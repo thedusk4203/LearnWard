@@ -1,0 +1,64 @@
+# Dart / Flutter -------------------------------------------------------------
+.dart_tool/
+.packages
+build/
+coverage/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.lock.bak
+
+# Root pubspec.lock is intentionally committed for reproducible resolution.
+!pubspec.lock
+
+# IDE / local tooling --------------------------------------------------------
+.idea/
+*.iml
+.vscode/
+.omo/
+.serena/
+
+# Android --------------------------------------------------------------------
+**/android/local.properties
+**/android/.gradle/
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+**/android/key.properties
+*.jks
+*.keystore
+
+# iOS ------------------------------------------------------------------------
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/ephemeral/
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Runner.xcworkspace/xcuserdata/
+**/ios/Runner.xcodeproj/xcuserdata/
+**/ios/Runner.xcodeproj/project.xcworkspace/xcuserdata/
+**/DerivedData/
+*.mobileprovision
+
+# Secrets / signing ----------------------------------------------------------
+.env
+.env.*
+!**/.env.example
+**/dart_defines.json
+!**/dart_defines.example.json
+*.pem
+*.p8
+*.p12
+**/google-services.json
+**/GoogleService-Info.plist
+
+# Supabase local state -------------------------------------------------------
+supabase/.temp/
+supabase/.branches/
+supabase/.env
+supabase/functions/.env
+
+# Operating system -----------------------------------------------------------
+.DS_Store
+Thumbs.db

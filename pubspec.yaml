@@ -1,0 +1,17 @@
+name: learnward_workspace
+description: LearnWard monorepo workspace root.
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+workspace:
+  - apps/mobile
+  - packages/learnward_domain
+  - packages/learnward_application
+  - packages/learnward_data
+  - packages/learnward_design_system
+  - packages/learnward_test_support
+
+dev_dependencies:
+  flutter_lints: ^6.0.0

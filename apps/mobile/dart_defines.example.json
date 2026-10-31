@@ -1,0 +1,5 @@
+{
+  "APP_ENV": "development",
+  "SUPABASE_URL": "http://127.0.0.1:45321",
+  "SUPABASE_PUBLISHABLE_KEY": "<local-publishable-key-from-supabase-status>"
+}
