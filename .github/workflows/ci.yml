@@ -70,9 +70,30 @@ jobs:
           cd ../..
           git diff --exit-code -- packages/learnward_data/lib
 
+  database:
+    name: Supabase migrations & RLS security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase local stack
+        run: supabase start
+
+      - name: Verify migrations
+        run: supabase db reset
+
+      - name: Run database and RLS pgTAP tests
+        run: supabase test db
+
   android:
     name: Android debug build
-    needs: quality
+    needs: [quality, database]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -108,7 +129,7 @@ jobs:
 
   ios:
     name: iOS simulator compile
-    needs: quality
+    needs: [quality, database]
     runs-on: macos-latest
     steps:
       - name: Checkout

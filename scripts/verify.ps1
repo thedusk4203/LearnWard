@@ -39,3 +39,8 @@ Push-Location apps\mobile
 flutter test
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
+
+if (Get-Command npx -ErrorAction SilentlyContinue) {
+    npx supabase test db
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
