@@ -15,6 +15,9 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final config = AppConfig.fromEnvironment();
+  // Fail fast immediately on boot if configuration is invalid for current environment
+  config.validate();
+
   if (config.isSupabaseConfigured) {
     await Supabase.initialize(
       url: config.supabaseUrl,

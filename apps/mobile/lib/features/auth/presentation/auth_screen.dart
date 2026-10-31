@@ -2,12 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:learnward_design_system/learnward_design_system.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../app/routing/app_routes.dart';
 
-/// Adult authentication screen supporting both Magic Link and 6-digit email OTP.
+/// Adult authentication screen supporting email Magic Link sign in.
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
 
@@ -17,22 +16,20 @@ class AuthScreen extends ConsumerStatefulWidget {
 
 class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _emailController = TextEditingController();
-  final _otpController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
   bool _isLoading = false;
-  bool _otpSent = false;
+  bool _linkSent = false;
   String? _errorMessage;
   String? _successMessage;
 
   @override
   void dispose() {
     _emailController.dispose();
-    _otpController.dispose();
     super.dispose();
   }
 
-  Future<void> _sendAuthCode() async {
+  Future<void> _sendMagicLink() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() {
@@ -51,9 +48,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           emailRedirectTo: 'com.learnward.app://auth-callback',
         );
         setState(() {
-          _otpSent = true;
+          _linkSent = true;
           _successMessage =
-              'Verification link & code sent to $email. Tap the magic link in your email or enter the 6-digit code below.';
+              'Check your email! A magic sign-in link has been sent to $email. Open the link on this device to complete sign in.';
         });
       } else {
         // Only reached in development demo mode
@@ -67,47 +64,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     } catch (e) {
       setState(() {
         _errorMessage = 'Authentication error: ${e.toString()}';
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _verifyOtpCode() async {
-    final code = _otpController.text.trim();
-    if (code.length < 6) {
-      setState(() {
-        _errorMessage = 'Please enter the 6-digit code sent to your email.';
-      });
-      return;
-    }
-
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    final email = _emailController.text.trim();
-
-    try {
-      final client = ref.read(supabaseClientProvider);
-      if (client != null) {
-        final response = await client.auth.verifyOTP(
-          type: OtpType.email,
-          token: code,
-          email: email,
-        );
-        if (response.session != null && mounted) {
-          context.go(AppRoutes.parentHome);
-        }
-      }
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Verification error: ${e.toString()}';
       });
     } finally {
       if (mounted) {
@@ -153,7 +109,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     TextFormField(
                       key: const Key('email_field'),
                       controller: _emailController,
-                      enabled: !_otpSent,
+                      enabled: !_linkSent,
                       decoration: const InputDecoration(
                         labelText: 'Email Address',
                         hintText: 'parent@example.com',
@@ -172,21 +128,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         return null;
                       },
                     ),
-                    if (_otpSent) ...[
-                      const SizedBox(height: AppSpacing.md),
-                      TextFormField(
-                        key: const Key('otp_field'),
-                        controller: _otpController,
-                        decoration: const InputDecoration(
-                          labelText: '6-Digit Verification Code',
-                          hintText: '123456',
-                          border: OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.key_outlined),
-                        ),
-                        keyboardType: TextInputType.number,
-                        maxLength: 6,
-                      ),
-                    ],
                     if (_errorMessage != null)
                       Padding(
                         padding: const EdgeInsets.only(top: AppSpacing.sm),
@@ -209,34 +150,21 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         ),
                       ),
                     const SizedBox(height: AppSpacing.md),
-                    if (!_otpSent)
-                      FilledButton(
-                        key: const Key('send_magic_link_button'),
-                        onPressed: _isLoading ? null : _sendAuthCode,
-                        child: _isLoading
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('Send Magic Link / Code'),
-                      )
-                    else
-                      FilledButton(
-                        key: const Key('verify_otp_button'),
-                        onPressed: _isLoading ? null : _verifyOtpCode,
-                        child: _isLoading
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('Verify & Sign In'),
-                      ),
+                    FilledButton(
+                      key: const Key('send_magic_link_button'),
+                      onPressed: _isLoading ? null : _sendMagicLink,
+                      child: _isLoading
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(
+                              _linkSent
+                                  ? 'Resend Magic Link'
+                                  : 'Send Magic Link',
+                            ),
+                    ),
                     // Development demo bypass is ONLY visible in development demo mode.
                     // Staging and production strictly require real authenticated sessions.
                     if (config.canUseLocalDemoRepositories) ...[

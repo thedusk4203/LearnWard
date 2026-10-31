@@ -19,6 +19,9 @@ class RouterListenable extends ChangeNotifier {
     ref.listen<AsyncValue<AuthState>>(authStateProvider, (_, _) {
       notifyListeners();
     });
+    ref.listen<String?>(currentUserIdProvider, (_, _) {
+      notifyListeners();
+    });
     ref.listen<ChildProfile?>(activeChildModeProvider, (_, _) {
       notifyListeners();
     });

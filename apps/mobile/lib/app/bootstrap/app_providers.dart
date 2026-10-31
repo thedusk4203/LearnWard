@@ -40,7 +40,11 @@ final parentGateServiceProvider = Provider<ParentGateService>((ref) {
 final supabaseClientProvider = Provider<SupabaseClient?>((ref) {
   final config = ref.watch(appConfigProvider);
   if (!config.isSupabaseConfigured) return null;
-  return Supabase.instance.client;
+  try {
+    return Supabase.instance.client;
+  } catch (_) {
+    return null;
+  }
 });
 
 /// Stream provider for current Supabase auth state.
@@ -53,9 +57,13 @@ final authStateProvider = StreamProvider<AuthState>((ref) {
 });
 
 /// Provider for the current user's ID, or null.
+///
+/// Reactively watches [authStateProvider] and updates dynamically
+/// whenever an auth event occurs (sign in, sign out, token refresh).
 final currentUserIdProvider = Provider<String?>((ref) {
+  final authState = ref.watch(authStateProvider);
   final client = ref.watch(supabaseClientProvider);
-  return client?.auth.currentUser?.id;
+  return authState.value?.session?.user.id ?? client?.auth.currentUser?.id;
 });
 
 /// Repository for family operations.
