@@ -1,0 +1,4 @@
+-- Phase 0 seed.
+--
+-- Intentionally empty. Product seed data (subjects, skills, demo families)
+-- arrives with the phases that define those entities. Never seed production.
