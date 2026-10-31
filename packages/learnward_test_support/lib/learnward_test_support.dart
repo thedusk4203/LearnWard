@@ -1,8 +1,9 @@
-/// Shared deterministic test helpers and fixtures for LearnWard.
+/// LearnWard test support library.
 ///
-/// Production behavior must never live here. Test-only builders for families,
-/// children, assessments and ledgers are added alongside the features that
-/// need them.
+/// Contains shared fakes, test builders and fixtures. Must never contain
+/// production behavior.
 library;
 
+export 'src/fake_child_profile_repository.dart';
+export 'src/fake_family_repository.dart';
 export 'src/fixed_clock.dart';
