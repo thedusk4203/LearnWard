@@ -213,8 +213,9 @@ npx supabase db reset
 npx supabase stop
 ```
 
-Local ports are `45321` (API), `45322` (database), `45323` (Studio), `45324`
-(Mailpit) and `45327` (analytics) to avoid Windows reserved-port collisions.
+Local ports are `45321` (API), `45322` (database), `45323` (Studio) and `45324`
+(Mailpit) to avoid Windows reserved-port collisions. Analytics is disabled in
+Phase 0 because there are no metrics to collect yet.
 The API URL for the app is `http://127.0.0.1:45321`; take the publishable key
 from `supabase status` and keep the secret/service-role key out of the app.
 

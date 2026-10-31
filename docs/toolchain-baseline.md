@@ -53,6 +53,6 @@ generated but not compiled locally. CI covers simulator compilation on
 
 ## Local Supabase ports
 
-`45321` API, `45322` database, `45323` Studio, `45324` Mailpit, `45327`
-analytics. The CLI defaults collided with Windows reserved/ephemeral ports on
-the bootstrap machine; see ADR 0001.
+`45321` API, `45322` database, `45323` Studio and `45324` Mailpit. Analytics is
+disabled in Phase 0. The CLI defaults collided with Windows reserved/ephemeral
+ports on the bootstrap machine; see ADR 0001.
