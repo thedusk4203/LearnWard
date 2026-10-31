@@ -6,6 +6,7 @@ library;
 export 'src/ports/child_profile_repository.dart';
 export 'src/ports/clock.dart';
 export 'src/ports/family_repository.dart';
+export 'src/ports/local_metadata_store.dart';
 export 'src/use_cases/archive_child_profile.dart';
 export 'src/use_cases/create_child_profile.dart';
 export 'src/use_cases/create_family.dart';

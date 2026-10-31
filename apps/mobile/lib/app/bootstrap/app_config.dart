@@ -27,6 +27,18 @@ enum AppEnvironment {
   }
 }
 
+/// Thrown when required Supabase configuration is missing outside development demo mode.
+class MissingSupabaseConfigurationException implements Exception {
+  MissingSupabaseConfigurationException(this.environment);
+
+  final AppEnvironment environment;
+
+  @override
+  String toString() =>
+      'MissingSupabaseConfigurationException: Supabase configuration (SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY) '
+      'is required in ${environment.label} environment. In-memory demo repositories are only permitted in development mode.';
+}
+
 /// Runtime configuration assembled from `--dart-define` values.
 ///
 /// Never put service-role keys or other secrets in this object. Only the
@@ -36,6 +48,7 @@ final class AppConfig {
     required this.environment,
     required this.supabaseUrl,
     required this.supabasePublishableKey,
+    this.enableLocalDemo = false,
   });
 
   factory AppConfig.fromEnvironment() {
@@ -47,14 +60,35 @@ final class AppConfig {
       supabasePublishableKey: const String.fromEnvironment(
         'SUPABASE_PUBLISHABLE_KEY',
       ),
+      enableLocalDemo: const bool.fromEnvironment(
+        'ENABLE_LOCAL_DEMO',
+        defaultValue: false,
+      ),
     );
   }
 
   final AppEnvironment environment;
   final String supabaseUrl;
   final String supabasePublishableKey;
+  final bool enableLocalDemo;
 
   /// Whether both public Supabase values were supplied at build time.
   bool get isSupabaseConfigured =>
       supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty;
+
+  /// Whether in-memory fallback repositories may be used.
+  ///
+  /// Only allowed in development mode (either explicitly via ENABLE_LOCAL_DEMO
+  /// or when Supabase credentials were not configured locally).
+  /// Staging and production MUST fail closed.
+  bool get canUseLocalDemoRepositories =>
+      environment == AppEnvironment.development &&
+      (enableLocalDemo || !isSupabaseConfigured);
+
+  /// Validates configuration, failing closed in staging and production.
+  void validate() {
+    if (!isSupabaseConfigured && !canUseLocalDemoRepositories) {
+      throw MissingSupabaseConfigurationException(environment);
+    }
+  }
 }

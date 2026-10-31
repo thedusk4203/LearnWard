@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:learnward_application/learnward_application.dart';
 
 import 'local_metadata_entries.dart';
 
@@ -9,7 +10,7 @@ part 'app_database.g.dart';
 /// The server remains authoritative. This database is reserved for cached read
 /// models, drafts and the future offline command outbox.
 @DriftDatabase(tables: [LocalMetadataEntries])
-class AppDatabase extends _$AppDatabase {
+class AppDatabase extends _$AppDatabase implements LocalMetadataStore {
   AppDatabase(super.executor);
 
   @override
@@ -24,6 +25,7 @@ class AppDatabase extends _$AppDatabase {
   );
 
   /// Writes a technical metadata entry, replacing an existing value.
+  @override
   Future<void> writeMetadata({
     required String key,
     required String value,
@@ -39,6 +41,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   /// Reads a technical metadata value, or `null` when the key is absent.
+  @override
   Future<String?> readMetadata(String key) async {
     final query = select(localMetadataEntries)
       ..where((entry) => entry.key.equals(key));
