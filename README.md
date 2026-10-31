@@ -44,6 +44,7 @@ Level    │    Wheel   Store
   - **Reward Points (RP)** — spendable on a random reward wheel or guaranteed reward store.
 - The wheel is a celebration mechanic, not the product moat.
 - The long-term moat is the **Growth Engine + longitudinal learning history + personalized mastery model**.
+- Mastery must remain separate from reward: academic evidence updates learning state; RP/XP never inflate mastery directly.
 
 ## Documentation
 
@@ -52,16 +53,17 @@ Level    │    Wheel   Store
 | [Product Definition](docs/00-product-definition.md) | Users, problem, JTBD, value proposition, scope and positioning |
 | [Product Principles](docs/01-product-principles.md) | Non-negotiable product rules and safety constraints |
 | [Competitive Landscape](docs/02-competitive-landscape.md) | Market map, competitors and identified white space |
-| [Growth Engine v0.1](docs/03-growth-engine-v0.1.md) | Initial academic scoring and progress model |
+| [Growth Engine v0.1](docs/03-growth-engine-v0.1.md) | Initial academic scoring and progress-recognition model |
 | [Reward Economy v0.1](docs/04-reward-economy-v0.1.md) | XP/RP economy, wheel/store and anti-farming rules |
 | [Pilot Plan v0.1](docs/05-pilot-plan-v0.1.md) | Four-week pre-build validation experiment |
 | [Metrics & Hypotheses](docs/06-metrics-and-hypotheses.md) | North Star, secondary metrics and validation criteria |
+| [Learning Engine & Mastery v0.1](docs/07-learning-engine-mastery-v0.1.md) | Subject/topic/skill model, mastery confidence, freshness and next-challenge logic |
 
 ## Product status
 
 **Phase:** Discovery / product definition  
 **Code:** Not started intentionally  
-**Next gate:** Validate the motivation + growth loop with a small real-world pilot before committing to an implementation stack.
+**Next gate:** Validate the motivation + growth + mastery loop with a small real-world pilot before committing to an implementation stack.
 
 ## Working rule
 
