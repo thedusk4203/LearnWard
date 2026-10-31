@@ -59,13 +59,17 @@ granted child devices.
 When pairing is activated later, grants will be issued and revoked exclusively through
 trusted, owner-authorized `SECURITY DEFINER` pairing RPCs.
 
-## Decision 5 — Last active owner invariant
+## Decision 5 — Last active owner invariant & concurrency serialization
 
 A family must never enter a state with zero active owners.
 A database trigger `trg_ensure_last_active_owner` on `public.family_memberships`
 enforces that the last active owner cannot self-revoke (`status = 'revoked'`),
 self-demote to parent (`role = 'parent'`), or be deleted (`LW006`).
-An owner may only revoke or demote if at least one other active owner remains.
+To prevent race conditions where concurrent transactions attempt to demote two co-owners
+simultaneously, the trigger acquires an exclusive row-level lock on the parent family row
+(`PERFORM 1 FROM public.families WHERE id = OLD.family_id FOR UPDATE`), serializing concurrent
+owner mutations within the same family tenant. Multi-connection regression tests verify that
+at least one active owner remains.
 
 ## Decision 6 — Tenant key immutability
 
@@ -74,9 +78,12 @@ a database trigger `trg_prevent_child_family_id_change` enforces that `family_id
 on `public.child_profiles` is immutable once created (`LW005`), even if a user is
 an active member of both families.
 
-## Decision 7 — Shared-device child mode containment & salted PIN gate
+## Decision 7 — Shared-device child mode containment, mandatory PIN setup & salted PIN gate
 
 For Phase 1, the operational child interaction model is shared-device Child Mode.
+- **Mandatory PIN Setup:** Before a parent can enter Child Mode, the app verifies if a
+  Parent PIN has been configured. If none exists, a 4-digit PIN setup and confirmation
+  dialog is required. Staging and production have no universal default PIN.
 - **Persistence:** When a parent enters Child Mode, the active child profile session
   is persisted locally in SQLite (`AppDatabase` technical metadata). If the app is
   killed or restarted, the child session is reloaded before initial render, remaining

@@ -232,8 +232,9 @@ Phase 1 introduces the core family and child identity schema:
 
 Row Level Security is enabled on all tables, isolating family data and protecting
 child profiles from cross-family access.
-Run `npx supabase test db` to execute the automated pgTAP security suite (28 assertions
-covering tenant isolation, mutation safety, and privilege escalation prevention).
+Run `npx supabase test db` to execute the automated pgTAP security suite (38 assertions
+covering tenant isolation, mutation safety, default privileges, and privilege escalation prevention).
+Run `node scripts/test_last_owner_concurrency.mjs` to execute the multi-session concurrency regression test.
 
 ### CI
 
