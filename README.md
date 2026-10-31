@@ -47,6 +47,7 @@ Level    │    Wheel   Store
 - Mastery must remain separate from reward: academic evidence updates learning state; RP/XP never inflate mastery directly.
 - Mobile v1 targets **Android and iOS from one Flutter codebase**.
 - Family is the tenant/security boundary; parent and paired-child access must be enforced server-side with RLS.
+- Implementation is planned as a Dart pub-workspace monorepo with domain logic isolated from Flutter/Supabase infrastructure.
 
 ## Documentation
 
@@ -62,13 +63,15 @@ Level    │    Wheel   Store
 | [Learning Engine & Mastery v0.1](docs/07-learning-engine-mastery-v0.1.md) | Subject/topic/skill model, mastery confidence, freshness and next-challenge logic |
 | [Mobile Architecture v0.1](docs/08-mobile-architecture-v0.1.md) | Flutter Android/iOS architecture and platform delivery decisions |
 | [Data & Authorization Model v0.1](docs/09-data-and-authorization-model-v0.1.md) | Family tenancy, schema, immutable ledgers, pairing, permissions, RLS and offline authority |
+| [Implementation Plan v0.1](docs/10-implementation-plan-v0.1.md) | Monorepo layout, package boundaries, environments, migrations, CI/CD, testing and phased delivery |
 
 ## Product status
 
-**Phase:** Discovery / architecture definition  
+**Phase:** Architecture-defined / implementation-ready  
 **Code:** Not started intentionally  
 **Mobile target:** Flutter → Android + iOS  
-**Next gate:** Validate the motivation + growth + mastery loop with a small real-world pilot while converting the frozen architecture into an implementation plan.
+**Backend direction:** Supabase + Postgres + Storage  
+**Next gate:** Begin Phase 0 engineering foundation and prepare the secure assessment vertical slice while preserving the four-week pilot plan.
 
 ## Working rule
 
