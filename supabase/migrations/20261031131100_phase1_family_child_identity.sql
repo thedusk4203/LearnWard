@@ -4,6 +4,24 @@
 -- and child device pairing foundations with Row Level Security (RLS).
 
 -- ---------------------------------------------------------------------------
+-- 0. DEFAULT PRIVILEGES (FAIL-CLOSED)
+-- ---------------------------------------------------------------------------
+
+-- Revoke default automatic grants on future objects created by postgres role.
+-- LearnWard strictly enforces explicit grants per role.
+alter default privileges for role postgres in schema public
+  revoke all on tables from anon, authenticated, service_role;
+
+alter default privileges for role postgres in schema public
+  revoke all on sequences from anon, authenticated, service_role;
+
+alter default privileges for role postgres in schema public
+  revoke all on functions from anon, authenticated, service_role;
+
+alter default privileges for role postgres
+  revoke execute on functions from public;
+
+-- ---------------------------------------------------------------------------
 -- 1. TABLES
 -- ---------------------------------------------------------------------------
 
@@ -142,7 +160,69 @@ grant execute on function private.is_family_owner(uuid) to authenticated;
 grant execute on function private.is_active_child_device(uuid, uuid) to authenticated;
 
 -- ---------------------------------------------------------------------------
--- 3. ATOMIC FAMILY CREATION FUNCTION
+-- 3. INVARIANT ENFORCEMENT TRIGGERS
+-- ---------------------------------------------------------------------------
+
+-- Invariant: Family must never have zero active owners.
+-- Last active owner cannot be revoked, demoted, or deleted while family exists.
+create or replace function private.ensure_last_active_owner()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_remaining int;
+begin
+  if (TG_OP = 'DELETE' and OLD.role = 'owner' and OLD.status = 'active') or
+     (TG_OP = 'UPDATE' and OLD.role = 'owner' and OLD.status = 'active' and (NEW.role != 'owner' or NEW.status != 'active')) then
+
+    -- If parent family still exists (i.e. not in the middle of family deletion):
+    if exists (select 1 from public.families where id = OLD.family_id) then
+      select count(*) into v_remaining
+      from public.family_memberships
+      where family_id = OLD.family_id
+        and role = 'owner'
+        and status = 'active'
+        and auth_user_id != OLD.auth_user_id;
+
+      if v_remaining = 0 then
+        raise exception 'Family must have at least one active owner' using errcode = 'LW006';
+      end if;
+    end if;
+  end if;
+
+  return coalesce(NEW, OLD);
+end;
+$$;
+
+create trigger trg_ensure_last_active_owner
+before update or delete on public.family_memberships
+for each row
+execute function private.ensure_last_active_owner();
+
+-- Invariant: child.family_id is immutable across tenants once created.
+create or replace function private.prevent_child_family_id_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if NEW.family_id != OLD.family_id then
+    raise exception 'family_id on child_profiles is immutable' using errcode = 'LW005';
+  end if;
+  return NEW;
+end;
+$$;
+
+create trigger trg_prevent_child_family_id_change
+before update on public.child_profiles
+for each row
+execute function private.prevent_child_family_id_change();
+
+-- ---------------------------------------------------------------------------
+-- 4. ATOMIC FAMILY CREATION FUNCTION
 -- ---------------------------------------------------------------------------
 
 create or replace function public.create_family(
@@ -162,6 +242,19 @@ begin
   v_user_id := auth.uid();
   if v_user_id is null then
     raise exception 'Authentication required to create a family' using errcode = 'LW001';
+  end if;
+
+  -- Guard against child device identities creating families
+  if exists (
+    select 1 from public.child_device_grants
+    where auth_user_id = v_user_id
+  ) then
+    raise exception 'Child device identities cannot create families' using errcode = 'LW007';
+  end if;
+
+  -- Guard against future anonymous identities creating families
+  if coalesce((auth.jwt() ->> 'is_anonymous')::boolean, false) is true then
+    raise exception 'Anonymous identities cannot create families' using errcode = 'LW008';
   end if;
 
   if trim(p_name) = '' or char_length(p_name) > 100 then
@@ -191,7 +284,7 @@ revoke all on function public.create_family(text, text, text) from public;
 grant execute on function public.create_family(text, text, text) to authenticated;
 
 -- ---------------------------------------------------------------------------
--- 4. ROW LEVEL SECURITY
+-- 5. ROW LEVEL SECURITY
 -- ---------------------------------------------------------------------------
 
 alter table public.families enable row level security;
@@ -269,7 +362,10 @@ create policy child_profiles_update on public.child_profiles
   using (private.is_active_family_adult(family_id))
   with check (private.is_active_family_adult(family_id));
 
--- child_device_grants
+-- child_device_grants:
+-- In Phase 1, pairing is deferred. Client roles cannot directly manufacture or
+-- mutate device grants. Grants are SELECT-only for active adults or the granted device.
+-- Creation/revocation will only be exposed through trusted, validated RPCs in later phases.
 create policy child_device_grants_select on public.child_device_grants
   for select
   to authenticated
@@ -278,21 +374,8 @@ create policy child_device_grants_select on public.child_device_grants
     or auth_user_id = auth.uid()
   );
 
-create policy child_device_grants_insert on public.child_device_grants
-  for insert
-  to authenticated
-  with check (
-    private.is_active_family_adult(family_id)
-  );
-
-create policy child_device_grants_update on public.child_device_grants
-  for update
-  to authenticated
-  using (private.is_active_family_adult(family_id))
-  with check (private.is_active_family_adult(family_id));
-
 -- ---------------------------------------------------------------------------
--- 5. EXPLICIT GRANTS
+-- 6. EXPLICIT GRANTS
 -- ---------------------------------------------------------------------------
 
 grant usage on schema public to authenticated, anon;
@@ -300,9 +383,9 @@ grant usage on schema public to authenticated, anon;
 grant select, update on public.families to authenticated;
 grant select, insert, update on public.family_memberships to authenticated;
 grant select, insert, update on public.child_profiles to authenticated;
-grant select, insert, update on public.child_device_grants to authenticated;
+grant select on public.child_device_grants to authenticated;
 
--- Default privileges safety
-alter default privileges in schema public revoke all on tables from public, anon;
-alter default privileges in schema private revoke all on tables from public, anon, authenticated;
-alter default privileges in schema private revoke all on functions from public, anon, authenticated;
+-- Service role retains full administrative access for backend tasks
+grant all on all tables in schema public to service_role;
+grant all on all sequences in schema public to service_role;
+grant all on all functions in schema public to service_role;
