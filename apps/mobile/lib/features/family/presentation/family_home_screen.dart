@@ -275,11 +275,13 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                       ),
                       trailing: FilledButton.tonal(
                         key: Key('enter_child_mode_${child.id.value}'),
-                        onPressed: () {
-                          ref
+                        onPressed: () async {
+                          await ref
                               .read(activeChildModeProvider.notifier)
                               .selectChild(child);
-                          context.go(AppRoutes.childMode);
+                          if (context.mounted) {
+                            context.go(AppRoutes.childMode);
+                          }
                         },
                         child: const Text('Child Mode'),
                       ),

@@ -2,14 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:learnward_design_system/learnward_design_system.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../app/routing/app_routes.dart';
 
-/// Adult authentication screen using Supabase Magic Link / OTP.
-///
-/// Password-based sign-in is intentionally avoided in Phase 1 to minimize
-/// credential overhead and support low-friction family onboarding.
+/// Adult authentication screen supporting both Magic Link and 6-digit email OTP.
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
 
@@ -19,18 +17,22 @@ class AuthScreen extends ConsumerStatefulWidget {
 
 class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _emailController = TextEditingController();
+  final _otpController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
+
   bool _isLoading = false;
+  bool _otpSent = false;
   String? _errorMessage;
   String? _successMessage;
 
   @override
   void dispose() {
     _emailController.dispose();
+    _otpController.dispose();
     super.dispose();
   }
 
-  Future<void> _sendMagicLink() async {
+  Future<void> _sendAuthCode() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() {
@@ -39,19 +41,24 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       _successMessage = null;
     });
 
+    final email = _emailController.text.trim();
+
     try {
       final client = ref.read(supabaseClientProvider);
       if (client != null) {
-        await client.auth.signInWithOtp(email: _emailController.text.trim());
+        await client.auth.signInWithOtp(
+          email: email,
+          emailRedirectTo: 'com.learnward.app://auth-callback',
+        );
         setState(() {
+          _otpSent = true;
           _successMessage =
-              'Magic link sent to ${_emailController.text.trim()}. Check your inbox!';
+              'Verification link & code sent to $email. Tap the magic link in your email or enter the 6-digit code below.';
         });
       } else {
-        // Mock fallback for offline / test environments
+        // Only reached in development demo mode
         setState(() {
-          _successMessage =
-              'Development mode: Sign-in link simulated for ${_emailController.text.trim()}.';
+          _successMessage = 'Development mode: Simulated sign-in for $email.';
         });
         if (mounted) {
           context.go(AppRoutes.parentHome);
@@ -70,9 +77,51 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     }
   }
 
+  Future<void> _verifyOtpCode() async {
+    final code = _otpController.text.trim();
+    if (code.length < 6) {
+      setState(() {
+        _errorMessage = 'Please enter the 6-digit code sent to your email.';
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    final email = _emailController.text.trim();
+
+    try {
+      final client = ref.read(supabaseClientProvider);
+      if (client != null) {
+        final response = await client.auth.verifyOTP(
+          type: OtpType.email,
+          token: code,
+          email: email,
+        );
+        if (response.session != null && mounted) {
+          context.go(AppRoutes.parentHome);
+        }
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = 'Verification error: ${e.toString()}';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final config = ref.watch(appConfigProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Adult Sign In')),
@@ -97,13 +146,14 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     Text(
-                      'Sign in with your email address. We will send a secure magic link to confirm your adult identity.',
+                      'Sign in with your email address to access your family dashboard.',
                       style: theme.textTheme.bodyLarge,
                     ),
                     const SizedBox(height: AppSpacing.md),
                     TextFormField(
                       key: const Key('email_field'),
                       controller: _emailController,
+                      enabled: !_otpSent,
                       decoration: const InputDecoration(
                         labelText: 'Email Address',
                         hintText: 'parent@example.com',
@@ -122,43 +172,81 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         return null;
                       },
                     ),
-                    const SizedBox(height: AppSpacing.md),
+                    if (_otpSent) ...[
+                      const SizedBox(height: AppSpacing.md),
+                      TextFormField(
+                        key: const Key('otp_field'),
+                        controller: _otpController,
+                        decoration: const InputDecoration(
+                          labelText: '6-Digit Verification Code',
+                          hintText: '123456',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.key_outlined),
+                        ),
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                      ),
+                    ],
                     if (_errorMessage != null)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        padding: const EdgeInsets.only(top: AppSpacing.sm),
                         child: Text(
                           _errorMessage!,
+                          key: const Key('auth_error_message'),
                           style: TextStyle(color: theme.colorScheme.error),
                         ),
                       ),
                     if (_successMessage != null)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        padding: const EdgeInsets.only(top: AppSpacing.sm),
                         child: Text(
                           _successMessage!,
+                          key: const Key('auth_success_message'),
                           style: TextStyle(
                             color: theme.colorScheme.primary,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
-                    FilledButton(
-                      key: const Key('send_magic_link_button'),
-                      onPressed: _isLoading ? null : _sendMagicLink,
-                      child: _isLoading
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Send Magic Link'),
-                    ),
                     const SizedBox(height: AppSpacing.md),
-                    TextButton(
-                      key: const Key('continue_as_guest_button'),
-                      onPressed: () => context.go(AppRoutes.parentHome),
-                      child: const Text('Continue to Family Dashboard'),
-                    ),
+                    if (!_otpSent)
+                      FilledButton(
+                        key: const Key('send_magic_link_button'),
+                        onPressed: _isLoading ? null : _sendAuthCode,
+                        child: _isLoading
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('Send Magic Link / Code'),
+                      )
+                    else
+                      FilledButton(
+                        key: const Key('verify_otp_button'),
+                        onPressed: _isLoading ? null : _verifyOtpCode,
+                        child: _isLoading
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('Verify & Sign In'),
+                      ),
+                    // Development demo bypass is ONLY visible in development demo mode.
+                    // Staging and production strictly require real authenticated sessions.
+                    if (config.canUseLocalDemoRepositories) ...[
+                      const SizedBox(height: AppSpacing.md),
+                      OutlinedButton(
+                        key: const Key('demo_bypass_button'),
+                        onPressed: () => context.go(AppRoutes.parentHome),
+                        child: const Text('Development Demo Bypass'),
+                      ),
+                    ],
                   ],
                 ),
               ),

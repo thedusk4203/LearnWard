@@ -20,10 +20,12 @@ void main() {
   ) async {
     final fakeFamilyRepo = FakeFamilyRepository();
     final fakeChildRepo = FakeChildProfileRepository();
+    final fakeStore = InMemoryLocalMetadataStore();
 
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          localMetadataStoreProvider.overrideWithValue(fakeStore),
           familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
           childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
         ],
@@ -69,10 +71,12 @@ void main() {
       ],
     );
     final fakeChildRepo = FakeChildProfileRepository(children: [child]);
+    final fakeStore = InMemoryLocalMetadataStore();
 
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          localMetadataStoreProvider.overrideWithValue(fakeStore),
           familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
           childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
           activeFamilyProvider.overrideWith(
@@ -125,10 +129,12 @@ void main() {
       ],
     );
     final fakeChildRepo = FakeChildProfileRepository(children: [child]);
+    final fakeStore = InMemoryLocalMetadataStore();
 
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          localMetadataStoreProvider.overrideWithValue(fakeStore),
           familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
           childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
           activeFamilyProvider.overrideWith(
@@ -153,13 +159,19 @@ void main() {
     await tester.tap(find.byKey(const Key('exit_child_mode_button')));
     await tester.pumpAndSettle();
 
-    // Verify Parent Gate challenge dialog appears (7 x 8 = 56)
+    // Verify Parent Gate challenge dialog appears
     expect(find.text('Parent Gate'), findsOneWidget);
-    expect(find.text('7 × 8 = ?'), findsOneWidget);
+    expect(
+      find.text('Enter your 4-digit Parent PIN to exit Child Mode.'),
+      findsOneWidget,
+    );
 
-    // Solve the challenge
-    await tester.enterText(find.byKey(const Key('parent_gate_input')), '56');
-    await tester.tap(find.byKey(const Key('parent_gate_confirm_button')));
+    // Enter default PIN 1234
+    await tester.enterText(
+      find.byKey(const Key('parent_gate_pin_field')),
+      '1234',
+    );
+    await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
     await tester.pumpAndSettle();
 
     // Successfully returned to Parent Mode

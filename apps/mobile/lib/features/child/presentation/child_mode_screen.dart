@@ -30,12 +30,18 @@ class ChildModeScreen extends ConsumerWidget {
             key: const Key('exit_child_mode_button'),
             icon: const Icon(Icons.lock_outline, size: 18),
             label: const Text('Exit Child Mode'),
-            onPressed: () async {
-              final confirmed = await ParentGateDialog.show(context);
-              if (confirmed && context.mounted) {
-                ref.read(activeChildModeProvider.notifier).exitChildMode();
-                context.go(AppRoutes.parentHome);
-              }
+            onPressed: () {
+              ParentGateDialog.show(
+                context,
+                onGatePassed: () async {
+                  await ref
+                      .read(activeChildModeProvider.notifier)
+                      .exitChildMode();
+                  if (context.mounted) {
+                    context.go(AppRoutes.parentHome);
+                  }
+                },
+              );
             },
           ),
         ],
@@ -76,22 +82,22 @@ class ChildModeScreen extends ConsumerWidget {
                   Card(
                     elevation: 0,
                     color: theme.colorScheme.surfaceContainerHighest,
-                    child: Padding(
-                      padding: const EdgeInsets.all(AppSpacing.md),
+                    child: const Padding(
+                      padding: EdgeInsets.all(AppSpacing.md),
                       child: Column(
                         children: [
                           Row(
                             children: [
-                              const Icon(Icons.info_outline, size: 20),
-                              const SizedBox(width: AppSpacing.sm),
+                              Icon(Icons.info_outline, size: 20),
+                              SizedBox(width: AppSpacing.sm),
                               Text(
                                 'Shared-Device Child Mode',
-                                style: theme.textTheme.titleMedium,
+                                style: TextStyle(fontWeight: FontWeight.bold),
                               ),
                             ],
                           ),
-                          const SizedBox(height: AppSpacing.xs),
-                          const Text(
+                          SizedBox(height: AppSpacing.xs),
+                          Text(
                             'You are in protected child mode on this shared device. '
                             'Parent configuration and admin settings are locked behind the parent gate.',
                           ),
