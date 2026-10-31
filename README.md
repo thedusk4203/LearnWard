@@ -66,14 +66,14 @@ Level    │    Wheel   Store
 | [Implementation Plan v0.1](docs/10-implementation-plan-v0.1.md) | Monorepo layout, package boundaries, environments, migrations, CI/CD, testing and phased delivery |
 | [Engineering Foundation ADR](docs/adr/0001-phase-0-foundation-decisions.md) | Phase 0 package, codegen, CI and local-Supabase decisions |
 | [Phase 1 Family & Child Identity ADR](docs/adr/0002-phase-1-family-child-identity.md) | Phase 1 family and child identity decisions, atomic creation, RLS, and shared-device mode |
+| [Phase 1 Freeze Receipt](docs/freezes/phase-1-family-child-identity-freeze.md) | Frozen Phase 1 baseline, CI receipt, security invariants, test counts, deferred scope and next gate |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
 
-Phase 1 establishes the family and child identity foundation: adult authentication,
-family creation, child profile management, family-scoped database RLS, and
-shared-device Child Mode. Subsequent product features (assessments, Growth Engine,
-rewards, wheel) are intentionally deferred to Phase 2+.
+**Phase 1 — Family + Child Identity Foundation is frozen.** It establishes adult authentication,
+family creation, child profile management, family-scoped database RLS, shared-device Child Mode,
+and the Parent PIN containment boundary. Phase 2 must consume this contract without weakening it.
 
 ### Repository layout
 
@@ -134,8 +134,7 @@ cd apps/mobile
 flutter run --dart-define-from-file=dart_defines.json
 ```
 
-`dart_defines.json` is gitignored. The app shell also starts without Supabase
-configuration using test fallbacks. Never put a `service_role`/secret key in Flutter.
+`dart_defines.json` is gitignored. Development may use explicitly enabled demo repositories; staging and production fail closed if required Supabase configuration is missing. Never put a `service_role`/secret key in Flutter.
 
 ### Run
 
@@ -230,8 +229,8 @@ Phase 1 introduces the core family and child identity schema:
 - `public.child_device_grants`
 - `private.child_pairing_requests`
 
-Row Level Security is enabled on all tables, isolating family data and protecting
-child profiles from cross-family access.
+Row Level Security is enabled on all exposed application tables, isolating family data and protecting
+child profiles from cross-family access. Child profiles are archived via allowed updates; direct client DELETE is not exposed as part of the Phase 1 contract.
 Run `npx supabase test db` to execute the automated pgTAP security suite (38 assertions
 covering tenant isolation, mutation safety, default privileges, and privilege escalation prevention).
 Run `node scripts/test_last_owner_concurrency.mjs` to execute the multi-session concurrency regression test.
@@ -243,16 +242,19 @@ Run `node scripts/test_last_owner_concurrency.mjs` to execute the multi-session 
 - format check, `flutter analyze`, package tests and widget tests;
 - generated-Drift freshness check;
 - Supabase migrations and pgTAP RLS security tests (`supabase start`, `supabase db reset`, `supabase test db`);
+- last-owner multi-connection concurrency regression;
 - Android debug APK build, uploaded as an artifact;
 - iOS simulator compile on `macos-latest` (no signing).
 
 ## Product status
 
-**Phase:** Phase 1 — Family + Child Identity complete  
-**Code:** Domain entities, application use cases, Supabase repositories, RLS migrations, pgTAP tests, mobile UI (adult auth, family dashboard, child profile setup, shared-device child mode with parent challenge)  
+**Phase:** Phase 1 — Family + Child Identity Foundation — **FROZEN**  
+**Frozen code baseline:** `2251cf51f47837ec121182f6a0c3d618effd393a`  
+**Post-merge CI:** `41218555546` — **SUCCESS**  
+**Code:** Domain entities, application use cases, Supabase repositories, RLS migrations, pgTAP tests, adult Magic Link auth, family/child flows, persistent shared-device Child Mode, mandatory Parent PIN, and concurrency-safe owner invariants  
 **Mobile target:** Flutter → Android + iOS  
 **Backend direction:** Supabase + Postgres + Storage  
-**Next gate:** Phase 2 — Assessment vertical slice.
+**Next gate:** Phase 2 — **Secure Assessment Capture Vertical Slice**.
 
 ## Working rule
 
