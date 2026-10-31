@@ -16,11 +16,14 @@ if the client disconnects or encounters an error mid-flight.
 A Postgres RPC `public.create_family(p_name text, p_timezone text, p_locale text)`
 is implemented with `SECURITY DEFINER` and `SET search_path = ''`. It inserts
 both rows atomically within a single transaction, validating inputs and setting
-`auth.uid()` as the owner. Unauthenticated execution (`anon`) is revoked; only
-`authenticated` users may invoke it.
+`auth.uid()` as the owner.
+The RPC enforces strict guards:
+- Unauthenticated execution (`anon`) is rejected (`42501`);
+- Child-device identities (`child_device_grants`) are barred from creating families (`LW007`);
+- Anonymous sign-in identities are barred from acquiring adult authority (`LW008`).
 
 **Consequence:** clients must call the RPC instead of inserting directly into
-`families`. Direct insert on `families` is not permitted by RLS.
+`families`. Direct insert on `families` is rejected by RLS.
 
 ## Decision 2 — Child profile is not an Auth user
 
@@ -29,43 +32,70 @@ both rows atomically within a single transaction, validating inputs and setting
 is collected or stored. Only `display_name`, optional `school_grade`, optional
 `birth_year`, and optional `avatar_key` are retained.
 
-This preserves the privacy invariant required by COPPA/GDPR-K guidelines and
-LearnWard product principles: children must not have standalone credentials or
-trackable auth accounts for shared family use.
+This architecture supports data-minimization and child-privacy goals: children do
+not have standalone credentials or trackable auth accounts for shared family use.
 
-## Decision 3 — Row Level Security (RLS) & Private helper functions
+## Decision 3 — Fail-closed default privileges & Row Level Security
 
 Row Level Security is enabled on all tables exposed to PostgREST (`families`,
-`family_memberships`, `child_profiles`, `child_device_grants`). Explicit table
-grants are enforced (`auto_expose_new_tables = false`).
+`family_memberships`, `child_profiles`, `child_device_grants`).
+To eliminate accidental privilege exposure in future migrations, default privileges
+created by the `postgres` migration role in schema `public` and `private` are
+revoked upfront from `anon`, `authenticated`, and `PUBLIC`. All access requires
+explicit role grants.
 
 To avoid recursive RLS queries when evaluating membership, security functions
 `is_active_family_adult`, `is_family_owner`, and `is_active_child_device` are
 placed in the non-exposed `private` schema with `SECURITY DEFINER` and
 `SET search_path = ''`. Only `authenticated` users are granted execute access.
-Default privileges on `public` and `private` schemas are revoked from `PUBLIC`.
 
-## Decision 4 — Shared-device child mode with local parent gate
+## Decision 4 — Lock down `child_device_grants` while pairing is deferred
 
-For Phase 1, the primary child interaction model is shared-device Child Mode.
-The child operates within the authenticated adult session on the parent's device,
-constrained to a child-safe dashboard and active child context.
+Dedicated child-device pairing is explicitly deferred to later phases.
+To prevent clients from directly manufacturing or mutating authorization grants,
+direct `INSERT` and `UPDATE` permissions on `public.child_device_grants` are revoked
+from `authenticated` and `anon`. Grants are `SELECT`-only for active adults and
+granted child devices.
+When pairing is activated later, grants will be issued and revoked exclusively through
+trusted, owner-authorized `SECURITY DEFINER` pairing RPCs.
 
-Transitioning back to Parent Mode requires answering a parent challenge (local
-gate). The pairing data model (`child_device_grants`, `private.child_pairing_requests`)
-is fully migrated and covered by RLS, but dedicated anonymous child device
-onboarding and short-code pairing exchange are deferred until dedicated child device
-UX is implemented.
+## Decision 5 — Last active owner invariant
 
-## Decision 5 — Blocking Supabase CI with pgTAP RLS security tests
+A family must never enter a state with zero active owners.
+A database trigger `trg_ensure_last_active_owner` on `public.family_memberships`
+enforces that the last active owner cannot self-revoke (`status = 'revoked'`),
+self-demote to parent (`role = 'parent'`), or be deleted (`LW006`).
+An owner may only revoke or demote if at least one other active owner remains.
 
-Supabase CI is activated in GitHub Actions. Every pull request and push to `main`
-boots the local Supabase stack (`supabase start`), executes migrations and seed
-(`supabase db reset`), and runs the pgTAP security test suite (`supabase test db`).
+## Decision 6 — Tenant key immutability
 
-The pgTAP tests verify 28 security invariants including:
-- Cross-family read isolation for adults;
-- Cross-family mutation isolation (updates and deletes rejected);
-- Child profile isolation;
-- Privilege escalation prevention (malicious users cannot self-assign `owner` or `parent` roles);
-- Unauthenticated rejection of `create_family` RPC.
+To prevent cross-tenant child profile hijacking or accidental tenant reassignment,
+a database trigger `trg_prevent_child_family_id_change` enforces that `family_id`
+on `public.child_profiles` is immutable once created (`LW005`), even if a user is
+an active member of both families.
+
+## Decision 7 — Shared-device child mode containment & salted PIN gate
+
+For Phase 1, the operational child interaction model is shared-device Child Mode.
+- **Persistence:** When a parent enters Child Mode, the active child profile session
+  is persisted locally in SQLite (`AppDatabase` technical metadata). If the app is
+  killed or restarted, the child session is reloaded before initial render, remaining
+  locked in `/child`.
+- **Router Guard:** The GoRouter guard intercepts all navigation while Child Mode
+  is active, redirecting any attempt to access `/parent`, `/family/create`, or `/auth`
+  back to `/child`.
+- **Parent Gate:** Replaces simple arithmetic questions with parent-defined 4-digit
+  PIN verification. The PIN is never stored in plaintext in SQLite or SharedPreferences;
+  only a cryptographically salted SHA-256 digest is retained.
+  **Threat model:** Defends against casual child tampering or accidental parent UI
+  access on shared family devices. Server-side Postgres RLS remains the authoritative
+  security boundary.
+
+## Decision 8 — Fail-closed configuration outside development
+
+Staging (`APP_ENV=staging`) and Production (`APP_ENV=production`) builds fail fast
+with a `MissingSupabaseConfigurationException` if `SUPABASE_URL` or
+`SUPABASE_PUBLISHABLE_KEY` is missing.
+In-memory fake repositories are strictly confined to `APP_ENV=development` when
+explicit demo mode (`ENABLE_LOCAL_DEMO=true`) or missing local configuration is set.
+Misconfigured production builds will never silently operate with fake data.

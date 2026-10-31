@@ -1,7 +1,7 @@
 # Toolchain and platform baseline
 
-Detected on **2026-10-31** for the Phase 0 bootstrap. Record actual versions,
-not aspirational ones; update this file when the pinned toolchain changes.
+Detected on **2026-10-31** for the Phase 0 bootstrap and Phase 1 implementation.
+Record actual versions, not aspirational ones; update this file when the pinned toolchain changes.
 
 ## Local development toolchain
 
@@ -28,7 +28,7 @@ not aspirational ones; update this file when the pinned toolchain changes.
 | Android `compileSdk` | 36 | Flutter 3.47.1 default |
 | Android `targetSdk` | 36 | Flutter 3.47.1 default |
 | iOS deployment target | 15.0 | generated Xcode project |
-| App identifier | `com.learnward.app` | Phase 0 placeholder |
+| App identifier | `com.learnward.app` | Phase 0/1 baseline |
 | Dart SDK constraint | `^3.13.0` | workspace |
 
 The Android and iOS floors follow `docs/08-mobile-architecture-v0.1.md`
@@ -45,8 +45,14 @@ generated but not compiled locally. CI covers simulator compilation on
 ## Version pinning policy
 
 - The Flutter version is pinned in CI via `FLUTTER_VERSION` and documented here.
+- Supabase CLI is pinned in CI to `2.122.0` (`supabase/setup-cli@v1` with `version: "2.122.0"`)
+  to guarantee deterministic database migrations and pgTAP test runs.
+  Upgrade procedure:
+  1. Test locally: `npx supabase db reset && npx supabase test db`.
+  2. Validate in CI on a test branch.
+  3. Update the pin in `.github/workflows/ci.yml` and record in this document.
 - FVM is not used. A single stable Flutter SDK plus the committed workspace
-  lockfile is sufficient for Phase 0.
+  lockfile is sufficient.
 - `pubspec.lock` is committed and CI fails on generated-code drift.
 - `test`/`build_runner` compatibility pins are explained in
   `docs/adr/0001-phase-0-foundation-decisions.md`.
