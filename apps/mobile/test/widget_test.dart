@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:learnward/app/app.dart';
 import 'package:learnward/app/bootstrap/app_providers.dart';
+import 'package:learnward/features/shared_device/domain/parent_gate_service.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:learnward_test_support/learnward_test_support.dart';
 
@@ -72,6 +73,8 @@ void main() {
     );
     final fakeChildRepo = FakeChildProfileRepository(children: [child]);
     final fakeStore = InMemoryLocalMetadataStore();
+    // Pre-configure parent PIN so that child mode can be entered directly
+    await ParentGateService(fakeStore).setPin('8392');
 
     await tester.pumpWidget(
       ProviderScope(
@@ -130,6 +133,8 @@ void main() {
     );
     final fakeChildRepo = FakeChildProfileRepository(children: [child]);
     final fakeStore = InMemoryLocalMetadataStore();
+    // Pre-configure parent PIN so that child mode can be entered directly
+    await ParentGateService(fakeStore).setPin('8392');
 
     await tester.pumpWidget(
       ProviderScope(
@@ -166,10 +171,10 @@ void main() {
       findsOneWidget,
     );
 
-    // Enter default PIN 1234
+    // Enter configured PIN 8392
     await tester.enterText(
       find.byKey(const Key('parent_gate_pin_field')),
-      '1234',
+      '8392',
     );
     await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
     await tester.pumpAndSettle();

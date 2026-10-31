@@ -7,6 +7,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../app/routing/app_routes.dart';
+import '../../shared_device/presentation/parent_pin_setup_dialog.dart';
 
 /// Parent/Guardian home dashboard.
 ///
@@ -276,6 +277,20 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                       trailing: FilledButton.tonal(
                         key: Key('enter_child_mode_${child.id.value}'),
                         onPressed: () async {
+                          final gateService = ref.read(
+                            parentGateServiceProvider,
+                          );
+                          final hasPin = await gateService.hasConfiguredPin();
+                          if (!context.mounted) return;
+
+                          if (!hasPin) {
+                            final pinConfigured =
+                                await ParentPinSetupDialog.show(context);
+                            if (!pinConfigured || !context.mounted) {
+                              return;
+                            }
+                          }
+
                           await ref
                               .read(activeChildModeProvider.notifier)
                               .selectChild(child);

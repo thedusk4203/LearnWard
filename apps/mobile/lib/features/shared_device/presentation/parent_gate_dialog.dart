@@ -80,7 +80,6 @@ class _ParentGateDialogState extends ConsumerState<ParentGateDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final config = ref.watch(appConfigProvider);
 
     return AlertDialog(
       title: const Row(
@@ -112,17 +111,6 @@ class _ParentGateDialogState extends ConsumerState<ParentGateDialog> {
               ),
               onSubmitted: (_) => _verifyPin(),
             ),
-            if (config.canUseLocalDemoRepositories)
-              Padding(
-                padding: const EdgeInsets.only(top: AppSpacing.xs),
-                child: Text(
-                  'Development hint: Default PIN is 1234',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
             if (_errorMessage != null)
               Padding(
                 padding: const EdgeInsets.only(top: AppSpacing.sm),

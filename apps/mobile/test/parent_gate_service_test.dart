@@ -12,33 +12,41 @@ void main() {
       service = ParentGateService(store);
     });
 
-    test('accepts default PIN 1234 before custom PIN is configured', () async {
+    test('no PIN configured fails closed: reject all PIN attempts', () async {
+      expect(await service.hasConfiguredPin(), isFalse);
       expect(await service.hasCustomPin(), isFalse);
-      expect(await service.verifyPin('1234'), isTrue);
+      // Fails closed: 1234 or any other PIN must NOT unlock
+      expect(await service.verifyPin('1234'), isFalse);
+      expect(await service.verifyPin('8392'), isFalse);
       expect(await service.verifyPin('0000'), isFalse);
-      expect(await service.verifyPin('9999'), isFalse);
     });
 
-    test(
-      'sets custom 4-digit PIN, hashes it with salt, and verifies correctly',
-      () async {
-        await service.setPin('8392');
+    test('sets custom 4-digit PIN, hashes it with salt, never persists plaintext, and verifies', () async {
+      await service.setPin('8392');
 
-        expect(await service.hasCustomPin(), isTrue);
-        expect(await service.verifyPin('8392'), isTrue);
-        expect(await service.verifyPin('1234'), isFalse);
-        expect(await service.verifyPin('0000'), isFalse);
+      expect(await service.hasConfiguredPin(), isTrue);
 
-        // Verify that plaintext PIN is NEVER stored in database
-        final storedHash = await store.readMetadata('parent_gate_pin_hash');
-        final storedSalt = await store.readMetadata('parent_gate_pin_salt');
+      // Verify that plaintext PIN 8392 is NEVER stored in metadata
+      final storedHash = await store.readMetadata(ParentGateService.pinHashKey);
+      final storedSalt = await store.readMetadata(ParentGateService.pinSaltKey);
 
-        expect(storedHash, isNotNull);
-        expect(storedSalt, isNotNull);
-        expect(storedHash, isNot(contains('8392')));
-        expect(storedHash!.length, equals(64)); // SHA-256 hex length
-      },
-    );
+      expect(storedHash, isNotNull);
+      expect(storedSalt, isNotNull);
+      expect(storedHash, isNot(contains('8392')));
+      expect(storedSalt, isNot(contains('8392')));
+      expect(storedHash!.length, equals(64)); // SHA-256 hex length
+
+      // Exit with 1234 must FAIL
+      expect(await service.verifyPin('1234'), isFalse);
+      // Exit with 8392 must PASS
+      expect(await service.verifyPin('8392'), isTrue);
+
+      // App restart simulation: new service using same store
+      final restartedService = ParentGateService(store);
+      expect(await restartedService.hasConfiguredPin(), isTrue);
+      expect(await restartedService.verifyPin('1234'), isFalse);
+      expect(await restartedService.verifyPin('8392'), isTrue);
+    });
 
     test('rejects PINs that are not exactly 4 digits', () async {
       expect(() => service.setPin('123'), throwsArgumentError);

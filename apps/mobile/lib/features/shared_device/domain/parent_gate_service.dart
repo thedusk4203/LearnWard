@@ -25,9 +25,8 @@ class ParentGateService {
 
   final LocalMetadataStore _store;
 
-  static const _pinHashKey = 'parent_gate_pin_hash';
-  static const _pinSaltKey = 'parent_gate_pin_salt';
-  static const _defaultPin = '1234';
+  static const pinHashKey = 'parent_gate_pin_hash';
+  static const pinSaltKey = 'parent_gate_pin_salt';
 
   /// Generates a random 16-byte hex salt.
   String _generateSalt() {
@@ -42,14 +41,16 @@ class ParentGateService {
     return sha256.convert(bytes).toString();
   }
 
-  /// Verifies if the entered PIN matches the configured or default Parent PIN.
+  /// Verifies if the entered PIN matches the configured Parent PIN.
+  ///
+  /// Fails closed (returns false) if no PIN has been explicitly configured.
+  /// Universal default PINs are strictly prohibited.
   Future<bool> verifyPin(String enteredPin) async {
-    final salt = await _store.readMetadata(_pinSaltKey);
-    final storedHash = await _store.readMetadata(_pinHashKey);
+    final salt = await _store.readMetadata(pinSaltKey);
+    final storedHash = await _store.readMetadata(pinHashKey);
 
     if (salt == null || storedHash == null) {
-      // Use default PIN '1234' if none has been explicitly configured
-      return enteredPin == _defaultPin;
+      return false;
     }
 
     final computedHash = _hashPin(enteredPin, salt);
@@ -57,6 +58,9 @@ class ParentGateService {
   }
 
   /// Updates or sets a new 4-digit Parent PIN.
+  ///
+  /// The plaintext PIN is hashed with a cryptographically secure random salt
+  /// and is NEVER persisted directly.
   Future<void> setPin(String newPin) async {
     if (newPin.length != 4 || int.tryParse(newPin) == null) {
       throw ArgumentError('Parent PIN must be exactly 4 digits');
@@ -66,13 +70,17 @@ class ParentGateService {
     final hash = _hashPin(newPin, salt);
     final now = DateTime.now().toUtc();
 
-    await _store.writeMetadata(key: _pinSaltKey, value: salt, updatedAt: now);
-    await _store.writeMetadata(key: _pinHashKey, value: hash, updatedAt: now);
+    await _store.writeMetadata(key: pinSaltKey, value: salt, updatedAt: now);
+    await _store.writeMetadata(key: pinHashKey, value: hash, updatedAt: now);
   }
 
-  /// Returns whether a custom PIN has been configured.
-  Future<bool> hasCustomPin() async {
-    final hash = await _store.readMetadata(_pinHashKey);
-    return hash != null;
+  /// Returns whether a parent PIN has been explicitly configured.
+  Future<bool> hasConfiguredPin() async {
+    final hash = await _store.readMetadata(pinHashKey);
+    final salt = await _store.readMetadata(pinSaltKey);
+    return hash != null && salt != null;
   }
+
+  /// Alias for [hasConfiguredPin].
+  Future<bool> hasCustomPin() => hasConfiguredPin();
 }
