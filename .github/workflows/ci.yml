@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: "3.47.1"
+
+jobs:
+  quality:
+    name: Format, analyze and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve workspace dependencies
+        run: flutter pub get
+
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Domain tests
+        run: dart test
+        working-directory: packages/learnward_domain
+
+      - name: Application tests
+        run: dart test
+        working-directory: packages/learnward_application
+
+      - name: Data tests
+        run: dart test
+        working-directory: packages/learnward_data
+
+      - name: Test support tests
+        run: dart test
+        working-directory: packages/learnward_test_support
+
+      - name: Design system tests
+        run: flutter test
+        working-directory: packages/learnward_design_system
+
+      - name: Flutter widget tests
+        run: flutter test
+        working-directory: apps/mobile
+
+      - name: Verify generated Drift code is current
+        run: |
+          cd packages/learnward_data
+          dart run build_runner build
+          cd ../..
+          git diff --exit-code -- packages/learnward_data/lib
+
+  android:
+    name: Android debug build
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve workspace dependencies
+        run: flutter pub get
+
+      - name: Build debug APK
+        run: flutter build apk --debug
+        working-directory: apps/mobile
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: learnward-debug-apk
+          path: apps/mobile/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  ios:
+    name: iOS simulator compile
+    needs: quality
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve workspace dependencies
+        run: flutter pub get
+
+      # Simulator builds need no signing credentials and protect normal PR CI
+      # from App Store signing requirements.
+      - name: Build for iOS simulator
+        run: flutter build ios --simulator --debug
+        working-directory: apps/mobile
