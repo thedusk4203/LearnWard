@@ -45,7 +45,8 @@ Level    │    Wheel   Store
 - The wheel is a celebration mechanic, not the product moat.
 - The long-term moat is the **Growth Engine + longitudinal learning history + personalized mastery model**.
 - Mastery must remain separate from reward: academic evidence updates learning state; RP/XP never inflate mastery directly.
-- Mobile delivery is **Android + iOS from one role-aware Flutter codebase** for v1.
+- Mobile v1 targets **Android and iOS from one Flutter codebase**.
+- Family is the tenant/security boundary; parent and paired-child access must be enforced server-side with RLS.
 
 ## Documentation
 
@@ -59,14 +60,15 @@ Level    │    Wheel   Store
 | [Pilot Plan v0.1](docs/05-pilot-plan-v0.1.md) | Four-week pre-build validation experiment |
 | [Metrics & Hypotheses](docs/06-metrics-and-hypotheses.md) | North Star, secondary metrics and validation criteria |
 | [Learning Engine & Mastery v0.1](docs/07-learning-engine-mastery-v0.1.md) | Subject/topic/skill model, mastery confidence, freshness and next-challenge logic |
-| [Mobile Architecture v0.1](docs/08-mobile-architecture-v0.1.md) | Android/iOS delivery, Flutter architecture, offline strategy, backend direction and security boundaries |
+| [Mobile Architecture v0.1](docs/08-mobile-architecture-v0.1.md) | Flutter Android/iOS architecture and platform delivery decisions |
+| [Data & Authorization Model v0.1](docs/09-data-and-authorization-model-v0.1.md) | Family tenancy, schema, immutable ledgers, pairing, permissions, RLS and offline authority |
 
 ## Product status
 
-**Phase:** Discovery / product definition  
+**Phase:** Discovery / architecture definition  
 **Code:** Not started intentionally  
-**Mobile target:** Android + iOS / Flutter  
-**Next gate:** Validate the motivation + growth + mastery loop with a small real-world pilot before production implementation.
+**Mobile target:** Flutter → Android + iOS  
+**Next gate:** Validate the motivation + growth + mastery loop with a small real-world pilot while converting the frozen architecture into an implementation plan.
 
 ## Working rule
 
