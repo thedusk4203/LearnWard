@@ -1,0 +1,23 @@
+name: learnward_data
+description: Infrastructure adapters and local Drift database for LearnWard.
+version: 0.1.0
+publish_to: none
+
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  drift: ^2.35.3
+  learnward_application:
+    path: ../learnward_application
+  learnward_domain:
+    path: ../learnward_domain
+  supabase: ^2.16.5
+
+dev_dependencies:
+  build_runner: 2.15.1
+  drift_dev: ^2.35.2
+  sqlite3: ^3.8.0
+  test: 1.31.1

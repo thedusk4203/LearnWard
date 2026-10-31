@@ -1,0 +1,16 @@
+name: learnward_application
+description: Application use cases and ports for LearnWard.
+version: 0.1.0
+publish_to: none
+
+resolution: workspace
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  learnward_domain:
+    path: ../learnward_domain
+
+dev_dependencies:
+  test: 1.31.1

@@ -1,0 +1,38 @@
+# Single repository-wide analyzer and lint configuration.
+#
+# Every workspace package relies on this file so local analysis and CI cannot
+# drift apart. Generated sources are excluded from linting; they are still
+# formatted and committed (see docs/adr/0001-phase-0-foundation-decisions.md).
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "**/generated_plugin_registrant.dart"
+    - "**/build/**"
+    - "**/.dart_tool/**"
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
+
+  errors:
+    todo: ignore
+
+linter:
+  rules:
+    - always_declare_return_types
+    - avoid_dynamic_calls
+    - avoid_print
+    - directives_ordering
+    - prefer_final_locals
+    - unawaited_futures
