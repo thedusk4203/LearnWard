@@ -16,6 +16,7 @@ coverage/
 .vscode/
 .omo/
 .serena/
+.gemini/
 
 # Android --------------------------------------------------------------------
 **/android/local.properties
