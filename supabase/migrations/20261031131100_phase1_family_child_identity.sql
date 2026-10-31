@@ -179,6 +179,13 @@ begin
 
     -- If parent family still exists (i.e. not in the middle of family deletion):
     if exists (select 1 from public.families where id = OLD.family_id) then
+      -- Acquire an exclusive row-level lock on the parent family row to serialize
+      -- concurrent owner demotions/revocations within the same family tenant.
+      perform 1
+      from public.families
+      where id = OLD.family_id
+      for update;
+
       select count(*) into v_remaining
       from public.family_memberships
       where family_id = OLD.family_id

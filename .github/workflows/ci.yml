@@ -91,6 +91,9 @@ jobs:
       - name: Run database and RLS pgTAP tests
         run: supabase test db
 
+      - name: Run last-owner concurrency regression test
+        run: node scripts/test_last_owner_concurrency.mjs
+
   android:
     name: Android debug build
     needs: [quality, database]

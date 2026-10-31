@@ -18,4 +18,7 @@ flutter analyze
 
 if command -v npx >/dev/null 2>&1; then
   npx supabase test db
+  if command -v node >/dev/null 2>&1; then
+    node scripts/test_last_owner_concurrency.mjs
+  fi
 fi
