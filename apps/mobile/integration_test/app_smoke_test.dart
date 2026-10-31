@@ -11,6 +11,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('LearnWard'), findsOneWidget);
-    expect(find.text('Engineering foundation ready'), findsOneWidget);
+    expect(find.text('No Family Found'), findsOneWidget);
   });
 }
