@@ -13,4 +13,6 @@ dependencies:
     path: ../learnward_domain
 
 dev_dependencies:
+  learnward_test_support:
+    path: ../learnward_test_support
   test: 1.31.1
