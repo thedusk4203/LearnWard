@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 import 'package:learnward_application/learnward_application.dart';
+import 'package:learnward_domain/learnward_domain.dart';
 
+import 'local_assessment_drafts.dart';
 import 'local_metadata_entries.dart';
 
 part 'app_database.g.dart';
@@ -9,16 +11,22 @@ part 'app_database.g.dart';
 ///
 /// The server remains authoritative. This database is reserved for cached read
 /// models, drafts and the future offline command outbox.
-@DriftDatabase(tables: [LocalMetadataEntries])
-class AppDatabase extends _$AppDatabase implements LocalMetadataStore {
+@DriftDatabase(tables: [LocalMetadataEntries, LocalAssessmentDrafts])
+class AppDatabase extends _$AppDatabase
+    implements LocalMetadataStore, LocalDraftStore {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (migrator) => migrator.createAll(),
+    onUpgrade: (migrator, from, to) async {
+      if (from < 2) {
+        await migrator.createTable(localAssessmentDrafts);
+      }
+    },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
     },
@@ -47,5 +55,61 @@ class AppDatabase extends _$AppDatabase implements LocalMetadataStore {
       ..where((entry) => entry.key.equals(key));
     final entry = await query.getSingleOrNull();
     return entry?.value;
+  }
+
+  @override
+  Future<void> saveLocalDraft(LocalAssessmentDraft draft) {
+    return into(localAssessmentDrafts).insertOnConflictUpdate(
+      LocalAssessmentDraftsCompanion.insert(
+        localDraftId: draft.localDraftId,
+        familyId: draft.familyId,
+        childId: draft.childId,
+        serverAssessmentId: Value(draft.serverAssessmentId),
+        subject: draft.subject,
+        title: draft.title,
+        assessmentType: draft.assessmentType,
+        difficulty: draft.difficulty,
+        rawScore: draft.rawScore,
+        maxScore: draft.maxScore,
+        localPhotoPath: Value(draft.localPhotoPath),
+        occurredAt: draft.occurredAt,
+        updatedAt: draft.updatedAt,
+      ),
+    );
+  }
+
+  @override
+  Future<List<LocalAssessmentDraft>> listLocalDrafts(ChildId childId) async {
+    final query = select(localAssessmentDrafts)
+      ..where((entry) => entry.childId.equals(childId.value))
+      ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]);
+    final rows = await query.get();
+
+    return rows
+        .map(
+          (row) => LocalAssessmentDraft(
+            localDraftId: row.localDraftId,
+            familyId: row.familyId,
+            childId: row.childId,
+            serverAssessmentId: row.serverAssessmentId,
+            subject: row.subject,
+            title: row.title,
+            assessmentType: row.assessmentType,
+            difficulty: row.difficulty,
+            rawScore: row.rawScore,
+            maxScore: row.maxScore,
+            localPhotoPath: row.localPhotoPath,
+            occurredAt: row.occurredAt,
+            updatedAt: row.updatedAt,
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<void> deleteLocalDraft(String localDraftId) async {
+    final query = delete(localAssessmentDrafts)
+      ..where((entry) => entry.localDraftId.equals(localDraftId));
+    await query.go();
   }
 }

@@ -1,5 +1,7 @@
 import 'package:drift/native.dart';
+import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_data/learnward_data.dart';
+import 'package:learnward_domain/learnward_domain.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -13,7 +15,7 @@ void main() {
     await database.close();
   });
 
-  group('AppDatabase', () {
+  group('AppDatabase Metadata', () {
     test('opens, migrates and persists technical metadata', () async {
       await database.writeMetadata(
         key: 'schema_probe',
@@ -40,6 +42,37 @@ void main() {
 
       expect(await database.readMetadata('schema_probe'), 'second');
       expect(await database.readMetadata('missing'), isNull);
+    });
+  });
+
+  group('AppDatabase LocalDraftStore', () {
+    test('saves, lists and deletes local assessment drafts', () async {
+      final draft1 = LocalAssessmentDraft(
+        localDraftId: 'draft-1',
+        familyId: 'fam-1',
+        childId: 'child-1',
+        subject: 'Math',
+        title: 'Quiz 1',
+        assessmentType: 'quiz',
+        difficulty: 'normal',
+        rawScore: 9,
+        maxScore: 10,
+        localPhotoPath: '/path/to/photo.jpg',
+        occurredAt: DateTime.utc(2026, 11, 1),
+        updatedAt: DateTime.utc(2026, 11, 1, 10, 0),
+      );
+
+      await database.saveLocalDraft(draft1);
+
+      final list = await database.listLocalDrafts(ChildId('child-1'));
+      expect(list.length, equals(1));
+      expect(list.first.subject, equals('Math'));
+      expect(list.first.rawScore, equals(9));
+      expect(list.first.localPhotoPath, equals('/path/to/photo.jpg'));
+
+      await database.deleteLocalDraft('draft-1');
+      final emptyList = await database.listLocalDrafts(ChildId('child-1'));
+      expect(emptyList.isEmpty, isTrue);
     });
   });
 }
