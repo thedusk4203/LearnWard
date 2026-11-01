@@ -411,6 +411,88 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                     const SizedBox(height: AppSpacing.md),
                   ],
 
+                  // Reward Store and Wheel Quick Action Card
+                  Card(
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(color: theme.colorScheme.outlineVariant),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(AppSpacing.md),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Rewards & Fun',
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              TextButton.icon(
+                                key: const Key(
+                                  'child_redemption_history_button',
+                                ),
+                                icon: const Icon(Icons.history, size: 16),
+                                label: const Text('My Claims'),
+                                onPressed: () {
+                                  context.push(AppRoutes.childRedemptions);
+                                },
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: AppSpacing.xs),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: FilledButton.icon(
+                                  key: const Key('child_reward_store_button'),
+                                  icon: const Icon(Icons.storefront, size: 18),
+                                  label: const Text('Reward Store'),
+                                  onPressed: () async {
+                                    await context.push(AppRoutes.childStore);
+                                    if (mounted) unawaited(_loadEconomyData());
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: AppSpacing.sm),
+                              Expanded(
+                                child: Tooltip(
+                                  message: 'Celebration Wheel is launching in Phase 4.2!',
+                                  child: OutlinedButton.icon(
+                                    key: const Key(
+                                      'child_wheel_placeholder_button',
+                                    ),
+                                    icon: const Icon(
+                                      Icons.toll_outlined,
+                                      size: 18,
+                                    ),
+                                    label: const Text('Wheel (Phase 4.2)'),
+                                    onPressed: () {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Celebration Wheel is coming in Phase 4.2!',
+                                              ),
+                                              duration: Duration(seconds: 2),
+                                            ),
+                                          );
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+
                   // 5. Basic Growth History List
                   if (_growthHistory.isNotEmpty) ...[
                     Text(

@@ -4,6 +4,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import 'local_assessment_drafts.dart';
 import 'local_metadata_entries.dart';
+import 'pending_reward_commands.dart';
 
 part 'app_database.g.dart';
 
@@ -11,13 +12,15 @@ part 'app_database.g.dart';
 ///
 /// The server remains authoritative. This database is reserved for cached read
 /// models, drafts and the future offline command outbox.
-@DriftDatabase(tables: [LocalMetadataEntries, LocalAssessmentDrafts])
+@DriftDatabase(
+  tables: [LocalMetadataEntries, LocalAssessmentDrafts, PendingRewardCommands],
+)
 class AppDatabase extends _$AppDatabase
-    implements LocalMetadataStore, LocalDraftStore {
+    implements LocalMetadataStore, LocalDraftStore, PendingRewardCommandStore {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -39,6 +42,9 @@ class AppDatabase extends _$AppDatabase
           localAssessmentDrafts,
           localAssessmentDrafts.evidenceId,
         );
+      }
+      if (from < 4) {
+        await migrator.createTable(pendingRewardCommands);
       }
     },
     beforeOpen: (details) async {
@@ -158,6 +164,115 @@ class AppDatabase extends _$AppDatabase
       entryContext: ctx,
       occurredAt: row.occurredAt,
       updatedAt: row.updatedAt,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // PENDING REWARD COMMAND STORE
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<void> savePendingCommand(PendingRewardCommand command) {
+    return into(pendingRewardCommands).insert(
+      PendingRewardCommandsCompanion.insert(
+        operation: command.operation.wireValue,
+        commandId: command.commandId,
+        familyId: command.familyId,
+        childId: Value(command.childId),
+        rewardId: Value(command.rewardId),
+        redemptionId: Value(command.redemptionId),
+        cancellationReason: Value(command.cancellationReason),
+        createdAt: command.createdAt,
+      ),
+      mode: InsertMode.insertOrReplace,
+    );
+  }
+
+  @override
+  Future<PendingRewardCommand?> getPendingCommand(String commandId) async {
+    final query = select(pendingRewardCommands)
+      ..where((entry) => entry.commandId.equals(commandId));
+    final row = await query.getSingleOrNull();
+    if (row == null) return null;
+    return _mapRowToPendingCommand(row);
+  }
+
+  @override
+  Future<PendingRewardCommand?> findPendingRedeemCommand({
+    required String familyId,
+    required String childId,
+    required String rewardId,
+  }) async {
+    final query = select(pendingRewardCommands)
+      ..where(
+        (entry) =>
+            entry.operation.equals(
+              RewardCommandOperation.redeemReward.wireValue,
+            ) &
+            entry.familyId.equals(familyId) &
+            entry.childId.equals(childId) &
+            entry.rewardId.equals(rewardId),
+      )
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+      ..limit(1);
+    final row = await query.getSingleOrNull();
+    if (row == null) return null;
+    return _mapRowToPendingCommand(row);
+  }
+
+  @override
+  Future<PendingRewardCommand?> findPendingRedemptionCommand({
+    required RewardCommandOperation operation,
+    required String redemptionId,
+  }) async {
+    final query = select(pendingRewardCommands)
+      ..where(
+        (entry) =>
+            entry.operation.equals(operation.wireValue) &
+            entry.redemptionId.equals(redemptionId),
+      )
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+      ..limit(1);
+    final row = await query.getSingleOrNull();
+    if (row == null) return null;
+    return _mapRowToPendingCommand(row);
+  }
+
+  @override
+  Future<List<PendingRewardCommand>> listPendingCommands({
+    String? familyId,
+    String? childId,
+  }) async {
+    final query = select(pendingRewardCommands);
+    if (familyId != null) {
+      query.where((entry) => entry.familyId.equals(familyId));
+    }
+    if (childId != null) {
+      query.where((entry) => entry.childId.equals(childId));
+    }
+    query.orderBy([(t) => OrderingTerm.desc(t.createdAt)]);
+    final rows = await query.get();
+    return rows.map(_mapRowToPendingCommand).toList();
+  }
+
+  @override
+  Future<void> deletePendingCommand(String commandId) async {
+    final query = delete(pendingRewardCommands)
+      ..where((entry) => entry.commandId.equals(commandId));
+    await query.go();
+  }
+
+  PendingRewardCommand _mapRowToPendingCommand(PendingRewardCommandEntry row) {
+    return PendingRewardCommand(
+      id: row.id,
+      operation: RewardCommandOperation.fromString(row.operation),
+      commandId: row.commandId,
+      familyId: row.familyId,
+      childId: row.childId,
+      rewardId: row.rewardId,
+      redemptionId: row.redemptionId,
+      cancellationReason: row.cancellationReason,
+      createdAt: row.createdAt,
     );
   }
 }

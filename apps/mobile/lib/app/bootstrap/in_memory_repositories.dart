@@ -48,6 +48,7 @@ final class InMemoryFamilyRepository implements FamilyRepository {
 /// credentials are not configured in local development.
 final class InMemoryChildProfileRepository implements ChildProfileRepository {
   final List<ChildProfile> _children = [];
+  List<ChildProfile> get children => _children;
   int _nextId = 1;
 
   @override
@@ -129,6 +130,71 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
   @override
   Future<void> deleteLocalDraft(String localDraftId) async {
     _drafts.remove(localDraftId);
+  }
+}
+
+/// Lightweight in-memory fallback for [PendingRewardCommandStore] in test and local demo modes.
+final class InMemoryPendingRewardCommandStore
+    implements PendingRewardCommandStore {
+  final Map<String, PendingRewardCommand> _commands = {};
+
+  @override
+  Future<void> savePendingCommand(PendingRewardCommand command) async {
+    _commands[command.commandId] = command;
+  }
+
+  @override
+  Future<PendingRewardCommand?> getPendingCommand(String commandId) async {
+    return _commands[commandId];
+  }
+
+  @override
+  Future<PendingRewardCommand?> findPendingRedeemCommand({
+    required String familyId,
+    required String childId,
+    required String rewardId,
+  }) async {
+    for (final cmd in _commands.values.toList().reversed) {
+      if (cmd.operation == RewardCommandOperation.redeemReward &&
+          cmd.familyId == familyId &&
+          cmd.childId == childId &&
+          cmd.rewardId == rewardId) {
+        return cmd;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<PendingRewardCommand?> findPendingRedemptionCommand({
+    required RewardCommandOperation operation,
+    required String redemptionId,
+  }) async {
+    for (final cmd in _commands.values.toList().reversed) {
+      if (cmd.operation == operation && cmd.redemptionId == redemptionId) {
+        return cmd;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<List<PendingRewardCommand>> listPendingCommands({
+    String? familyId,
+    String? childId,
+  }) async {
+    final list = _commands.values.where((cmd) {
+      if (familyId != null && cmd.familyId != familyId) return false;
+      if (childId != null && cmd.childId != childId) return false;
+      return true;
+    }).toList();
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
+  @override
+  Future<void> deletePendingCommand(String commandId) async {
+    _commands.remove(commandId);
   }
 }
 
@@ -448,6 +514,7 @@ final class InMemoryGrowthRepository implements GrowthRepository {
   final Map<String, GrowthEvent> _growthEventsByVle = {};
   final Map<String, GrowthEvent> _growthEventsByAssessment = {};
   final Map<String, ChildBalance> _balancesByChild = {};
+  Map<String, ChildBalance> get balancesByChild => _balancesByChild;
   final List<XpLedgerEntry> _xpLedger = [];
   final List<RpLedgerEntry> _rpLedger = [];
 
@@ -636,5 +703,275 @@ final class InMemoryGrowthRepository implements GrowthRepository {
       await processVerifiedLearningEvent(verifiedLearningEventId: event.id);
     }
     return pending.length;
+  }
+}
+
+/// Lightweight in-memory fallback for [RewardRepository] when Supabase credentials
+/// are not configured in local development.
+final class InMemoryRewardRepository implements RewardRepository {
+  InMemoryRewardRepository({this.growthRepository});
+
+  final InMemoryGrowthRepository? growthRepository;
+  final Map<String, Reward> _rewards = {};
+  final Map<String, RewardRedemption> _redemptions = {};
+  final Map<String, dynamic> _commandReceipts = {};
+  int _nextRewardId = 1;
+  int _nextRedemptionId = 1;
+
+  @override
+  Future<Reward> createReward({
+    required FamilyId familyId,
+    required String title,
+    String? description,
+    required RewardCategory category,
+    String iconKey = 'default_star',
+    bool storeEnabled = true,
+    int? storeCostMinor,
+    bool wheelEnabled = false,
+    WheelTier? wheelTier,
+    ChildId? targetChildId,
+  }) async {
+    final id = RewardId('local-rew-${_nextRewardId++}');
+    final now = DateTime.now().toUtc();
+    final reward = Reward(
+      id: id,
+      familyId: familyId,
+      title: title,
+      description: description,
+      category: category,
+      iconKey: iconKey,
+      storeEnabled: storeEnabled,
+      storeCostMinor: storeCostMinor,
+      wheelEnabled: wheelEnabled,
+      wheelTier: wheelTier,
+      targetChildId: targetChildId,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    );
+    _rewards[id.value] = reward;
+    return reward;
+  }
+
+  @override
+  Future<Reward> updateReward(Reward reward) async {
+    _rewards[reward.id.value] = reward.copyWith(
+      updatedAt: DateTime.now().toUtc(),
+    );
+    return _rewards[reward.id.value]!;
+  }
+
+  @override
+  Future<void> deleteReward({
+    required FamilyId familyId,
+    required RewardId rewardId,
+  }) async {
+    _rewards.remove(rewardId.value);
+  }
+
+  @override
+  Future<Reward?> getReward({
+    required FamilyId familyId,
+    required RewardId rewardId,
+  }) async {
+    final reward = _rewards[rewardId.value];
+    if (reward != null && reward.familyId == familyId) {
+      return reward;
+    }
+    return null;
+  }
+
+  @override
+  Future<List<Reward>> listFamilyRewards({
+    required FamilyId familyId,
+    bool? activeOnly,
+  }) async {
+    return _rewards.values.where((r) {
+      if (r.familyId != familyId) return false;
+      if (activeOnly == true && !r.isActive) return false;
+      return true;
+    }).toList();
+  }
+
+  @override
+  Future<List<Reward>> listStoreRewards({
+    required FamilyId familyId,
+    ChildId? childId,
+  }) async {
+    final list = _rewards.values.where((r) {
+      if (r.familyId != familyId) return false;
+      if (!r.storeEnabled || !r.isActive) return false;
+      if (childId != null && !r.isEligibleFor(childId)) return false;
+      return true;
+    }).toList();
+    list.sort(
+      (a, b) => (a.storeCostMinor ?? 0).compareTo(b.storeCostMinor ?? 0),
+    );
+    return list;
+  }
+
+  @override
+  Future<RewardRedemption> redeemStoreReward({
+    required String commandId,
+    required RewardId rewardId,
+    required ChildId childId,
+  }) async {
+    if (_commandReceipts.containsKey(commandId)) {
+      final receipt = _commandReceipts[commandId] as Map<String, dynamic>;
+      final existingId = receipt['resource_id'] as String;
+      return _redemptions[existingId]!;
+    }
+
+    final reward = _rewards[rewardId.value];
+    if (reward == null || !reward.isActive || !reward.storeEnabled) {
+      throw const InvalidRewardException('Reward no longer available.');
+    }
+
+    final cost = reward.storeCostMinor ?? 0;
+    if (growthRepository != null) {
+      final balance = await growthRepository!.getChildBalance(childId);
+      final currentBalance = balance?.rpBalanceMinor.value ?? 0;
+      if (currentBalance < cost) {
+        throw const InvalidRewardException('Insufficient RP balance.');
+      }
+      growthRepository!._balancesByChild[childId.value] = ChildBalance(
+        familyId: reward.familyId,
+        childId: childId,
+        xpTotal: balance?.xpTotal ?? const XpAmount(0),
+        rpBalanceMinor: RpMinor(currentBalance - cost),
+        updatedAt: DateTime.now().toUtc(),
+      );
+    }
+
+    final now = DateTime.now().toUtc();
+    final redemptionId = RewardRedemptionId('local-red-${_nextRedemptionId++}');
+    final redemption = RewardRedemption(
+      id: redemptionId,
+      familyId: reward.familyId,
+      childId: childId,
+      rewardId: reward.id,
+      origin: RewardOrigin.store,
+      rpCostMinor: cost,
+      status: RewardRedemptionStatus.pendingFulfillment,
+      rewardSnapshot: {
+        'reward_id': reward.id.value,
+        'title': reward.title,
+        'description': reward.description,
+        'category': reward.category.value,
+        'icon_key': reward.iconKey,
+        'store_cost_minor': cost,
+        'redeemed_at': now.toIso8601String(),
+      },
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    _redemptions[redemptionId.value] = redemption;
+    _commandReceipts[commandId] = {
+      'operation': 'redeem_reward',
+      'resource_id': redemptionId.value,
+    };
+    return redemption;
+  }
+
+  @override
+  Future<RewardRedemption> fulfillRewardRedemption({
+    required String commandId,
+    required RewardRedemptionId redemptionId,
+  }) async {
+    if (_commandReceipts.containsKey(commandId)) {
+      final receipt = _commandReceipts[commandId] as Map<String, dynamic>;
+      final existingId = receipt['resource_id'] as String;
+      return _redemptions[existingId]!;
+    }
+
+    final existing = _redemptions[redemptionId.value];
+    if (existing == null) {
+      throw const InvalidRedemptionException('Reward redemption not found.');
+    }
+    if (existing.status != RewardRedemptionStatus.pendingFulfillment) {
+      throw InvalidRedemptionException(
+        'Reward redemption is already in a terminal state: ${existing.status.value}',
+      );
+    }
+
+    final now = DateTime.now().toUtc();
+    final updated = existing.copyWith(
+      status: RewardRedemptionStatus.fulfilled,
+      fulfilledAt: now,
+      fulfilledByUserId: 'local-parent-user',
+      updatedAt: now,
+    );
+    _redemptions[redemptionId.value] = updated;
+    _commandReceipts[commandId] = {
+      'operation': 'fulfill_reward',
+      'resource_id': redemptionId.value,
+    };
+    return updated;
+  }
+
+  @override
+  Future<RewardRedemption> cancelRewardRedemption({
+    required String commandId,
+    required RewardRedemptionId redemptionId,
+    required String cancellationReason,
+  }) async {
+    if (_commandReceipts.containsKey(commandId)) {
+      final receipt = _commandReceipts[commandId] as Map<String, dynamic>;
+      final existingId = receipt['resource_id'] as String;
+      return _redemptions[existingId]!;
+    }
+
+    final existing = _redemptions[redemptionId.value];
+    if (existing == null) {
+      throw const InvalidRedemptionException('Reward redemption not found.');
+    }
+    if (existing.status != RewardRedemptionStatus.pendingFulfillment) {
+      throw InvalidRedemptionException(
+        'Reward redemption is already in a terminal state: ${existing.status.value}',
+      );
+    }
+
+    final now = DateTime.now().toUtc();
+    final updated = existing.copyWith(
+      status: RewardRedemptionStatus.cancelled,
+      cancellationReason: cancellationReason,
+      updatedAt: now,
+    );
+
+    if (growthRepository != null) {
+      final balance = await growthRepository!.getChildBalance(existing.childId);
+      final currentBalance = balance?.rpBalanceMinor.value ?? 0;
+      growthRepository!._balancesByChild[existing.childId.value] = ChildBalance(
+        familyId: existing.familyId,
+        childId: existing.childId,
+        xpTotal: balance?.xpTotal ?? const XpAmount(0),
+        rpBalanceMinor: RpMinor(currentBalance + existing.rpCostMinor),
+        updatedAt: now,
+      );
+    }
+
+    _redemptions[redemptionId.value] = updated;
+    _commandReceipts[commandId] = {
+      'operation': 'cancel_reward',
+      'resource_id': redemptionId.value,
+    };
+    return updated;
+  }
+
+  @override
+  Future<List<RewardRedemption>> listRedemptions({
+    required FamilyId familyId,
+    ChildId? childId,
+    RewardRedemptionStatus? status,
+  }) async {
+    final list = _redemptions.values.where((r) {
+      if (r.familyId != familyId) return false;
+      if (childId != null && r.childId != childId) return false;
+      if (status != null && r.status != status) return false;
+      return true;
+    }).toList();
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
   }
 }

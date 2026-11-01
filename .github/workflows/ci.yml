@@ -115,6 +115,12 @@ jobs:
       - name: Run Growth Engine Dart/Postgres parity test
         run: node scripts/test_growth_parity.mjs
 
+      - name: Run Reward Store concurrency regression test
+        run: node scripts/test_reward_store_concurrency.mjs
+
+      - name: Run Reward Store vertical slice integration test
+        run: node scripts/test_reward_store_vertical_slice.mjs
+
   android:
     name: Android debug build
     needs: [quality, database]

@@ -19,5 +19,7 @@ dependencies:
 dev_dependencies:
   build_runner: 2.15.1
   drift_dev: ^2.35.2
+  learnward_test_support:
+    path: ../learnward_test_support
   sqlite3: ^3.8.0
   test: 1.31.1

@@ -44,6 +44,23 @@ final localDraftStoreProvider = Provider<LocalDraftStore>((ref) {
   return ref.watch(databaseProvider);
 });
 
+/// In-memory pending reward command store provider for testing/local demo.
+final inMemoryPendingRewardCommandStoreProvider =
+    Provider<PendingRewardCommandStore>((ref) {
+      return InMemoryPendingRewardCommandStore();
+    });
+
+/// Pending reward command store provider.
+final pendingRewardCommandStoreProvider = Provider<PendingRewardCommandStore>((
+  ref,
+) {
+  final config = ref.watch(appConfigProvider);
+  if (config.canUseLocalDemoRepositories) {
+    return ref.watch(inMemoryPendingRewardCommandStoreProvider);
+  }
+  return ref.watch(databaseProvider);
+});
+
 /// Evidence picker service provider. Defaults to production native image_picker.
 final evidencePickerServiceProvider = Provider<EvidencePickerService>((ref) {
   final config = ref.watch(appConfigProvider);
@@ -166,6 +183,24 @@ final growthRepositoryProvider = Provider<GrowthRepository>((ref) {
     return InMemoryGrowthRepository(
       assessmentRepository: assessmentRepo is InMemoryAssessmentRepository
           ? assessmentRepo
+          : null,
+    );
+  }
+  throw MissingSupabaseConfigurationException(config.environment);
+});
+
+/// Repository for reward catalog, store redemptions and fulfillment.
+final rewardRepositoryProvider = Provider<RewardRepository>((ref) {
+  final config = ref.watch(appConfigProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (client != null) {
+    return SupabaseRewardRepository(client);
+  }
+  if (config.canUseLocalDemoRepositories) {
+    final growthRepo = ref.watch(growthRepositoryProvider);
+    return InMemoryRewardRepository(
+      growthRepository: growthRepo is InMemoryGrowthRepository
+          ? growthRepo
           : null,
     );
   }

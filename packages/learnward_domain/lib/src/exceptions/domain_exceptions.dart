@@ -27,3 +27,23 @@ final class InvalidAssessmentException implements Exception {
   @override
   String toString() => 'InvalidAssessmentException: $message';
 }
+
+/// Raised when reward catalog invariants are violated.
+final class InvalidRewardException implements Exception {
+  const InvalidRewardException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'InvalidRewardException: $message';
+}
+
+/// Raised when reward redemption invariants are violated.
+final class InvalidRedemptionException implements Exception {
+  const InvalidRedemptionException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'InvalidRedemptionException: $message';
+}

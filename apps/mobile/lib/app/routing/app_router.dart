@@ -14,6 +14,11 @@ import '../../features/child/presentation/create_child_screen.dart';
 import '../../features/family/presentation/create_family_screen.dart';
 import '../../features/family/presentation/family_home_screen.dart';
 import '../../features/foundation/presentation/foundation_screen.dart';
+import '../../features/rewards/presentation/child_redemption_history_screen.dart';
+import '../../features/rewards/presentation/child_store_screen.dart';
+import '../../features/rewards/presentation/parent_fulfillment_inbox_screen.dart';
+import '../../features/rewards/presentation/parent_reward_catalog_screen.dart';
+import '../../features/rewards/presentation/parent_reward_form_screen.dart';
 import '../bootstrap/app_providers.dart';
 import 'app_routes.dart';
 
@@ -113,9 +118,42 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const CreateChildScreen(),
       ),
       GoRoute(
+        path: AppRoutes.parentRewards,
+        name: AppRoutes.parentRewardsName,
+        builder: (context, state) => const ParentRewardCatalogScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.parentCreateReward,
+        name: AppRoutes.parentCreateRewardName,
+        builder: (context, state) => const ParentRewardFormScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.parentEditReward,
+        name: AppRoutes.parentEditRewardName,
+        builder: (context, state) {
+          final reward = state.extra as Reward?;
+          return ParentRewardFormScreen(rewardToEdit: reward);
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.parentFulfillmentInbox,
+        name: AppRoutes.parentFulfillmentInboxName,
+        builder: (context, state) => const ParentFulfillmentInboxScreen(),
+      ),
+      GoRoute(
         path: AppRoutes.childMode,
         name: AppRoutes.childModeName,
         builder: (context, state) => const ChildModeScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.childStore,
+        name: AppRoutes.childStoreName,
+        builder: (context, state) => const ChildStoreScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.childRedemptions,
+        name: AppRoutes.childRedemptionsName,
+        builder: (context, state) => const ChildRedemptionHistoryScreen(),
       ),
       GoRoute(
         path: AppRoutes.childAddAssessment,
