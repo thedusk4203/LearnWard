@@ -2,7 +2,8 @@
 ///
 /// Study XP represents cumulative learning effort, unlocks levels, and is never spent.
 final class XpAmount implements Comparable<XpAmount> {
-  const XpAmount(this.value) : assert(value >= 0, 'XP amount must be non-negative');
+  const XpAmount(this.value)
+    : assert(value >= 0, 'XP amount must be non-negative');
 
   static const XpAmount zero = XpAmount(0);
 

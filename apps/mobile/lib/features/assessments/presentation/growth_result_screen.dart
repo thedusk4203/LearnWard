@@ -55,7 +55,9 @@ class GrowthResultScreen extends StatelessWidget {
               // Header Summary Card
               Card(
                 elevation: 0,
-                color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+                color: theme.colorScheme.primaryContainer.withValues(
+                  alpha: 0.3,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                   side: BorderSide(
@@ -137,7 +139,11 @@ class GrowthResultScreen extends StatelessWidget {
                         const SizedBox(height: 4),
                         Row(
                           children: [
-                            Icon(Icons.shield_outlined, size: 16, color: Colors.amber.shade800),
+                            Icon(
+                              Icons.shield_outlined,
+                              size: 16,
+                              color: Colors.amber.shade800,
+                            ),
                             const SizedBox(width: 6),
                             Expanded(
                               child: Text(
@@ -162,7 +168,8 @@ class GrowthResultScreen extends StatelessWidget {
                         const SizedBox(height: AppSpacing.sm),
                         _buildBreakdownRow(
                           label: 'Mastery Maintenance',
-                          amount: '+${growthEvent.highPerformerRpMinor.formatRp()}',
+                          amount:
+                              '+${growthEvent.highPerformerRpMinor.formatRp()}',
                           theme: theme,
                         ),
                       ],
@@ -170,7 +177,8 @@ class GrowthResultScreen extends StatelessWidget {
                         const SizedBox(height: AppSpacing.sm),
                         _buildBreakdownRow(
                           label: 'Personal Best',
-                          amount: '+${growthEvent.personalBestRpMinor.formatRp()}',
+                          amount:
+                              '+${growthEvent.personalBestRpMinor.formatRp()}',
                           theme: theme,
                         ),
                       ],
@@ -178,7 +186,8 @@ class GrowthResultScreen extends StatelessWidget {
                         const SizedBox(height: AppSpacing.sm),
                         _buildBreakdownRow(
                           label: 'Challenge Bonus',
-                          amount: '+${growthEvent.difficultyRpMinor.formatRp()}',
+                          amount:
+                              '+${growthEvent.difficultyRpMinor.formatRp()}',
                           theme: theme,
                         ),
                       ],
@@ -206,7 +215,9 @@ class GrowthResultScreen extends StatelessWidget {
               const SizedBox(height: AppSpacing.xs),
               Card(
                 elevation: 0,
-                color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.3),
+                color: theme.colorScheme.secondaryContainer.withValues(
+                  alpha: 0.3,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                   side: BorderSide(
@@ -263,7 +274,8 @@ class GrowthResultScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _buildExplanationBullet(
-                          title: 'Base Score (+${growthEvent.scoreRpMinor.formatRp()} RP)',
+                          title:
+                              'Base Score (+${growthEvent.scoreRpMinor.formatRp()} RP)',
                           description: growthEvent.belowLevelAdjustment
                               ? 'Good practice! This activity is below current level, earning 25% base reward value.'
                               : 'Direct reward proportional to verified test score (${growthEvent.normalizedScore.toStringAsFixed(2)} / 10).',
@@ -271,30 +283,36 @@ class GrowthResultScreen extends StatelessWidget {
                         ),
                         if (growthEvent.growthRpMinor.value > 0)
                           _buildExplanationBullet(
-                            title: 'Growth Bonus (+${growthEvent.growthRpMinor.formatRp()} RP)',
-                            description: 'Score exceeded recent 3-assessment baseline (${growthEvent.baselineScore!.toStringAsFixed(2)}) by +${growthEvent.growthDelta!.toStringAsFixed(2)}.',
+                            title:
+                                'Growth Bonus (+${growthEvent.growthRpMinor.formatRp()} RP)',
+                            description:
+                                'Score exceeded recent 3-assessment baseline (${growthEvent.baselineScore!.toStringAsFixed(2)}) by +${growthEvent.growthDelta!.toStringAsFixed(2)}.',
                             theme: theme,
                           ),
                         if (growthEvent.highPerformerRpMinor.value > 0)
                           _buildExplanationBullet(
-                            title: 'Mastery Maintenance (+${growthEvent.highPerformerRpMinor.formatRp()} RP)',
+                            title:
+                                'Mastery Maintenance (+${growthEvent.highPerformerRpMinor.formatRp()} RP)',
                             description: 'Maintained strong high performance at or above 8.5.',
                             theme: theme,
                           ),
                         if (growthEvent.personalBestRpMinor.value > 0)
                           _buildExplanationBullet(
-                            title: 'Personal Best (+${growthEvent.personalBestRpMinor.formatRp()} RP)',
+                            title:
+                                'Personal Best (+${growthEvent.personalBestRpMinor.formatRp()} RP)',
                             description: 'Established a new personal record in this subject.',
                             theme: theme,
                           ),
                         if (growthEvent.difficultyRpMinor.value > 0)
                           _buildExplanationBullet(
-                            title: 'Challenge Bonus (+${growthEvent.difficultyRpMinor.formatRp()} RP)',
+                            title:
+                                'Challenge Bonus (+${growthEvent.difficultyRpMinor.formatRp()} RP)',
                             description: 'Earned bonus for completing a harder challenge assessment.',
                             theme: theme,
                           ),
                         _buildExplanationBullet(
-                          title: 'Study XP (+${growthEvent.xpAwarded.value} XP)',
+                          title:
+                              'Study XP (+${growthEvent.xpAwarded.value} XP)',
                           description: 'Permanent progression points for cumulative learning effort. Never spent or deducted.',
                           theme: theme,
                         ),
@@ -329,7 +347,9 @@ class GrowthResultScreen extends StatelessWidget {
         Text(
           label,
           style: isTotal
-              ? theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)
+              ? theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                )
               : theme.textTheme.bodyMedium,
         ),
         Text(
@@ -339,7 +359,9 @@ class GrowthResultScreen extends StatelessWidget {
                   fontWeight: FontWeight.bold,
                   color: theme.colorScheme.primary,
                 )
-              : theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+              : theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
         ),
       ],
     );

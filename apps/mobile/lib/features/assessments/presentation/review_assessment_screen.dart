@@ -123,9 +123,10 @@ class _ReviewAssessmentScreenState
         final vleUseCase = ListVerifiedLearningEvents(repo);
         final vles = await vleUseCase(_currentAssessment.childId);
         final targetVle = vles.cast<VerifiedLearningEvent?>().firstWhere(
-              (VerifiedLearningEvent? e) => e?.assessmentId == _currentAssessment.id,
-              orElse: () => null,
-            );
+          (VerifiedLearningEvent? e) =>
+              e?.assessmentId == _currentAssessment.id,
+          orElse: () => null,
+        );
         if (targetVle != null) {
           final growthRepo = ref.read(growthRepositoryProvider);
           final processGrowth = ProcessVerifiedLearningEvent(growthRepo);
@@ -151,7 +152,10 @@ class _ReviewAssessmentScreenState
                     label: 'View Details',
                     textColor: Colors.white,
                     onPressed: () {
-                      GrowthResultScreen.show(context, growthEvent: growthEvent!);
+                      GrowthResultScreen.show(
+                        context,
+                        growthEvent: growthEvent!,
+                      );
                     },
                   )
                 : null,

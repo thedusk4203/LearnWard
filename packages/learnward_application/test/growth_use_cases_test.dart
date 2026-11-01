@@ -63,34 +63,40 @@ class FakeGrowthRepository implements GrowthRepository {
     if (commandId != null) processedCommandIds.add(commandId);
 
     // Append to ledgers
-    xpLedger.add(XpLedgerEntry(
-      id: 'xp_${xpLedger.length + 1}',
-      familyId: familyId,
-      childId: childId,
-      amount: growthEvent.xpAwarded,
-      reasonCode: 'growth_award',
-      sourceType: 'growth_event',
-      sourceId: growthEvent.id,
-      idempotencyKey: 'xp:ge:${growthEvent.id}',
-      createdAt: growthEvent.createdAt,
-    ));
+    xpLedger.add(
+      XpLedgerEntry(
+        id: 'xp_${xpLedger.length + 1}',
+        familyId: familyId,
+        childId: childId,
+        amount: growthEvent.xpAwarded,
+        reasonCode: 'growth_award',
+        sourceType: 'growth_event',
+        sourceId: growthEvent.id,
+        idempotencyKey: 'xp:ge:${growthEvent.id}',
+        createdAt: growthEvent.createdAt,
+      ),
+    );
 
-    rpLedger.add(RpLedgerEntry(
-      id: 'rp_${rpLedger.length + 1}',
-      familyId: familyId,
-      childId: childId,
-      amountMinor: growthEvent.totalRpMinor,
-      reasonCode: 'growth_award',
-      sourceType: 'growth_event',
-      sourceId: growthEvent.id,
-      idempotencyKey: 'rp:ge:${growthEvent.id}',
-      createdAt: growthEvent.createdAt,
-    ));
+    rpLedger.add(
+      RpLedgerEntry(
+        id: 'rp_${rpLedger.length + 1}',
+        familyId: familyId,
+        childId: childId,
+        amountMinor: growthEvent.totalRpMinor,
+        reasonCode: 'growth_award',
+        sourceType: 'growth_event',
+        sourceId: growthEvent.id,
+        idempotencyKey: 'rp:ge:${growthEvent.id}',
+        createdAt: growthEvent.createdAt,
+      ),
+    );
 
     // Update balance projection
     final currentBal = balancesByChild[childId.value];
-    final newXp = (currentBal?.xpTotal ?? XpAmount.zero) + growthEvent.xpAwarded;
-    final newRp = (currentBal?.rpBalanceMinor ?? RpMinor.zero) + growthEvent.totalRpMinor;
+    final newXp =
+        (currentBal?.xpTotal ?? XpAmount.zero) + growthEvent.xpAwarded;
+    final newRp =
+        (currentBal?.rpBalanceMinor ?? RpMinor.zero) + growthEvent.totalRpMinor;
 
     balancesByChild[childId.value] = ChildBalance(
       familyId: familyId,
@@ -116,14 +122,14 @@ class FakeGrowthRepository implements GrowthRepository {
 
   @override
   Future<List<GrowthEvent>> listGrowthEvents(ChildId childId) async {
-    return growthEventsByVle.values
-        .where((e) => e.childId == childId)
-        .toList()
+    return growthEventsByVle.values.where((e) => e.childId == childId).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
 
   @override
-  Future<GrowthEvent?> getGrowthEventByAssessmentId(AssessmentId assessmentId) async {
+  Future<GrowthEvent?> getGrowthEventByAssessmentId(
+    AssessmentId assessmentId,
+  ) async {
     return growthEventsByAssessment[assessmentId.value];
   }
 }
@@ -202,21 +208,24 @@ void main() {
       expect(balance.rpBalanceMinor.value, equals(1150));
     });
 
-    test('GetLatestGrowthEvent and ListGrowthEvents return chronological history', () async {
-      final childId = ChildId('child_1');
+    test(
+      'GetLatestGrowthEvent and ListGrowthEvents return chronological history',
+      () async {
+        final childId = ChildId('child_1');
 
-      expect(await getLatestUseCase(childId), isNull);
-      expect(await listGrowthUseCase(childId), isEmpty);
+        expect(await getLatestUseCase(childId), isNull);
+        expect(await listGrowthUseCase(childId), isEmpty);
 
-      final event = await processUseCase(verifiedLearningEventId: 'vle_1');
+        final event = await processUseCase(verifiedLearningEventId: 'vle_1');
 
-      final latest = await getLatestUseCase(childId);
-      expect(latest, isNotNull);
-      expect(latest!.id, equals(event.id));
+        final latest = await getLatestUseCase(childId);
+        expect(latest, isNotNull);
+        expect(latest!.id, equals(event.id));
 
-      final list = await listGrowthUseCase(childId);
-      expect(list.length, equals(1));
-      expect(list.first.id, equals(event.id));
-    });
+        final list = await listGrowthUseCase(childId);
+        expect(list.length, equals(1));
+        expect(list.first.id, equals(event.id));
+      },
+    );
   });
 }

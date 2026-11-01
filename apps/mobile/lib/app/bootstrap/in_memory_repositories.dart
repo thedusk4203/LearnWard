@@ -573,7 +573,8 @@ final class InMemoryGrowthRepository implements GrowthRepository {
     );
 
     final currentBal = _balancesByChild[childId.value];
-    final newXp = (currentBal?.xpTotal ?? XpAmount.zero) + growthEvent.xpAwarded;
+    final newXp =
+        (currentBal?.xpTotal ?? XpAmount.zero) + growthEvent.xpAwarded;
     final newRp =
         (currentBal?.rpBalanceMinor ?? RpMinor.zero) + growthEvent.totalRpMinor;
 

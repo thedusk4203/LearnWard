@@ -48,7 +48,8 @@ final class GrowthEngine {
       if (c.id == input.currentEventId) return false;
       if (c.subjectKey != input.subjectKey) return false;
 
-      final isPrior = c.occurredAt.isBefore(input.occurredAt) ||
+      final isPrior =
+          c.occurredAt.isBefore(input.occurredAt) ||
           (c.occurredAt.isAtSameMomentAs(input.occurredAt) &&
               c.verifiedAt.isBefore(input.verifiedAt));
       if (!isPrior) return false;
@@ -75,7 +76,10 @@ final class GrowthEngine {
 
     if (comparables.length >= minimumBaselineSamples) {
       final lastThree = comparables.take(minimumBaselineSamples).toList();
-      final sum = lastThree.fold<double>(0.0, (acc, c) => acc + c.normalizedScore);
+      final sum = lastThree.fold<double>(
+        0.0,
+        (acc, c) => acc + c.normalizedScore,
+      );
       baselineScore = _roundToTwoDecimals(sum / minimumBaselineSamples);
       baselineSampleCount = minimumBaselineSamples;
       growthDelta = _roundToTwoDecimals(currentScoreValue - baselineScore);
@@ -97,7 +101,8 @@ final class GrowthEngine {
     }
 
     // 5. Calculate economic components based on difficulty & performance.
-    final bool isBelowLevel = input.difficulty == AssessmentDifficulty.belowLevel;
+    final bool isBelowLevel =
+        input.difficulty == AssessmentDifficulty.belowLevel;
     final int standardScoreMinor = (currentScoreValue * RpMinor.factor).round();
 
     final RpMinor scoreRpMinor;
@@ -106,7 +111,8 @@ final class GrowthEngine {
     final RpMinor personalBestRpMinor;
     final RpMinor difficultyRpMinor;
     final RpMinor goalRpMinor = RpMinor.zero; // Explicitly deferred in Phase 3
-    final RpMinor recoveryRpMinor = RpMinor.zero; // Explicitly deferred in Phase 3
+    final RpMinor recoveryRpMinor =
+        RpMinor.zero; // Explicitly deferred in Phase 3
 
     if (isBelowLevel) {
       // Below-level protection:
@@ -155,7 +161,8 @@ final class GrowthEngine {
       // Personal Best bonus:
       // Exceeds prior comparable historical best by at least 0.25 -> +1 RP
       if (historicalBest != null &&
-          _roundToTwoDecimals(currentScoreValue - historicalBest) >= personalBestMargin) {
+          _roundToTwoDecimals(currentScoreValue - historicalBest) >=
+              personalBestMargin) {
         personalBestRpMinor = const RpMinor(100);
       } else {
         personalBestRpMinor = RpMinor.zero;
@@ -178,7 +185,8 @@ final class GrowthEngine {
       }
     }
 
-    final totalRpMinor = scoreRpMinor +
+    final totalRpMinor =
+        scoreRpMinor +
         growthRpMinor +
         highPerformerRpMinor +
         personalBestRpMinor +
@@ -188,7 +196,8 @@ final class GrowthEngine {
 
     // 6. Calculate Study XP:
     // XP = 10 + 2 * RP_awarded
-    final int xpValue = 10 + (2.0 * totalRpMinor.value / RpMinor.factor).round();
+    final int xpValue =
+        10 + (2.0 * totalRpMinor.value / RpMinor.factor).round();
     final xpAwarded = XpAmount(xpValue);
 
     final breakdown = GrowthBreakdown(
@@ -218,11 +227,16 @@ final class GrowthEngine {
       'assessment_type': input.assessmentType.value,
       'occurred_at': input.occurredAt.toIso8601String(),
       'verified_at': input.verifiedAt.toIso8601String(),
-      'baseline_samples_used': comparables.take(minimumBaselineSamples).map((c) => {
-        'id': c.id,
-        'score': c.normalizedScore,
-        'occurred_at': c.occurredAt.toIso8601String(),
-      }).toList(),
+      'baseline_samples_used': comparables
+          .take(minimumBaselineSamples)
+          .map(
+            (c) => {
+              'id': c.id,
+              'score': c.normalizedScore,
+              'occurred_at': c.occurredAt.toIso8601String(),
+            },
+          )
+          .toList(),
       'comparable_count': comparables.length,
       'historical_best': historicalBest,
     };

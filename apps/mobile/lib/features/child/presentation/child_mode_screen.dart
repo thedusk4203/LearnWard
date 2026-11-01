@@ -162,14 +162,21 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    Icon(Icons.bolt, size: 20, color: theme.colorScheme.secondary),
+                                    Icon(
+                                      Icons.bolt,
+                                      size: 20,
+                                      color: theme.colorScheme.secondary,
+                                    ),
                                     const SizedBox(width: 4),
                                     Text(
                                       'Study XP',
-                                      style: theme.textTheme.bodyMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                        color: theme.colorScheme.onSurfaceVariant,
-                                      ),
+                                      style: theme.textTheme.bodyMedium
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.bold,
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
                                     ),
                                   ],
                                 ),
@@ -177,10 +184,11 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                                 Text(
                                   key: const Key('child_xp_total'),
                                   '${_childBalance?.xpTotal.value ?? 0} XP',
-                                  style: theme.textTheme.headlineSmall?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color: theme.colorScheme.secondary,
-                                  ),
+                                  style: theme.textTheme.headlineSmall
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: theme.colorScheme.secondary,
+                                      ),
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
@@ -203,14 +211,21 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    Icon(Icons.stars, size: 20, color: theme.colorScheme.primary),
+                                    Icon(
+                                      Icons.stars,
+                                      size: 20,
+                                      color: theme.colorScheme.primary,
+                                    ),
                                     const SizedBox(width: 4),
                                     Text(
                                       'Reward Points',
-                                      style: theme.textTheme.bodyMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                        color: theme.colorScheme.onSurfaceVariant,
-                                      ),
+                                      style: theme.textTheme.bodyMedium
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.bold,
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
                                     ),
                                   ],
                                 ),
@@ -218,10 +233,11 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                                 Text(
                                   key: const Key('child_rp_balance'),
                                   '${_childBalance?.rpBalanceMinor.formatRp() ?? '0.00'} RP',
-                                  style: theme.textTheme.headlineSmall?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                    color: theme.colorScheme.primary,
-                                  ),
+                                  style: theme.textTheme.headlineSmall
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: theme.colorScheme.primary,
+                                      ),
                                 ),
                                 const SizedBox(height: 2),
                                 Text(
@@ -245,11 +261,15 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                     Card(
                       key: const Key('latest_growth_card'),
                       elevation: 0,
-                      color: theme.colorScheme.primaryContainer.withValues(alpha: 0.25),
+                      color: theme.colorScheme.primaryContainer.withValues(
+                        alpha: 0.25,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                         side: BorderSide(
-                          color: theme.colorScheme.primary.withValues(alpha: 0.3),
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.3,
+                          ),
                         ),
                       ),
                       child: Padding(
@@ -267,7 +287,10 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                                   ),
                                 ),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: Colors.green.shade100,
                                     borderRadius: BorderRadius.circular(12),
@@ -400,7 +423,9 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                     ListView.builder(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      itemCount: _growthHistory.length > 5 ? 5 : _growthHistory.length,
+                      itemCount: _growthHistory.length > 5
+                          ? 5
+                          : _growthHistory.length,
                       itemBuilder: (ctx, i) {
                         final event = _growthHistory[i];
                         return Card(
@@ -409,15 +434,21 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                           child: ListTile(
                             key: Key('growth_history_item_${event.id}'),
                             leading: CircleAvatar(
-                              backgroundColor: theme.colorScheme.primaryContainer,
+                              backgroundColor:
+                                  theme.colorScheme.primaryContainer,
                               child: Text(
                                 event.normalizedScore.toStringAsFixed(1),
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
                               ),
                             ),
                             title: Text(
                               '+${event.totalRpMinor.formatRp()} RP • +${event.xpAwarded.value} XP',
-                              style: const TextStyle(fontWeight: FontWeight.bold),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                             subtitle: Text(
                               event.growthDelta != null
@@ -426,7 +457,10 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                             ),
                             trailing: const Icon(Icons.chevron_right, size: 20),
                             onTap: () {
-                              GrowthResultScreen.show(context, growthEvent: event);
+                              GrowthResultScreen.show(
+                                context,
+                                growthEvent: event,
+                              );
                             },
                           ),
                         );

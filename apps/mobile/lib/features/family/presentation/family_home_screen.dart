@@ -375,7 +375,11 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                               const SizedBox(height: 4),
                               Row(
                                 children: [
-                                  Icon(Icons.bolt, size: 14, color: theme.colorScheme.secondary),
+                                  Icon(
+                                    Icons.bolt,
+                                    size: 14,
+                                    color: theme.colorScheme.secondary,
+                                  ),
                                   const SizedBox(width: 2),
                                   Text(
                                     '${_childBalances[child.id.value]?.xpTotal.value ?? 0} XP',
@@ -386,7 +390,11 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  Icon(Icons.stars, size: 14, color: theme.colorScheme.primary),
+                                  Icon(
+                                    Icons.stars,
+                                    size: 14,
+                                    color: theme.colorScheme.primary,
+                                  ),
                                   const SizedBox(width: 2),
                                   Text(
                                     '${_childBalances[child.id.value]?.rpBalanceMinor.formatRp() ?? "0.00"} RP',

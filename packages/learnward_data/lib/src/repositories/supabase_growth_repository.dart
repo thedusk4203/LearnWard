@@ -93,11 +93,13 @@ final class SupabaseGrowthRepository implements GrowthRepository {
       historicalBest: (row['historical_best'] as num?)?.toDouble(),
       scoreRpMinor: RpMinor((row['score_rp_minor'] as num).toInt()),
       growthRpMinor: RpMinor((row['growth_rp_minor'] as num).toInt()),
-      highPerformerRpMinor:
-          RpMinor((row['high_performer_rp_minor'] as num).toInt()),
+      highPerformerRpMinor: RpMinor(
+        (row['high_performer_rp_minor'] as num).toInt(),
+      ),
       goalRpMinor: RpMinor((row['goal_rp_minor'] as num).toInt()),
-      personalBestRpMinor:
-          RpMinor((row['personal_best_rp_minor'] as num).toInt()),
+      personalBestRpMinor: RpMinor(
+        (row['personal_best_rp_minor'] as num).toInt(),
+      ),
       difficultyRpMinor: RpMinor((row['difficulty_rp_minor'] as num).toInt()),
       recoveryRpMinor: RpMinor((row['recovery_rp_minor'] as num).toInt()),
       belowLevelAdjustment: row['below_level_adjustment'] as bool? ?? false,

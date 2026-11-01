@@ -40,12 +40,17 @@ class _FakeGrowthRepository implements GrowthRepository {
   }
 
   @override
-  Future<List<GrowthEvent>> listGrowthEvents(ChildId childId, {int limit = 20}) async {
+  Future<List<GrowthEvent>> listGrowthEvents(
+    ChildId childId, {
+    int limit = 20,
+  }) async {
     return history;
   }
 
   @override
-  Future<GrowthEvent?> getGrowthEventByAssessmentId(AssessmentId assessmentId) async {
+  Future<GrowthEvent?> getGrowthEventByAssessmentId(
+    AssessmentId assessmentId,
+  ) async {
     return latest;
   }
 
@@ -55,11 +60,6 @@ class _FakeGrowthRepository implements GrowthRepository {
     String? commandId,
   }) {
     throw UnimplementedError();
-  }
-
-  @override
-  Future<ChildBalance> reconcileChildBalance(ChildId childId) async {
-    return getChildBalance(childId);
   }
 }
 
@@ -85,7 +85,9 @@ GrowthEvent _createEvent({
   bool belowLevelAdjustment = false,
   RpMinor totalRpMinor = const RpMinor(900),
   XpAmount xpAwarded = const XpAmount(28),
-  Map<String, dynamic> inputsSnapshot = const {'explanation': 'Standard growth evaluation'},
+  Map<String, dynamic> inputsSnapshot = const {
+    'explanation': 'Standard growth evaluation',
+  },
   DateTime? createdAt,
 }) {
   return GrowthEvent(
@@ -117,7 +119,9 @@ GrowthEvent _createEvent({
 
 void main() {
   group('GrowthResultScreen Widget Tests', () {
-    testWidgets('renders standard assessment growth breakdown with bonuses', (tester) async {
+    testWidgets('renders standard assessment growth breakdown with bonuses', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(800, 1600);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -126,9 +130,7 @@ void main() {
       final event = _createEvent();
 
       await tester.pumpWidget(
-        MaterialApp(
-          home: GrowthResultScreen(growthEvent: event),
-        ),
+        MaterialApp(home: GrowthResultScreen(growthEvent: event)),
       );
       await tester.pumpAndSettle();
 
@@ -152,49 +154,56 @@ void main() {
       // Verify Educational explanation
       expect(find.text('Why did I get this amount?'), findsOneWidget);
       expect(
-        find.textContaining('Direct reward proportional to verified test score', findRichText: true),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets('renders below-level anti-farming notice when belowLevelAdjustment is true', (tester) async {
-      tester.view.physicalSize = const Size(800, 1600);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      final event = _createEvent(
-        id: 'growth-below',
-        verifiedLearningEventId: 'vle-below',
-        normalizedScore: 10.0,
-        baselineScore: 6.0,
-        baselineSampleCount: 3,
-        growthDelta: null,
-        scoreRpMinor: const RpMinor(250),
-        growthRpMinor: const RpMinor(0),
-        highPerformerRpMinor: const RpMinor(0),
-        personalBestRpMinor: const RpMinor(0),
-        difficultyRpMinor: const RpMinor(0),
-        totalRpMinor: const RpMinor(250),
-        xpAwarded: const XpAmount(15),
-        belowLevelAdjustment: true,
-      );
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: GrowthResultScreen(growthEvent: event),
+        find.textContaining(
+          'Direct reward proportional to verified test score',
+          findRichText: true,
         ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.text('Below-level activity (25% base RP)'), findsOneWidget);
-      expect(find.text('+2.50 RP'), findsOneWidget);
-      expect(find.text('+15 XP'), findsOneWidget);
-      expect(
-        find.textContaining('This activity is below current level', findRichText: true),
         findsOneWidget,
       );
     });
+
+    testWidgets(
+      'renders below-level anti-farming notice when belowLevelAdjustment is true',
+      (tester) async {
+        tester.view.physicalSize = const Size(800, 1600);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final event = _createEvent(
+          id: 'growth-below',
+          verifiedLearningEventId: 'vle-below',
+          normalizedScore: 10.0,
+          baselineScore: 6.0,
+          baselineSampleCount: 3,
+          growthDelta: null,
+          scoreRpMinor: const RpMinor(250),
+          growthRpMinor: const RpMinor(0),
+          highPerformerRpMinor: const RpMinor(0),
+          personalBestRpMinor: const RpMinor(0),
+          difficultyRpMinor: const RpMinor(0),
+          totalRpMinor: const RpMinor(250),
+          xpAwarded: const XpAmount(15),
+          belowLevelAdjustment: true,
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(home: GrowthResultScreen(growthEvent: event)),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Below-level activity (25% base RP)'), findsOneWidget);
+        expect(find.text('+2.50 RP'), findsOneWidget);
+        expect(find.text('+15 XP'), findsOneWidget);
+        expect(
+          find.textContaining(
+            'This activity is below current level',
+            findRichText: true,
+          ),
+          findsOneWidget,
+        );
+      },
+    );
 
     testWidgets('shows as dialog and closes via close button', (tester) async {
       final event = _createEvent(
@@ -215,7 +224,8 @@ void main() {
         MaterialApp(
           home: Builder(
             builder: (context) => ElevatedButton(
-              onPressed: () => GrowthResultScreen.show(context, growthEvent: event),
+              onPressed: () =>
+                  GrowthResultScreen.show(context, growthEvent: event),
               child: const Text('Show Dialog'),
             ),
           ),
@@ -226,7 +236,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Score: 7.00 / 10'), findsOneWidget);
-      expect(find.text('Building Baseline (0 / 3 comparable tests)'), findsOneWidget);
+      expect(
+        find.text('Building Baseline (0 / 3 comparable tests)'),
+        findsOneWidget,
+      );
 
       await tester.tap(find.byKey(const Key('close_growth_result_button')));
       await tester.pumpAndSettle();
@@ -236,7 +249,9 @@ void main() {
   });
 
   group('ChildModeScreen Economy Integration Tests', () {
-    testWidgets('displays balance card and latest growth event', (tester) async {
+    testWidgets('displays balance card and latest growth event', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(800, 1600);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -283,14 +298,14 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            activeChildModeProvider.overrideWith(() => _PresetChildModeNotifier(child)),
+            activeChildModeProvider.overrideWith(
+              () => _PresetChildModeNotifier(child),
+            ),
             growthRepositoryProvider.overrideWithValue(fakeGrowthRepo),
             localMetadataStoreProvider.overrideWithValue(metadataStore),
             localDraftStoreProvider.overrideWithValue(draftStore),
           ],
-          child: const MaterialApp(
-            home: ChildModeScreen(),
-          ),
+          child: const MaterialApp(home: ChildModeScreen()),
         ),
       );
 
@@ -309,10 +324,15 @@ void main() {
       expect(find.text('+6.50 RP'), findsOneWidget);
 
       // Check history item
-      expect(find.byKey(Key('growth_history_item_${latestEvent.id}')), findsOneWidget);
+      expect(
+        find.byKey(Key('growth_history_item_${latestEvent.id}')),
+        findsOneWidget,
+      );
 
       // Tap history item to open dialog
-      await tester.tap(find.byKey(Key('growth_history_item_${latestEvent.id}')));
+      await tester.tap(
+        find.byKey(Key('growth_history_item_${latestEvent.id}')),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('Score: 9.00 / 10'), findsOneWidget);
