@@ -4,19 +4,23 @@ import 'package:learnward_domain/learnward_domain.dart';
 abstract interface class AssessmentRepository {
   /// Creates a draft assessment via server-authoritative RPC.
   Future<Assessment> createDraft({
+    required String commandId,
     required FamilyId familyId,
     required ChildId childId,
+    required SubjectKey subjectKey,
     required String subject,
     required String title,
     required AssessmentType type,
     required AssessmentDifficulty difficulty,
     required AssessmentScore score,
     DateTime? occurredAt,
+    EntryContext entryContext = EntryContext.adult,
   });
 
   /// Updates an existing draft assessment.
   Future<Assessment> updateDraft({
     required AssessmentId assessmentId,
+    required SubjectKey subjectKey,
     required String subject,
     required String title,
     required AssessmentType type,
@@ -41,12 +45,12 @@ abstract interface class AssessmentRepository {
     String? notes,
   });
 
-  /// Rejects an assessment with optional review notes.
+  /// Rejects an assessment with mandatory server-enforced feedback notes.
   Future<Assessment> rejectAssessment({
     required AssessmentId assessmentId,
     required int expectedVersion,
     required String commandId,
-    String? reason,
+    required String reason,
   });
 
   /// Retrieves a specific assessment by id.

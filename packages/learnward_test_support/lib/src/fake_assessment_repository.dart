@@ -1,8 +1,9 @@
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 
-final class FakeAssessmentRepository implements AssessmentRepository {
+base class FakeAssessmentRepository implements AssessmentRepository {
   final Map<String, Assessment> assessments = {};
+  final Map<String, String> commandToAssessmentId = {};
   final Map<String, AssessmentEvidence> evidence = {};
   final List<VerifiedLearningEvent> verifiedEvents = [];
   final Set<String> processedCommandIds = {};
@@ -12,26 +13,36 @@ final class FakeAssessmentRepository implements AssessmentRepository {
 
   @override
   Future<Assessment> createDraft({
+    required String commandId,
     required FamilyId familyId,
     required ChildId childId,
+    required SubjectKey subjectKey,
     required String subject,
     required String title,
     required AssessmentType type,
     required AssessmentDifficulty difficulty,
     required AssessmentScore score,
     DateTime? occurredAt,
+    EntryContext entryContext = EntryContext.adult,
   }) async {
+    // Idempotent retry check
+    if (commandToAssessmentId.containsKey(commandId)) {
+      return assessments[commandToAssessmentId[commandId]]!;
+    }
+
     final id = AssessmentId('fake-assessment-${_assessmentIdCounter++}');
     final now = DateTime.now().toUtc();
     final assessment = Assessment(
       id: id,
       familyId: familyId,
       childId: childId,
+      subjectKey: subjectKey,
       subject: subject,
       title: title,
       type: type,
       difficulty: difficulty,
       score: score,
+      entryContext: entryContext,
       status: AssessmentStatus.draft,
       occurredAt: occurredAt ?? now,
       version: 1,
@@ -40,12 +51,14 @@ final class FakeAssessmentRepository implements AssessmentRepository {
       updatedAt: now,
     );
     assessments[id.value] = assessment;
+    commandToAssessmentId[commandId] = id.value;
     return assessment;
   }
 
   @override
   Future<Assessment> updateDraft({
     required AssessmentId assessmentId,
+    required SubjectKey subjectKey,
     required String subject,
     required String title,
     required AssessmentType type,
@@ -66,6 +79,7 @@ final class FakeAssessmentRepository implements AssessmentRepository {
     }
 
     final updated = existing.copyWith(
+      subjectKey: subjectKey,
       subject: subject,
       title: title,
       type: type,
@@ -139,17 +153,24 @@ final class FakeAssessmentRepository implements AssessmentRepository {
     );
     assessments[assessmentId.value] = verified;
 
+    final evidenceCount = evidence.values
+        .where((e) => e.assessmentId == assessmentId)
+        .length;
+
     verifiedEvents.add(
       VerifiedLearningEvent(
         id: 'fake-event-${verifiedEvents.length + 1}',
         familyId: verified.familyId,
         childId: verified.childId,
         assessmentId: verified.id,
+        subjectKey: verified.subjectKey,
         subject: verified.subject,
         title: verified.title,
         type: verified.type,
         difficulty: verified.difficulty,
         score: verified.score,
+        evidenceCount: evidenceCount,
+        entryContext: verified.entryContext,
         occurredAt: verified.occurredAt,
         verifiedAt: now,
         verifiedByUserId: 'fake-verifier',
@@ -165,7 +186,7 @@ final class FakeAssessmentRepository implements AssessmentRepository {
     required AssessmentId assessmentId,
     required int expectedVersion,
     required String commandId,
-    String? reason,
+    required String reason,
   }) async {
     final existing = assessments[assessmentId.value];
     if (existing == null) {

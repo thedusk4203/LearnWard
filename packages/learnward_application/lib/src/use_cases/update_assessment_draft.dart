@@ -10,6 +10,7 @@ final class UpdateAssessmentDraft {
 
   Future<Assessment> call({
     required AssessmentId assessmentId,
+    required SubjectKey subjectKey,
     required String subject,
     required String title,
     required AssessmentType type,
@@ -20,6 +21,7 @@ final class UpdateAssessmentDraft {
   }) {
     return _repository.updateDraft(
       assessmentId: assessmentId,
+      subjectKey: subjectKey,
       subject: subject,
       title: title,
       type: type,

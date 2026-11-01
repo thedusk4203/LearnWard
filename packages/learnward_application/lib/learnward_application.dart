@@ -21,6 +21,7 @@ export 'src/use_cases/list_verified_learning_events.dart';
 export 'src/use_cases/normalize_assessment_score.dart';
 export 'src/use_cases/reject_assessment.dart';
 export 'src/use_cases/submit_assessment.dart';
+export 'src/use_cases/submit_assessment_draft.dart';
 export 'src/use_cases/update_assessment_draft.dart';
 export 'src/use_cases/upload_assessment_evidence.dart';
 export 'src/use_cases/verify_assessment.dart';

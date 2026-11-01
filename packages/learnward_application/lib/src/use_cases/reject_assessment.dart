@@ -12,13 +12,24 @@ final class RejectAssessment {
     required AssessmentId assessmentId,
     required int expectedVersion,
     required String commandId,
-    String? reason,
+    required String reason,
   }) {
+    final trimmed = reason.trim();
+    if (trimmed.isEmpty) {
+      throw const InvalidAssessmentException(
+        'Rejection reason cannot be empty.',
+      );
+    }
+    if (trimmed.length > 500) {
+      throw const InvalidAssessmentException(
+        'Rejection reason must not exceed 500 characters.',
+      );
+    }
     return _repository.rejectAssessment(
       assessmentId: assessmentId,
       expectedVersion: expectedVersion,
       commandId: commandId,
-      reason: reason,
+      reason: trimmed,
     );
   }
 }
