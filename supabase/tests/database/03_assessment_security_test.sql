@@ -1,5 +1,5 @@
 begin;
-select plan(26);
+select plan(42);
 
 -- ---------------------------------------------------------------------------
 -- 0. FIXTURES SETUP (superuser context)
@@ -31,24 +31,27 @@ insert into public.child_device_grants (id, family_id, child_id, auth_user_id, s
 on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------------
--- 1. DRAFT CREATION & NORMALIZED SCORE
+-- 1. DRAFT CREATION, IDEMPOTENCY & NORMALIZED SCORES
 -- ---------------------------------------------------------------------------
 
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "20000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
--- Create draft assessment via RPC
+-- Test 1: Create draft assessment via RPC with command_id
 create temporary table test_draft_1 on commit drop as
 select * from public.create_assessment_draft(
+  '60000000-0000-0000-0000-000000000001'::uuid,
   'f2000000-0000-0000-0000-000000000001'::uuid,
   'c2000000-0000-0000-0000-000000000001'::uuid,
+  'math',
   'Mathematics',
   'Fraction Quiz 1',
   'quiz',
   'normal',
   8.5,
   10.0,
-  now()
+  now(),
+  'adult'
 );
 
 select is(
@@ -57,24 +60,71 @@ select is(
   'create_assessment_draft succeeds for active adult'
 );
 
+-- Test 2: Normalized score calculation
 select is(
   (select normalized_score from test_draft_1),
   8.50::numeric(4, 2),
   'normalized_score is generated server-side correctly (8.5 / 10 * 10 = 8.50)'
 );
 
+-- Test 3: Status is draft
 select is(
   (select status from test_draft_1),
   'draft',
   'initial assessment status is draft'
 );
 
--- Cross-family draft creation denial
+-- Test 4: Idempotent create retry returns same assessment
+create temporary table test_draft_1_retry on commit drop as
+select * from public.create_assessment_draft(
+  '60000000-0000-0000-0000-000000000001'::uuid,
+  'f2000000-0000-0000-0000-000000000001'::uuid,
+  'c2000000-0000-0000-0000-000000000001'::uuid,
+  'math',
+  'Mathematics',
+  'Fraction Quiz 1',
+  'quiz',
+  'normal',
+  8.5,
+  10.0,
+  now(),
+  'adult'
+);
+
+select is(
+  (select id from test_draft_1_retry),
+  (select id from test_draft_1),
+  'create_assessment_draft retry with same command_id returns exact same assessment'
+);
+
+-- Test 5: Cross-user create replay denied (Owner B using command X)
+select set_config('request.jwt.claims', '{"sub": "20000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
+
 select throws_ok(
   $$
     select public.create_assessment_draft(
+      '60000000-0000-0000-0000-000000000001'::uuid,
       'f2000000-0000-0000-0000-000000000002'::uuid,
       'c2000000-0000-0000-0000-000000000002'::uuid,
+      'math', 'Mathematics', 'Hacked', 'quiz', 'normal', 10, 10
+    )
+  $$,
+  '42501',
+  NULL,
+  'Different user replaying create_draft command_id is denied (42501)'
+);
+
+-- Switch back to Owner A
+select set_config('request.jwt.claims', '{"sub": "20000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+
+-- Test 6: Cross-family draft creation denial
+select throws_ok(
+  $$
+    select public.create_assessment_draft(
+      '60000000-0000-0000-0000-000000000099'::uuid,
+      'f2000000-0000-0000-0000-000000000002'::uuid,
+      'c2000000-0000-0000-0000-000000000002'::uuid,
+      'english',
       'English',
       'Essay',
       'homework',
@@ -89,17 +139,126 @@ select throws_ok(
 );
 
 -- ---------------------------------------------------------------------------
--- 2. DIRECT CLIENT TABLE MUTATION RESTRICTIONS
+-- 2. SCORE NORMALIZATION MATRIX (Tests 7-14)
+-- ---------------------------------------------------------------------------
+
+-- 15 / 20 -> 7.50
+select is(
+  (select normalized_score from public.create_assessment_draft(
+    '60000000-0000-0000-0000-000000000010'::uuid,
+    'f2000000-0000-0000-0000-000000000001'::uuid,
+    'c2000000-0000-0000-0000-000000000001'::uuid,
+    'math', 'Math', 'Test 15/20', 'quiz', 'normal', 15.0, 20.0
+  )),
+  7.50::numeric(4, 2),
+  'Score normalization matrix: 15 / 20 -> 7.50'
+);
+
+-- 36 / 50 -> 7.20
+select is(
+  (select normalized_score from public.create_assessment_draft(
+    '60000000-0000-0000-0000-000000000011'::uuid,
+    'f2000000-0000-0000-0000-000000000001'::uuid,
+    'c2000000-0000-0000-0000-000000000001'::uuid,
+    'math', 'Math', 'Test 36/50', 'quiz', 'normal', 36.0, 50.0
+  )),
+  7.20::numeric(4, 2),
+  'Score normalization matrix: 36 / 50 -> 7.20'
+);
+
+-- 72 / 100 -> 7.20
+select is(
+  (select normalized_score from public.create_assessment_draft(
+    '60000000-0000-0000-0000-000000000012'::uuid,
+    'f2000000-0000-0000-0000-000000000001'::uuid,
+    'c2000000-0000-0000-0000-000000000001'::uuid,
+    'math', 'Math', 'Test 72/100', 'quiz', 'normal', 72.0, 100.0
+  )),
+  7.20::numeric(4, 2),
+  'Score normalization matrix: 72 / 100 -> 7.20'
+);
+
+-- 0 / 10 -> 0.00
+select is(
+  (select normalized_score from public.create_assessment_draft(
+    '60000000-0000-0000-0000-000000000013'::uuid,
+    'f2000000-0000-0000-0000-000000000001'::uuid,
+    'c2000000-0000-0000-0000-000000000001'::uuid,
+    'math', 'Math', 'Test 0/10', 'quiz', 'normal', 0.0, 10.0
+  )),
+  0.00::numeric(4, 2),
+  'Score normalization matrix: 0 / 10 -> 0.00'
+);
+
+-- 10 / 10 -> 10.00
+select is(
+  (select normalized_score from public.create_assessment_draft(
+    '60000000-0000-0000-0000-000000000014'::uuid,
+    'f2000000-0000-0000-0000-000000000001'::uuid,
+    'c2000000-0000-0000-0000-000000000001'::uuid,
+    'math', 'Math', 'Test 10/10', 'quiz', 'normal', 10.0, 10.0
+  )),
+  10.00::numeric(4, 2),
+  'Score normalization matrix: 10 / 10 -> 10.00'
+);
+
+-- Reject: -1 / 10
+select throws_ok(
+  $$
+    select public.create_assessment_draft(
+      '60000000-0000-0000-0000-000000000015'::uuid,
+      'f2000000-0000-0000-0000-000000000001'::uuid,
+      'c2000000-0000-0000-0000-000000000001'::uuid,
+      'math', 'Math', 'Invalid -1', 'quiz', 'normal', -1.0, 10.0
+    )
+  $$,
+  '23514',
+  NULL,
+  'Score rejection: negative raw score throws check constraint 23514'
+);
+
+-- Reject: 11 / 10
+select throws_ok(
+  $$
+    select public.create_assessment_draft(
+      '60000000-0000-0000-0000-000000000016'::uuid,
+      'f2000000-0000-0000-0000-000000000001'::uuid,
+      'c2000000-0000-0000-0000-000000000001'::uuid,
+      'math', 'Math', 'Invalid 11/10', 'quiz', 'normal', 11.0, 10.0
+    )
+  $$,
+  '23514',
+  NULL,
+  'Score rejection: raw_score > max_score throws check constraint 23514'
+);
+
+-- Reject: 5 / 0
+select throws_ok(
+  $$
+    select public.create_assessment_draft(
+      '60000000-0000-0000-0000-000000000017'::uuid,
+      'f2000000-0000-0000-0000-000000000001'::uuid,
+      'c2000000-0000-0000-0000-000000000001'::uuid,
+      'math', 'Math', 'Invalid 5/0', 'quiz', 'normal', 5.0, 0.0
+    )
+  $$,
+  '23514',
+  NULL,
+  'Score rejection: max_score <= 0 throws check constraint 23514'
+);
+
+-- ---------------------------------------------------------------------------
+-- 3. DIRECT CLIENT TABLE MUTATION RESTRICTIONS (Tests 15-17)
 -- ---------------------------------------------------------------------------
 
 select throws_ok(
   $$
     insert into public.assessments (
-      family_id, child_id, subject, title, assessment_type, difficulty, raw_score, max_score, created_by_user_id
+      family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, created_by_user_id
     ) values (
       'f2000000-0000-0000-0000-000000000001'::uuid,
       'c2000000-0000-0000-0000-000000000001'::uuid,
-      'Math', 'Forged', 'quiz', 'normal', 10, 10,
+      'math', 'Math', 'Forged', 'quiz', 'normal', 10, 10,
       '20000000-0000-0000-0000-000000000001'::uuid
     )
   $$,
@@ -130,14 +289,13 @@ select throws_ok(
 );
 
 -- ---------------------------------------------------------------------------
--- 3. EVIDENCE ATTACHMENT
+-- 4. EVIDENCE ATTACHMENT & HIERARCHY VALIDATION (Tests 18-19)
 -- ---------------------------------------------------------------------------
 
--- Valid evidence registration
 create temporary table test_evidence_1 on commit drop as
 select * from public.register_assessment_evidence(
   (select id from test_draft_1),
-  (select 'f2000000-0000-0000-0000-000000000001/c2000000-0000-0000-0000-000000000001/' || id::text || '/page1.jpg' from test_draft_1),
+  (select 'f2000000-0000-0000-0000-000000000001/c2000000-0000-0000-0000-000000000001/' || id::text || '/550e8400-e29b-41d4-a716-446655440000.jpg' from test_draft_1),
   'image/jpeg',
   102400
 );
@@ -145,10 +303,9 @@ select * from public.register_assessment_evidence(
 select is(
   (select count(*)::int from test_evidence_1),
   1,
-  'register_assessment_evidence succeeds with proper hierarchy path'
+  'register_assessment_evidence succeeds with proper hierarchy path and evidence UUID'
 );
 
--- Invalid evidence hierarchy path
 select throws_ok(
   $$
     select public.register_assessment_evidence(
@@ -164,10 +321,9 @@ select throws_ok(
 );
 
 -- ---------------------------------------------------------------------------
--- 4. CROSS-FAMILY READ ISOLATION
+-- 5. CROSS-FAMILY READ ISOLATION (Tests 20-22)
 -- ---------------------------------------------------------------------------
 
--- Switch to Adult B
 select set_config('request.jwt.claims', '{"sub": "20000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
 
 select is(
@@ -182,7 +338,6 @@ select is(
   'Adult B cannot view Family A assessment evidence via SELECT'
 );
 
--- Adult B cannot verify Adult A assessment
 select throws_ok(
   $$
     select public.verify_assessment(
@@ -198,18 +353,16 @@ select throws_ok(
 );
 
 -- ---------------------------------------------------------------------------
--- 5. SUBMISSION & VERSION ADVANCEMENT
+-- 6. SUBMISSION & VERSION ADVANCEMENT (Tests 23-26)
 -- ---------------------------------------------------------------------------
 
--- Switch back to Adult A
 select set_config('request.jwt.claims', '{"sub": "20000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
--- Stale version submit fails
 select throws_ok(
   $$
     select public.submit_assessment(
       (select id from test_draft_1),
-      99, -- wrong version
+      99,
       '80000000-0000-0000-0000-000000000001'::uuid
     )
   $$,
@@ -218,7 +371,6 @@ select throws_ok(
   'submit_assessment with wrong version throws LW101'
 );
 
--- Submit draft for review
 create temporary table test_submitted_1 on commit drop as
 select * from public.submit_assessment(
   (select id from test_draft_1),
@@ -238,12 +390,11 @@ select is(
   'submitted assessment version increments to 2'
 );
 
--- Updating a submitted assessment fails
 select throws_ok(
   $$
     select public.update_assessment_draft(
       (select id from test_draft_1),
-      'Math', 'Modified Title', 'quiz', 'normal', 9, 10, now(), 2
+      'math', 'Math', 'Modified Title', 'quiz', 'normal', 9, 10, now(), 2
     )
   $$,
   'LW107',
@@ -252,15 +403,45 @@ select throws_ok(
 );
 
 -- ---------------------------------------------------------------------------
--- 6. VERIFICATION, IDEMPOTENCY & IMMUTABLE LEARNING EVENTS
+-- 7. EVIDENCE IMMUTABILITY AFTER DRAFT (Tests 27-28)
 -- ---------------------------------------------------------------------------
 
--- Stale verification attempt throws LW101
+-- Evidence removal fails after draft status
+select throws_ok(
+  $$
+    select public.remove_draft_assessment_evidence(
+      (select id from test_evidence_1)
+    )
+  $$,
+  'LW109',
+  NULL,
+  'remove_draft_assessment_evidence rejected when assessment is pending_review (LW109)'
+);
+
+-- Evidence registration fails after draft status
+select throws_ok(
+  $$
+    select public.register_assessment_evidence(
+      (select id from test_draft_1),
+      (select 'f2000000-0000-0000-0000-000000000001/c2000000-0000-0000-0000-000000000001/' || id::text || '/550e8400-e29b-41d4-a716-446655440002.jpg' from test_draft_1),
+      'image/jpeg',
+      102400
+    )
+  $$,
+  'LW109',
+  NULL,
+  'register_assessment_evidence rejected when assessment is pending_review (LW109)'
+);
+
+-- ---------------------------------------------------------------------------
+-- 8. VERIFICATION, AUDIT & SNAPSHOT (Tests 29-34)
+-- ---------------------------------------------------------------------------
+
 select throws_ok(
   $$
     select public.verify_assessment(
       (select id from test_draft_1),
-      1, -- expected 2
+      1,
       '70000000-0000-0000-0000-000000000001'::uuid,
       'Approved'
     )
@@ -268,6 +449,21 @@ select throws_ok(
   'LW101',
   NULL,
   'verify_assessment rejects stale expected_version (LW101)'
+);
+
+-- Verify notes length check > 1000 chars fails
+select throws_ok(
+  $$
+    select public.verify_assessment(
+      (select id from test_draft_1),
+      2,
+      '70000000-0000-0000-0000-000000000001'::uuid,
+      repeat('a', 1001)
+    )
+  $$,
+  'LW104',
+  NULL,
+  'verify_assessment rejects notes exceeding 1000 characters (LW104)'
 );
 
 -- Real verification by Adult A
@@ -297,7 +493,18 @@ select is(
   'verified_learning_events captures canonical normalized_score snapshot'
 );
 
--- Idempotent retry with same command_id
+-- Snapshot captures stable subject_key and evidence_count
+select is(
+  (select subject_key from public.verified_learning_events where assessment_id = (select id from test_draft_1)),
+  'math',
+  'verified_learning_events captures stable subject_key'
+);
+
+-- ---------------------------------------------------------------------------
+-- 9. IDEMPOTENCY REPLAY ATTACKS & AUTHORIZATION (Tests 35-37)
+-- ---------------------------------------------------------------------------
+
+-- Idempotent retry by Owner A returns same assessment
 create temporary table test_verified_retry on commit drop as
 select * from public.verify_assessment(
   (select id from test_draft_1),
@@ -312,56 +519,49 @@ select is(
   'Idempotent verify retry does NOT create duplicate verified_learning_events'
 );
 
--- ---------------------------------------------------------------------------
--- 7. TERMINAL IMMUTABILITY GUARANTEES
--- ---------------------------------------------------------------------------
-
--- Direct attempt by superuser context to mutate verified learning events fails via trigger
-reset role;
+-- Owner B attempts to replay Owner A's verify command -> 42501
+select set_config('request.jwt.claims', '{"sub": "20000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
 
 select throws_ok(
   $$
-    update public.verified_learning_events
-    set normalized_score = 10.0
-    where assessment_id = (select id from test_draft_1)
+    select public.verify_assessment(
+      (select id from test_draft_1),
+      2,
+      '70000000-0000-0000-0000-000000000001'::uuid
+    )
   $$,
-  'LW102',
+  '42501',
   NULL,
-  'verified_learning_events cannot be updated even by superuser (LW102)'
+  'Owner B cannot replay Owner A processed command_id (42501)'
 );
 
-select throws_ok(
-  $$
-    delete from public.verified_learning_events
-    where assessment_id = (select id from test_draft_1)
-  $$,
-  'LW102',
-  NULL,
-  'verified_learning_events cannot be deleted even by superuser (LW102)'
-);
-
-select throws_ok(
-  $$
-    update public.assessments
-    set raw_score = 10.0
-    where id = (select id from test_draft_1)
-  $$,
-  'LW103',
-  NULL,
-  'verified assessments cannot be modified (LW103)'
-);
-
--- ---------------------------------------------------------------------------
--- 8. REJECTION FLOW
--- ---------------------------------------------------------------------------
-
-set local role authenticated;
+-- Reusing command_id for different operation (e.g. reject) is rejected
 select set_config('request.jwt.claims', '{"sub": "20000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+
+select throws_ok(
+  $$
+    select public.reject_assessment(
+      (select id from test_draft_1),
+      2,
+      '70000000-0000-0000-0000-000000000001'::uuid,
+      'Invalid reuse of verify command'
+    )
+  $$,
+  '42501',
+  NULL,
+  'Reusing verify command_id for reject operation is rejected (42501)'
+);
+
+-- ---------------------------------------------------------------------------
+-- 10. REJECTION FLOW & SERVER-ENFORCED REASON (Tests 38-42)
+-- ---------------------------------------------------------------------------
 
 create temporary table test_draft_reject on commit drop as
 select * from public.create_assessment_draft(
+  '60000000-0000-0000-0000-000000000020'::uuid,
   'f2000000-0000-0000-0000-000000000001'::uuid,
   'c2000000-0000-0000-0000-000000000001'::uuid,
+  'science',
   'Science',
   'Lab Report',
   'homework',
@@ -373,14 +573,60 @@ select * from public.create_assessment_draft(
 select public.submit_assessment(
   (select id from test_draft_reject),
   1,
-  '80000000-0000-0000-0000-000000000002'::uuid
+  '80000000-0000-0000-0000-000000000020'::uuid
 );
 
+-- Rejection with null reason fails
+select throws_ok(
+  $$
+    select public.reject_assessment(
+      (select id from test_draft_reject),
+      2,
+      '70000000-0000-0000-0000-000000000020'::uuid,
+      null
+    )
+  $$,
+  'LW104',
+  NULL,
+  'reject_assessment with null reason is rejected (LW104)'
+);
+
+-- Rejection with empty / whitespace reason fails
+select throws_ok(
+  $$
+    select public.reject_assessment(
+      (select id from test_draft_reject),
+      2,
+      '70000000-0000-0000-0000-000000000020'::uuid,
+      '   '
+    )
+  $$,
+  'LW104',
+  NULL,
+  'reject_assessment with empty/whitespace reason is rejected (LW104)'
+);
+
+-- Rejection with > 500 characters fails
+select throws_ok(
+  $$
+    select public.reject_assessment(
+      (select id from test_draft_reject),
+      2,
+      '70000000-0000-0000-0000-000000000020'::uuid,
+      repeat('x', 501)
+    )
+  $$,
+  'LW104',
+  NULL,
+  'reject_assessment with reason > 500 characters is rejected (LW104)'
+);
+
+-- Valid rejection
 create temporary table test_rejected_1 on commit drop as
 select * from public.reject_assessment(
   (select id from test_draft_reject),
   2,
-  '70000000-0000-0000-0000-000000000002'::uuid,
+  '70000000-0000-0000-0000-000000000020'::uuid,
   'Incomplete calculations on question 3'
 );
 

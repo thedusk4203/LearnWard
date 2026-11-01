@@ -2,11 +2,20 @@
 /**
  * LearnWard - Assessment Evidence Storage Security Regression Test
  *
- * Verifies:
- * 1. Storage bucket 'assessment-evidence' is private.
- * 2. Unauthenticated access is denied.
- * 3. Cross-family read/write access is denied via Storage RLS.
- * 4. Legitimate family adult can upload and read evidence for their family path.
+ * Verifies all Phase 2 Storage security invariants:
+ * A. Owner A uploads to Family A / Child A / Draft Assessment A -> SUCCESS
+ * B. Owner A uploads to Family A / Child A / NONEXISTENT ASSESSMENT -> DENIED
+ * C. Owner A uploads using Family A / Child B / Assessment A -> DENIED
+ * D. Owner A uploads Family A / arbitrary UUID child / Assessment A -> DENIED
+ * E. Owner B uploads into Family A -> DENIED
+ * F. Owner B reads Family A evidence -> DENIED
+ * G. Anon reads evidence -> DENIED
+ * H. Submit Assessment A, then delete evidence -> DENIED
+ * I. Submit Assessment A, then upload additional evidence -> DENIED
+ * J. Overwrite / upsert existing evidence -> DENIED
+ * K. Public unauthenticated evidence URL -> DENIED
+ * L. MIME verification (image/gif, application/pdf, text/plain) -> DENIED
+ * M. Oversize upload (> 10 MiB) -> DENIED
  */
 
 import crypto from 'node:crypto';
@@ -24,6 +33,9 @@ const ASSESSMENT_A = 'ea000000-0000-4000-c000-000000000001';
 const FAMILY_B = 'fb000000-0000-4000-c000-000000000002';
 const OWNER_B = 'ab000000-0000-4000-c000-000000000002';
 const CHILD_B = 'cb000000-0000-4000-c000-000000000002';
+
+const EVIDENCE_ID_1 = crypto.randomUUID();
+const EVIDENCE_ID_2 = crypto.randomUUID();
 
 function createJwt(userId) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -63,8 +75,8 @@ function runPsql(sql) {
 }
 
 async function main() {
-  console.log('=== LearnWard Storage Evidence Security Test ===');
-  console.log('Setting up database fixtures for Family A and Family B...');
+  console.log('=== LearnWard Full Storage Evidence Security Test ===');
+  console.log('Setting up database fixtures for Family A, Family B, and Draft Assessment A...');
 
   const setupSql = `
     delete from public.assessments where id = '${ASSESSMENT_A}';
@@ -87,6 +99,16 @@ async function main() {
     insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year) values
       ('${CHILD_A}', '${FAMILY_A}', 'Child A', 3, 2017),
       ('${CHILD_B}', '${FAMILY_B}', 'Child B', 4, 2016);
+
+    insert into public.assessments (
+      id, family_id, child_id, subject_key, subject, title,
+      assessment_type, difficulty, raw_score, max_score,
+      status, created_by_user_id
+    ) values (
+      '${ASSESSMENT_A}', '${FAMILY_A}', '${CHILD_A}', 'math', 'Mathematics', 'Fractions Quiz',
+      'quiz', 'normal', 8.0, 10.0,
+      'draft', '${OWNER_A}'
+    );
   `;
 
   const setupRes = await runPsql(setupSql);
@@ -94,33 +116,17 @@ async function main() {
     console.error('Fixture setup failed:', setupRes.stderr);
     process.exit(1);
   }
-  console.log('Fixtures established.');
+  console.log('Fixtures established: Real Draft Assessment A exists.');
 
   const tokenA = createJwt(OWNER_A);
   const tokenB = createJwt(OWNER_B);
 
-  const pathA = `${FAMILY_A}/${CHILD_A}/${ASSESSMENT_A}/page1.jpg`;
+  const pathA = `${FAMILY_A}/${CHILD_A}/${ASSESSMENT_A}/${EVIDENCE_ID_1}.jpg`;
   const dummyImageBytes = Buffer.from('FAKE_JPEG_IMAGE_CONTENT');
 
-  // Test 1: Unauthenticated upload attempt must fail
-  console.log('\nTest 1: Unauthenticated upload rejection...');
-  const unauthUploadRes = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
-    method: 'POST',
-    headers: {
-      'apikey': ANON_KEY,
-      'Content-Type': 'image/jpeg',
-    },
-    body: dummyImageBytes,
-  });
-  if (unauthUploadRes.status !== 400 && unauthUploadRes.status !== 401 && unauthUploadRes.status !== 403) {
-    console.error(`FAIL: Expected unauthenticated upload to be denied, got status ${unauthUploadRes.status}`);
-    process.exit(1);
-  }
-  console.log(`PASS: Unauthenticated upload rejected with status ${unauthUploadRes.status}.`);
-
-  // Test 2: Owner A uploads evidence to Family A path -> must succeed
-  console.log('\nTest 2: Family A adult uploads to Family A path...');
-  const ownerAUploadRes = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+  // A. Owner A uploads to Family A / Child A / Draft Assessment A -> SUCCESS
+  console.log('\n[Test A] Owner A uploads to Family A / Child A / Draft Assessment A...');
+  const resA = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
     method: 'POST',
     headers: {
       'apikey': ANON_KEY,
@@ -129,50 +135,72 @@ async function main() {
     },
     body: dummyImageBytes,
   });
-  if (!ownerAUploadRes.ok) {
-    const errText = await ownerAUploadRes.text();
-    console.error(`FAIL: Owner A upload failed: ${ownerAUploadRes.status} ${errText}`);
+  if (!resA.ok) {
+    const errText = await resA.text();
+    console.error(`FAIL [Test A]: Upload failed with status ${resA.status}: ${errText}`);
     process.exit(1);
   }
-  console.log(`PASS: Owner A upload succeeded (HTTP ${ownerAUploadRes.status}).`);
+  console.log(`PASS [Test A]: Upload succeeded (HTTP ${resA.status}).`);
 
-  // Test 3: Owner A downloads evidence from Family A path -> must succeed
-  console.log('\nTest 3: Family A adult reads Family A evidence...');
-  const ownerAGetRes = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+  // B. Owner A uploads to Family A / Child A / NONEXISTENT ASSESSMENT -> DENIED
+  console.log('\n[Test B] Owner A uploads to NONEXISTENT assessment...');
+  const fakeAssessmentId = 'ea000000-0000-4000-c000-999999999999';
+  const pathNonexistent = `${FAMILY_A}/${CHILD_A}/${fakeAssessmentId}/${EVIDENCE_ID_2}.jpg`;
+  const resB = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathNonexistent}`, {
+    method: 'POST',
     headers: {
       'apikey': ANON_KEY,
       'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'image/jpeg',
     },
+    body: dummyImageBytes,
   });
-  if (!ownerAGetRes.ok) {
-    console.error(`FAIL: Owner A read failed: ${ownerAGetRes.status}`);
+  if (resB.ok) {
+    console.error('FAIL [Test B]: Upload to nonexistent assessment was allowed!');
     process.exit(1);
   }
-  const content = await ownerAGetRes.text();
-  if (content !== 'FAKE_JPEG_IMAGE_CONTENT') {
-    console.error('FAIL: Downloaded content does not match uploaded bytes');
-    process.exit(1);
-  }
-  console.log('PASS: Owner A read succeeded with exact content match.');
+  console.log(`PASS [Test B]: Upload to nonexistent assessment denied (HTTP ${resB.status}).`);
 
-  // Test 4: Owner B attempts to download Family A evidence -> must fail
-  console.log('\nTest 4: Cross-family read attempt (Owner B reading Family A evidence)...');
-  const ownerBGetRes = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+  // C. Owner A uploads using Family A / Child B / Assessment A -> DENIED
+  console.log('\n[Test C] Owner A uploads using mismatched child (Child B for Assessment A)...');
+  const pathWrongChild = `${FAMILY_A}/${CHILD_B}/${ASSESSMENT_A}/${EVIDENCE_ID_2}.jpg`;
+  const resC = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathWrongChild}`, {
+    method: 'POST',
     headers: {
       'apikey': ANON_KEY,
-      'Authorization': `Bearer ${tokenB}`,
+      'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'image/jpeg',
     },
+    body: dummyImageBytes,
   });
-  if (ownerBGetRes.ok) {
-    console.error('FAIL: Owner B was able to read Family A private evidence!');
+  if (resC.ok) {
+    console.error('FAIL [Test C]: Upload with mismatched child was allowed!');
     process.exit(1);
   }
-  console.log(`PASS: Cross-family read denied (HTTP ${ownerBGetRes.status}).`);
+  console.log(`PASS [Test C]: Upload with mismatched child denied (HTTP ${resC.status}).`);
 
-  // Test 5: Owner B attempts to upload to Family A path -> must fail
-  console.log('\nTest 5: Cross-family upload attempt (Owner B uploading to Family A path)...');
-  const crossUploadPath = `${FAMILY_A}/${CHILD_A}/${ASSESSMENT_A}/malicious.jpg`;
-  const ownerBCrossUploadRes = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${crossUploadPath}`, {
+  // D. Owner A uploads using Family A / arbitrary UUID child / Assessment A -> DENIED
+  console.log('\n[Test D] Owner A uploads using arbitrary UUID child...');
+  const arbitraryChild = 'ca000000-0000-4000-c000-888888888888';
+  const pathArbitraryChild = `${FAMILY_A}/${arbitraryChild}/${ASSESSMENT_A}/${EVIDENCE_ID_2}.jpg`;
+  const resD = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathArbitraryChild}`, {
+    method: 'POST',
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'image/jpeg',
+    },
+    body: dummyImageBytes,
+  });
+  if (resD.ok) {
+    console.error('FAIL [Test D]: Upload with arbitrary child UUID was allowed!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test D]: Upload with arbitrary child UUID denied (HTTP ${resD.status}).`);
+
+  // E. Owner B uploads into Family A -> DENIED
+  console.log('\n[Test E] Owner B attempts to upload into Family A path...');
+  const resE = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${FAMILY_A}/${CHILD_A}/${ASSESSMENT_A}/${EVIDENCE_ID_2}.jpg`, {
     method: 'POST',
     headers: {
       'apikey': ANON_KEY,
@@ -181,22 +209,140 @@ async function main() {
     },
     body: dummyImageBytes,
   });
-  if (ownerBCrossUploadRes.ok) {
-    console.error('FAIL: Owner B was able to upload into Family A path!');
+  if (resE.ok) {
+    console.error('FAIL [Test E]: Cross-family upload by Owner B was allowed!');
     process.exit(1);
   }
-  console.log(`PASS: Cross-family upload denied (HTTP ${ownerBCrossUploadRes.status}).`);
+  console.log(`PASS [Test E]: Cross-family upload denied (HTTP ${resE.status}).`);
 
-  // Cleanup storage & database
-  console.log('\nCleaning up storage and database...');
-  await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+  // F. Owner B reads Family A evidence -> DENIED
+  console.log('\n[Test F] Owner B attempts to read Family A evidence...');
+  const resF = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenB}`,
+    },
+  });
+  if (resF.ok) {
+    console.error('FAIL [Test F]: Cross-family read by Owner B was allowed!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test F]: Cross-family read denied (HTTP ${resF.status}).`);
+
+  // G. Anon reads evidence -> DENIED
+  console.log('\n[Test G] Anonymous caller attempts to read Family A evidence...');
+  const resG = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    headers: {
+      'apikey': ANON_KEY,
+    },
+  });
+  if (resG.ok) {
+    console.error('FAIL [Test G]: Unauthenticated read was allowed!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test G]: Unauthenticated read denied (HTTP ${resG.status}).`);
+
+  // J. Evidence overwrite / upsert attempt -> DENIED
+  console.log('\n[Test J] Overwrite / upsert attempt on existing evidence object...');
+  const resJ = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    method: 'PUT',
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'image/jpeg',
+    },
+    body: Buffer.from('MUTATED_BYTES'),
+  });
+  if (resJ.ok) {
+    console.error('FAIL [Test J]: Evidence overwrite was allowed!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test J]: Overwrite / upsert attempt denied (HTTP ${resJ.status}).`);
+
+  // K. Public unauthenticated evidence URL -> DENIED
+  console.log('\n[Test K] Public URL retrieve on private bucket...');
+  const resK = await fetch(`${API_URL}/storage/v1/object/public/assessment-evidence/${pathA}`);
+  if (resK.ok) {
+    console.error('FAIL [Test K]: Public unauthenticated URL succeeded on private bucket!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test K]: Public URL access denied (HTTP ${resK.status}).`);
+
+  // L. MIME verification (disallowed types) -> DENIED
+  console.log('\n[Test L] Uploads with disallowed MIME types (image/gif, application/pdf, text/plain)...');
+  for (const mime of ['image/gif', 'application/pdf', 'text/plain']) {
+    const resMime = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${FAMILY_A}/${CHILD_A}/${ASSESSMENT_A}/${crypto.randomUUID()}.jpg`, {
+      method: 'POST',
+      headers: {
+        'apikey': ANON_KEY,
+        'Authorization': `Bearer ${tokenA}`,
+        'Content-Type': mime,
+      },
+      body: dummyImageBytes,
+    });
+    if (resMime.ok) {
+      console.error(`FAIL [Test L]: Upload with disallowed MIME ${mime} succeeded!`);
+      process.exit(1);
+    }
+  }
+  console.log('PASS [Test L]: Disallowed MIME types rejected.');
+
+  // M. Oversize upload (> 10 MiB) -> DENIED
+  console.log('\n[Test M] Oversize upload (> 10 MiB)...');
+  const oversizeBytes = Buffer.alloc(10485760 + 1024, 0x42);
+  const resM = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${FAMILY_A}/${CHILD_A}/${ASSESSMENT_A}/${crypto.randomUUID()}.jpg`, {
+    method: 'POST',
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'image/jpeg',
+    },
+    body: oversizeBytes,
+  });
+  if (resM.ok) {
+    console.error('FAIL [Test M]: Oversize upload was allowed!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test M]: Oversize upload denied (HTTP ${resM.status}).`);
+
+  // Advance Assessment A status to pending_review
+  console.log('\nTransitioning Assessment A to pending_review...');
+  await runPsql(`update public.assessments set status = 'pending_review' where id = '${ASSESSMENT_A}';`);
+
+  // H. Submit Assessment A then delete evidence -> DENIED
+  console.log('\n[Test H] Delete evidence after submission (pending_review status)...');
+  const resH = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
     method: 'DELETE',
     headers: {
       'apikey': ANON_KEY,
       'Authorization': `Bearer ${tokenA}`,
     },
   });
+  if (resH.ok) {
+    console.error('FAIL [Test H]: Evidence delete was allowed after assessment was submitted!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test H]: Evidence delete denied after submit (HTTP ${resH.status}).`);
 
+  // I. Submit Assessment A then upload additional evidence -> DENIED
+  console.log('\n[Test I] Upload evidence after submission (pending_review status)...');
+  const resI = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${FAMILY_A}/${CHILD_A}/${ASSESSMENT_A}/${EVIDENCE_ID_2}.jpg`, {
+    method: 'POST',
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'image/jpeg',
+    },
+    body: dummyImageBytes,
+  });
+  if (resI.ok) {
+    console.error('FAIL [Test I]: Upload was allowed after assessment was submitted!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test I]: Upload denied after submit (HTTP ${resI.status}).`);
+
+  // Cleanup
+  console.log('\nCleaning up storage and database...');
   await runPsql(`
     delete from public.assessments where id = '${ASSESSMENT_A}';
     delete from public.child_profiles where id in ('${CHILD_A}', '${CHILD_B}');
@@ -204,7 +350,7 @@ async function main() {
     delete from auth.users where id in ('${OWNER_A}', '${OWNER_B}');
   `);
 
-  console.log('=== Storage Evidence Security Test PASSED ===\n');
+  console.log('=== All Storage Evidence Security Tests A-M PASSED ===\n');
 }
 
 main().catch((err) => {

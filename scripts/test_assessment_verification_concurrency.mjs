@@ -64,10 +64,10 @@ async function main() {
     values ('${CHILD_ID}', '${FAMILY_ID}', 'Test Child', 4, 2016);
 
     insert into public.assessments (
-      id, family_id, child_id, subject, title, assessment_type, difficulty,
+      id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
       raw_score, max_score, status, version, created_by_user_id
     ) values (
-      '${ASSESSMENT_ID}', '${FAMILY_ID}', '${CHILD_ID}', 'Mathematics', 'Weekly Test',
+      '${ASSESSMENT_ID}', '${FAMILY_ID}', '${CHILD_ID}', 'math', 'Mathematics', 'Weekly Test',
       'quiz', 'normal', 9.0, 10.0, 'pending_review', 2, '${OWNER_ID}'
     );
   `;
