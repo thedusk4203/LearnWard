@@ -1,0 +1,433 @@
+[
+  {
+    "id": "cold_start",
+    "description": "Cold start with no historical results: baseline is null, delta is null",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 7.0,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [],
+    "expected": {
+      "baseline_score": null,
+      "baseline_sample_count": 0,
+      "growth_delta": null,
+      "historical_best": null,
+      "score_rp_minor": 700,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 0,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 700,
+      "xp_awarded": 24
+    }
+  },
+  {
+    "id": "canonical_baseline_spec",
+    "description": "Canonical worked example from spec: 6.43 rolling baseline -> 7.50 Hard = 11.50 RP, 33 XP",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 15.0,
+      "max_score": 20.0,
+      "difficulty": "hard",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 6.5, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 6.8, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 6.43,
+      "baseline_sample_count": 3,
+      "growth_delta": 1.07,
+      "historical_best": 6.80,
+      "score_rp_minor": 750,
+      "growth_rp_minor": 200,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 100,
+      "difficulty_rp_minor": 100,
+      "total_rp_minor": 1150,
+      "xp_awarded": 33
+    }
+  },
+  {
+    "id": "growth_threshold_below_050",
+    "description": "Delta < +0.50 yields +0 RP growth bonus",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 6.4,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 6.00,
+      "baseline_sample_count": 3,
+      "growth_delta": 0.40,
+      "historical_best": 6.00,
+      "score_rp_minor": 640,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 100,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 740,
+      "xp_awarded": 25
+    }
+  },
+  {
+    "id": "growth_threshold_050_to_099",
+    "description": "Delta +0.50 to +0.99 yields +1.00 RP growth bonus (100 minor)",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 6.6,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 6.00,
+      "baseline_sample_count": 3,
+      "growth_delta": 0.60,
+      "historical_best": 6.00,
+      "score_rp_minor": 660,
+      "growth_rp_minor": 100,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 100,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 860,
+      "xp_awarded": 27
+    }
+  },
+  {
+    "id": "growth_threshold_100_to_149",
+    "description": "Delta +1.00 to +1.49 yields +2.00 RP growth bonus (200 minor)",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 7.2,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 6.00,
+      "baseline_sample_count": 3,
+      "growth_delta": 1.20,
+      "historical_best": 6.00,
+      "score_rp_minor": 720,
+      "growth_rp_minor": 200,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 100,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 1020,
+      "xp_awarded": 30
+    }
+  },
+  {
+    "id": "growth_threshold_150_to_199",
+    "description": "Delta +1.50 to +1.99 yields +3.00 RP growth bonus (300 minor)",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 7.8,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 6.00,
+      "baseline_sample_count": 3,
+      "growth_delta": 1.80,
+      "historical_best": 6.00,
+      "score_rp_minor": 780,
+      "growth_rp_minor": 300,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 100,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 1180,
+      "xp_awarded": 34
+    }
+  },
+  {
+    "id": "growth_threshold_ge_200",
+    "description": "Delta >= +2.00 yields +4.00 RP growth bonus (400 minor)",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 8.1,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 6.00,
+      "baseline_sample_count": 3,
+      "growth_delta": 2.10,
+      "historical_best": 6.00,
+      "score_rp_minor": 810,
+      "growth_rp_minor": 400,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 100,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 1310,
+      "xp_awarded": 36
+    }
+  },
+  {
+    "id": "high_performer_maintenance",
+    "description": "High Performer: baseline >= 8.5 AND current >= 8.5 yields Mastery Maintenance +1.00 RP (100 minor)",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 8.8,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 8.8, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 9.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 8.9, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 8.90,
+      "baseline_sample_count": 3,
+      "growth_delta": -0.10,
+      "historical_best": 9.00,
+      "score_rp_minor": 880,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 100,
+      "personal_best_rp_minor": 0,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 980,
+      "xp_awarded": 30
+    }
+  },
+  {
+    "id": "personal_best_exact_boundary",
+    "description": "Personal Best: exceeds prior best by exactly +0.25 yields +1.00 RP (100 minor)",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 7.25,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 7.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 7.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 7.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 7.00,
+      "baseline_sample_count": 3,
+      "growth_delta": 0.25,
+      "historical_best": 7.00,
+      "score_rp_minor": 725,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 100,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 825,
+      "xp_awarded": 27
+    }
+  },
+  {
+    "id": "hard_difficulty_bonus",
+    "description": "Hard difficulty yields additive +1.00 RP (100 minor)",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 6.2,
+      "max_score": 10.0,
+      "difficulty": "hard",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 6.00,
+      "baseline_sample_count": 3,
+      "growth_delta": 0.20,
+      "historical_best": 6.00,
+      "score_rp_minor": 620,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 0,
+      "difficulty_rp_minor": 100,
+      "total_rp_minor": 720,
+      "xp_awarded": 24
+    }
+  },
+  {
+    "id": "challenge_below_5",
+    "description": "Challenge difficulty below 5.0 score yields +0 RP challenge bonus (anti-farming)",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 4.5,
+      "max_score": 10.0,
+      "difficulty": "challenge",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 3 },
+      { "id": "h2", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 2 },
+      { "id": "h3", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 5.00,
+      "baseline_sample_count": 3,
+      "growth_delta": -0.50,
+      "historical_best": 5.00,
+      "score_rp_minor": 450,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 0,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 450,
+      "xp_awarded": 19
+    }
+  },
+  {
+    "id": "challenge_ge_5",
+    "description": "Challenge difficulty >= 5.0 score yields additive +2.00 RP (200 minor)",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 6.0,
+      "max_score": 10.0,
+      "difficulty": "challenge",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 3 },
+      { "id": "h2", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 2 },
+      { "id": "h3", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": 5.00,
+      "baseline_sample_count": 3,
+      "growth_delta": 1.00,
+      "historical_best": 5.00,
+      "score_rp_minor": 600,
+      "growth_rp_minor": 200,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 100,
+      "difficulty_rp_minor": 200,
+      "total_rp_minor": 1100,
+      "xp_awarded": 32
+    }
+  },
+  {
+    "id": "below_level_anti_farming",
+    "description": "Below-level anti-farming: 25% base RP, bonuses zeroed, legitimate Study XP",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 10.0,
+      "max_score": 10.0,
+      "difficulty": "below_level",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 8.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 8.5, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 9.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": null,
+      "baseline_sample_count": 0,
+      "growth_delta": null,
+      "historical_best": null,
+      "score_rp_minor": 250,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 0,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 250,
+      "xp_awarded": 15
+    }
+  },
+  {
+    "id": "incompatible_type_history",
+    "description": "Incompatible assessment type history (homework vs exam) is excluded from rolling baseline",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 8.5,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "exam"
+    },
+    "history": [
+      { "id": "h1", "score": 8.0, "type": "homework", "difficulty": "normal", "days_ago": 3 },
+      { "id": "h2", "score": 8.0, "type": "homework", "difficulty": "normal", "days_ago": 2 },
+      { "id": "h3", "score": 8.0, "type": "homework", "difficulty": "normal", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": null,
+      "baseline_sample_count": 0,
+      "growth_delta": null,
+      "historical_best": null,
+      "score_rp_minor": 850,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 0,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 850,
+      "xp_awarded": 27
+    }
+  },
+  {
+    "id": "incompatible_difficulty_history",
+    "description": "Incompatible difficulty history (challenge vs normal) is excluded from standard band baseline",
+    "current": {
+      "subject_key": "math",
+      "raw_score": 7.5,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 3 },
+      { "id": "h2", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 2 },
+      { "id": "h3", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 1 }
+    ],
+    "expected": {
+      "baseline_score": null,
+      "baseline_sample_count": 0,
+      "growth_delta": null,
+      "historical_best": null,
+      "score_rp_minor": 750,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 0,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 750,
+      "xp_awarded": 25
+    }
+  }
+]

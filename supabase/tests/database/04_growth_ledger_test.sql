@@ -1,5 +1,5 @@
 begin;
-select plan(28);
+select plan(39);
 
 -- ---------------------------------------------------------------------------
 -- 0. FIXTURES SETUP (superuser context)
@@ -296,14 +296,51 @@ select throws_ok(
 );
 
 -- ---------------------------------------------------------------------------
--- 6. BALANCE RECONCILIATION
+-- 6. BALANCE RECONCILIATION & AUTHORIZATION CHECKS
 -- ---------------------------------------------------------------------------
 
--- Test 23: Deterministic reconciliation check
+-- Test 23: Unauthenticated caller cannot reconcile child balance
+set local role anon;
+select throws_ok(
+  $$ select * from public.reconcile_child_balance('c3000000-0000-0000-0000-000000000001'::uuid) $$,
+  '42501',
+  null,
+  'reconcile_child_balance rejects unauthenticated caller with 42501'
+);
+
+-- Test 24: Family B owner cannot reconcile Family A child balance
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select * from public.reconcile_child_balance('c3000000-0000-0000-0000-000000000001'::uuid) $$,
+  '42501',
+  null,
+  'reconcile_child_balance rejects cross-family caller with 42501'
+);
+
+-- Test 25: Sibling child device (Child A2) cannot reconcile Child A1 balance
+select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000004", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select * from public.reconcile_child_balance('c3000000-0000-0000-0000-000000000001'::uuid) $$,
+  '42501',
+  null,
+  'reconcile_child_balance rejects sibling child device with 42501'
+);
+
+-- Test 26: Authorized Family A adult succeeds
+select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 select is(
   (select is_reconciled from public.reconcile_child_balance('c3000000-0000-0000-0000-000000000001'::uuid)),
   true,
-  'reconcile_child_balance confirms projected balances equal sum of ledgers'
+  'reconcile_child_balance succeeds for active family adult and confirms reconciliation'
+);
+
+-- Test 27: Paired child device (Child A1) succeeds for their own balance
+select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
+select is(
+  (select is_reconciled from public.reconcile_child_balance('c3000000-0000-0000-0000-000000000001'::uuid)),
+  true,
+  'reconcile_child_balance succeeds for paired child device for their own profile'
 );
 
 -- ---------------------------------------------------------------------------
@@ -313,7 +350,7 @@ select is(
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
 
--- Test 24: Owner B cannot see Family A growth events or ledgers
+-- Test 28: Owner B cannot see Family A growth events or ledgers
 select is(
   (select count(*)::int from public.growth_events where family_id = 'f3000000-0000-0000-0000-000000000001'::uuid),
   0,
@@ -327,32 +364,186 @@ select is(
 -- Set context to Child Device A2
 select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000004", "role": "authenticated"}', true);
 
--- Test 25: Child A2 cannot read sibling Child A1 growth_events
+-- Test 29: Child A2 cannot read sibling Child A1 growth_events
 select is(
   (select count(*)::int from public.growth_events where child_id = 'c3000000-0000-0000-0000-000000000001'::uuid),
   0,
   'Sibling isolation prevents Child A2 from reading Child A1 growth_events'
 );
 
--- Test 26: Child A2 cannot read sibling Child A1 xp_ledger
+-- Test 30: Child A2 cannot read sibling Child A1 xp_ledger
 select is(
   (select count(*)::int from public.xp_ledger where child_id = 'c3000000-0000-0000-0000-000000000001'::uuid),
   0,
   'Sibling isolation prevents Child A2 from reading Child A1 xp_ledger'
 );
 
--- Test 27: Child A2 cannot read sibling Child A1 rp_ledger
+-- Test 31: Child A2 cannot read sibling Child A1 rp_ledger
 select is(
   (select count(*)::int from public.rp_ledger where child_id = 'c3000000-0000-0000-0000-000000000001'::uuid),
   0,
   'Sibling isolation prevents Child A2 from reading Child A1 rp_ledger'
 );
 
--- Test 28: Child A2 cannot read sibling Child A1 child_balances
+-- Test 32: Child A2 cannot read sibling Child A1 child_balances
 select is(
   (select count(*)::int from public.child_balances where child_id = 'c3000000-0000-0000-0000-000000000001'::uuid),
   0,
   'Sibling isolation prevents Child A2 from reading Child A1 child_balances'
+);
+
+-- ---------------------------------------------------------------------------
+-- 9. LONGITUDINAL COMPARABILITY FILTERING IN SQL
+-- ---------------------------------------------------------------------------
+
+reset role;
+
+-- Setup historical records for child A2:
+-- Target subject: math
+-- Event h1: math, quiz (evaluative), normal (standard), 6.00 (3 days ago) -> COMPATIBLE
+-- Event h2: math, homework (formative), normal (standard), 9.00 (2 days ago) -> INCOMPATIBLE TYPE
+-- Event h3: math, quiz (evaluative), challenge, 4.00 (2 days ago) -> INCOMPATIBLE DIFFICULTY
+-- Event h4: math, exam (evaluative), normal (standard), 6.50 (2 days ago) -> COMPATIBLE
+-- Event h5: math, quiz (evaluative), below_level, 10.00 (1 day ago) -> INCOMPATIBLE DIFFICULTY
+-- Event h6: math, quiz (evaluative), hard (standard), 6.80 (1 day ago) -> COMPATIBLE
+-- Current: math, exam (evaluative), hard (standard), 7.50 (now) -> Target
+
+do $$
+begin
+  -- h1: compatible (quiz, normal, 6.00)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000011'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Q1', 'quiz', 'normal', 6, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+
+  -- Command receipt and Review event placeholder
+  insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+  values ('70000000-0000-0000-0000-000000000099'::uuid, 'verify', '30000000-0000-0000-0000-000000000001'::uuid, 'a3000000-0000-0000-0000-000000000011'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid) on conflict do nothing;
+
+  insert into public.assessment_review_events (
+    id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+  ) values (
+    'e3000000-0000-0000-0000-000000000099'::uuid,
+    '70000000-0000-0000-0000-000000000099'::uuid,
+    'f3000000-0000-0000-0000-000000000001'::uuid,
+    'a3000000-0000-0000-0000-000000000011'::uuid,
+    'verified',
+    'pending_review',
+    'verified',
+    '30000000-0000-0000-0000-000000000001'::uuid
+  ) on conflict (id) do nothing;
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000011'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'a3000000-0000-0000-0000-000000000011'::uuid, 'math', 'Math', 'Q1', 'quiz', 'normal', 6, 10, 6.00, now() - interval '3 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- h2: incompatible type (homework, normal, 9.00)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000012'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'HW1', 'homework', 'normal', 9, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000012'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'a3000000-0000-0000-0000-000000000012'::uuid, 'math', 'Math', 'HW1', 'homework', 'normal', 9, 10, 9.00, now() - interval '2 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- h3: incompatible diff (quiz, challenge, 4.00)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000013'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Ch1', 'quiz', 'challenge', 4, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000013'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'a3000000-0000-0000-0000-000000000013'::uuid, 'math', 'Math', 'Ch1', 'quiz', 'challenge', 4, 10, 4.00, now() - interval '2 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- h4: compatible (exam, normal, 6.50)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000014'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'E1', 'exam', 'normal', 6.5, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000014'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'a3000000-0000-0000-0000-000000000014'::uuid, 'math', 'Math', 'E1', 'exam', 'normal', 6.5, 10, 6.50, now() - interval '2 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- h5: incompatible diff (quiz, below_level, 10.00)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000015'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'BL1', 'quiz', 'below_level', 10, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000015'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'a3000000-0000-0000-0000-000000000015'::uuid, 'math', 'Math', 'BL1', 'quiz', 'below_level', 10, 10, 10.00, now() - interval '1 day', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- h6: compatible (quiz, hard, 6.80)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000016'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Q2', 'quiz', 'hard', 6.8, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000016'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'a3000000-0000-0000-0000-000000000016'::uuid, 'math', 'Math', 'Q2', 'quiz', 'hard', 6.8, 10, 6.80, now() - interval '1 day', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- Current target: exam, hard, 7.50
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000017'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'E2_Target', 'exam', 'hard', 7.5, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000017'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'a3000000-0000-0000-0000-000000000017'::uuid, 'math', 'Math', 'E2_Target', 'exam', 'hard', 7.5, 10, 7.50, now(), '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+end;
+$$;
+
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+
+create temp table comp_test_res as
+select * from public.process_verified_learning_event('93000000-0000-0000-0000-000000000017'::uuid, null);
+
+-- Test 33: SQL process_verified_learning_event computes 6.43 baseline filtering incompatible type & difficulty
+select is(
+  (select baseline_score from comp_test_res),
+  6.43::numeric,
+  'SQL process_verified_learning_event computes 6.43 baseline filtering incompatible type and difficulty'
+);
+
+-- Test 34: SQL inputs_snapshot contains current assessment_type & difficulty
+select is(
+  (select inputs_snapshot->>'assessment_type' from comp_test_res),
+  'exam',
+  'inputs_snapshot contains current assessment_type'
+);
+
+-- Test 35: SQL inputs_snapshot samples_used contains exactly 3 compatible items
+select is(
+  (select jsonb_array_length(inputs_snapshot->'samples_used') from comp_test_res),
+  3,
+  'inputs_snapshot samples_used contains exactly 3 compatible items'
+);
+
+-- ---------------------------------------------------------------------------
+-- 10. UNPROCESSED DISCOVERY & CATCH-UP DELIVERY
+-- ---------------------------------------------------------------------------
+
+reset role;
+
+-- Create an unprocessed verified event
+do $$
+begin
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000020'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Unprocessed_1', 'quiz', 'normal', 8, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000020'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000002'::uuid, 'a3000000-0000-0000-0000-000000000020'::uuid, 'math', 'Math', 'Unprocessed_1', 'quiz', 'normal', 8, 10, 8.00, now(), '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+end;
+$$;
+
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+
+-- Test 36: get_unprocessed_verified_learning_events discovers unprocessed events
+select is(
+  (select count(*)::int from public.get_unprocessed_verified_learning_events('f3000000-0000-0000-0000-000000000001'::uuid)),
+  7,
+  'get_unprocessed_verified_learning_events discovers 7 unprocessed verified events'
+);
+
+-- Test 37: catch_up_unprocessed_growth processes the events
+select is(
+  (select public.catch_up_unprocessed_growth('f3000000-0000-0000-0000-000000000001'::uuid)),
+  7,
+  'catch_up_unprocessed_growth processes 7 unprocessed events'
+);
+
+-- Test 38: catch_up_unprocessed_growth returns 0 on second run (idempotent)
+select is(
+  (select public.catch_up_unprocessed_growth('f3000000-0000-0000-0000-000000000001'::uuid)),
+  0,
+  'catch_up_unprocessed_growth returns 0 on second run (idempotent)'
+);
+
+-- Test 39: get_unprocessed_verified_learning_events returns 0 after catch-up
+select is(
+  (select count(*)::int from public.get_unprocessed_verified_learning_events('f3000000-0000-0000-0000-000000000001'::uuid)),
+  0,
+  'get_unprocessed_verified_learning_events returns 0 after catch-up completed'
 );
 
 select * from finish();

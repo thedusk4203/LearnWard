@@ -143,7 +143,7 @@ async function main() {
     create temporary table target_assessment as
     select * from public.create_assessment_draft(
       '${crypto.randomUUID()}'::uuid, '${FAMILY_ID}'::uuid, '${CHILD_ID}'::uuid,
-      'math', 'Mathematics', 'Target Test', 'practice', 'hard', 15.0, 20.0, now(), 'adult'
+      'math', 'Mathematics', 'Target Test', 'quiz', 'hard', 15.0, 20.0, now(), 'adult'
     );
 
     select public.submit_assessment((select id from target_assessment), 1, '${crypto.randomUUID()}'::uuid);
@@ -216,6 +216,9 @@ async function main() {
 
   console.log('\n5. Verifying Ledgers and child_balances projection...');
   const ledgerSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
+
     select
       (select amount from public.xp_ledger where source_id in (select id from public.growth_events where verified_learning_event_id = '${targetVleId}')) as xp_award,
       (select amount_minor from public.rp_ledger where source_id in (select id from public.growth_events where verified_learning_event_id = '${targetVleId}')) as rp_award,
@@ -325,7 +328,12 @@ async function main() {
   console.log('PASS: Below-level anti-farming protection verified successfully.');
 
   console.log('\n8. Final Balance Reconciliation Audit...');
-  const finalReconSql = `select is_reconciled from public.reconcile_child_balance('${CHILD_ID}');`;
+  const finalReconSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
+
+    select is_reconciled from public.reconcile_child_balance('${CHILD_ID}');
+  `;
   const finalReconRes = await runPsql(finalReconSql);
   const finalReconLines = finalReconRes.stdout.trim().split('\n').map(l => l.trim()).filter(Boolean);
   if (finalReconLines[finalReconLines.length - 1] !== 't') throw new Error('Final reconciliation failed!');

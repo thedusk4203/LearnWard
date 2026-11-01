@@ -78,6 +78,74 @@ final class SupabaseGrowthRepository implements GrowthRepository {
     return _mapGrowthEvent(Map<String, dynamic>.from(row));
   }
 
+  @override
+  Future<List<VerifiedLearningEvent>> getUnprocessedVerifiedEvents(
+    FamilyId familyId,
+  ) async {
+    final response = await _client.rpc<List<dynamic>>(
+      'get_unprocessed_verified_learning_events',
+      params: {'p_family_id': familyId.value},
+    );
+
+    return response
+        .map(
+          (r) => _mapVerifiedLearningEvent(Map<String, dynamic>.from(r as Map)),
+        )
+        .toList();
+  }
+
+  @override
+  Future<int> catchUpUnprocessedGrowth(FamilyId familyId) async {
+    final count = await _client.rpc<int>(
+      'catch_up_unprocessed_growth',
+      params: {'p_family_id': familyId.value},
+    );
+
+    return count;
+  }
+
+  static VerifiedLearningEvent _mapVerifiedLearningEvent(
+    Map<String, dynamic> row,
+  ) {
+    final rawScore = (row['raw_score'] as num).toDouble();
+    final maxScore = (row['max_score'] as num).toDouble();
+
+    SubjectKey subjectKey;
+    try {
+      subjectKey = SubjectKey.parse(row['subject_key'] as String? ?? 'math');
+    } catch (_) {
+      subjectKey = SubjectKey.math;
+    }
+
+    EntryContext entryContext;
+    try {
+      entryContext = EntryContext.parse(
+        row['entry_context'] as String? ?? 'adult',
+      );
+    } catch (_) {
+      entryContext = EntryContext.adult;
+    }
+
+    return VerifiedLearningEvent(
+      id: row['id'] as String,
+      familyId: FamilyId(row['family_id'] as String),
+      childId: ChildId(row['child_id'] as String),
+      assessmentId: AssessmentId(row['assessment_id'] as String),
+      subjectKey: subjectKey,
+      subject: row['subject'] as String,
+      title: row['title'] as String,
+      type: AssessmentType.fromValue(row['assessment_type'] as String),
+      difficulty: AssessmentDifficulty.fromValue(row['difficulty'] as String),
+      score: AssessmentScore(rawScore: rawScore, maxScore: maxScore),
+      evidenceCount: (row['evidence_count'] as num?)?.toInt() ?? 0,
+      entryContext: entryContext,
+      occurredAt: DateTime.parse(row['occurred_at'] as String),
+      verifiedAt: DateTime.parse(row['verified_at'] as String),
+      verifiedByUserId: row['verified_by_user_id'] as String,
+      reviewEventId: row['review_event_id'] as String,
+    );
+  }
+
   static GrowthEvent _mapGrowthEvent(Map<String, dynamic> row) {
     return GrowthEvent(
       id: row['id'] as String,

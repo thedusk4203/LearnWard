@@ -68,6 +68,9 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
       final pending = await pendingUseCase.forFamily(currentActive.id);
 
       final growthRepo = ref.read(growthRepositoryProvider);
+      try {
+        await growthRepo.catchUpUnprocessedGrowth(currentActive.id);
+      } catch (_) {}
       final getBalance = GetChildBalance(growthRepo);
       final balances = <String, ChildBalance>{};
       for (final c in children) {

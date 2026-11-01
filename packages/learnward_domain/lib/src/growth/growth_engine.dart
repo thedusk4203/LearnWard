@@ -43,7 +43,8 @@ final class GrowthEngine {
     // - Must not be the current event.
     // - Must match canonical subjectKey.
     // - Must have occurred strictly before the current event (or verified earlier if concurrent).
-    // - If current assessment is standard/hard/challenge, exclude below_level historical records.
+    // - Must match assessment type compatibility band (evaluative: quiz/exam, formative: homework/practice, other).
+    // - Must match difficulty compatibility band (standard: normal/hard, challenge, below_level).
     final comparables = input.comparableHistory.where((c) {
       if (c.id == input.currentEventId) return false;
       if (c.subjectKey != input.subjectKey) return false;
@@ -54,8 +55,13 @@ final class GrowthEngine {
               c.verifiedAt.isBefore(input.verifiedAt));
       if (!isPrior) return false;
 
-      if (input.difficulty != AssessmentDifficulty.belowLevel &&
-          c.difficulty == AssessmentDifficulty.belowLevel) {
+      // Assessment type compatibility
+      if (!input.assessmentType.isCompatibleWith(c.assessmentType)) {
+        return false;
+      }
+
+      // Difficulty band compatibility
+      if (!input.difficulty.isCompatibleWith(c.difficulty)) {
         return false;
       }
 
@@ -149,7 +155,7 @@ final class GrowthEngine {
       }
 
       // High-performer protection:
-      // baseline >= 8.5 AND current >= 8.5 -> +1 RP
+      // baseline >= 8.5 AND current >= 8.5 -> +1 RP (100 minor)
       if (baselineScore != null &&
           baselineScore >= highPerformerThreshold &&
           currentScoreValue >= highPerformerThreshold) {
@@ -159,7 +165,7 @@ final class GrowthEngine {
       }
 
       // Personal Best bonus:
-      // Exceeds prior comparable historical best by at least 0.25 -> +1 RP
+      // Exceeds prior comparable historical best by at least 0.25 -> +1 RP (100 minor)
       if (historicalBest != null &&
           _roundToTwoDecimals(currentScoreValue - historicalBest) >=
               personalBestMargin) {
@@ -234,6 +240,8 @@ final class GrowthEngine {
               'id': c.id,
               'score': c.normalizedScore,
               'occurred_at': c.occurredAt.toIso8601String(),
+              'assessment_type': c.assessmentType.value,
+              'difficulty': c.difficulty.value,
             },
           )
           .toList(),

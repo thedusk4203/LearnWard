@@ -21,4 +21,12 @@ abstract interface class GrowthRepository {
 
   /// Retrieves the GrowthEvent corresponding to a given assessment, or null if uncalculated.
   Future<GrowthEvent?> getGrowthEventByAssessmentId(AssessmentId assessmentId);
+
+  /// Lists verified learning events that do not yet have a corresponding GrowthEvent.
+  Future<List<VerifiedLearningEvent>> getUnprocessedVerifiedEvents(
+    FamilyId familyId,
+  );
+
+  /// Catches up any unprocessed verified learning events for the family.
+  Future<int> catchUpUnprocessedGrowth(FamilyId familyId);
 }

@@ -12,6 +12,7 @@ export 'src/ports/growth_repository.dart';
 export 'src/ports/local_draft_store.dart';
 export 'src/ports/local_metadata_store.dart';
 export 'src/use_cases/archive_child_profile.dart';
+export 'src/use_cases/catch_up_unprocessed_growth.dart';
 export 'src/use_cases/create_assessment_draft.dart';
 export 'src/use_cases/create_child_profile.dart';
 export 'src/use_cases/create_family.dart';

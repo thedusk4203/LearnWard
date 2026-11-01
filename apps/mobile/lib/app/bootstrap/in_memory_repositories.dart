@@ -615,4 +615,24 @@ final class InMemoryGrowthRepository implements GrowthRepository {
   ) async {
     return _growthEventsByAssessment[assessmentId.value];
   }
+
+  @override
+  Future<List<VerifiedLearningEvent>> getUnprocessedVerifiedEvents(
+    FamilyId familyId,
+  ) async {
+    if (assessmentRepository == null) return const [];
+    return assessmentRepository!._verifiedEvents.where((vle) {
+      return vle.familyId == familyId &&
+          !_growthEventsByVle.containsKey(vle.id);
+    }).toList();
+  }
+
+  @override
+  Future<int> catchUpUnprocessedGrowth(FamilyId familyId) async {
+    final pending = await getUnprocessedVerifiedEvents(familyId);
+    for (final event in pending) {
+      await processVerifiedLearningEvent(verifiedLearningEventId: event.id);
+    }
+    return pending.length;
+  }
 }

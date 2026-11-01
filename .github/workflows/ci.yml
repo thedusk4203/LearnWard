@@ -109,6 +109,12 @@ jobs:
       - name: Run Growth Engine vertical slice integration test
         run: node scripts/test_growth_vertical_slice.mjs
 
+      - name: Run Growth delivery recovery integration test
+        run: node scripts/test_growth_delivery_recovery.mjs
+
+      - name: Run Growth Engine Dart/Postgres parity test
+        run: node scripts/test_growth_parity.mjs
+
   android:
     name: Android debug build
     needs: [quality, database]

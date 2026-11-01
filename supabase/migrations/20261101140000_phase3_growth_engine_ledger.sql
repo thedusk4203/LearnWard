@@ -345,7 +345,8 @@ begin
   -- - Same canonical subject_key
   -- - Excludes current event
   -- - Strictly occurred before current event (or verified earlier)
-  -- - Excludes below_level history if current is not below_level
+  -- - Assessment type compatibility band (evaluative: quiz/exam, formative: homework/practice, other)
+  -- - Difficulty compatibility band (standard: normal/hard, challenge, below_level)
   for v_comparables in
     select id, normalized_score, difficulty, assessment_type, occurred_at, verified_at
     from public.verified_learning_events
@@ -357,7 +358,19 @@ begin
         or (occurred_at = v_event.occurred_at and verified_at < v_event.verified_at)
       )
       and (
-        case when v_difficulty != 'below_level' then difficulty != 'below_level' else true end
+        case
+          when v_event.assessment_type in ('quiz', 'exam') then assessment_type in ('quiz', 'exam')
+          when v_event.assessment_type in ('homework', 'practice') then assessment_type in ('homework', 'practice')
+          else assessment_type = v_event.assessment_type
+        end
+      )
+      and (
+        case
+          when v_difficulty in ('normal', 'hard') then difficulty in ('normal', 'hard')
+          when v_difficulty = 'challenge' then difficulty = 'challenge'
+          when v_difficulty = 'below_level' then difficulty = 'below_level'
+          else difficulty = v_difficulty
+        end
       )
     order by occurred_at desc, verified_at desc
   loop
@@ -373,7 +386,9 @@ begin
       v_samples_json := v_samples_json || jsonb_build_object(
         'id', v_comparables.id,
         'score', v_comparables.normalized_score,
-        'occurred_at', v_comparables.occurred_at
+        'occurred_at', v_comparables.occurred_at,
+        'assessment_type', v_comparables.assessment_type,
+        'difficulty', v_comparables.difficulty
       );
     end if;
   end loop;
@@ -467,6 +482,7 @@ begin
     'subject_key', v_subject_key,
     'normalized_score', v_normalized_score,
     'difficulty', v_difficulty,
+    'assessment_type', v_event.assessment_type,
     'baseline_score', v_baseline,
     'baseline_count', v_baseline_count,
     'growth_delta', v_growth_delta,
@@ -636,24 +652,43 @@ security definer
 set search_path = ''
 as $$
 declare
+  v_user_id uuid;
   v_fam_id uuid;
   v_proj_xp bigint := 0;
   v_proj_rp bigint := 0;
   v_ledg_xp bigint := 0;
   v_ledg_rp bigint := 0;
 begin
-  select cp.family_id into v_fam_id from public.child_profiles cp where cp.id = p_child_id;
+  -- 1. Authentication check
+  v_user_id := (select auth.uid());
+  if v_user_id is null then
+    raise exception 'Authentication required' using errcode = '42501';
+  end if;
+
+  -- 2. Target child profile existence & family resolution
+  select cp.family_id into v_fam_id
+  from public.child_profiles cp
+  where cp.id = p_child_id;
+
   if not found then
     raise exception 'Child profile not found' using errcode = 'LW105';
   end if;
 
-  -- Read projection
+  -- 3. Authorization check: must be active adult of child's family or exact paired child
+  if not (
+    private.is_active_family_adult(v_fam_id)
+    or private.is_active_child_device(v_fam_id, p_child_id)
+  ) then
+    raise exception 'Permission denied: unauthorized for child balance reconciliation' using errcode = '42501';
+  end if;
+
+  -- 4. Read projection
   select coalesce(cb.xp_total, 0), coalesce(cb.rp_balance_minor, 0)
   into v_proj_xp, v_proj_rp
   from public.child_balances cb
   where cb.child_id = p_child_id;
 
-  -- Read ledger sums
+  -- 5. Read ledger sums
   select coalesce(sum(xl.amount), 0) into v_ledg_xp
   from public.xp_ledger xl
   where xl.child_id = p_child_id;
@@ -674,3 +709,86 @@ end;
 $$;
 
 grant execute on function public.reconcile_child_balance(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 8. UNPROCESSED VERIFIED EVENTS & CATCH-UP DELIVERY
+-- ---------------------------------------------------------------------------
+
+create or replace function public.get_unprocessed_verified_learning_events(p_family_id uuid)
+returns setof public.verified_learning_events
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+begin
+  -- 1. Authentication check
+  v_user_id := (select auth.uid());
+  if v_user_id is null then
+    raise exception 'Authentication required' using errcode = '42501';
+  end if;
+
+  -- 2. Authorization check (only active family adults can list unprocessed events)
+  if not private.is_active_family_adult(p_family_id) then
+    raise exception 'Permission denied: must be active family adult' using errcode = '42501';
+  end if;
+
+  return query
+  select vle.*
+  from public.verified_learning_events vle
+  where vle.family_id = p_family_id
+    and not exists (
+      select 1
+      from public.growth_events ge
+      where ge.verified_learning_event_id = vle.id
+    )
+  order by vle.occurred_at asc, vle.verified_at asc;
+end;
+$$;
+
+grant execute on function public.get_unprocessed_verified_learning_events(uuid) to authenticated;
+
+create or replace function public.catch_up_unprocessed_growth(p_family_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+  v_event record;
+  v_processed_count integer := 0;
+begin
+  -- 1. Authentication check
+  v_user_id := (select auth.uid());
+  if v_user_id is null then
+    raise exception 'Authentication required' using errcode = '42501';
+  end if;
+
+  -- 2. Authorization check (only active family adults can trigger catch-up)
+  if not private.is_active_family_adult(p_family_id) then
+    raise exception 'Permission denied: must be active family adult' using errcode = '42501';
+  end if;
+
+  -- 3. Discover and process each unprocessed event safely
+  for v_event in
+    select vle.id
+    from public.verified_learning_events vle
+    where vle.family_id = p_family_id
+      and not exists (
+        select 1
+        from public.growth_events ge
+        where ge.verified_learning_event_id = vle.id
+      )
+    order by vle.occurred_at asc, vle.verified_at asc
+  loop
+    perform public.process_verified_learning_event(v_event.id, null);
+    v_processed_count := v_processed_count + 1;
+  end loop;
+
+  return v_processed_count;
+end;
+$$;
+
+grant execute on function public.catch_up_unprocessed_growth(uuid) to authenticated;

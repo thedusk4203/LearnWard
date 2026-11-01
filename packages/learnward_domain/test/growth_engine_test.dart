@@ -46,7 +46,7 @@ void main() {
           maxScore: 20,
         ), // 7.50
         difficulty: AssessmentDifficulty.hard,
-        assessmentType: AssessmentType.practice,
+        assessmentType: AssessmentType.quiz,
         occurredAt: now,
         verifiedAt: now.add(const Duration(minutes: 5)),
         comparableHistory: history,
@@ -585,6 +585,259 @@ void main() {
         equals(result2.breakdown.xpAwarded.value),
       );
       expect(result1.inputsSnapshot, equals(result2.inputsSnapshot));
+    });
+
+    group('Comparability filtering (assessment type & difficulty bands)', () {
+      test('incompatible assessment type (homework vs exam) is excluded', () {
+        final history = [
+          makeResult(
+            id: 'c1',
+            score: 8.0,
+            type: AssessmentType.homework,
+            daysAgo: 3,
+          ),
+          makeResult(
+            id: 'c2',
+            score: 8.0,
+            type: AssessmentType.homework,
+            daysAgo: 2,
+          ),
+          makeResult(
+            id: 'c3',
+            score: 8.0,
+            type: AssessmentType.homework,
+            daysAgo: 1,
+          ),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'cur_exam',
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 8.5, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.exam,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        expect(result.breakdown.baselineScore, isNull);
+        expect(result.breakdown.baselineSampleCount, equals(0));
+        expect(result.breakdown.growthDelta, isNull);
+      });
+
+      test('compatible assessment type (quiz vs exam in evaluative band) is included', () {
+        final history = [
+          makeResult(
+            id: 'c1',
+            score: 7.0,
+            type: AssessmentType.quiz,
+            daysAgo: 3,
+          ),
+          makeResult(
+            id: 'c2',
+            score: 7.5,
+            type: AssessmentType.quiz,
+            daysAgo: 2,
+          ),
+          makeResult(
+            id: 'c3',
+            score: 8.0,
+            type: AssessmentType.quiz,
+            daysAgo: 1,
+          ),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'cur_exam',
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 8.5, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.exam,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        expect(result.breakdown.baselineScore, equals(7.50));
+        expect(result.breakdown.baselineSampleCount, equals(3));
+        expect(result.breakdown.growthDelta, equals(1.00));
+      });
+
+      test('incompatible difficulty (challenge vs normal) is excluded', () {
+        final history = [
+          makeResult(
+            id: 'c1',
+            score: 5.0,
+            difficulty: AssessmentDifficulty.challenge,
+            daysAgo: 3,
+          ),
+          makeResult(
+            id: 'c2',
+            score: 5.0,
+            difficulty: AssessmentDifficulty.challenge,
+            daysAgo: 2,
+          ),
+          makeResult(
+            id: 'c3',
+            score: 5.0,
+            difficulty: AssessmentDifficulty.challenge,
+            daysAgo: 1,
+          ),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'cur_norm',
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 7.5, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        expect(result.breakdown.baselineScore, isNull);
+        expect(result.breakdown.baselineSampleCount, equals(0));
+      });
+
+      test(
+        'compatible difficulty (normal vs hard in standard band) is included',
+        () {
+          final history = [
+            makeResult(
+              id: 'c1',
+              score: 6.0,
+              difficulty: AssessmentDifficulty.normal,
+              daysAgo: 3,
+            ),
+            makeResult(
+              id: 'c2',
+              score: 6.5,
+              difficulty: AssessmentDifficulty.normal,
+              daysAgo: 2,
+            ),
+            makeResult(
+              id: 'c3',
+              score: 6.8,
+              difficulty: AssessmentDifficulty.normal,
+              daysAgo: 1,
+            ),
+          ];
+
+          final input = GrowthInput(
+            currentEventId: 'cur_hard',
+            subjectKey: SubjectKey.math,
+            currentScore: NormalizedScore.fromRaw(rawScore: 7.5, maxScore: 10),
+            difficulty: AssessmentDifficulty.hard,
+            assessmentType: AssessmentType.quiz,
+            occurredAt: now,
+            verifiedAt: now,
+            comparableHistory: history,
+          );
+
+          final result = GrowthEngine.calculate(input);
+          expect(result.breakdown.baselineScore, equals(6.43));
+          expect(result.breakdown.baselineSampleCount, equals(3));
+          expect(result.breakdown.growthDelta, equals(1.07));
+        },
+      );
+
+      test('rolling last 3 is selected only after compatibility filtering', () {
+        final history = [
+          // 1 day ago: incompatible type (homework)
+          makeResult(
+            id: 'incomp_type_1',
+            score: 9.0,
+            type: AssessmentType.homework,
+            daysAgo: 1,
+          ),
+          // 2 days ago: COMPATIBLE (quiz, normal)
+          makeResult(
+            id: 'comp_1',
+            score: 7.0,
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.normal,
+            daysAgo: 2,
+          ),
+          // 3 days ago: incompatible difficulty (challenge)
+          makeResult(
+            id: 'incomp_diff_1',
+            score: 5.0,
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.challenge,
+            daysAgo: 3,
+          ),
+          // 4 days ago: COMPATIBLE (quiz, normal)
+          makeResult(
+            id: 'comp_2',
+            score: 6.5,
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.normal,
+            daysAgo: 4,
+          ),
+          // 5 days ago: incompatible difficulty (below_level)
+          makeResult(
+            id: 'incomp_diff_2',
+            score: 10.0,
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.belowLevel,
+            daysAgo: 5,
+          ),
+          // 6 days ago: COMPATIBLE (exam, hard)
+          makeResult(
+            id: 'comp_3',
+            score: 6.0,
+            type: AssessmentType.exam,
+            difficulty: AssessmentDifficulty.hard,
+            daysAgo: 6,
+          ),
+          // 7 days ago: compatible but 4th in chronology (should not be in baseline)
+          makeResult(
+            id: 'comp_4',
+            score: 5.0,
+            type: AssessmentType.exam,
+            difficulty: AssessmentDifficulty.normal,
+            daysAgo: 7,
+          ),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'cur_target',
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 8.0, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.exam,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        final b = result.breakdown;
+
+        // Exactly comp_1 (7.0), comp_2 (6.5), comp_3 (6.0) used: mean = 6.50
+        expect(b.baselineScore, equals(6.50));
+        expect(b.baselineSampleCount, equals(3));
+        expect(b.growthDelta, equals(1.50));
+
+        final snapshot = result.inputsSnapshot;
+        expect(snapshot['assessment_type'], equals('exam'));
+        expect(snapshot['difficulty'], equals('normal'));
+        final samples = (snapshot['baseline_samples_used'] as List)
+            .cast<Map<String, dynamic>>();
+        expect(samples.length, equals(3));
+        expect(samples[0]['id'], equals('comp_1'));
+        expect(samples[0]['assessment_type'], equals('quiz'));
+        expect(samples[0]['difficulty'], equals('normal'));
+        expect(samples[1]['id'], equals('comp_2'));
+        expect(samples[2]['id'], equals('comp_3'));
+        expect(samples[2]['assessment_type'], equals('exam'));
+        expect(samples[2]['difficulty'], equals('hard'));
+      });
     });
   });
 }

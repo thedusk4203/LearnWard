@@ -61,6 +61,18 @@ class _FakeGrowthRepository implements GrowthRepository {
   }) {
     throw UnimplementedError();
   }
+
+  @override
+  Future<List<VerifiedLearningEvent>> getUnprocessedVerifiedEvents(
+    FamilyId familyId,
+  ) async {
+    return const [];
+  }
+
+  @override
+  Future<int> catchUpUnprocessedGrowth(FamilyId familyId) async {
+    return 0;
+  }
 }
 
 GrowthEvent _createEvent({

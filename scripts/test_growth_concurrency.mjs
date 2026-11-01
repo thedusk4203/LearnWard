@@ -153,6 +153,9 @@ async function main() {
 
   // Verification queries
   const verifySql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
+
     select
       (select count(*) from public.growth_events where verified_learning_event_id = '${verifiedEventId}') as growth_event_count,
       (select count(*) from public.xp_ledger where family_id = '${FAMILY_ID}') as xp_ledger_count,

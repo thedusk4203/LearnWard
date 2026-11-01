@@ -21,12 +21,21 @@ The core Growth Engine algorithm lives in `packages/learnward_domain` as a zero-
 ## Decision 2 — Rolling baseline selection and longitudinal comparability rules
 
 A child's performance baseline must be objective, individualized, and resistant to manipulation:
-1. **Longitudinal Comparability:** A prior result is comparable if and only if it shares the identical `subject_key` (`math`, `english`, `literature`, `science`, `other`).
+1. **Longitudinal Comparability:** A prior result is comparable if and only if it shares:
+   - the identical `subject_key` (`math`, `english`, `literature`, `science`, `other`);
+   - a compatible **Assessment Type Band**:
+     - *Evaluative band*: `quiz`, `exam`
+     - *Formative band*: `homework`, `practice`
+     - *Other band*: `other`
+   - a compatible **Difficulty Band**:
+     - *Standard band*: `normal`, `hard` (core curriculum)
+     - *Challenge band*: `challenge` (advanced enrichment)
+     - *Below-level band*: `below_level` (isolated anti-farming)
 2. **Strict Chronological Precedence:** Only results occurring strictly before the current event are eligible: `occurred_at < current_event.occurred_at` OR (`occurred_at == current_event.occurred_at` AND `verified_at < current_event.verified_at`).
 3. **Self-Exclusion:** The current event ID is strictly excluded from its own baseline calculation.
 4. **Rolling Window Size:** The baseline is the unweighted arithmetic mean of the last 3 prior comparable results (rounded to 2 decimal places: `round(mean * 100) / 100`).
 5. **Cold-Start Handling:** If fewer than 3 prior comparable results exist, the baseline score is `null`, and no growth or high-performer maintenance bonus is awarded (`baseline_sample_count` is recorded for progress transparency).
-6. **Baseline Integrity:** Activities marked `below_level` are excluded from serving as baseline samples for standard assessments to prevent artificial deflation of the learner's baseline.
+6. **Baseline Integrity & Auditability:** The calculation snapshot in `inputs_snapshot` records the current assessment type and difficulty band, as well as the exact comparators used (including their `id`, `normalized_score`, `occurred_at`, `assessment_type`, and `difficulty`).
 
 ---
 
@@ -42,9 +51,9 @@ To completely eliminate floating-point representation drift and rounding discrep
 
 ---
 
-## Decision 4 — Deterministic RP and Study XP formula
+## Decision 4 — Deterministic RP and Study XP formula (`growth-v0.1`)
 
-$$\text{RP} = \text{Score} + \text{Growth} + \text{Goal} + \text{Personal Best} + \text{Challenge} + \text{Recovery}$$
+$$\text{RP} = \text{Score} + \text{Growth} + \text{High Performer} + \text{Goal} + \text{Personal Best} + \text{Difficulty} + \text{Recovery}$$
 
 1. **Score RP:** Direct reward proportional to normalized score:
    - Standard assessment: `round(normalized_score * 100)` minor units ($10.00 \rightarrow 1000\text{ minor} = 10.00\text{ RP}$).
@@ -54,13 +63,13 @@ $$\text{RP} = \text{Score} + \text{Growth} + \text{Goal} + \text{Personal Best} 
    - $+1.00 \le \Delta < +1.50 \implies +2.00\text{ RP}$ ($200\text{ minor}$)
    - $+1.50 \le \Delta < +2.00 \implies +3.00\text{ RP}$ ($300\text{ minor}$)
    - $\Delta \ge +2.00 \implies +4.00\text{ RP}$ ($400\text{ minor}$)
-3. **High-Performer Maintenance (Mastery):** If $\text{baseline\_score} \ge 8.50$ AND $\text{normalized\_score} \ge 8.50$, award $+0.50\text{ RP}$ ($50\text{ minor}$).
+3. **High-Performer Maintenance (Mastery):** If $\text{baseline\_score} \ge 8.50$ AND $\text{normalized\_score} \ge 8.50$, award $+1.00\text{ RP}$ ($100\text{ minor}$).
 4. **Personal Best:** Awarded if $\text{normalized\_score} \ge \text{historical\_best} + 0.25$: $+1.00\text{ RP}$ ($100\text{ minor}$).
 5. **Difficulty / Challenge Bonus:**
    - `difficulty == 'hard'`: $+1.00\text{ RP}$ ($100\text{ minor}$).
    - `difficulty == 'challenge'` AND $\text{normalized\_score} \ge 5.00$: $+2.00\text{ RP}$ ($200\text{ minor}$). No bonus if score $< 5.00$ to avoid low-effort farming.
 6. **Study XP:** Permanent effort points calculated as:
-   $$\text{XP} = 10 + \text{round}(2 \times \text{total\_rp})$$
+   $$\text{XP} = 10 + \text{round}(2.0 \times \frac{\text{total\_rp\_minor}}{100})$$
    Study XP is cumulative and never deducted or spent.
 
 ---
@@ -70,7 +79,7 @@ $$\text{RP} = \text{Score} + \text{Growth} + \text{Goal} + \text{Personal Best} 
 When an assessment is flagged with `difficulty == 'below_level'`:
 - Base RP is curtailed to $25\%$ ($10.00/10$ yields $2.50\text{ RP}$ instead of $10.00\text{ RP}$).
 - Growth, Mastery Maintenance, Personal Best, and Challenge bonuses are strictly zeroed out ($0\text{ RP}$).
-- Legitimate Study XP is preserved ($10 + 2 \times 2.50 = 15\text{ XP}$) to acknowledge effort without distorting the incentive economy.
+- Legitimate Study XP is preserved ($10 + \text{round}(2.0 \times 2.50) = 15\text{ XP}$) to acknowledge effort without distorting the incentive economy.
 - UI explicitly explains this adjustment to prevent child confusion.
 
 ---
@@ -88,15 +97,30 @@ All economic mutations must execute through the trusted `SECURITY DEFINER` funct
 
 ---
 
-## Decision 7 — Append-only ledgers and `child_balances` projection
+## Decision 7 — Append-only ledgers, `child_balances` projection, and reconciliation authorization
 
 1. **Immutable Ledgers:** `xp_ledger` and `rp_ledger` are strictly append-only. A PostgreSQL trigger `prevent_ledger_mutation` blocks any `UPDATE` or `DELETE` attempt (`LW102`).
 2. **Projection Table:** `public.child_balances` caches current balances (`xp_total`, `rp_balance_minor`) for fast mobile queries.
-3. **Ledger is Source of Truth:** `child_balances` is purely a derived projection. The trusted function `public.reconcile_child_balance(p_child_id)` recalculates the projection from `SUM(xp_ledger.amount)` and `SUM(rp_ledger.amount_minor)` under an exclusive advisory lock.
+3. **Ledger is Source of Truth:** `child_balances` is purely a derived projection.
+4. **Reconciliation Security:** The function `public.reconcile_child_balance(p_child_id)`:
+   - Enforces authentication (`auth.uid() is not null`, error `42501`).
+   - Resolves the target child's family from `child_profiles` (`LW105`).
+   - Strictly authorizes the caller: requires active adult membership in the child's family or the exact paired child device identity (`42501`).
+   - Cross-family calls, sibling child devices, and anonymous callers are rejected.
+   - Recalculates the projection from `SUM(xp_ledger.amount)` and `SUM(rp_ledger.amount_minor)` under an exclusive child advisory lock.
 
 ---
 
-## Decision 8 — Explicit deferrals
+## Decision 8 — Verify → Growth Delivery Reliability and Catch-Up
+
+1. **Separation of Concerns:** `verify_assessment` finalizes the immutable verification of academic work independently from Growth Engine calculation.
+2. **Resilience to Interruption:** If network or client failures occur after `verify_assessment` but before `process_verified_learning_event`, the verification is not rolled back. The mobile UI catches the error and surfaces that calculation is queued.
+3. **Discoverability and Self-Healing:** The function `public.get_unprocessed_verified_learning_events(p_family_id)` identifies all verified events lacking corresponding `growth_events`.
+4. **Batch Catch-Up:** `public.catch_up_unprocessed_growth(p_family_id)` processes any unprocessed verified learning events sequentially. This runs automatically on parent family dashboard load.
+
+---
+
+## Decision 9 — Explicit deferrals
 
 To maintain strict Phase 3 scope boundaries:
 1. **Goal and Recovery Bonuses:** Goal commitment and Recovery Quest engines are not yet implemented. In `growth-v0.1`, their bonuses are evaluated to `0 minor` and documented as not applicable in calculation breakdowns.

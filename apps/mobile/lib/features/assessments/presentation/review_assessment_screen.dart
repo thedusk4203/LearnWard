@@ -119,6 +119,7 @@ class _ReviewAssessmentScreenState
       setState(() => _currentAssessment = verified);
 
       GrowthEvent? growthEvent;
+      Object? growthError;
       try {
         final vleUseCase = ListVerifiedLearningEvents(repo);
         final vles = await vleUseCase(_currentAssessment.childId);
@@ -135,7 +136,9 @@ class _ReviewAssessmentScreenState
             commandId: generateUuid(),
           );
         }
-      } catch (_) {}
+      } catch (err) {
+        growthError = err;
+      }
 
       if (mounted) {
         final rpAwarded = growthEvent?.totalRpMinor.formatRp();
@@ -144,9 +147,13 @@ class _ReviewAssessmentScreenState
             content: Text(
               growthEvent != null
                   ? 'Assessment verified successfully! +$rpAwarded RP awarded.'
+                  : growthError != null
+                  ? 'Assessment verified! Reward calculation is pending catch-up.'
                   : 'Assessment verified successfully!',
             ),
-            backgroundColor: Colors.green,
+            backgroundColor: growthError != null
+                ? Colors.orange.shade800
+                : Colors.green,
             action: growthEvent != null
                 ? SnackBarAction(
                     label: 'View Details',

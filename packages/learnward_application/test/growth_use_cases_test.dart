@@ -132,6 +132,25 @@ class FakeGrowthRepository implements GrowthRepository {
   ) async {
     return growthEventsByAssessment[assessmentId.value];
   }
+
+  final List<VerifiedLearningEvent> unprocessedEvents = [];
+
+  @override
+  Future<List<VerifiedLearningEvent>> getUnprocessedVerifiedEvents(
+    FamilyId familyId,
+  ) async {
+    return unprocessedEvents.where((e) => e.familyId == familyId).toList();
+  }
+
+  @override
+  Future<int> catchUpUnprocessedGrowth(FamilyId familyId) async {
+    final toProcess = await getUnprocessedVerifiedEvents(familyId);
+    for (final event in toProcess) {
+      await processVerifiedLearningEvent(verifiedLearningEventId: event.id);
+    }
+    unprocessedEvents.removeWhere((e) => e.familyId == familyId);
+    return toProcess.length;
+  }
 }
 
 void main() {
@@ -225,6 +244,67 @@ void main() {
         final list = await listGrowthUseCase(childId);
         expect(list.length, equals(1));
         expect(list.first.id, equals(event.id));
+      },
+    );
+
+    test(
+      'CatchUpUnprocessedGrowth processes all pending verified events',
+      () async {
+        final familyId = FamilyId('fam_1');
+        final childId = ChildId('child_1');
+
+        final catchUpUseCase = CatchUpUnprocessedGrowth(repository);
+
+        // No events initially
+        expect(await catchUpUseCase.execute(familyId), equals(0));
+
+        // Add 2 unprocessed verified events
+        repository.unprocessedEvents.addAll([
+          VerifiedLearningEvent(
+            id: 'vle_pending_1',
+            familyId: familyId,
+            childId: childId,
+            assessmentId: AssessmentId('a1'),
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Quiz 1',
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.normal,
+            score: AssessmentScore(rawScore: 8, maxScore: 10),
+            evidenceCount: 1,
+            entryContext: EntryContext.adult,
+            occurredAt: DateTime.utc(2026, 11, 1),
+            verifiedAt: DateTime.utc(2026, 11, 1),
+            verifiedByUserId: 'user_1',
+            reviewEventId: 'rev_1',
+          ),
+          VerifiedLearningEvent(
+            id: 'vle_pending_2',
+            familyId: familyId,
+            childId: childId,
+            assessmentId: AssessmentId('a2'),
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Quiz 2',
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.normal,
+            score: AssessmentScore(rawScore: 9, maxScore: 10),
+            evidenceCount: 1,
+            entryContext: EntryContext.adult,
+            occurredAt: DateTime.utc(2026, 11, 1),
+            verifiedAt: DateTime.utc(2026, 11, 1),
+            verifiedByUserId: 'user_1',
+            reviewEventId: 'rev_2',
+          ),
+        ]);
+
+        // Catches up both
+        final count = await catchUpUseCase.execute(familyId);
+        expect(count, equals(2));
+
+        // Subsequent catch-up has nothing left
+        expect(await catchUpUseCase.execute(familyId), equals(0));
+        expect(repository.growthEventsByVle.length, equals(2));
       },
     );
   });
