@@ -12,5 +12,7 @@ export 'src/entities/verified_learning_event.dart';
 export 'src/exceptions/domain_exceptions.dart';
 export 'src/value_objects/assessment_enums.dart';
 export 'src/value_objects/assessment_score.dart';
+export 'src/value_objects/entry_context.dart';
 export 'src/value_objects/identifiers.dart';
 export 'src/value_objects/normalized_score.dart';
+export 'src/value_objects/subject_key.dart';
