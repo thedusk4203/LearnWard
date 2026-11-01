@@ -94,6 +94,12 @@ jobs:
       - name: Run last-owner concurrency regression test
         run: node scripts/test_last_owner_concurrency.mjs
 
+      - name: Run assessment verification concurrency regression test
+        run: node scripts/test_assessment_verification_concurrency.mjs
+
+      - name: Run assessment evidence storage security test
+        run: node scripts/test_storage_evidence_security.mjs
+
   android:
     name: Android debug build
     needs: [quality, database]
