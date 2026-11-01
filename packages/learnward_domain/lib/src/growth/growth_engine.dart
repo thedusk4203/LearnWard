@@ -48,6 +48,9 @@ final class GrowthEngine {
     final comparables = input.comparableHistory.where((c) {
       if (c.id == input.currentEventId) return false;
       if (c.subjectKey != input.subjectKey) return false;
+      // Grade level comparability: both current event and candidate must have a known matching grade level.
+      // Unknown grades are fail-closed and never longitudinally comparable.
+      if (input.gradeLevel == null || c.gradeLevel == null) return false;
       if (c.gradeLevel != input.gradeLevel) return false;
 
       final isPrior =

@@ -13,7 +13,7 @@ final class GrowthInput {
     required this.assessmentType,
     required this.occurredAt,
     required this.verifiedAt,
-    this.gradeLevel = 5,
+    required this.gradeLevel,
     this.comparableHistory = const [],
     this.personalGoal,
   });
@@ -33,8 +33,8 @@ final class GrowthInput {
   /// Assessment type of current assessment.
   final AssessmentType assessmentType;
 
-  /// Grade level snapshot of current assessment for longitudinal comparability.
-  final int gradeLevel;
+  /// Grade level snapshot of current assessment for longitudinal comparability (null if unknown).
+  final int? gradeLevel;
 
   /// Timestamp when the learning activity occurred.
   final DateTime occurredAt;

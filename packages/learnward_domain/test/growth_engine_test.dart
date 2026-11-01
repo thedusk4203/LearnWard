@@ -11,7 +11,7 @@ void main() {
       SubjectKey subjectKey = SubjectKey.math,
       AssessmentDifficulty difficulty = AssessmentDifficulty.normal,
       AssessmentType type = AssessmentType.quiz,
-      int gradeLevel = 5,
+      int? gradeLevel = 5,
       int daysAgo = 1,
       int minutesAgo = 0,
     }) {
@@ -42,6 +42,7 @@ void main() {
 
       final input = GrowthInput(
         currentEventId: 'current',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(
           rawScore: 15,
@@ -89,6 +90,7 @@ void main() {
     test('no history: baseline is null, no growth/PB bonus, challenge bonus active if >= 5.0', () {
       final input = GrowthInput(
         currentEventId: 'ev1',
+        gradeLevel: 5,
         subjectKey: SubjectKey.science,
         currentScore: NormalizedScore.fromRaw(
           rawScore: 8,
@@ -120,6 +122,7 @@ void main() {
 
       final input = GrowthInput(
         currentEventId: 'ev2',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(
           rawScore: 7,
@@ -158,6 +161,7 @@ void main() {
 
       final input = GrowthInput(
         currentEventId: 'ev3',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(
           rawScore: 7,
@@ -195,6 +199,7 @@ void main() {
 
       final input = GrowthInput(
         currentEventId: 'ev4',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(
           rawScore: 9,
@@ -243,6 +248,7 @@ void main() {
 
       final input = GrowthInput(
         currentEventId: 'math_ev',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(rawScore: 8, maxScore: 10),
         difficulty: AssessmentDifficulty.normal,
@@ -271,6 +277,7 @@ void main() {
 
       final input = GrowthInput(
         currentEventId: 'self_ev',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(rawScore: 10, maxScore: 10),
         difficulty: AssessmentDifficulty.normal,
@@ -302,6 +309,7 @@ void main() {
 
         final input = GrowthInput(
           currentEventId: 'ev',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(
             rawScore: currentScore,
@@ -354,6 +362,7 @@ void main() {
 
         final input = GrowthInput(
           currentEventId: 'hp_ev',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(
             rawScore: 9,
@@ -393,6 +402,7 @@ void main() {
 
         final input = GrowthInput(
           currentEventId: 'ev',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(
             rawScore: 9,
@@ -420,6 +430,7 @@ void main() {
       // Current 7.25: exceeds by 0.25 -> +1 RP
       final inputExact = GrowthInput(
         currentEventId: 'ev_exact',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(rawScore: 7.25, maxScore: 10),
         difficulty: AssessmentDifficulty.normal,
@@ -436,6 +447,7 @@ void main() {
       // Current 7.24: exceeds by 0.24 -> 0 RP
       final inputBelow = GrowthInput(
         currentEventId: 'ev_below',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(rawScore: 7.24, maxScore: 10),
         difficulty: AssessmentDifficulty.normal,
@@ -454,6 +466,7 @@ void main() {
       test('normal difficulty -> 0 RP', () {
         final input = GrowthInput(
           currentEventId: 'ev',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(rawScore: 7, maxScore: 10),
           difficulty: AssessmentDifficulty.normal,
@@ -470,6 +483,7 @@ void main() {
       test('hard difficulty -> +1 RP (100 minor)', () {
         final input = GrowthInput(
           currentEventId: 'ev',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(rawScore: 7, maxScore: 10),
           difficulty: AssessmentDifficulty.hard,
@@ -488,6 +502,7 @@ void main() {
         () {
           final input = GrowthInput(
             currentEventId: 'ev',
+            gradeLevel: 5,
             subjectKey: SubjectKey.math,
             currentScore: NormalizedScore.fromRaw(rawScore: 4.9, maxScore: 10),
             difficulty: AssessmentDifficulty.challenge,
@@ -505,6 +520,7 @@ void main() {
       test('challenge score >= 5.0 -> +2 RP (200 minor)', () {
         final input = GrowthInput(
           currentEventId: 'ev',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(rawScore: 5.0, maxScore: 10),
           difficulty: AssessmentDifficulty.challenge,
@@ -528,6 +544,7 @@ void main() {
 
       final input = GrowthInput(
         currentEventId: 'below_ev',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(
           rawScore: 10,
@@ -566,6 +583,7 @@ void main() {
 
       final input = GrowthInput(
         currentEventId: 'rep_ev',
+        gradeLevel: 5,
         subjectKey: SubjectKey.math,
         currentScore: NormalizedScore.fromRaw(rawScore: 8.8, maxScore: 10),
         difficulty: AssessmentDifficulty.hard,
@@ -614,6 +632,7 @@ void main() {
 
         final input = GrowthInput(
           currentEventId: 'cur_exam',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(rawScore: 8.5, maxScore: 10),
           difficulty: AssessmentDifficulty.normal,
@@ -653,6 +672,7 @@ void main() {
 
         final input = GrowthInput(
           currentEventId: 'cur_exam',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(rawScore: 8.5, maxScore: 10),
           difficulty: AssessmentDifficulty.normal,
@@ -692,6 +712,7 @@ void main() {
 
         final input = GrowthInput(
           currentEventId: 'cur_norm',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(rawScore: 7.5, maxScore: 10),
           difficulty: AssessmentDifficulty.normal,
@@ -732,6 +753,7 @@ void main() {
 
           final input = GrowthInput(
             currentEventId: 'cur_hard',
+            gradeLevel: 5,
             subjectKey: SubjectKey.math,
             currentScore: NormalizedScore.fromRaw(rawScore: 7.5, maxScore: 10),
             difficulty: AssessmentDifficulty.hard,
@@ -809,6 +831,7 @@ void main() {
 
         final input = GrowthInput(
           currentEventId: 'cur_target',
+          gradeLevel: 5,
           subjectKey: SubjectKey.math,
           currentScore: NormalizedScore.fromRaw(rawScore: 8.0, maxScore: 10),
           difficulty: AssessmentDifficulty.normal,
@@ -918,6 +941,74 @@ void main() {
                   .cast<Map<String, dynamic>>();
           expect(samples.length, equals(3));
           expect(samples.every((s) => s['grade_level'] == 5), isTrue);
+        },
+      );
+    });
+
+    group('Unknown grade fail-closed behavior', () {
+      test('target assessment with null grade receives no baseline and no growth/PB/mastery bonus', () {
+        final history = [
+          makeResult(id: 'c1', score: 8.0, daysAgo: 3, gradeLevel: 5),
+          makeResult(id: 'c2', score: 8.5, daysAgo: 2, gradeLevel: 5),
+          makeResult(id: 'c3', score: 9.0, daysAgo: 1, gradeLevel: 5),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'current',
+          gradeLevel: null,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 9.5, maxScore: 10),
+          difficulty: AssessmentDifficulty.hard,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now.add(const Duration(minutes: 5)),
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        final b = result.breakdown;
+        expect(b.baselineScore, isNull);
+        expect(b.baselineSampleCount, equals(0));
+        expect(b.growthDelta, isNull);
+        expect(b.historicalBest, isNull);
+        expect(b.growthRpMinor.value, equals(0));
+        expect(b.highPerformerRpMinor.value, equals(0));
+        expect(b.personalBestRpMinor.value, equals(0));
+        expect(b.difficultyRpMinor.value, equals(100)); // Hard operates
+        expect(b.scoreRpMinor.value, equals(950)); // Base score operates
+        expect(b.totalRpMinor.value, equals(1050));
+        expect(
+          b.xpAwarded.value,
+          equals(31),
+        ); // 10 + round(2.0 * 10.50) = 31 XP
+      });
+
+      test(
+        'history with null grade is excluded when target has known grade',
+        () {
+          final history = [
+            makeResult(id: 'c1', score: 7.0, daysAgo: 3, gradeLevel: null),
+            makeResult(id: 'c2', score: 7.0, daysAgo: 2, gradeLevel: null),
+            makeResult(id: 'c3', score: 7.0, daysAgo: 1, gradeLevel: null),
+          ];
+
+          final input = GrowthInput(
+            currentEventId: 'current',
+            gradeLevel: 5,
+            subjectKey: SubjectKey.math,
+            currentScore: NormalizedScore.fromRaw(rawScore: 8.0, maxScore: 10),
+            difficulty: AssessmentDifficulty.normal,
+            assessmentType: AssessmentType.quiz,
+            occurredAt: now,
+            verifiedAt: now.add(const Duration(minutes: 5)),
+            comparableHistory: history,
+          );
+
+          final result = GrowthEngine.calculate(input);
+          final b = result.breakdown;
+          expect(b.baselineScore, isNull);
+          expect(b.baselineSampleCount, equals(0));
+          expect(b.growthRpMinor.value, equals(0));
         },
       );
     });

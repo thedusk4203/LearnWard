@@ -39,7 +39,7 @@ void main() {
         final assessmentType = AssessmentType.fromValue(
           current['assessment_type'] as String,
         );
-        final currentGrade = (current['grade_level'] as num?)?.toInt() ?? 5;
+        final currentGrade = (current['grade_level'] as num?)?.toInt();
         final rawScore = (current['raw_score'] as num).toDouble();
         final maxScore = (current['max_score'] as num).toDouble();
 
@@ -50,7 +50,7 @@ void main() {
           final hDiff = AssessmentDifficulty.fromValue(
             h['difficulty'] as String,
           );
-          final hGrade = (h['grade_level'] as num?)?.toInt() ?? 5;
+          final hGrade = (h['grade_level'] as num?)?.toInt();
           final daysAgo = h['days_ago'] as int;
 
           return ComparableResult(

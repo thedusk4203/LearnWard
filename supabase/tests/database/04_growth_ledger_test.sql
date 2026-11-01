@@ -1,5 +1,5 @@
 begin;
-select plan(42);
+select plan(46);
 
 -- ---------------------------------------------------------------------------
 -- 0. FIXTURES SETUP (superuser context)
@@ -553,28 +553,31 @@ select is(
 reset role;
 
 insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year)
-values ('c3000000-0000-0000-0000-000000000009'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'Grade Test Child', 5, 2015);
+values ('c3000000-0000-0000-0000-000000000009'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'Grade Test Child', 4, 2015);
 
--- Insert 3 historical Grade 4 assessments and verified events
+-- Insert 3 historical Grade 4 assessments and verified events while child was in Grade 4
 do $$
 begin
   -- g4_1: Grade 4 (8.00)
-  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, grade_level_snapshot, status, created_by_user_id)
-  values ('a3000000-0000-0000-0000-000000000041'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G4_1', 'quiz', 'normal', 8, 10, 4, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
-  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, grade_level_snapshot, occurred_at, verified_by_user_id, review_event_id)
-  values ('93000000-0000-0000-0000-000000000041'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000041'::uuid, 'math', 'Math', 'G4_1', 'quiz', 'normal', 8, 10, 8.00, 4, now() - interval '30 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000041'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G4_1', 'quiz', 'normal', 8, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000041'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000041'::uuid, 'math', 'Math', 'G4_1', 'quiz', 'normal', 8, 10, 8.00, now() - interval '30 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
 
   -- g4_2: Grade 4 (8.50)
-  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, grade_level_snapshot, status, created_by_user_id)
-  values ('a3000000-0000-0000-0000-000000000042'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G4_2', 'quiz', 'normal', 8.5, 10, 4, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
-  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, grade_level_snapshot, occurred_at, verified_by_user_id, review_event_id)
-  values ('93000000-0000-0000-0000-000000000042'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000042'::uuid, 'math', 'Math', 'G4_2', 'quiz', 'normal', 8.5, 10, 8.50, 4, now() - interval '20 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000042'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G4_2', 'quiz', 'normal', 8.5, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000042'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000042'::uuid, 'math', 'Math', 'G4_2', 'quiz', 'normal', 8.5, 10, 8.50, now() - interval '20 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
 
   -- g4_3: Grade 4 (9.00)
-  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, grade_level_snapshot, status, created_by_user_id)
-  values ('a3000000-0000-0000-0000-000000000043'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G4_3', 'quiz', 'normal', 9, 10, 4, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
-  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, grade_level_snapshot, occurred_at, verified_by_user_id, review_event_id)
-  values ('93000000-0000-0000-0000-000000000043'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000043'::uuid, 'math', 'Math', 'G4_3', 'quiz', 'normal', 9, 10, 9.00, 4, now() - interval '10 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000043'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G4_3', 'quiz', 'normal', 9, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000043'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000043'::uuid, 'math', 'Math', 'G4_3', 'quiz', 'normal', 9, 10, 9.00, now() - interval '10 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- Child is promoted to Grade 5
+  update public.child_profiles set school_grade = 5 where id = 'c3000000-0000-0000-0000-000000000009'::uuid;
 
   -- Current Grade 5 target assessment (trigger automatically snapshots grade 5 from child profile)
   insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
@@ -613,6 +616,77 @@ select is(
   (select is_reconciled from public.reconcile_child_balance('c3000000-0000-0000-0000-000000000009'::uuid)),
   true,
   'Single-snapshot reconcile_child_balance confirms projection equals ledger totals'
+);
+
+-- ---------------------------------------------------------------------------
+-- 13. UNKNOWN GRADE FAIL-CLOSED REGRESSION
+-- ---------------------------------------------------------------------------
+
+reset role;
+
+-- Create child with school_grade = NULL
+insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year)
+values ('c3000000-0000-0000-0000-000000000099'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'Unknown Grade Child', null, 2015);
+
+-- 1. Assessment created while child grade is NULL
+insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+values ('a3000000-0000-0000-0000-000000000091'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000099'::uuid, 'math', 'Math', 'Old_NULL_Grade', 'quiz', 'hard', 8, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+
+-- 2. VLE created; remains grade NULL
+insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+values ('93000000-0000-0000-0000-000000000091'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000099'::uuid, 'a3000000-0000-0000-0000-000000000091'::uuid, 'math', 'Math', 'Old_NULL_Grade', 'quiz', 'hard', 8, 10, 8.00, now() - interval '2 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+-- 3. Later update child profile to Grade 6
+update public.child_profiles
+set school_grade = 6
+where id = 'c3000000-0000-0000-0000-000000000099'::uuid;
+
+-- Add 3 Grade 6 historical events for this child to prove they are NOT used as baseline
+insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+values
+  ('a3000000-0000-0000-0000-000000000092'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000099'::uuid, 'math', 'Math', 'G6_1', 'quiz', 'hard', 7, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid),
+  ('a3000000-0000-0000-0000-000000000093'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000099'::uuid, 'math', 'Math', 'G6_2', 'quiz', 'hard', 7, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid),
+  ('a3000000-0000-0000-0000-000000000094'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000099'::uuid, 'math', 'Math', 'G6_3', 'quiz', 'hard', 7, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+
+insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+values
+  ('93000000-0000-0000-0000-000000000092'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000099'::uuid, 'a3000000-0000-0000-0000-000000000092'::uuid, 'math', 'Math', 'G6_1', 'quiz', 'hard', 7, 10, 7.00, now() - interval '3 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid),
+  ('93000000-0000-0000-0000-000000000093'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000099'::uuid, 'a3000000-0000-0000-0000-000000000093'::uuid, 'math', 'Math', 'G6_2', 'quiz', 'hard', 7, 10, 7.00, now() - interval '3 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid),
+  ('93000000-0000-0000-0000-000000000094'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000099'::uuid, 'a3000000-0000-0000-0000-000000000094'::uuid, 'math', 'Math', 'G6_3', 'quiz', 'hard', 7, 10, 7.00, now() - interval '3 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+-- 4. Process old VLE
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+
+create temp table null_grade_test_res as
+select * from public.process_verified_learning_event('93000000-0000-0000-0000-000000000091'::uuid, null);
+
+-- Test 43: Growth must NOT retroactively treat that event as Grade 6 (grade_level in inputs_snapshot is null)
+select is(
+  (select inputs_snapshot->>'grade_level' from null_grade_test_res),
+  null,
+  'Growth does NOT retroactively treat old NULL-grade event as Grade 6'
+);
+
+-- Test 44: No baseline from Grade 6 history (baseline_score is null)
+select is(
+  (select baseline_score from null_grade_test_res),
+  null,
+  'No baseline computed from Grade 6 history for old NULL-grade event'
+);
+
+-- Test 45: Base score RP awarded for NULL-grade event
+select is(
+  (select score_rp_minor from null_grade_test_res),
+  800::bigint,
+  'Base score RP awarded for NULL-grade event'
+);
+
+-- Test 46: Hard difficulty RP awarded for NULL-grade event
+select is(
+  (select difficulty_rp_minor from null_grade_test_res),
+  100::bigint,
+  'Hard difficulty RP awarded for NULL-grade event'
 );
 
 select * from finish();

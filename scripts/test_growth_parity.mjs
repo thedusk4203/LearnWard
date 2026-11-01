@@ -98,14 +98,16 @@ async function main() {
       v_a public.assessments;
       v_vle public.verified_learning_events;
     begin
+      -- Authoritative grade derivation: simulate child being in p_grade when assessment was captured
+      if p_grade is distinct from (select school_grade from public.child_profiles where id = p_child_id) then
+        update public.child_profiles set school_grade = p_grade where id = p_child_id;
+      end if;
+
       v_a := public.create_assessment_draft(
         gen_random_uuid(), p_family_id, p_child_id,
         p_subject_key, 'Subject', 'Test Title', p_type, p_difficulty,
         p_raw_score, p_max_score, p_occurred_at, 'adult'
       );
-      if p_grade is not null then
-        update public.assessments set grade_level_snapshot = p_grade where id = v_a.id;
-      end if;
       perform public.submit_assessment(v_a.id, 1, gen_random_uuid());
       perform public.verify_assessment(v_a.id, 2, gen_random_uuid(), 'verified');
       select * into v_vle from public.verified_learning_events where assessment_id = v_a.id;
@@ -130,7 +132,8 @@ async function main() {
     const { id, description, current, history, expected } = fixture;
     const childId = crypto.randomUUID();
 
-    const currentGrade = current.grade_level ?? 5;
+    const currentGrade = current.grade_level !== undefined && current.grade_level !== null ? current.grade_level : null;
+    const initialGradeStr = currentGrade !== null ? currentGrade : 'null';
 
     // 1. Create Child profile
     // 2. Insert and verify history
@@ -142,13 +145,13 @@ async function main() {
         '${FAMILY_ID}'::uuid, '${childId}'::uuid, '${current.subject_key}',
         '${h.type}', '${h.difficulty}', ${h.score}, 10.0,
         now() - interval '${h.days_ago} days',
-        ${h.grade_level ? h.grade_level : 'null'}
+        ${h.grade_level !== undefined && h.grade_level !== null ? h.grade_level : 'null'}
       );
     `).join('\n');
 
     const testSql = `
       insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year)
-      values ('${childId}', '${FAMILY_ID}', 'Child ${id}', ${currentGrade}, 2015);
+      values ('${childId}', '${FAMILY_ID}', 'Child ${id}', ${initialGradeStr}, 2015);
 
       set role authenticated;
       select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
@@ -164,7 +167,7 @@ async function main() {
           '${FAMILY_ID}'::uuid, '${childId}'::uuid, '${current.subject_key}',
           '${current.assessment_type}', '${current.difficulty}',
           ${current.raw_score}, ${current.max_score}, now(),
-          ${currentGrade}
+          ${currentGrade !== null ? currentGrade : 'null'}
         ) as vle_id
       ) t
       cross join lateral public.process_verified_learning_event(t.vle_id) g;

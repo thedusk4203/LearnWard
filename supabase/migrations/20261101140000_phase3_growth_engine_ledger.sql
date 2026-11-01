@@ -12,12 +12,19 @@ alter table public.command_receipts
 
 -- Immutable grade-level snapshot provenance for longitudinal Growth comparability
 alter table public.assessments
-  add column if not exists grade_level_snapshot integer;
+  add column if not exists grade_level_snapshot integer,
+  drop constraint if exists assessments_grade_level_snapshot_check,
+  add constraint assessments_grade_level_snapshot_check
+    check (grade_level_snapshot is null or grade_level_snapshot between 1 and 12);
 
 alter table public.verified_learning_events
-  add column if not exists grade_level_snapshot integer;
+  add column if not exists grade_level_snapshot integer,
+  drop constraint if exists vle_grade_level_snapshot_check,
+  add constraint vle_grade_level_snapshot_check
+    check (grade_level_snapshot is null or grade_level_snapshot between 1 and 12);
 
--- Server-side trigger to snapshot school_grade from child_profiles at assessment creation
+-- Server-side trigger to snapshot school_grade from child_profiles at assessment creation.
+-- Authoritative derivation: never trusts caller-supplied grade snapshot on INSERT.
 create or replace function private.set_assessment_grade_snapshot()
 returns trigger
 language plpgsql
@@ -25,11 +32,9 @@ security definer
 set search_path = ''
 as $$
 begin
-  if new.grade_level_snapshot is null then
-    select cp.school_grade into new.grade_level_snapshot
-    from public.child_profiles cp
-    where cp.id = new.child_id and cp.family_id = new.family_id;
-  end if;
+  select cp.school_grade into new.grade_level_snapshot
+  from public.child_profiles cp
+  where cp.id = new.child_id and cp.family_id = new.family_id;
   return new;
 end;
 $$;
@@ -39,7 +44,8 @@ create trigger trg_assessment_grade_snapshot
   before insert on public.assessments
   for each row execute function private.set_assessment_grade_snapshot();
 
--- Server-side trigger to preserve assessment's grade_level_snapshot into verified_learning_events
+-- Server-side trigger to preserve assessment's immutable grade_level_snapshot into verified_learning_events.
+-- Fail-closed: copies assessment's snapshot directly; never falls back to mutable child_profiles.school_grade.
 create or replace function private.set_vle_grade_snapshot()
 returns trigger
 language plpgsql
@@ -47,16 +53,9 @@ security definer
 set search_path = ''
 as $$
 begin
-  if new.grade_level_snapshot is null then
-    select a.grade_level_snapshot into new.grade_level_snapshot
-    from public.assessments a
-    where a.id = new.assessment_id;
-    if new.grade_level_snapshot is null then
-      select cp.school_grade into new.grade_level_snapshot
-      from public.child_profiles cp
-      where cp.id = new.child_id and cp.family_id = new.family_id;
-    end if;
-  end if;
+  select a.grade_level_snapshot into new.grade_level_snapshot
+  from public.assessments a
+  where a.id = new.assessment_id;
   return new;
 end;
 $$;
@@ -66,17 +65,8 @@ create trigger trg_vle_grade_snapshot
   before insert on public.verified_learning_events
   for each row execute function private.set_vle_grade_snapshot();
 
--- Backfill existing rows if any
-update public.assessments a
-set grade_level_snapshot = cp.school_grade
-from public.child_profiles cp
-where a.child_id = cp.id and a.grade_level_snapshot is null;
-
-update public.verified_learning_events vle
-set grade_level_snapshot = coalesce(a.grade_level_snapshot, cp.school_grade)
-from public.assessments a
-join public.child_profiles cp on cp.id = a.child_id
-where vle.assessment_id = a.id and vle.grade_level_snapshot is null;
+-- Legacy Phase 2 rows without trustworthy grade-at-assessment-time provenance remain NULL.
+-- Do not fabricate historical grade during migration backfill from mutable child profile.
 
 -- ---------------------------------------------------------------------------
 -- 1. GROWTH EVENTS AUDIT TABLE
@@ -409,70 +399,66 @@ begin
   v_difficulty := v_event.difficulty;
   v_subject_key := v_event.subject_key;
   v_grade_level := v_event.grade_level_snapshot;
-  if v_grade_level is null then
-    select school_grade into v_grade_level
-    from public.child_profiles
-    where id = v_event.child_id;
-  end if;
+  -- Fail-closed: NEVER query mutable child_profiles.school_grade when snapshot is null.
 
   -- 6. Retrieve strictly prior comparable records:
   -- - Same child
   -- - Same canonical subject_key
   -- - Excludes current event
   -- - Strictly occurred before current event (or verified earlier)
-  -- - Grade level comparability (matching grade_level_snapshot)
+  -- - Grade level comparability: both current event and candidate must have known matching grade level.
+  --   Unknown grades are fail-closed and never longitudinally comparable.
   -- - Assessment type compatibility band (evaluative: quiz/exam, formative: homework/practice, other)
   -- - Difficulty compatibility band (standard: normal/hard, challenge, below_level)
-  for v_comparables in
-    select id, normalized_score, difficulty, assessment_type, grade_level_snapshot, occurred_at, verified_at
-    from public.verified_learning_events
-    where child_id = v_event.child_id
-      and subject_key = v_subject_key
-      and id != v_event.id
-      and (
-        occurred_at < v_event.occurred_at
-        or (occurred_at = v_event.occurred_at and verified_at < v_event.verified_at)
-      )
-      and (
-        grade_level_snapshot = v_grade_level
-        or (grade_level_snapshot is null and v_grade_level is null)
-      )
-      and (
-        case
-          when v_event.assessment_type in ('quiz', 'exam') then assessment_type in ('quiz', 'exam')
-          when v_event.assessment_type in ('homework', 'practice') then assessment_type in ('homework', 'practice')
-          else assessment_type = v_event.assessment_type
-        end
-      )
-      and (
-        case
-          when v_difficulty in ('normal', 'hard') then difficulty in ('normal', 'hard')
-          when v_difficulty = 'challenge' then difficulty = 'challenge'
-          when v_difficulty = 'below_level' then difficulty = 'below_level'
-          else difficulty = v_difficulty
-        end
-      )
-    order by occurred_at desc, verified_at desc
-  loop
-    -- Track historical best across all prior comparable records
-    if v_historical_best is null or v_comparables.normalized_score > v_historical_best then
-      v_historical_best := v_comparables.normalized_score;
-    end if;
+  if v_grade_level is not null then
+    for v_comparables in
+      select id, normalized_score, difficulty, assessment_type, grade_level_snapshot, occurred_at, verified_at
+      from public.verified_learning_events
+      where child_id = v_event.child_id
+        and subject_key = v_subject_key
+        and id != v_event.id
+        and (
+          occurred_at < v_event.occurred_at
+          or (occurred_at = v_event.occurred_at and verified_at < v_event.verified_at)
+        )
+        and grade_level_snapshot = v_grade_level
+        and (
+          case
+            when v_event.assessment_type in ('quiz', 'exam') then assessment_type in ('quiz', 'exam')
+            when v_event.assessment_type in ('homework', 'practice') then assessment_type in ('homework', 'practice')
+            else assessment_type = v_event.assessment_type
+          end
+        )
+        and (
+          case
+            when v_difficulty in ('normal', 'hard') then difficulty in ('normal', 'hard')
+            when v_difficulty = 'challenge' then difficulty = 'challenge'
+            when v_difficulty = 'below_level' then difficulty = 'below_level'
+            else difficulty = v_difficulty
+          end
+        )
+      order by occurred_at desc, verified_at desc
+    loop
+      -- Track historical best across all prior comparable records
+      if v_historical_best is null or v_comparables.normalized_score > v_historical_best then
+        v_historical_best := v_comparables.normalized_score;
+      end if;
 
-    -- Take first 3 for rolling baseline
-    if v_count < 3 then
-      v_sum := v_sum + v_comparables.normalized_score;
-      v_count := v_count + 1;
-      v_samples_json := v_samples_json || jsonb_build_object(
-        'id', v_comparables.id,
-        'score', v_comparables.normalized_score,
-        'occurred_at', v_comparables.occurred_at,
-        'assessment_type', v_comparables.assessment_type,
-        'difficulty', v_comparables.difficulty,
-        'grade_level', v_comparables.grade_level_snapshot
-      );
-    end if;
-  end loop;
+      -- Take first 3 for rolling baseline
+      if v_count < 3 then
+        v_sum := v_sum + v_comparables.normalized_score;
+        v_count := v_count + 1;
+        v_samples_json := v_samples_json || jsonb_build_object(
+          'id', v_comparables.id,
+          'score', v_comparables.normalized_score,
+          'occurred_at', v_comparables.occurred_at,
+          'assessment_type', v_comparables.assessment_type,
+          'difficulty', v_comparables.difficulty,
+          'grade_level', v_comparables.grade_level_snapshot
+        );
+      end if;
+    end loop;
+  end if;
 
   -- 7. Compute rolling baseline (requires 3 samples)
   if v_count >= 3 then

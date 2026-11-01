@@ -4,10 +4,11 @@
     "description": "Cold start with no historical results: baseline is null, delta is null",
     "current": {
       "subject_key": "math",
-      "raw_score": 7.0,
-      "max_score": 10.0,
+      "raw_score": 7,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [],
     "expected": {
@@ -29,21 +30,43 @@
     "description": "Canonical worked example from spec: 6.43 rolling baseline -> 7.50 Hard = 11.50 RP, 33 XP",
     "current": {
       "subject_key": "math",
-      "raw_score": 15.0,
-      "max_score": 20.0,
+      "raw_score": 15,
+      "max_score": 20,
       "difficulty": "hard",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 6.5, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 6.8, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 6.5,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 6.8,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
       "baseline_score": 6.43,
       "baseline_sample_count": 3,
       "growth_delta": 1.07,
-      "historical_best": 6.80,
+      "historical_best": 6.8,
       "score_rp_minor": 750,
       "growth_rp_minor": 200,
       "high_performer_rp_minor": 0,
@@ -59,20 +82,42 @@
     "current": {
       "subject_key": "math",
       "raw_score": 6.4,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 6.00,
+      "baseline_score": 6,
       "baseline_sample_count": 3,
-      "growth_delta": 0.40,
-      "historical_best": 6.00,
+      "growth_delta": 0.4,
+      "historical_best": 6,
       "score_rp_minor": 640,
       "growth_rp_minor": 0,
       "high_performer_rp_minor": 0,
@@ -88,20 +133,42 @@
     "current": {
       "subject_key": "math",
       "raw_score": 6.6,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 6.00,
+      "baseline_score": 6,
       "baseline_sample_count": 3,
-      "growth_delta": 0.60,
-      "historical_best": 6.00,
+      "growth_delta": 0.6,
+      "historical_best": 6,
       "score_rp_minor": 660,
       "growth_rp_minor": 100,
       "high_performer_rp_minor": 0,
@@ -117,20 +184,42 @@
     "current": {
       "subject_key": "math",
       "raw_score": 7.2,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 6.00,
+      "baseline_score": 6,
       "baseline_sample_count": 3,
-      "growth_delta": 1.20,
-      "historical_best": 6.00,
+      "growth_delta": 1.2,
+      "historical_best": 6,
       "score_rp_minor": 720,
       "growth_rp_minor": 200,
       "high_performer_rp_minor": 0,
@@ -146,20 +235,42 @@
     "current": {
       "subject_key": "math",
       "raw_score": 7.8,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 6.00,
+      "baseline_score": 6,
       "baseline_sample_count": 3,
-      "growth_delta": 1.80,
-      "historical_best": 6.00,
+      "growth_delta": 1.8,
+      "historical_best": 6,
       "score_rp_minor": 780,
       "growth_rp_minor": 300,
       "high_performer_rp_minor": 0,
@@ -175,20 +286,42 @@
     "current": {
       "subject_key": "math",
       "raw_score": 8.1,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 6.00,
+      "baseline_score": 6,
       "baseline_sample_count": 3,
-      "growth_delta": 2.10,
-      "historical_best": 6.00,
+      "growth_delta": 2.1,
+      "historical_best": 6,
       "score_rp_minor": 810,
       "growth_rp_minor": 400,
       "high_performer_rp_minor": 0,
@@ -204,20 +337,42 @@
     "current": {
       "subject_key": "math",
       "raw_score": 8.8,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 8.8, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 9.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 8.9, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 8.8,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 9,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 8.9,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 8.90,
+      "baseline_score": 8.9,
       "baseline_sample_count": 3,
-      "growth_delta": -0.10,
-      "historical_best": 9.00,
+      "growth_delta": -0.1,
+      "historical_best": 9,
       "score_rp_minor": 880,
       "growth_rp_minor": 0,
       "high_performer_rp_minor": 100,
@@ -233,20 +388,42 @@
     "current": {
       "subject_key": "math",
       "raw_score": 7.25,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 7.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 7.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 7.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 7,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 7,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 7,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 7.00,
+      "baseline_score": 7,
       "baseline_sample_count": 3,
       "growth_delta": 0.25,
-      "historical_best": 7.00,
+      "historical_best": 7,
       "score_rp_minor": 725,
       "growth_rp_minor": 0,
       "high_performer_rp_minor": 0,
@@ -262,20 +439,42 @@
     "current": {
       "subject_key": "math",
       "raw_score": 6.2,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "hard",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 6.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 6,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 6.00,
+      "baseline_score": 6,
       "baseline_sample_count": 3,
-      "growth_delta": 0.20,
-      "historical_best": 6.00,
+      "growth_delta": 0.2,
+      "historical_best": 6,
       "score_rp_minor": 620,
       "growth_rp_minor": 0,
       "high_performer_rp_minor": 0,
@@ -291,20 +490,42 @@
     "current": {
       "subject_key": "math",
       "raw_score": 4.5,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "challenge",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 3 },
-      { "id": "h2", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 2 },
-      { "id": "h3", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 5,
+        "type": "quiz",
+        "difficulty": "challenge",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 5,
+        "type": "quiz",
+        "difficulty": "challenge",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 5,
+        "type": "quiz",
+        "difficulty": "challenge",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 5.00,
+      "baseline_score": 5,
       "baseline_sample_count": 3,
-      "growth_delta": -0.50,
-      "historical_best": 5.00,
+      "growth_delta": -0.5,
+      "historical_best": 5,
       "score_rp_minor": 450,
       "growth_rp_minor": 0,
       "high_performer_rp_minor": 0,
@@ -319,21 +540,43 @@
     "description": "Challenge difficulty >= 5.0 score yields additive +2.00 RP (200 minor)",
     "current": {
       "subject_key": "math",
-      "raw_score": 6.0,
-      "max_score": 10.0,
+      "raw_score": 6,
+      "max_score": 10,
       "difficulty": "challenge",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 3 },
-      { "id": "h2", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 2 },
-      { "id": "h3", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 5,
+        "type": "quiz",
+        "difficulty": "challenge",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 5,
+        "type": "quiz",
+        "difficulty": "challenge",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 5,
+        "type": "quiz",
+        "difficulty": "challenge",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
-      "baseline_score": 5.00,
+      "baseline_score": 5,
       "baseline_sample_count": 3,
-      "growth_delta": 1.00,
-      "historical_best": 5.00,
+      "growth_delta": 1,
+      "historical_best": 5,
       "score_rp_minor": 600,
       "growth_rp_minor": 200,
       "high_performer_rp_minor": 0,
@@ -348,15 +591,37 @@
     "description": "Below-level anti-farming: 25% base RP, bonuses zeroed, legitimate Study XP",
     "current": {
       "subject_key": "math",
-      "raw_score": 10.0,
-      "max_score": 10.0,
+      "raw_score": 10,
+      "max_score": 10,
       "difficulty": "below_level",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 8.0, "type": "quiz", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 8.5, "type": "quiz", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 9.0, "type": "quiz", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 8,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 8.5,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 9,
+        "type": "quiz",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
       "baseline_score": null,
@@ -378,14 +643,36 @@
     "current": {
       "subject_key": "math",
       "raw_score": 8.5,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "exam"
+      "assessment_type": "exam",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 8.0, "type": "homework", "difficulty": "normal", "days_ago": 3 },
-      { "id": "h2", "score": 8.0, "type": "homework", "difficulty": "normal", "days_ago": 2 },
-      { "id": "h3", "score": 8.0, "type": "homework", "difficulty": "normal", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 8,
+        "type": "homework",
+        "difficulty": "normal",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 8,
+        "type": "homework",
+        "difficulty": "normal",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 8,
+        "type": "homework",
+        "difficulty": "normal",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
       "baseline_score": null,
@@ -407,14 +694,36 @@
     "current": {
       "subject_key": "math",
       "raw_score": 7.5,
-      "max_score": 10.0,
+      "max_score": 10,
       "difficulty": "normal",
-      "assessment_type": "quiz"
+      "assessment_type": "quiz",
+      "grade_level": 5
     },
     "history": [
-      { "id": "h1", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 3 },
-      { "id": "h2", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 2 },
-      { "id": "h3", "score": 5.0, "type": "quiz", "difficulty": "challenge", "days_ago": 1 }
+      {
+        "id": "h1",
+        "score": 5,
+        "type": "quiz",
+        "difficulty": "challenge",
+        "days_ago": 3,
+        "grade_level": 5
+      },
+      {
+        "id": "h2",
+        "score": 5,
+        "type": "quiz",
+        "difficulty": "challenge",
+        "days_ago": 2,
+        "grade_level": 5
+      },
+      {
+        "id": "h3",
+        "score": 5,
+        "type": "quiz",
+        "difficulty": "challenge",
+        "days_ago": 1,
+        "grade_level": 5
+      }
     ],
     "expected": {
       "baseline_score": null,
@@ -436,15 +745,36 @@
     "current": {
       "subject_key": "math",
       "grade_level": 5,
-      "raw_score": 8.0,
-      "max_score": 10.0,
+      "raw_score": 8,
+      "max_score": 10,
       "difficulty": "normal",
       "assessment_type": "quiz"
     },
     "history": [
-      { "id": "h1", "score": 7.5, "type": "quiz", "difficulty": "normal", "grade_level": 4, "days_ago": 30 },
-      { "id": "h2", "score": 8.0, "type": "quiz", "difficulty": "normal", "grade_level": 4, "days_ago": 20 },
-      { "id": "h3", "score": 8.5, "type": "quiz", "difficulty": "normal", "grade_level": 4, "days_ago": 10 }
+      {
+        "id": "h1",
+        "score": 7.5,
+        "type": "quiz",
+        "difficulty": "normal",
+        "grade_level": 4,
+        "days_ago": 30
+      },
+      {
+        "id": "h2",
+        "score": 8,
+        "type": "quiz",
+        "difficulty": "normal",
+        "grade_level": 4,
+        "days_ago": 20
+      },
+      {
+        "id": "h3",
+        "score": 8.5,
+        "type": "quiz",
+        "difficulty": "normal",
+        "grade_level": 4,
+        "days_ago": 10
+      }
     ],
     "expected": {
       "baseline_score": null,
@@ -458,6 +788,57 @@
       "difficulty_rp_minor": 0,
       "total_rp_minor": 800,
       "xp_awarded": 26
+    }
+  },
+  {
+    "id": "unknown_grade_fail_closed",
+    "description": "Unknown grade on current event fails closed: baseline is unavailable and history is excluded",
+    "current": {
+      "subject_key": "math",
+      "grade_level": null,
+      "raw_score": 7.5,
+      "max_score": 10,
+      "difficulty": "hard",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      {
+        "id": "h1",
+        "score": 7,
+        "type": "quiz",
+        "difficulty": "normal",
+        "grade_level": 5,
+        "days_ago": 3
+      },
+      {
+        "id": "h2",
+        "score": 7,
+        "type": "quiz",
+        "difficulty": "normal",
+        "grade_level": 5,
+        "days_ago": 2
+      },
+      {
+        "id": "h3",
+        "score": 7,
+        "type": "quiz",
+        "difficulty": "normal",
+        "grade_level": 5,
+        "days_ago": 1
+      }
+    ],
+    "expected": {
+      "baseline_score": null,
+      "baseline_sample_count": 0,
+      "growth_delta": null,
+      "historical_best": null,
+      "score_rp_minor": 750,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 0,
+      "difficulty_rp_minor": 100,
+      "total_rp_minor": 850,
+      "xp_awarded": 27
     }
   }
 ]

@@ -33,6 +33,11 @@ A child's performance baseline must be objective, individualized, and resistant 
      - *Challenge band*: `challenge` (advanced enrichment)
      - *Below-level band*: `below_level` (isolated anti-farming)
 2. **Immutable Server-Side Grade Snapshot:** `child_profiles.school_grade` is mutable as children advance in school. To prevent historical results from older grades contaminating future grade baselines, each assessment snapshots the child's school grade server-side upon creation (`grade_level_snapshot`), which is preserved immutably into `verified_learning_events`.
+   - `set_assessment_grade_snapshot` derives the grade authoritatively server-side on INSERT from `child_profiles.school_grade`; caller-supplied snapshots are never trusted.
+   - `set_vle_grade_snapshot` copies the assessment's immutable snapshot; it never falls back to current child profile.
+   - Database constraint enforces: `grade_level_snapshot IS NULL OR grade_level_snapshot BETWEEN 1 AND 12`.
+   - Fail-closed unknown grade policy: if grade snapshot is NULL, no grade is inferred, unknown history is never longitudinally comparable, baseline remains unavailable, and longitudinal bonuses (Growth, High Performer, Personal Best) are strictly withheld ($0$). Base score RP and difficulty bonus operate independently.
+   - Legacy Phase 2 rows without trustworthy grade provenance remain `NULL` (no fabricated backfill).
 3. **Topic Behavior in Growth v0.1:** `docs/03-growth-engine-v0.1.md` notes that topic-specific comparison requires reliable, standardized topic taxonomy. Because Phase 2 captures assessments with unstructured titles without formal taxonomy tags, Growth v0.1 deterministically applies the documented subject-level fallback rather than fabricating an ad-hoc topic taxonomy.
 4. **Strict Chronological Precedence:** Only results occurring strictly before the current event are eligible: `occurred_at < current_event.occurred_at` OR (`occurred_at == current_event.occurred_at` AND `verified_at < current_event.verified_at`).
 5. **Self-Exclusion:** The current event ID is strictly excluded from its own baseline calculation.
