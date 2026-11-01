@@ -19,6 +19,7 @@ final class VerifiedLearningEvent {
     required this.score,
     required this.evidenceCount,
     this.entryContext = EntryContext.adult,
+    this.gradeLevelSnapshot,
     required this.occurredAt,
     required this.verifiedAt,
     required this.verifiedByUserId,
@@ -37,6 +38,7 @@ final class VerifiedLearningEvent {
   final AssessmentScore score;
   final int evidenceCount;
   final EntryContext entryContext;
+  final int? gradeLevelSnapshot;
   final DateTime occurredAt;
   final DateTime verifiedAt;
   final String verifiedByUserId;
@@ -52,5 +54,5 @@ final class VerifiedLearningEvent {
 
   @override
   String toString() =>
-      'VerifiedLearningEvent($id, ${subjectKey.value}: $subject - $title, score: $score, verifiedAt: $verifiedAt)';
+      'VerifiedLearningEvent($id, ${subjectKey.value}: $subject - $title, score: $score, grade: $gradeLevelSnapshot, verifiedAt: $verifiedAt)';
 }

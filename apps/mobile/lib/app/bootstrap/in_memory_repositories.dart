@@ -438,3 +438,203 @@ final class InMemoryAssessmentEvidenceStorage
     _storage.remove(storagePath);
   }
 }
+
+/// Lightweight in-memory fallback for [GrowthRepository] in local demo mode and widget tests.
+final class InMemoryGrowthRepository implements GrowthRepository {
+  InMemoryGrowthRepository({this.assessmentRepository});
+
+  final InMemoryAssessmentRepository? assessmentRepository;
+
+  final Map<String, GrowthEvent> _growthEventsByVle = {};
+  final Map<String, GrowthEvent> _growthEventsByAssessment = {};
+  final Map<String, ChildBalance> _balancesByChild = {};
+  final List<XpLedgerEntry> _xpLedger = [];
+  final List<RpLedgerEntry> _rpLedger = [];
+
+  @override
+  Future<GrowthEvent> processVerifiedLearningEvent({
+    required String verifiedLearningEventId,
+    String? commandId,
+  }) async {
+    if (_growthEventsByVle.containsKey(verifiedLearningEventId)) {
+      return _growthEventsByVle[verifiedLearningEventId]!;
+    }
+
+    VerifiedLearningEvent? vle;
+    if (assessmentRepository != null) {
+      for (final event in assessmentRepository!._verifiedEvents) {
+        if (event.id == verifiedLearningEventId) {
+          vle = event;
+          break;
+        }
+      }
+    }
+
+    final familyId = vle?.familyId ?? FamilyId('demo-fam');
+    final childId = vle?.childId ?? ChildId('demo-child');
+    final assessmentId = vle?.assessmentId ?? AssessmentId('demo-assessment');
+    final subjectKey = vle?.subjectKey ?? SubjectKey.math;
+    final diff = vle?.difficulty ?? AssessmentDifficulty.normal;
+    final normScore = vle?.score.serverNormalizedScore ?? 7.50;
+
+    final history = <ComparableResult>[];
+    if (assessmentRepository != null) {
+      for (final event in assessmentRepository!._verifiedEvents) {
+        if (event.id != verifiedLearningEventId &&
+            event.childId == childId &&
+            event.subjectKey == subjectKey) {
+          history.add(
+            ComparableResult(
+              id: event.id,
+              subjectKey: event.subjectKey,
+              normalizedScore: event.score.serverNormalizedScore,
+              difficulty: event.difficulty,
+              assessmentType: event.type,
+              gradeLevel: event.gradeLevelSnapshot,
+              occurredAt: event.occurredAt,
+              verifiedAt: event.verifiedAt,
+            ),
+          );
+        }
+      }
+    }
+
+    final input = GrowthInput(
+      currentEventId: verifiedLearningEventId,
+      subjectKey: subjectKey,
+      currentScore: NormalizedScore.fromRaw(
+        rawScore: normScore,
+        maxScore: 10.0,
+      ),
+      difficulty: diff,
+      assessmentType: vle?.type ?? AssessmentType.quiz,
+      gradeLevel: vle?.gradeLevelSnapshot,
+      occurredAt: vle?.occurredAt ?? DateTime.now().toUtc(),
+      verifiedAt: vle?.verifiedAt ?? DateTime.now().toUtc(),
+      comparableHistory: history,
+    );
+
+    final growthResult = GrowthEngine.calculate(input);
+    final breakdown = growthResult.breakdown;
+
+    final growthEvent = GrowthEvent(
+      id: 'local-ge-',
+      familyId: familyId,
+      childId: childId,
+      verifiedLearningEventId: verifiedLearningEventId,
+      assessmentId: assessmentId,
+      engineVersion: GrowthEngine.engineVersion,
+      normalizedScore: breakdown.normalizedScore,
+      baselineScore: breakdown.baselineScore,
+      baselineSampleCount: breakdown.baselineSampleCount,
+      growthDelta: breakdown.growthDelta,
+      historicalBest: breakdown.historicalBest,
+      scoreRpMinor: breakdown.scoreRpMinor,
+      growthRpMinor: breakdown.growthRpMinor,
+      highPerformerRpMinor: breakdown.highPerformerRpMinor,
+      goalRpMinor: breakdown.goalRpMinor,
+      personalBestRpMinor: breakdown.personalBestRpMinor,
+      difficultyRpMinor: breakdown.difficultyRpMinor,
+      recoveryRpMinor: breakdown.recoveryRpMinor,
+      belowLevelAdjustment: breakdown.belowLevelAdjustment,
+      totalRpMinor: breakdown.totalRpMinor,
+      xpAwarded: breakdown.xpAwarded,
+      inputsSnapshot: growthResult.inputsSnapshot,
+      createdAt: DateTime.now().toUtc(),
+    );
+
+    _growthEventsByVle[verifiedLearningEventId] = growthEvent;
+    _growthEventsByAssessment[assessmentId.value] = growthEvent;
+
+    _xpLedger.add(
+      XpLedgerEntry(
+        id: 'local-xp-',
+        familyId: familyId,
+        childId: childId,
+        amount: growthEvent.xpAwarded,
+        reasonCode: 'growth_award',
+        sourceType: 'growth_event',
+        sourceId: growthEvent.id,
+        idempotencyKey: 'xp:ge:',
+        createdAt: growthEvent.createdAt,
+      ),
+    );
+
+    _rpLedger.add(
+      RpLedgerEntry(
+        id: 'local-rp-',
+        familyId: familyId,
+        childId: childId,
+        amountMinor: growthEvent.totalRpMinor,
+        reasonCode: 'growth_award',
+        sourceType: 'growth_event',
+        sourceId: growthEvent.id,
+        idempotencyKey: 'rp:ge:',
+        createdAt: growthEvent.createdAt,
+      ),
+    );
+
+    final currentBal = _balancesByChild[childId.value];
+    final newXp =
+        (currentBal?.xpTotal ?? XpAmount.zero) + growthEvent.xpAwarded;
+    final newRp =
+        (currentBal?.rpBalanceMinor ?? RpMinor.zero) + growthEvent.totalRpMinor;
+
+    _balancesByChild[childId.value] = ChildBalance(
+      familyId: familyId,
+      childId: childId,
+      xpTotal: newXp,
+      rpBalanceMinor: newRp,
+      updatedAt: growthEvent.createdAt,
+    );
+
+    return growthEvent;
+  }
+
+  @override
+  Future<ChildBalance?> getChildBalance(ChildId childId) async {
+    return _balancesByChild[childId.value];
+  }
+
+  @override
+  Future<GrowthEvent?> getLatestGrowthEvent(ChildId childId) async {
+    final list = await listGrowthEvents(childId);
+    return list.isEmpty ? null : list.first;
+  }
+
+  @override
+  Future<List<GrowthEvent>> listGrowthEvents(ChildId childId) async {
+    final events = _growthEventsByVle.values
+        .where((e) => e.childId == childId)
+        .toList();
+    events.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return events;
+  }
+
+  @override
+  Future<GrowthEvent?> getGrowthEventByAssessmentId(
+    AssessmentId assessmentId,
+  ) async {
+    return _growthEventsByAssessment[assessmentId.value];
+  }
+
+  @override
+  Future<List<VerifiedLearningEvent>> getUnprocessedVerifiedEvents(
+    FamilyId familyId,
+  ) async {
+    if (assessmentRepository == null) return const [];
+    return assessmentRepository!._verifiedEvents.where((vle) {
+      return vle.familyId == familyId &&
+          !_growthEventsByVle.containsKey(vle.id);
+    }).toList();
+  }
+
+  @override
+  Future<int> catchUpUnprocessedGrowth(FamilyId familyId) async {
+    final pending = await getUnprocessedVerifiedEvents(familyId);
+    for (final event in pending) {
+      await processVerifiedLearningEvent(verifiedLearningEventId: event.id);
+    }
+    return pending.length;
+  }
+}

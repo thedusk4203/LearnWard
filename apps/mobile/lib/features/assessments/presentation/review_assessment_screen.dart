@@ -7,6 +7,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../shared/utils/uuid_generator.dart';
+import 'growth_result_screen.dart';
 
 /// Screen where a parent reviews, verifies or rejects a submitted assessment.
 class ReviewAssessmentScreen extends ConsumerStatefulWidget {
@@ -117,11 +118,54 @@ class _ReviewAssessmentScreenState
 
       setState(() => _currentAssessment = verified);
 
+      GrowthEvent? growthEvent;
+      Object? growthError;
+      try {
+        final vleUseCase = ListVerifiedLearningEvents(repo);
+        final vles = await vleUseCase(_currentAssessment.childId);
+        final targetVle = vles.cast<VerifiedLearningEvent?>().firstWhere(
+          (VerifiedLearningEvent? e) =>
+              e?.assessmentId == _currentAssessment.id,
+          orElse: () => null,
+        );
+        if (targetVle != null) {
+          final growthRepo = ref.read(growthRepositoryProvider);
+          final processGrowth = ProcessVerifiedLearningEvent(growthRepo);
+          growthEvent = await processGrowth(
+            verifiedLearningEventId: targetVle.id,
+            commandId: generateUuid(),
+          );
+        }
+      } catch (err) {
+        growthError = err;
+      }
+
       if (mounted) {
+        final rpAwarded = growthEvent?.totalRpMinor.formatRp();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Assessment verified successfully!'),
-            backgroundColor: Colors.green,
+          SnackBar(
+            content: Text(
+              growthEvent != null
+                  ? 'Assessment verified successfully! +$rpAwarded RP awarded.'
+                  : growthError != null
+                  ? 'Assessment verified! Reward calculation is pending catch-up.'
+                  : 'Assessment verified successfully!',
+            ),
+            backgroundColor: growthError != null
+                ? Colors.orange.shade800
+                : Colors.green,
+            action: growthEvent != null
+                ? SnackBarAction(
+                    label: 'View Details',
+                    textColor: Colors.white,
+                    onPressed: () {
+                      GrowthResultScreen.show(
+                        context,
+                        growthEvent: growthEvent!,
+                      );
+                    },
+                  )
+                : null,
           ),
         );
         context.pop(true);

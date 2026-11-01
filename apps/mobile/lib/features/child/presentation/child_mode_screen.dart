@@ -5,15 +5,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_design_system/learnward_design_system.dart';
+import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../app/routing/app_routes.dart';
+import '../../assessments/presentation/growth_result_screen.dart';
 import '../../shared_device/presentation/parent_gate_dialog.dart';
 
 /// Screen displayed when the app is in Child Mode on a shared family device.
 ///
-/// Features a restricted child UI that hides adult family configuration,
-/// child profile management, and billing settings.
+/// Features a restricted child UI displaying learner balance (Study XP and RP),
+/// latest Growth breakdown, verified learning history, and draft capture.
 class ChildModeScreen extends ConsumerStatefulWidget {
   const ChildModeScreen({super.key});
 
@@ -23,11 +25,18 @@ class ChildModeScreen extends ConsumerStatefulWidget {
 
 class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
   List<LocalAssessmentDraft> _localDrafts = [];
+  ChildBalance? _childBalance;
+  GrowthEvent? _latestGrowth;
+  List<GrowthEvent> _growthHistory = [];
+  bool _isLoadingEconomy = false;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadLocalDrafts());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadLocalDrafts();
+      _loadEconomyData();
+    });
   }
 
   Future<void> _loadLocalDrafts() async {
@@ -40,6 +49,36 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
         setState(() => _localDrafts = drafts);
       }
     } catch (_) {}
+  }
+
+  Future<void> _loadEconomyData() async {
+    final activeChild = ref.read(activeChildModeProvider);
+    if (activeChild == null) return;
+
+    setState(() => _isLoadingEconomy = true);
+    try {
+      final growthRepo = ref.read(growthRepositoryProvider);
+      final getBalance = GetChildBalance(growthRepo);
+      final getLatest = GetLatestGrowthEvent(growthRepo);
+      final listGrowth = ListGrowthEvents(growthRepo);
+
+      final balance = await getBalance(activeChild.id);
+      final latest = await getLatest(activeChild.id);
+      final history = await listGrowth(activeChild.id);
+
+      if (mounted) {
+        setState(() {
+          _childBalance = balance;
+          _latestGrowth = latest;
+          _growthHistory = history;
+        });
+      }
+    } catch (_) {
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingEconomy = false);
+      }
+    }
   }
 
   @override
@@ -84,29 +123,219 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   CircleAvatar(
-                    radius: 40,
+                    radius: 36,
                     backgroundColor: theme.colorScheme.primaryContainer,
                     child: Icon(
                       Icons.school,
-                      size: 40,
+                      size: 36,
                       color: theme.colorScheme.onPrimaryContainer,
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.md),
+                  const SizedBox(height: AppSpacing.sm),
                   Text(
                     'Welcome to LearnWard, $displayName!',
                     style: theme.textTheme.titleLarge,
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: AppSpacing.sm),
-                  Text(
-                    'Capture your scores, test papers, and learning results.',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                  const SizedBox(height: AppSpacing.md),
+
+                  if (_isLoadingEconomy)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: AppSpacing.xs),
+                      child: LinearProgressIndicator(),
                     ),
-                    textAlign: TextAlign.center,
+                  // 1. Authoritative Economic Balances Card (XP & RP)
+                  Card(
+                    key: const Key('child_balances_card'),
+                    elevation: 1,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: BorderSide(color: theme.colorScheme.outlineVariant),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(AppSpacing.md),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.bolt,
+                                      size: 20,
+                                      color: theme.colorScheme.secondary,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Study XP',
+                                      style: theme.textTheme.bodyMedium
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.bold,
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  key: const Key('child_xp_total'),
+                                  '${_childBalance?.xpTotal.value ?? 0} XP',
+                                  style: theme.textTheme.headlineSmall
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: theme.colorScheme.secondary,
+                                      ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Progression',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            height: 48,
+                            width: 1,
+                            color: theme.colorScheme.outlineVariant,
+                          ),
+                          Expanded(
+                            child: Column(
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.stars,
+                                      size: 20,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Reward Points',
+                                      style: theme.textTheme.bodyMedium
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.bold,
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  key: const Key('child_rp_balance'),
+                                  '${_childBalance?.rpBalanceMinor.formatRp() ?? '0.00'} RP',
+                                  style: theme.textTheme.headlineSmall
+                                      ?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                        color: theme.colorScheme.primary,
+                                      ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Family Currency',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: AppSpacing.lg),
+
+                  const SizedBox(height: AppSpacing.md),
+
+                  // 2. Latest Growth Breakdown Card
+                  if (_latestGrowth != null) ...[
+                    Card(
+                      key: const Key('latest_growth_card'),
+                      elevation: 0,
+                      color: theme.colorScheme.primaryContainer.withValues(
+                        alpha: 0.25,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.3,
+                          ),
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(AppSpacing.md),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  'Latest Verified Result',
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green.shade100,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    '+${_latestGrowth!.totalRpMinor.formatRp()} RP',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.green.shade800,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              'Score: ${_latestGrowth!.normalizedScore.toStringAsFixed(2)} / 10'
+                              '${_latestGrowth!.baselineScore != null ? ' • Baseline: ${_latestGrowth!.baselineScore!.toStringAsFixed(2)}' : ''}'
+                              '${_latestGrowth!.growthDelta != null ? ' (Δ ${_latestGrowth!.growthDelta! >= 0 ? '+' : ''}${_latestGrowth!.growthDelta!.toStringAsFixed(2)})' : ''}',
+                              style: theme.textTheme.bodyMedium,
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                key: const Key('latest_growth_explain_button'),
+                                icon: const Icon(Icons.help_outline, size: 16),
+                                label: const Text('Why did I get this amount?'),
+                                onPressed: () {
+                                  GrowthResultScreen.show(
+                                    context,
+                                    growthEvent: _latestGrowth!,
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
+
+                  // 3. Add Result Button
                   FilledButton.icon(
                     key: const Key('child_add_assessment_button'),
                     icon: const Icon(Icons.add_task),
@@ -117,10 +346,13 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                       );
                       if (result == true) {
                         unawaited(_loadLocalDrafts());
+                        unawaited(_loadEconomyData());
                       }
                     },
                   ),
                   const SizedBox(height: AppSpacing.md),
+
+                  // 4. Unsubmitted Local Drafts
                   if (_localDrafts.isNotEmpty) ...[
                     Text(
                       'Unsubmitted Local Drafts (${_localDrafts.length})',
@@ -152,6 +384,7 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                               );
                               if (result == true) {
                                 unawaited(_loadLocalDrafts());
+                                unawaited(_loadEconomyData());
                               }
                             },
                             trailing: IconButton(
@@ -177,6 +410,65 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                     ),
                     const SizedBox(height: AppSpacing.md),
                   ],
+
+                  // 5. Basic Growth History List
+                  if (_growthHistory.isNotEmpty) ...[
+                    Text(
+                      'Recent Growth Awards (${_growthHistory.length})',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _growthHistory.length > 5
+                          ? 5
+                          : _growthHistory.length,
+                      itemBuilder: (ctx, i) {
+                        final event = _growthHistory[i];
+                        return Card(
+                          elevation: 0,
+                          margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+                          child: ListTile(
+                            key: Key('growth_history_item_${event.id}'),
+                            leading: CircleAvatar(
+                              backgroundColor:
+                                  theme.colorScheme.primaryContainer,
+                              child: Text(
+                                event.normalizedScore.toStringAsFixed(1),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                            title: Text(
+                              '+${event.totalRpMinor.formatRp()} RP • +${event.xpAwarded.value} XP',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Text(
+                              event.growthDelta != null
+                                  ? 'Improvement: +${event.growthDelta!.toStringAsFixed(2)} above baseline'
+                                  : 'Initial baseline sample',
+                            ),
+                            trailing: const Icon(Icons.chevron_right, size: 20),
+                            onTap: () {
+                              GrowthResultScreen.show(
+                                context,
+                                growthEvent: event,
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
+
                   Card(
                     elevation: 0,
                     color: theme.colorScheme.surfaceContainerHighest,

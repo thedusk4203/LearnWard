@@ -27,6 +27,7 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
   String? _errorMessage;
   List<ChildProfile> _children = [];
   List<Assessment> _pendingAssessments = [];
+  Map<String, ChildBalance> _childBalances = {};
 
   @override
   void initState() {
@@ -66,9 +67,23 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
       final pendingUseCase = ListPendingAssessments(assessmentRepo);
       final pending = await pendingUseCase.forFamily(currentActive.id);
 
+      final growthRepo = ref.read(growthRepositoryProvider);
+      try {
+        await growthRepo.catchUpUnprocessedGrowth(currentActive.id);
+      } catch (_) {}
+      final getBalance = GetChildBalance(growthRepo);
+      final balances = <String, ChildBalance>{};
+      for (final c in children) {
+        try {
+          final b = await getBalance(c.id);
+          if (b != null) balances[c.id.value] = b;
+        } catch (_) {}
+      }
+
       setState(() {
         _children = children;
         _pendingAssessments = pending;
+        _childBalances = balances;
       });
     } catch (e) {
       setState(() {
@@ -348,14 +363,53 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                             ),
                           ),
                           title: Text(child.displayName),
-                          subtitle: Text(
-                            [
-                              if (child.schoolGrade != null)
-                                'Grade ${child.schoolGrade}',
-                              if (child.birthYear != null)
-                                'Born ${child.birthYear}',
-                              'Status: ${child.status.wireName}',
-                            ].join(' • '),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                [
+                                  if (child.schoolGrade != null)
+                                    'Grade ${child.schoolGrade}',
+                                  if (child.birthYear != null)
+                                    'Born ${child.birthYear}',
+                                  'Status: ${child.status.wireName}',
+                                ].join(' • '),
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.bolt,
+                                    size: 14,
+                                    color: theme.colorScheme.secondary,
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Text(
+                                    '${_childBalances[child.id.value]?.xpTotal.value ?? 0} XP',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                      color: theme.colorScheme.secondary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Icon(
+                                    Icons.stars,
+                                    size: 14,
+                                    color: theme.colorScheme.primary,
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Text(
+                                    '${_childBalances[child.id.value]?.rpBalanceMinor.formatRp() ?? "0.00"} RP',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                           trailing: FilledButton.tonal(
                             key: Key('enter_child_mode_${child.id.value}'),

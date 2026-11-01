@@ -1,0 +1,1016 @@
+import 'package:learnward_domain/learnward_domain.dart';
+import 'package:test/test.dart';
+
+void main() {
+  group('GrowthEngine v0.1', () {
+    final now = DateTime.utc(2026, 11, 1, 12, 0);
+
+    ComparableResult makeResult({
+      required String id,
+      required double score,
+      SubjectKey subjectKey = SubjectKey.math,
+      AssessmentDifficulty difficulty = AssessmentDifficulty.normal,
+      AssessmentType type = AssessmentType.quiz,
+      int? gradeLevel = 5,
+      int daysAgo = 1,
+      int minutesAgo = 0,
+    }) {
+      return ComparableResult(
+        id: id,
+        subjectKey: subjectKey,
+        normalizedScore: score,
+        difficulty: difficulty,
+        assessmentType: type,
+        gradeLevel: gradeLevel,
+        occurredAt: now.subtract(Duration(days: daysAgo, minutes: minutesAgo)),
+        verifiedAt: now.subtract(
+          Duration(days: daysAgo, minutes: minutesAgo - 5),
+        ),
+      );
+    }
+
+    test('Engine version is growth-v0.1', () {
+      expect(GrowthEngine.engineVersion, equals('growth-v0.1'));
+    });
+
+    test('Documented canonical example from spec: 6.43 baseline -> 7.50 Hard = 11.50 RP, 33 XP', () {
+      final history = [
+        makeResult(id: 'c1', score: 6.0, daysAgo: 3),
+        makeResult(id: 'c2', score: 6.5, daysAgo: 2),
+        makeResult(id: 'c3', score: 6.8, daysAgo: 1),
+      ];
+
+      final input = GrowthInput(
+        currentEventId: 'current',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(
+          rawScore: 15,
+          maxScore: 20,
+        ), // 7.50
+        difficulty: AssessmentDifficulty.hard,
+        assessmentType: AssessmentType.quiz,
+        occurredAt: now,
+        verifiedAt: now.add(const Duration(minutes: 5)),
+        comparableHistory: history,
+      );
+
+      final result = GrowthEngine.calculate(input);
+      final b = result.breakdown;
+
+      expect(b.normalizedScore, equals(7.50));
+      expect(b.baselineScore, equals(6.43));
+      expect(b.baselineSampleCount, equals(3));
+      expect(b.growthDelta, equals(1.07));
+      expect(b.historicalBest, equals(6.80));
+
+      expect(b.scoreRpMinor.value, equals(750)); // +7.50 RP
+      expect(
+        b.growthRpMinor.value,
+        equals(200),
+      ); // +2.00 RP (delta 1.07 in [1.0, 1.49])
+      expect(
+        b.personalBestRpMinor.value,
+        equals(100),
+      ); // +1.00 RP (7.50 - 6.80 = 0.70 >= 0.25)
+      expect(b.difficultyRpMinor.value, equals(100)); // +1.00 RP (Hard)
+      expect(
+        b.highPerformerRpMinor.value,
+        equals(0),
+      ); // 0 RP (baseline 6.43 < 8.5)
+      expect(b.goalRpMinor.value, equals(0)); // 0 RP (deferred)
+      expect(b.recoveryRpMinor.value, equals(0)); // 0 RP (deferred)
+      expect(b.belowLevelAdjustment, isFalse);
+
+      expect(b.totalRpMinor.value, equals(1150)); // +11.50 RP
+      expect(b.totalRpMinor.formatRp(), equals('11.50'));
+      expect(b.xpAwarded.value, equals(33)); // 10 + 2 * 11.50 = 33 XP
+    });
+
+    test('no history: baseline is null, no growth/PB bonus, challenge bonus active if >= 5.0', () {
+      final input = GrowthInput(
+        currentEventId: 'ev1',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.science,
+        currentScore: NormalizedScore.fromRaw(
+          rawScore: 8,
+          maxScore: 10,
+        ), // 8.00
+        difficulty: AssessmentDifficulty.normal,
+        assessmentType: AssessmentType.quiz,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: [],
+      );
+
+      final result = GrowthEngine.calculate(input);
+      final b = result.breakdown;
+
+      expect(b.baselineScore, isNull);
+      expect(b.baselineSampleCount, equals(0));
+      expect(b.growthDelta, isNull);
+      expect(b.historicalBest, isNull);
+      expect(b.scoreRpMinor.value, equals(800)); // 8.00 RP
+      expect(b.growthRpMinor.value, equals(0));
+      expect(b.personalBestRpMinor.value, equals(0));
+      expect(b.totalRpMinor.value, equals(800)); // 8.00 RP
+      expect(b.xpAwarded.value, equals(26)); // 10 + 2 * 8.00 = 26 XP
+    });
+
+    test('1 comparable result: baseline remains null, historical best tracks and can trigger PB', () {
+      final history = [makeResult(id: 'c1', score: 6.0, daysAgo: 1)];
+
+      final input = GrowthInput(
+        currentEventId: 'ev2',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(
+          rawScore: 7,
+          maxScore: 10,
+        ), // 7.00
+        difficulty: AssessmentDifficulty.normal,
+        assessmentType: AssessmentType.quiz,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: history,
+      );
+
+      final result = GrowthEngine.calculate(input);
+      final b = result.breakdown;
+
+      expect(b.baselineScore, isNull);
+      expect(b.baselineSampleCount, equals(1));
+      expect(b.historicalBest, equals(6.00));
+      expect(
+        b.growthRpMinor.value,
+        equals(0),
+      ); // no baseline => no growth bonus
+      expect(
+        b.personalBestRpMinor.value,
+        equals(100),
+      ); // 7.00 - 6.00 >= 0.25 => +1 RP
+      expect(b.totalRpMinor.value, equals(800)); // 700 + 100 = 800 (8.00 RP)
+      expect(b.xpAwarded.value, equals(26));
+    });
+
+    test('2 comparable results: baseline remains null (requires at least 3 samples)', () {
+      final history = [
+        makeResult(id: 'c1', score: 7.0, daysAgo: 2),
+        makeResult(id: 'c2', score: 7.2, daysAgo: 1),
+      ];
+
+      final input = GrowthInput(
+        currentEventId: 'ev3',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(
+          rawScore: 7,
+          maxScore: 10,
+        ), // 7.00
+        difficulty: AssessmentDifficulty.normal,
+        assessmentType: AssessmentType.quiz,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: history,
+      );
+
+      final result = GrowthEngine.calculate(input);
+      final b = result.breakdown;
+
+      expect(b.baselineScore, isNull);
+      expect(b.baselineSampleCount, equals(2));
+      expect(b.historicalBest, equals(7.20));
+      expect(b.growthRpMinor.value, equals(0));
+      expect(b.personalBestRpMinor.value, equals(0)); // 7.00 < 7.20
+      expect(b.totalRpMinor.value, equals(700));
+    });
+
+    test('3+ comparable results: uses rolling last 3 only', () {
+      final history = [
+        makeResult(
+          id: 'c_oldest',
+          score: 2.0,
+          daysAgo: 10,
+        ), // ignored by rolling 3
+        makeResult(id: 'c1', score: 7.0, daysAgo: 3),
+        makeResult(id: 'c2', score: 8.0, daysAgo: 2),
+        makeResult(id: 'c3', score: 9.0, daysAgo: 1),
+      ];
+
+      final input = GrowthInput(
+        currentEventId: 'ev4',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(
+          rawScore: 9,
+          maxScore: 10,
+        ), // 9.00
+        difficulty: AssessmentDifficulty.normal,
+        assessmentType: AssessmentType.quiz,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: history,
+      );
+
+      final result = GrowthEngine.calculate(input);
+      final b = result.breakdown;
+
+      // Last 3 are 7.0, 8.0, 9.0 -> mean is 8.00 (not including 2.0)
+      expect(b.baselineScore, equals(8.00));
+      expect(b.baselineSampleCount, equals(3));
+      expect(b.growthDelta, equals(1.00));
+      expect(b.growthRpMinor.value, equals(200)); // delta 1.00 -> +2 RP
+      expect(b.historicalBest, equals(9.00)); // across all records
+      expect(b.personalBestRpMinor.value, equals(0)); // 9.00 - 9.00 = 0 < 0.25
+    });
+
+    test('non-comparable subject is strictly ignored', () {
+      final history = [
+        makeResult(
+          id: 'eng1',
+          score: 9.0,
+          subjectKey: SubjectKey.english,
+          daysAgo: 3,
+        ),
+        makeResult(
+          id: 'eng2',
+          score: 9.0,
+          subjectKey: SubjectKey.english,
+          daysAgo: 2,
+        ),
+        makeResult(
+          id: 'eng3',
+          score: 9.0,
+          subjectKey: SubjectKey.english,
+          daysAgo: 1,
+        ),
+      ];
+
+      final input = GrowthInput(
+        currentEventId: 'math_ev',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(rawScore: 8, maxScore: 10),
+        difficulty: AssessmentDifficulty.normal,
+        assessmentType: AssessmentType.quiz,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: history,
+      );
+
+      final result = GrowthEngine.calculate(input);
+      expect(result.breakdown.baselineScore, isNull);
+      expect(result.breakdown.baselineSampleCount, equals(0));
+    });
+
+    test('current event is strictly excluded from its own baseline', () {
+      final history = [
+        makeResult(
+          id: 'self_ev',
+          score: 10.0,
+          daysAgo: 0,
+        ), // same id as current
+        makeResult(id: 'c1', score: 5.0, daysAgo: 3),
+        makeResult(id: 'c2', score: 5.0, daysAgo: 2),
+        makeResult(id: 'c3', score: 5.0, daysAgo: 1),
+      ];
+
+      final input = GrowthInput(
+        currentEventId: 'self_ev',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(rawScore: 10, maxScore: 10),
+        difficulty: AssessmentDifficulty.normal,
+        assessmentType: AssessmentType.quiz,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: history,
+      );
+
+      final result = GrowthEngine.calculate(input);
+      // Baseline should be mean of c1, c2, c3 = 5.00, NOT containing 10.0
+      expect(result.breakdown.baselineScore, equals(5.00));
+      expect(result.breakdown.growthDelta, equals(5.00));
+      expect(
+        result.breakdown.growthRpMinor.value,
+        equals(400),
+      ); // delta >= 2.0 -> +4 RP
+    });
+
+    group('Growth bonus delta thresholds', () {
+      GrowthBreakdown runDelta(double delta) {
+        final baselineScore = 5.0;
+        final currentScore = baselineScore + delta;
+        final history = [
+          makeResult(id: 'c1', score: 5.0, daysAgo: 3),
+          makeResult(id: 'c2', score: 5.0, daysAgo: 2),
+          makeResult(id: 'c3', score: 5.0, daysAgo: 1),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'ev',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(
+            rawScore: currentScore,
+            maxScore: 10,
+          ),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        return GrowthEngine.calculate(input).breakdown;
+      }
+
+      test('delta < 0.50 -> 0 RP', () {
+        expect(runDelta(0.49).growthRpMinor.value, equals(0));
+        expect(runDelta(-0.50).growthRpMinor.value, equals(0));
+      });
+
+      test('delta 0.50 to 0.99 -> +1 RP (100 minor)', () {
+        expect(runDelta(0.50).growthRpMinor.value, equals(100));
+        expect(runDelta(0.99).growthRpMinor.value, equals(100));
+      });
+
+      test('delta 1.00 to 1.49 -> +2 RP (200 minor)', () {
+        expect(runDelta(1.00).growthRpMinor.value, equals(200));
+        expect(runDelta(1.49).growthRpMinor.value, equals(200));
+      });
+
+      test('delta 1.50 to 1.99 -> +3 RP (300 minor)', () {
+        expect(runDelta(1.50).growthRpMinor.value, equals(300));
+        expect(runDelta(1.99).growthRpMinor.value, equals(300));
+      });
+
+      test('delta >= 2.00 -> +4 RP (400 minor)', () {
+        expect(runDelta(2.00).growthRpMinor.value, equals(400));
+        expect(runDelta(3.50).growthRpMinor.value, equals(400));
+      });
+    });
+
+    test(
+      'high performer maintenance: baseline >= 8.5 AND current >= 8.5 -> +1 RP',
+      () {
+        final history = [
+          makeResult(id: 'c1', score: 9.0, daysAgo: 3),
+          makeResult(id: 'c2', score: 9.0, daysAgo: 2),
+          makeResult(id: 'c3', score: 9.0, daysAgo: 1),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'hp_ev',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(
+            rawScore: 9,
+            maxScore: 10,
+          ), // 9.00
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        final b = result.breakdown;
+
+        expect(b.baselineScore, equals(9.00));
+        expect(b.growthDelta, equals(0.00));
+        expect(b.growthRpMinor.value, equals(0)); // delta 0 -> no growth bonus
+        expect(b.highPerformerRpMinor.value, equals(100)); // +1 RP maintenance!
+        expect(b.personalBestRpMinor.value, equals(0));
+        expect(
+          b.totalRpMinor.value,
+          equals(1000),
+        ); // 900 base + 100 maintenance = 10.00 RP
+        expect(b.xpAwarded.value, equals(30)); // 10 + 2 * 10 = 30 XP
+      },
+    );
+
+    test(
+      'high performer not awarded if baseline < 8.5 even if current >= 8.5',
+      () {
+        final history = [
+          makeResult(id: 'c1', score: 8.0, daysAgo: 3),
+          makeResult(id: 'c2', score: 8.0, daysAgo: 2),
+          makeResult(id: 'c3', score: 8.0, daysAgo: 1),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'ev',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(
+            rawScore: 9,
+            maxScore: 10,
+          ), // 9.00
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        expect(result.breakdown.highPerformerRpMinor.value, equals(0));
+        expect(
+          result.breakdown.growthRpMinor.value,
+          equals(200),
+        ); // delta +1.00 -> +2 RP
+      },
+    );
+
+    test('personal best boundary: exactly +0.25 vs +0.24', () {
+      final history = [makeResult(id: 'c1', score: 7.0, daysAgo: 1)];
+
+      // Current 7.25: exceeds by 0.25 -> +1 RP
+      final inputExact = GrowthInput(
+        currentEventId: 'ev_exact',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(rawScore: 7.25, maxScore: 10),
+        difficulty: AssessmentDifficulty.normal,
+        assessmentType: AssessmentType.quiz,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: history,
+      );
+      expect(
+        GrowthEngine.calculate(inputExact).breakdown.personalBestRpMinor.value,
+        equals(100),
+      );
+
+      // Current 7.24: exceeds by 0.24 -> 0 RP
+      final inputBelow = GrowthInput(
+        currentEventId: 'ev_below',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(rawScore: 7.24, maxScore: 10),
+        difficulty: AssessmentDifficulty.normal,
+        assessmentType: AssessmentType.quiz,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: history,
+      );
+      expect(
+        GrowthEngine.calculate(inputBelow).breakdown.personalBestRpMinor.value,
+        equals(0),
+      );
+    });
+
+    group('Difficulty bonuses', () {
+      test('normal difficulty -> 0 RP', () {
+        final input = GrowthInput(
+          currentEventId: 'ev',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 7, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now,
+        );
+        expect(
+          GrowthEngine.calculate(input).breakdown.difficultyRpMinor.value,
+          equals(0),
+        );
+      });
+
+      test('hard difficulty -> +1 RP (100 minor)', () {
+        final input = GrowthInput(
+          currentEventId: 'ev',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 7, maxScore: 10),
+          difficulty: AssessmentDifficulty.hard,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now,
+        );
+        expect(
+          GrowthEngine.calculate(input).breakdown.difficultyRpMinor.value,
+          equals(100),
+        );
+      });
+
+      test(
+        'challenge score below 5.0 -> 0 RP (no farming bonus for low scores)',
+        () {
+          final input = GrowthInput(
+            currentEventId: 'ev',
+            gradeLevel: 5,
+            subjectKey: SubjectKey.math,
+            currentScore: NormalizedScore.fromRaw(rawScore: 4.9, maxScore: 10),
+            difficulty: AssessmentDifficulty.challenge,
+            assessmentType: AssessmentType.quiz,
+            occurredAt: now,
+            verifiedAt: now,
+          );
+          expect(
+            GrowthEngine.calculate(input).breakdown.difficultyRpMinor.value,
+            equals(0),
+          );
+        },
+      );
+
+      test('challenge score >= 5.0 -> +2 RP (200 minor)', () {
+        final input = GrowthInput(
+          currentEventId: 'ev',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 5.0, maxScore: 10),
+          difficulty: AssessmentDifficulty.challenge,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now,
+        );
+        expect(
+          GrowthEngine.calculate(input).breakdown.difficultyRpMinor.value,
+          equals(200),
+        );
+      });
+    });
+
+    test('below-level anti-farming: 25% base RP, growth/PB bonuses disabled, legitimate XP earned', () {
+      final history = [
+        makeResult(id: 'c1', score: 6.0, daysAgo: 3),
+        makeResult(id: 'c2', score: 6.0, daysAgo: 2),
+        makeResult(id: 'c3', score: 6.0, daysAgo: 1),
+      ];
+
+      final input = GrowthInput(
+        currentEventId: 'below_ev',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(
+          rawScore: 10,
+          maxScore: 10,
+        ), // 10.00
+        difficulty: AssessmentDifficulty.belowLevel,
+        assessmentType: AssessmentType.practice,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: history,
+      );
+
+      final result = GrowthEngine.calculate(input);
+      final b = result.breakdown;
+
+      expect(b.belowLevelAdjustment, isTrue);
+      // Standard base is 1000 minor; 25% is 250 minor (2.50 RP)
+      expect(b.scoreRpMinor.value, equals(250));
+      expect(b.growthRpMinor.value, equals(0)); // disabled!
+      expect(b.highPerformerRpMinor.value, equals(0)); // disabled!
+      expect(b.personalBestRpMinor.value, equals(0)); // disabled!
+      expect(b.difficultyRpMinor.value, equals(0));
+
+      expect(b.totalRpMinor.value, equals(250)); // 2.50 RP
+      expect(b.totalRpMinor.formatRp(), equals('2.50'));
+      // XP = 10 + 2 * 2.50 = 15 XP (legitimate Study XP earned)
+      expect(b.xpAwarded.value, equals(15));
+    });
+
+    test('deterministic repeated calculation produces identical results', () {
+      final history = [
+        makeResult(id: 'c1', score: 7.2, daysAgo: 3),
+        makeResult(id: 'c2', score: 7.5, daysAgo: 2),
+        makeResult(id: 'c3', score: 8.0, daysAgo: 1),
+      ];
+
+      final input = GrowthInput(
+        currentEventId: 'rep_ev',
+        gradeLevel: 5,
+        subjectKey: SubjectKey.math,
+        currentScore: NormalizedScore.fromRaw(rawScore: 8.8, maxScore: 10),
+        difficulty: AssessmentDifficulty.hard,
+        assessmentType: AssessmentType.exam,
+        occurredAt: now,
+        verifiedAt: now,
+        comparableHistory: history,
+      );
+
+      final result1 = GrowthEngine.calculate(input);
+      final result2 = GrowthEngine.calculate(input);
+
+      expect(
+        result1.breakdown.totalRpMinor.value,
+        equals(result2.breakdown.totalRpMinor.value),
+      );
+      expect(
+        result1.breakdown.xpAwarded.value,
+        equals(result2.breakdown.xpAwarded.value),
+      );
+      expect(result1.inputsSnapshot, equals(result2.inputsSnapshot));
+    });
+
+    group('Comparability filtering (assessment type & difficulty bands)', () {
+      test('incompatible assessment type (homework vs exam) is excluded', () {
+        final history = [
+          makeResult(
+            id: 'c1',
+            score: 8.0,
+            type: AssessmentType.homework,
+            daysAgo: 3,
+          ),
+          makeResult(
+            id: 'c2',
+            score: 8.0,
+            type: AssessmentType.homework,
+            daysAgo: 2,
+          ),
+          makeResult(
+            id: 'c3',
+            score: 8.0,
+            type: AssessmentType.homework,
+            daysAgo: 1,
+          ),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'cur_exam',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 8.5, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.exam,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        expect(result.breakdown.baselineScore, isNull);
+        expect(result.breakdown.baselineSampleCount, equals(0));
+        expect(result.breakdown.growthDelta, isNull);
+      });
+
+      test('compatible assessment type (quiz vs exam in evaluative band) is included', () {
+        final history = [
+          makeResult(
+            id: 'c1',
+            score: 7.0,
+            type: AssessmentType.quiz,
+            daysAgo: 3,
+          ),
+          makeResult(
+            id: 'c2',
+            score: 7.5,
+            type: AssessmentType.quiz,
+            daysAgo: 2,
+          ),
+          makeResult(
+            id: 'c3',
+            score: 8.0,
+            type: AssessmentType.quiz,
+            daysAgo: 1,
+          ),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'cur_exam',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 8.5, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.exam,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        expect(result.breakdown.baselineScore, equals(7.50));
+        expect(result.breakdown.baselineSampleCount, equals(3));
+        expect(result.breakdown.growthDelta, equals(1.00));
+      });
+
+      test('incompatible difficulty (challenge vs normal) is excluded', () {
+        final history = [
+          makeResult(
+            id: 'c1',
+            score: 5.0,
+            difficulty: AssessmentDifficulty.challenge,
+            daysAgo: 3,
+          ),
+          makeResult(
+            id: 'c2',
+            score: 5.0,
+            difficulty: AssessmentDifficulty.challenge,
+            daysAgo: 2,
+          ),
+          makeResult(
+            id: 'c3',
+            score: 5.0,
+            difficulty: AssessmentDifficulty.challenge,
+            daysAgo: 1,
+          ),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'cur_norm',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 7.5, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        expect(result.breakdown.baselineScore, isNull);
+        expect(result.breakdown.baselineSampleCount, equals(0));
+      });
+
+      test(
+        'compatible difficulty (normal vs hard in standard band) is included',
+        () {
+          final history = [
+            makeResult(
+              id: 'c1',
+              score: 6.0,
+              difficulty: AssessmentDifficulty.normal,
+              daysAgo: 3,
+            ),
+            makeResult(
+              id: 'c2',
+              score: 6.5,
+              difficulty: AssessmentDifficulty.normal,
+              daysAgo: 2,
+            ),
+            makeResult(
+              id: 'c3',
+              score: 6.8,
+              difficulty: AssessmentDifficulty.normal,
+              daysAgo: 1,
+            ),
+          ];
+
+          final input = GrowthInput(
+            currentEventId: 'cur_hard',
+            gradeLevel: 5,
+            subjectKey: SubjectKey.math,
+            currentScore: NormalizedScore.fromRaw(rawScore: 7.5, maxScore: 10),
+            difficulty: AssessmentDifficulty.hard,
+            assessmentType: AssessmentType.quiz,
+            occurredAt: now,
+            verifiedAt: now,
+            comparableHistory: history,
+          );
+
+          final result = GrowthEngine.calculate(input);
+          expect(result.breakdown.baselineScore, equals(6.43));
+          expect(result.breakdown.baselineSampleCount, equals(3));
+          expect(result.breakdown.growthDelta, equals(1.07));
+        },
+      );
+
+      test('rolling last 3 is selected only after compatibility filtering', () {
+        final history = [
+          // 1 day ago: incompatible type (homework)
+          makeResult(
+            id: 'incomp_type_1',
+            score: 9.0,
+            type: AssessmentType.homework,
+            daysAgo: 1,
+          ),
+          // 2 days ago: COMPATIBLE (quiz, normal)
+          makeResult(
+            id: 'comp_1',
+            score: 7.0,
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.normal,
+            daysAgo: 2,
+          ),
+          // 3 days ago: incompatible difficulty (challenge)
+          makeResult(
+            id: 'incomp_diff_1',
+            score: 5.0,
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.challenge,
+            daysAgo: 3,
+          ),
+          // 4 days ago: COMPATIBLE (quiz, normal)
+          makeResult(
+            id: 'comp_2',
+            score: 6.5,
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.normal,
+            daysAgo: 4,
+          ),
+          // 5 days ago: incompatible difficulty (below_level)
+          makeResult(
+            id: 'incomp_diff_2',
+            score: 10.0,
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.belowLevel,
+            daysAgo: 5,
+          ),
+          // 6 days ago: COMPATIBLE (exam, hard)
+          makeResult(
+            id: 'comp_3',
+            score: 6.0,
+            type: AssessmentType.exam,
+            difficulty: AssessmentDifficulty.hard,
+            daysAgo: 6,
+          ),
+          // 7 days ago: compatible but 4th in chronology (should not be in baseline)
+          makeResult(
+            id: 'comp_4',
+            score: 5.0,
+            type: AssessmentType.exam,
+            difficulty: AssessmentDifficulty.normal,
+            daysAgo: 7,
+          ),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'cur_target',
+          gradeLevel: 5,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 8.0, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.exam,
+          occurredAt: now,
+          verifiedAt: now,
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        final b = result.breakdown;
+
+        // Exactly comp_1 (7.0), comp_2 (6.5), comp_3 (6.0) used: mean = 6.50
+        expect(b.baselineScore, equals(6.50));
+        expect(b.baselineSampleCount, equals(3));
+        expect(b.growthDelta, equals(1.50));
+
+        final snapshot = result.inputsSnapshot;
+        expect(snapshot['assessment_type'], equals('exam'));
+        expect(snapshot['difficulty'], equals('normal'));
+        final samples = (snapshot['baseline_samples_used'] as List)
+            .cast<Map<String, dynamic>>();
+        expect(samples.length, equals(3));
+        expect(samples[0]['id'], equals('comp_1'));
+        expect(samples[0]['assessment_type'], equals('quiz'));
+        expect(samples[0]['difficulty'], equals('normal'));
+        expect(samples[0]['grade_level'], equals(5));
+        expect(samples[1]['id'], equals('comp_2'));
+        expect(samples[2]['id'], equals('comp_3'));
+        expect(samples[2]['assessment_type'], equals('exam'));
+        expect(samples[2]['difficulty'], equals('hard'));
+        expect(samples[2]['grade_level'], equals(5));
+      });
+    });
+
+    group('Grade level comparability', () {
+      test('Incompatible grade history (Grade 4 vs Grade 5) is strictly excluded from baseline', () {
+        final history = [
+          makeResult(id: 'g4_1', score: 8.0, gradeLevel: 4, daysAgo: 30),
+          makeResult(id: 'g4_2', score: 8.5, gradeLevel: 4, daysAgo: 20),
+          makeResult(id: 'g4_3', score: 9.0, gradeLevel: 4, daysAgo: 10),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'current',
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 8, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.quiz,
+          gradeLevel: 5,
+          occurredAt: now,
+          verifiedAt: now.add(const Duration(minutes: 5)),
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        final b = result.breakdown;
+
+        expect(b.baselineScore, isNull);
+        expect(b.baselineSampleCount, equals(0));
+        expect(b.growthDelta, isNull);
+        expect(b.historicalBest, isNull);
+
+        expect(result.inputsSnapshot['grade_level'], equals(5));
+        expect(
+          (result.inputsSnapshot['baseline_samples_used'] as List).isEmpty,
+          isTrue,
+        );
+      });
+
+      test(
+        'Multi-grade history only includes matching grade level in baseline',
+        () {
+          final history = [
+            makeResult(id: 'g4_1', score: 9.0, gradeLevel: 4, daysAgo: 40),
+            makeResult(id: 'g5_1', score: 6.0, gradeLevel: 5, daysAgo: 3),
+            makeResult(id: 'g5_2', score: 6.5, gradeLevel: 5, daysAgo: 2),
+            makeResult(id: 'g5_3', score: 7.0, gradeLevel: 5, daysAgo: 1),
+          ];
+
+          final input = GrowthInput(
+            currentEventId: 'current',
+            subjectKey: SubjectKey.math,
+            currentScore: NormalizedScore.fromRaw(rawScore: 8, maxScore: 10),
+            difficulty: AssessmentDifficulty.normal,
+            assessmentType: AssessmentType.quiz,
+            gradeLevel: 5,
+            occurredAt: now,
+            verifiedAt: now.add(const Duration(minutes: 5)),
+            comparableHistory: history,
+          );
+
+          final result = GrowthEngine.calculate(input);
+          final b = result.breakdown;
+
+          // Mean of g5_1 (6.0), g5_2 (6.5), g5_3 (7.0) = 6.50
+          expect(b.baselineScore, equals(6.50));
+          expect(b.baselineSampleCount, equals(3));
+          expect(b.growthDelta, equals(1.50));
+          expect(
+            b.historicalBest,
+            equals(7.00),
+          ); // g4_1 (9.0) excluded from historical best!
+
+          final samples =
+              (result.inputsSnapshot['baseline_samples_used'] as List)
+                  .cast<Map<String, dynamic>>();
+          expect(samples.length, equals(3));
+          expect(samples.every((s) => s['grade_level'] == 5), isTrue);
+        },
+      );
+    });
+
+    group('Unknown grade fail-closed behavior', () {
+      test('target assessment with null grade receives no baseline and no growth/PB/mastery bonus', () {
+        final history = [
+          makeResult(id: 'c1', score: 8.0, daysAgo: 3, gradeLevel: 5),
+          makeResult(id: 'c2', score: 8.5, daysAgo: 2, gradeLevel: 5),
+          makeResult(id: 'c3', score: 9.0, daysAgo: 1, gradeLevel: 5),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'current',
+          gradeLevel: null,
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 9.5, maxScore: 10),
+          difficulty: AssessmentDifficulty.hard,
+          assessmentType: AssessmentType.quiz,
+          occurredAt: now,
+          verifiedAt: now.add(const Duration(minutes: 5)),
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        final b = result.breakdown;
+        expect(b.baselineScore, isNull);
+        expect(b.baselineSampleCount, equals(0));
+        expect(b.growthDelta, isNull);
+        expect(b.historicalBest, isNull);
+        expect(b.growthRpMinor.value, equals(0));
+        expect(b.highPerformerRpMinor.value, equals(0));
+        expect(b.personalBestRpMinor.value, equals(0));
+        expect(b.difficultyRpMinor.value, equals(100)); // Hard operates
+        expect(b.scoreRpMinor.value, equals(950)); // Base score operates
+        expect(b.totalRpMinor.value, equals(1050));
+        expect(
+          b.xpAwarded.value,
+          equals(31),
+        ); // 10 + round(2.0 * 10.50) = 31 XP
+      });
+
+      test(
+        'history with null grade is excluded when target has known grade',
+        () {
+          final history = [
+            makeResult(id: 'c1', score: 7.0, daysAgo: 3, gradeLevel: null),
+            makeResult(id: 'c2', score: 7.0, daysAgo: 2, gradeLevel: null),
+            makeResult(id: 'c3', score: 7.0, daysAgo: 1, gradeLevel: null),
+          ];
+
+          final input = GrowthInput(
+            currentEventId: 'current',
+            gradeLevel: 5,
+            subjectKey: SubjectKey.math,
+            currentScore: NormalizedScore.fromRaw(rawScore: 8.0, maxScore: 10),
+            difficulty: AssessmentDifficulty.normal,
+            assessmentType: AssessmentType.quiz,
+            occurredAt: now,
+            verifiedAt: now.add(const Duration(minutes: 5)),
+            comparableHistory: history,
+          );
+
+          final result = GrowthEngine.calculate(input);
+          final b = result.breakdown;
+          expect(b.baselineScore, isNull);
+          expect(b.baselineSampleCount, equals(0));
+          expect(b.growthRpMinor.value, equals(0));
+        },
+      );
+    });
+  });
+}
