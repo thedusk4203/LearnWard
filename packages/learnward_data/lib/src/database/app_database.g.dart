@@ -320,6 +320,18 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
         type: DriftSqlType.string,
         requiredDuringInsert: false,
       );
+  static const VerificationMeta _subjectKeyMeta = const VerificationMeta(
+    'subjectKey',
+  );
+  @override
+  late final GeneratedColumn<String> subjectKey = GeneratedColumn<String>(
+    'subject_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('math'),
+  );
   static const VerificationMeta _subjectMeta = const VerificationMeta(
     'subject',
   );
@@ -395,6 +407,18 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _entryContextMeta = const VerificationMeta(
+    'entryContext',
+  );
+  @override
+  late final GeneratedColumn<String> entryContext = GeneratedColumn<String>(
+    'entry_context',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('shared_child'),
+  );
   static const VerificationMeta _occurredAtMeta = const VerificationMeta(
     'occurredAt',
   );
@@ -423,6 +447,7 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     familyId,
     childId,
     serverAssessmentId,
+    subjectKey,
     subject,
     title,
     assessmentType,
@@ -430,6 +455,7 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     rawScore,
     maxScore,
     localPhotoPath,
+    entryContext,
     occurredAt,
     updatedAt,
   ];
@@ -479,6 +505,12 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
           data['server_assessment_id']!,
           _serverAssessmentIdMeta,
         ),
+      );
+    }
+    if (data.containsKey('subject_key')) {
+      context.handle(
+        _subjectKeyMeta,
+        subjectKey.isAcceptableOrUnknown(data['subject_key']!, _subjectKeyMeta),
       );
     }
     if (data.containsKey('subject')) {
@@ -541,6 +573,15 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
         ),
       );
     }
+    if (data.containsKey('entry_context')) {
+      context.handle(
+        _entryContextMeta,
+        entryContext.isAcceptableOrUnknown(
+          data['entry_context']!,
+          _entryContextMeta,
+        ),
+      );
+    }
     if (data.containsKey('occurred_at')) {
       context.handle(
         _occurredAtMeta,
@@ -585,6 +626,10 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
         DriftSqlType.string,
         data['${effectivePrefix}server_assessment_id'],
       ),
+      subjectKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}subject_key'],
+      )!,
       subject: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}subject'],
@@ -613,6 +658,10 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
         DriftSqlType.string,
         data['${effectivePrefix}local_photo_path'],
       ),
+      entryContext: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}entry_context'],
+      )!,
       occurredAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}occurred_at'],
@@ -636,6 +685,7 @@ class LocalAssessmentDraftEntry extends DataClass
   final String familyId;
   final String childId;
   final String? serverAssessmentId;
+  final String subjectKey;
   final String subject;
   final String title;
   final String assessmentType;
@@ -643,6 +693,7 @@ class LocalAssessmentDraftEntry extends DataClass
   final double rawScore;
   final double maxScore;
   final String? localPhotoPath;
+  final String entryContext;
   final DateTime occurredAt;
   final DateTime updatedAt;
   const LocalAssessmentDraftEntry({
@@ -650,6 +701,7 @@ class LocalAssessmentDraftEntry extends DataClass
     required this.familyId,
     required this.childId,
     this.serverAssessmentId,
+    required this.subjectKey,
     required this.subject,
     required this.title,
     required this.assessmentType,
@@ -657,6 +709,7 @@ class LocalAssessmentDraftEntry extends DataClass
     required this.rawScore,
     required this.maxScore,
     this.localPhotoPath,
+    required this.entryContext,
     required this.occurredAt,
     required this.updatedAt,
   });
@@ -669,6 +722,7 @@ class LocalAssessmentDraftEntry extends DataClass
     if (!nullToAbsent || serverAssessmentId != null) {
       map['server_assessment_id'] = Variable<String>(serverAssessmentId);
     }
+    map['subject_key'] = Variable<String>(subjectKey);
     map['subject'] = Variable<String>(subject);
     map['title'] = Variable<String>(title);
     map['assessment_type'] = Variable<String>(assessmentType);
@@ -678,6 +732,7 @@ class LocalAssessmentDraftEntry extends DataClass
     if (!nullToAbsent || localPhotoPath != null) {
       map['local_photo_path'] = Variable<String>(localPhotoPath);
     }
+    map['entry_context'] = Variable<String>(entryContext);
     map['occurred_at'] = Variable<DateTime>(occurredAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
     return map;
@@ -691,6 +746,7 @@ class LocalAssessmentDraftEntry extends DataClass
       serverAssessmentId: serverAssessmentId == null && nullToAbsent
           ? const Value.absent()
           : Value(serverAssessmentId),
+      subjectKey: Value(subjectKey),
       subject: Value(subject),
       title: Value(title),
       assessmentType: Value(assessmentType),
@@ -700,6 +756,7 @@ class LocalAssessmentDraftEntry extends DataClass
       localPhotoPath: localPhotoPath == null && nullToAbsent
           ? const Value.absent()
           : Value(localPhotoPath),
+      entryContext: Value(entryContext),
       occurredAt: Value(occurredAt),
       updatedAt: Value(updatedAt),
     );
@@ -717,6 +774,7 @@ class LocalAssessmentDraftEntry extends DataClass
       serverAssessmentId: serializer.fromJson<String?>(
         json['serverAssessmentId'],
       ),
+      subjectKey: serializer.fromJson<String>(json['subjectKey']),
       subject: serializer.fromJson<String>(json['subject']),
       title: serializer.fromJson<String>(json['title']),
       assessmentType: serializer.fromJson<String>(json['assessmentType']),
@@ -724,6 +782,7 @@ class LocalAssessmentDraftEntry extends DataClass
       rawScore: serializer.fromJson<double>(json['rawScore']),
       maxScore: serializer.fromJson<double>(json['maxScore']),
       localPhotoPath: serializer.fromJson<String?>(json['localPhotoPath']),
+      entryContext: serializer.fromJson<String>(json['entryContext']),
       occurredAt: serializer.fromJson<DateTime>(json['occurredAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
@@ -736,6 +795,7 @@ class LocalAssessmentDraftEntry extends DataClass
       'familyId': serializer.toJson<String>(familyId),
       'childId': serializer.toJson<String>(childId),
       'serverAssessmentId': serializer.toJson<String?>(serverAssessmentId),
+      'subjectKey': serializer.toJson<String>(subjectKey),
       'subject': serializer.toJson<String>(subject),
       'title': serializer.toJson<String>(title),
       'assessmentType': serializer.toJson<String>(assessmentType),
@@ -743,6 +803,7 @@ class LocalAssessmentDraftEntry extends DataClass
       'rawScore': serializer.toJson<double>(rawScore),
       'maxScore': serializer.toJson<double>(maxScore),
       'localPhotoPath': serializer.toJson<String?>(localPhotoPath),
+      'entryContext': serializer.toJson<String>(entryContext),
       'occurredAt': serializer.toJson<DateTime>(occurredAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
@@ -753,6 +814,7 @@ class LocalAssessmentDraftEntry extends DataClass
     String? familyId,
     String? childId,
     Value<String?> serverAssessmentId = const Value.absent(),
+    String? subjectKey,
     String? subject,
     String? title,
     String? assessmentType,
@@ -760,6 +822,7 @@ class LocalAssessmentDraftEntry extends DataClass
     double? rawScore,
     double? maxScore,
     Value<String?> localPhotoPath = const Value.absent(),
+    String? entryContext,
     DateTime? occurredAt,
     DateTime? updatedAt,
   }) => LocalAssessmentDraftEntry(
@@ -769,6 +832,7 @@ class LocalAssessmentDraftEntry extends DataClass
     serverAssessmentId: serverAssessmentId.present
         ? serverAssessmentId.value
         : this.serverAssessmentId,
+    subjectKey: subjectKey ?? this.subjectKey,
     subject: subject ?? this.subject,
     title: title ?? this.title,
     assessmentType: assessmentType ?? this.assessmentType,
@@ -778,6 +842,7 @@ class LocalAssessmentDraftEntry extends DataClass
     localPhotoPath: localPhotoPath.present
         ? localPhotoPath.value
         : this.localPhotoPath,
+    entryContext: entryContext ?? this.entryContext,
     occurredAt: occurredAt ?? this.occurredAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -793,6 +858,9 @@ class LocalAssessmentDraftEntry extends DataClass
       serverAssessmentId: data.serverAssessmentId.present
           ? data.serverAssessmentId.value
           : this.serverAssessmentId,
+      subjectKey: data.subjectKey.present
+          ? data.subjectKey.value
+          : this.subjectKey,
       subject: data.subject.present ? data.subject.value : this.subject,
       title: data.title.present ? data.title.value : this.title,
       assessmentType: data.assessmentType.present
@@ -806,6 +874,9 @@ class LocalAssessmentDraftEntry extends DataClass
       localPhotoPath: data.localPhotoPath.present
           ? data.localPhotoPath.value
           : this.localPhotoPath,
+      entryContext: data.entryContext.present
+          ? data.entryContext.value
+          : this.entryContext,
       occurredAt: data.occurredAt.present
           ? data.occurredAt.value
           : this.occurredAt,
@@ -820,6 +891,7 @@ class LocalAssessmentDraftEntry extends DataClass
           ..write('familyId: $familyId, ')
           ..write('childId: $childId, ')
           ..write('serverAssessmentId: $serverAssessmentId, ')
+          ..write('subjectKey: $subjectKey, ')
           ..write('subject: $subject, ')
           ..write('title: $title, ')
           ..write('assessmentType: $assessmentType, ')
@@ -827,6 +899,7 @@ class LocalAssessmentDraftEntry extends DataClass
           ..write('rawScore: $rawScore, ')
           ..write('maxScore: $maxScore, ')
           ..write('localPhotoPath: $localPhotoPath, ')
+          ..write('entryContext: $entryContext, ')
           ..write('occurredAt: $occurredAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -839,6 +912,7 @@ class LocalAssessmentDraftEntry extends DataClass
     familyId,
     childId,
     serverAssessmentId,
+    subjectKey,
     subject,
     title,
     assessmentType,
@@ -846,6 +920,7 @@ class LocalAssessmentDraftEntry extends DataClass
     rawScore,
     maxScore,
     localPhotoPath,
+    entryContext,
     occurredAt,
     updatedAt,
   );
@@ -857,6 +932,7 @@ class LocalAssessmentDraftEntry extends DataClass
           other.familyId == this.familyId &&
           other.childId == this.childId &&
           other.serverAssessmentId == this.serverAssessmentId &&
+          other.subjectKey == this.subjectKey &&
           other.subject == this.subject &&
           other.title == this.title &&
           other.assessmentType == this.assessmentType &&
@@ -864,6 +940,7 @@ class LocalAssessmentDraftEntry extends DataClass
           other.rawScore == this.rawScore &&
           other.maxScore == this.maxScore &&
           other.localPhotoPath == this.localPhotoPath &&
+          other.entryContext == this.entryContext &&
           other.occurredAt == this.occurredAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -874,6 +951,7 @@ class LocalAssessmentDraftsCompanion
   final Value<String> familyId;
   final Value<String> childId;
   final Value<String?> serverAssessmentId;
+  final Value<String> subjectKey;
   final Value<String> subject;
   final Value<String> title;
   final Value<String> assessmentType;
@@ -881,6 +959,7 @@ class LocalAssessmentDraftsCompanion
   final Value<double> rawScore;
   final Value<double> maxScore;
   final Value<String?> localPhotoPath;
+  final Value<String> entryContext;
   final Value<DateTime> occurredAt;
   final Value<DateTime> updatedAt;
   final Value<int> rowid;
@@ -889,6 +968,7 @@ class LocalAssessmentDraftsCompanion
     this.familyId = const Value.absent(),
     this.childId = const Value.absent(),
     this.serverAssessmentId = const Value.absent(),
+    this.subjectKey = const Value.absent(),
     this.subject = const Value.absent(),
     this.title = const Value.absent(),
     this.assessmentType = const Value.absent(),
@@ -896,6 +976,7 @@ class LocalAssessmentDraftsCompanion
     this.rawScore = const Value.absent(),
     this.maxScore = const Value.absent(),
     this.localPhotoPath = const Value.absent(),
+    this.entryContext = const Value.absent(),
     this.occurredAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -905,6 +986,7 @@ class LocalAssessmentDraftsCompanion
     required String familyId,
     required String childId,
     this.serverAssessmentId = const Value.absent(),
+    this.subjectKey = const Value.absent(),
     required String subject,
     required String title,
     required String assessmentType,
@@ -912,6 +994,7 @@ class LocalAssessmentDraftsCompanion
     required double rawScore,
     required double maxScore,
     this.localPhotoPath = const Value.absent(),
+    this.entryContext = const Value.absent(),
     required DateTime occurredAt,
     required DateTime updatedAt,
     this.rowid = const Value.absent(),
@@ -931,6 +1014,7 @@ class LocalAssessmentDraftsCompanion
     Expression<String>? familyId,
     Expression<String>? childId,
     Expression<String>? serverAssessmentId,
+    Expression<String>? subjectKey,
     Expression<String>? subject,
     Expression<String>? title,
     Expression<String>? assessmentType,
@@ -938,6 +1022,7 @@ class LocalAssessmentDraftsCompanion
     Expression<double>? rawScore,
     Expression<double>? maxScore,
     Expression<String>? localPhotoPath,
+    Expression<String>? entryContext,
     Expression<DateTime>? occurredAt,
     Expression<DateTime>? updatedAt,
     Expression<int>? rowid,
@@ -948,6 +1033,7 @@ class LocalAssessmentDraftsCompanion
       if (childId != null) 'child_id': childId,
       if (serverAssessmentId != null)
         'server_assessment_id': serverAssessmentId,
+      if (subjectKey != null) 'subject_key': subjectKey,
       if (subject != null) 'subject': subject,
       if (title != null) 'title': title,
       if (assessmentType != null) 'assessment_type': assessmentType,
@@ -955,6 +1041,7 @@ class LocalAssessmentDraftsCompanion
       if (rawScore != null) 'raw_score': rawScore,
       if (maxScore != null) 'max_score': maxScore,
       if (localPhotoPath != null) 'local_photo_path': localPhotoPath,
+      if (entryContext != null) 'entry_context': entryContext,
       if (occurredAt != null) 'occurred_at': occurredAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
@@ -966,6 +1053,7 @@ class LocalAssessmentDraftsCompanion
     Value<String>? familyId,
     Value<String>? childId,
     Value<String?>? serverAssessmentId,
+    Value<String>? subjectKey,
     Value<String>? subject,
     Value<String>? title,
     Value<String>? assessmentType,
@@ -973,6 +1061,7 @@ class LocalAssessmentDraftsCompanion
     Value<double>? rawScore,
     Value<double>? maxScore,
     Value<String?>? localPhotoPath,
+    Value<String>? entryContext,
     Value<DateTime>? occurredAt,
     Value<DateTime>? updatedAt,
     Value<int>? rowid,
@@ -982,6 +1071,7 @@ class LocalAssessmentDraftsCompanion
       familyId: familyId ?? this.familyId,
       childId: childId ?? this.childId,
       serverAssessmentId: serverAssessmentId ?? this.serverAssessmentId,
+      subjectKey: subjectKey ?? this.subjectKey,
       subject: subject ?? this.subject,
       title: title ?? this.title,
       assessmentType: assessmentType ?? this.assessmentType,
@@ -989,6 +1079,7 @@ class LocalAssessmentDraftsCompanion
       rawScore: rawScore ?? this.rawScore,
       maxScore: maxScore ?? this.maxScore,
       localPhotoPath: localPhotoPath ?? this.localPhotoPath,
+      entryContext: entryContext ?? this.entryContext,
       occurredAt: occurredAt ?? this.occurredAt,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
@@ -1009,6 +1100,9 @@ class LocalAssessmentDraftsCompanion
     }
     if (serverAssessmentId.present) {
       map['server_assessment_id'] = Variable<String>(serverAssessmentId.value);
+    }
+    if (subjectKey.present) {
+      map['subject_key'] = Variable<String>(subjectKey.value);
     }
     if (subject.present) {
       map['subject'] = Variable<String>(subject.value);
@@ -1031,6 +1125,9 @@ class LocalAssessmentDraftsCompanion
     if (localPhotoPath.present) {
       map['local_photo_path'] = Variable<String>(localPhotoPath.value);
     }
+    if (entryContext.present) {
+      map['entry_context'] = Variable<String>(entryContext.value);
+    }
     if (occurredAt.present) {
       map['occurred_at'] = Variable<DateTime>(occurredAt.value);
     }
@@ -1050,6 +1147,7 @@ class LocalAssessmentDraftsCompanion
           ..write('familyId: $familyId, ')
           ..write('childId: $childId, ')
           ..write('serverAssessmentId: $serverAssessmentId, ')
+          ..write('subjectKey: $subjectKey, ')
           ..write('subject: $subject, ')
           ..write('title: $title, ')
           ..write('assessmentType: $assessmentType, ')
@@ -1057,6 +1155,7 @@ class LocalAssessmentDraftsCompanion
           ..write('rawScore: $rawScore, ')
           ..write('maxScore: $maxScore, ')
           ..write('localPhotoPath: $localPhotoPath, ')
+          ..write('entryContext: $entryContext, ')
           ..write('occurredAt: $occurredAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
@@ -1277,6 +1376,7 @@ typedef $$LocalAssessmentDraftsTableCreateCompanionBuilder =
       required String familyId,
       required String childId,
       Value<String?> serverAssessmentId,
+      Value<String> subjectKey,
       required String subject,
       required String title,
       required String assessmentType,
@@ -1284,6 +1384,7 @@ typedef $$LocalAssessmentDraftsTableCreateCompanionBuilder =
       required double rawScore,
       required double maxScore,
       Value<String?> localPhotoPath,
+      Value<String> entryContext,
       required DateTime occurredAt,
       required DateTime updatedAt,
       Value<int> rowid,
@@ -1294,6 +1395,7 @@ typedef $$LocalAssessmentDraftsTableUpdateCompanionBuilder =
       Value<String> familyId,
       Value<String> childId,
       Value<String?> serverAssessmentId,
+      Value<String> subjectKey,
       Value<String> subject,
       Value<String> title,
       Value<String> assessmentType,
@@ -1301,6 +1403,7 @@ typedef $$LocalAssessmentDraftsTableUpdateCompanionBuilder =
       Value<double> rawScore,
       Value<double> maxScore,
       Value<String?> localPhotoPath,
+      Value<String> entryContext,
       Value<DateTime> occurredAt,
       Value<DateTime> updatedAt,
       Value<int> rowid,
@@ -1332,6 +1435,11 @@ class $$LocalAssessmentDraftsTableFilterComposer
 
   ColumnFilters<String> get serverAssessmentId => $composableBuilder(
     column: $table.serverAssessmentId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get subjectKey => $composableBuilder(
+    column: $table.subjectKey,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1367,6 +1475,11 @@ class $$LocalAssessmentDraftsTableFilterComposer
 
   ColumnFilters<String> get localPhotoPath => $composableBuilder(
     column: $table.localPhotoPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get entryContext => $composableBuilder(
+    column: $table.entryContext,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1410,6 +1523,11 @@ class $$LocalAssessmentDraftsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get subjectKey => $composableBuilder(
+    column: $table.subjectKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get subject => $composableBuilder(
     column: $table.subject,
     builder: (column) => ColumnOrderings(column),
@@ -1442,6 +1560,11 @@ class $$LocalAssessmentDraftsTableOrderingComposer
 
   ColumnOrderings<String> get localPhotoPath => $composableBuilder(
     column: $table.localPhotoPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get entryContext => $composableBuilder(
+    column: $table.entryContext,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -1481,6 +1604,11 @@ class $$LocalAssessmentDraftsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<String> get subjectKey => $composableBuilder(
+    column: $table.subjectKey,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get subject =>
       $composableBuilder(column: $table.subject, builder: (column) => column);
 
@@ -1505,6 +1633,11 @@ class $$LocalAssessmentDraftsTableAnnotationComposer
 
   GeneratedColumn<String> get localPhotoPath => $composableBuilder(
     column: $table.localPhotoPath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get entryContext => $composableBuilder(
+    column: $table.entryContext,
     builder: (column) => column,
   );
 
@@ -1567,6 +1700,7 @@ class $$LocalAssessmentDraftsTableTableManager
                 Value<String> familyId = const Value.absent(),
                 Value<String> childId = const Value.absent(),
                 Value<String?> serverAssessmentId = const Value.absent(),
+                Value<String> subjectKey = const Value.absent(),
                 Value<String> subject = const Value.absent(),
                 Value<String> title = const Value.absent(),
                 Value<String> assessmentType = const Value.absent(),
@@ -1574,6 +1708,7 @@ class $$LocalAssessmentDraftsTableTableManager
                 Value<double> rawScore = const Value.absent(),
                 Value<double> maxScore = const Value.absent(),
                 Value<String?> localPhotoPath = const Value.absent(),
+                Value<String> entryContext = const Value.absent(),
                 Value<DateTime> occurredAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -1582,6 +1717,7 @@ class $$LocalAssessmentDraftsTableTableManager
                 familyId: familyId,
                 childId: childId,
                 serverAssessmentId: serverAssessmentId,
+                subjectKey: subjectKey,
                 subject: subject,
                 title: title,
                 assessmentType: assessmentType,
@@ -1589,6 +1725,7 @@ class $$LocalAssessmentDraftsTableTableManager
                 rawScore: rawScore,
                 maxScore: maxScore,
                 localPhotoPath: localPhotoPath,
+                entryContext: entryContext,
                 occurredAt: occurredAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
@@ -1599,6 +1736,7 @@ class $$LocalAssessmentDraftsTableTableManager
                 required String familyId,
                 required String childId,
                 Value<String?> serverAssessmentId = const Value.absent(),
+                Value<String> subjectKey = const Value.absent(),
                 required String subject,
                 required String title,
                 required String assessmentType,
@@ -1606,6 +1744,7 @@ class $$LocalAssessmentDraftsTableTableManager
                 required double rawScore,
                 required double maxScore,
                 Value<String?> localPhotoPath = const Value.absent(),
+                Value<String> entryContext = const Value.absent(),
                 required DateTime occurredAt,
                 required DateTime updatedAt,
                 Value<int> rowid = const Value.absent(),
@@ -1614,6 +1753,7 @@ class $$LocalAssessmentDraftsTableTableManager
                 familyId: familyId,
                 childId: childId,
                 serverAssessmentId: serverAssessmentId,
+                subjectKey: subjectKey,
                 subject: subject,
                 title: title,
                 assessmentType: assessmentType,
@@ -1621,6 +1761,7 @@ class $$LocalAssessmentDraftsTableTableManager
                 rawScore: rawScore,
                 maxScore: maxScore,
                 localPhotoPath: localPhotoPath,
+                entryContext: entryContext,
                 occurredAt: occurredAt,
                 updatedAt: updatedAt,
                 rowid: rowid,

@@ -11,20 +11,25 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
 
   @override
   Future<Assessment> createDraft({
+    required String commandId,
     required FamilyId familyId,
     required ChildId childId,
+    required SubjectKey subjectKey,
     required String subject,
     required String title,
     required AssessmentType type,
     required AssessmentDifficulty difficulty,
     required AssessmentScore score,
     DateTime? occurredAt,
+    EntryContext entryContext = EntryContext.adult,
   }) async {
     final response = await _client.rpc<Map<String, dynamic>>(
       'create_assessment_draft',
       params: {
+        'p_command_id': commandId,
         'p_family_id': familyId.value,
         'p_child_id': childId.value,
+        'p_subject_key': subjectKey.value,
         'p_subject': subject,
         'p_title': title,
         'p_assessment_type': type.value,
@@ -33,6 +38,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
         'p_max_score': score.maxScore,
         'p_occurred_at': (occurredAt ?? DateTime.now().toUtc())
             .toIso8601String(),
+        'p_entry_context': entryContext.value,
       },
     );
 
@@ -42,6 +48,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
   @override
   Future<Assessment> updateDraft({
     required AssessmentId assessmentId,
+    required SubjectKey subjectKey,
     required String subject,
     required String title,
     required AssessmentType type,
@@ -54,6 +61,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
       'update_assessment_draft',
       params: {
         'p_assessment_id': assessmentId.value,
+        'p_subject_key': subjectKey.value,
         'p_subject': subject,
         'p_title': title,
         'p_assessment_type': type.value,
@@ -111,7 +119,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     required AssessmentId assessmentId,
     required int expectedVersion,
     required String commandId,
-    String? reason,
+    required String reason,
   }) async {
     final response = await _client.rpc<Map<String, dynamic>>(
       'reject_assessment',
@@ -245,15 +253,33 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     final rawScore = (row['raw_score'] as num).toDouble();
     final maxScore = (row['max_score'] as num).toDouble();
 
+    SubjectKey subjectKey;
+    try {
+      subjectKey = SubjectKey.parse(row['subject_key'] as String? ?? 'math');
+    } catch (_) {
+      subjectKey = SubjectKey.math;
+    }
+
+    EntryContext entryContext;
+    try {
+      entryContext = EntryContext.parse(
+        row['entry_context'] as String? ?? 'adult',
+      );
+    } catch (_) {
+      entryContext = EntryContext.adult;
+    }
+
     return Assessment(
       id: AssessmentId(row['id'] as String),
       familyId: FamilyId(row['family_id'] as String),
       childId: ChildId(row['child_id'] as String),
+      subjectKey: subjectKey,
       subject: row['subject'] as String,
       title: row['title'] as String,
       type: AssessmentType.fromValue(row['assessment_type'] as String),
       difficulty: AssessmentDifficulty.fromValue(row['difficulty'] as String),
       score: AssessmentScore(rawScore: rawScore, maxScore: maxScore),
+      entryContext: entryContext,
       status: AssessmentStatus.fromValue(row['status'] as String),
       occurredAt: DateTime.parse(row['occurred_at'] as String),
       version: row['version'] as int,
@@ -282,16 +308,35 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     final rawScore = (row['raw_score'] as num).toDouble();
     final maxScore = (row['max_score'] as num).toDouble();
 
+    SubjectKey subjectKey;
+    try {
+      subjectKey = SubjectKey.parse(row['subject_key'] as String? ?? 'math');
+    } catch (_) {
+      subjectKey = SubjectKey.math;
+    }
+
+    EntryContext entryContext;
+    try {
+      entryContext = EntryContext.parse(
+        row['entry_context'] as String? ?? 'adult',
+      );
+    } catch (_) {
+      entryContext = EntryContext.adult;
+    }
+
     return VerifiedLearningEvent(
       id: row['id'] as String,
       familyId: FamilyId(row['family_id'] as String),
       childId: ChildId(row['child_id'] as String),
       assessmentId: AssessmentId(row['assessment_id'] as String),
+      subjectKey: subjectKey,
       subject: row['subject'] as String,
       title: row['title'] as String,
       type: AssessmentType.fromValue(row['assessment_type'] as String),
       difficulty: AssessmentDifficulty.fromValue(row['difficulty'] as String),
       score: AssessmentScore(rawScore: rawScore, maxScore: maxScore),
+      evidenceCount: (row['evidence_count'] as num?)?.toInt() ?? 0,
+      entryContext: entryContext,
       occurredAt: DateTime.parse(row['occurred_at'] as String),
       verifiedAt: DateTime.parse(row['verified_at'] as String),
       verifiedByUserId: row['verified_by_user_id'] as String,

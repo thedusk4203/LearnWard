@@ -19,19 +19,21 @@ final class SupabaseAssessmentEvidenceStorage
     required FamilyId familyId,
     required ChildId childId,
     required AssessmentId assessmentId,
-    required String fileName,
+    required EvidenceId evidenceId,
     required List<int> bytes,
     required String mediaType,
   }) async {
+    final ext = mediaType == 'image/png' ? 'png' : 'jpg';
     final storagePath =
-        '${familyId.value}/${childId.value}/${assessmentId.value}/$fileName';
+        '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
 
+    // Strictly enforce immutable object identity: upsert = false
     await _client.storage
         .from(bucketName)
         .uploadBinary(
           storagePath,
           Uint8List.fromList(bytes),
-          fileOptions: FileOptions(contentType: mediaType, upsert: true),
+          fileOptions: FileOptions(contentType: mediaType, upsert: false),
         );
 
     return storagePath;
@@ -40,7 +42,7 @@ final class SupabaseAssessmentEvidenceStorage
   @override
   Future<String> getEvidenceSignedUrl({
     required String storagePath,
-    Duration expiresIn = const Duration(minutes: 60),
+    Duration expiresIn = const Duration(minutes: 10),
   }) async {
     return _client.storage
         .from(bucketName)

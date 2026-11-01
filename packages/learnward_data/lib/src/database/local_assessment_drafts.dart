@@ -11,6 +11,8 @@ class LocalAssessmentDrafts extends Table {
 
   TextColumn get serverAssessmentId => text().nullable()();
 
+  TextColumn get subjectKey => text().withDefault(const Constant('math'))();
+
   TextColumn get subject => text()();
 
   TextColumn get title => text()();
@@ -24,6 +26,9 @@ class LocalAssessmentDrafts extends Table {
   RealColumn get maxScore => real()();
 
   TextColumn get localPhotoPath => text().nullable()();
+
+  TextColumn get entryContext =>
+      text().withDefault(const Constant('shared_child'))();
 
   DateTimeColumn get occurredAt => dateTime()();
 

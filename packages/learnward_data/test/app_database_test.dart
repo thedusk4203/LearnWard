@@ -46,33 +46,45 @@ void main() {
   });
 
   group('AppDatabase LocalDraftStore', () {
-    test('saves, lists and deletes local assessment drafts', () async {
-      final draft1 = LocalAssessmentDraft(
-        localDraftId: 'draft-1',
-        familyId: 'fam-1',
-        childId: 'child-1',
-        subject: 'Math',
-        title: 'Quiz 1',
-        assessmentType: 'quiz',
-        difficulty: 'normal',
-        rawScore: 9,
-        maxScore: 10,
-        localPhotoPath: '/path/to/photo.jpg',
-        occurredAt: DateTime.utc(2026, 11, 1),
-        updatedAt: DateTime.utc(2026, 11, 1, 10, 0),
-      );
+    test(
+      'saves, gets, lists and deletes local assessment drafts with subjectKey',
+      () async {
+        final draft1 = LocalAssessmentDraft(
+          localDraftId: 'draft-1',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          subjectKey: SubjectKey.science,
+          subject: 'Science',
+          title: 'Quiz 1',
+          assessmentType: 'quiz',
+          difficulty: 'normal',
+          rawScore: 9,
+          maxScore: 10,
+          localPhotoPath: '/path/to/photo.jpg',
+          entryContext: EntryContext.sharedChild,
+          occurredAt: DateTime.utc(2026, 11, 1),
+          updatedAt: DateTime.utc(2026, 11, 1, 10, 0),
+        );
 
-      await database.saveLocalDraft(draft1);
+        await database.saveLocalDraft(draft1);
 
-      final list = await database.listLocalDrafts(ChildId('child-1'));
-      expect(list.length, equals(1));
-      expect(list.first.subject, equals('Math'));
-      expect(list.first.rawScore, equals(9));
-      expect(list.first.localPhotoPath, equals('/path/to/photo.jpg'));
+        final retrieved = await database.getLocalDraft('draft-1');
+        expect(retrieved, isNotNull);
+        expect(retrieved!.subjectKey, equals(SubjectKey.science));
+        expect(retrieved.entryContext, equals(EntryContext.sharedChild));
+        expect(retrieved.title, equals('Quiz 1'));
 
-      await database.deleteLocalDraft('draft-1');
-      final emptyList = await database.listLocalDrafts(ChildId('child-1'));
-      expect(emptyList.isEmpty, isTrue);
-    });
+        final list = await database.listLocalDrafts(ChildId('child-1'));
+        expect(list.length, equals(1));
+        expect(list.first.subject, equals('Science'));
+        expect(list.first.rawScore, equals(9));
+        expect(list.first.localPhotoPath, equals('/path/to/photo.jpg'));
+
+        await database.deleteLocalDraft('draft-1');
+        final emptyList = await database.listLocalDrafts(ChildId('child-1'));
+        expect(emptyList.isEmpty, isTrue);
+        expect(await database.getLocalDraft('draft-1'), isNull);
+      },
+    );
   });
 }

@@ -9,6 +9,7 @@ void main() {
         'id': 'a1000000-0000-0000-0000-000000000001',
         'family_id': 'f1000000-0000-0000-0000-000000000001',
         'child_id': 'c1000000-0000-0000-0000-000000000001',
+        'subject_key': 'math',
         'subject': 'Mathematics',
         'title': 'Midterm Exam',
         'assessment_type': 'exam',
@@ -18,6 +19,7 @@ void main() {
         'normalized_score': 8.55,
         'status': 'verified',
         'version': 3,
+        'entry_context': 'adult',
         'occurred_at': now.toIso8601String(),
         'created_by_user_id': 'u1000000-0000-0000-0000-000000000001',
         'created_at': now.toIso8601String(),
@@ -31,11 +33,13 @@ void main() {
         id: AssessmentId(row['id'] as String),
         familyId: FamilyId(row['family_id'] as String),
         childId: ChildId(row['child_id'] as String),
+        subjectKey: SubjectKey.parse(row['subject_key'] as String),
         subject: row['subject'] as String,
         title: row['title'] as String,
         type: AssessmentType.fromValue(row['assessment_type'] as String),
         difficulty: AssessmentDifficulty.fromValue(row['difficulty'] as String),
         score: AssessmentScore(rawScore: rawScore, maxScore: maxScore),
+        entryContext: EntryContext.parse(row['entry_context'] as String),
         status: AssessmentStatus.fromValue(row['status'] as String),
         occurredAt: DateTime.parse(row['occurred_at'] as String),
         version: row['version'] as int,
@@ -48,6 +52,7 @@ void main() {
         assessment.id.value,
         equals('a1000000-0000-0000-0000-000000000001'),
       );
+      expect(assessment.subjectKey, equals(SubjectKey.math));
       expect(assessment.type, equals(AssessmentType.exam));
       expect(assessment.difficulty, equals(AssessmentDifficulty.hard));
       expect(assessment.status, equals(AssessmentStatus.verified));

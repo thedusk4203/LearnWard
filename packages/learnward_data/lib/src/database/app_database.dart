@@ -65,6 +65,7 @@ class AppDatabase extends _$AppDatabase
         familyId: draft.familyId,
         childId: draft.childId,
         serverAssessmentId: Value(draft.serverAssessmentId),
+        subjectKey: Value(draft.subjectKey.value),
         subject: draft.subject,
         title: draft.title,
         assessmentType: draft.assessmentType,
@@ -72,10 +73,21 @@ class AppDatabase extends _$AppDatabase
         rawScore: draft.rawScore,
         maxScore: draft.maxScore,
         localPhotoPath: Value(draft.localPhotoPath),
+        entryContext: Value(draft.entryContext.value),
         occurredAt: draft.occurredAt,
         updatedAt: draft.updatedAt,
       ),
     );
+  }
+
+  @override
+  Future<LocalAssessmentDraft?> getLocalDraft(String localDraftId) async {
+    final query = select(localAssessmentDrafts)
+      ..where((entry) => entry.localDraftId.equals(localDraftId));
+    final row = await query.getSingleOrNull();
+    if (row == null) return null;
+
+    return _mapRowToDraft(row);
   }
 
   @override
@@ -85,25 +97,7 @@ class AppDatabase extends _$AppDatabase
       ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]);
     final rows = await query.get();
 
-    return rows
-        .map(
-          (row) => LocalAssessmentDraft(
-            localDraftId: row.localDraftId,
-            familyId: row.familyId,
-            childId: row.childId,
-            serverAssessmentId: row.serverAssessmentId,
-            subject: row.subject,
-            title: row.title,
-            assessmentType: row.assessmentType,
-            difficulty: row.difficulty,
-            rawScore: row.rawScore,
-            maxScore: row.maxScore,
-            localPhotoPath: row.localPhotoPath,
-            occurredAt: row.occurredAt,
-            updatedAt: row.updatedAt,
-          ),
-        )
-        .toList();
+    return rows.map(_mapRowToDraft).toList();
   }
 
   @override
@@ -111,5 +105,39 @@ class AppDatabase extends _$AppDatabase
     final query = delete(localAssessmentDrafts)
       ..where((entry) => entry.localDraftId.equals(localDraftId));
     await query.go();
+  }
+
+  LocalAssessmentDraft _mapRowToDraft(LocalAssessmentDraftEntry row) {
+    SubjectKey key;
+    try {
+      key = SubjectKey.parse(row.subjectKey);
+    } catch (_) {
+      key = SubjectKey.math;
+    }
+
+    EntryContext ctx;
+    try {
+      ctx = EntryContext.parse(row.entryContext);
+    } catch (_) {
+      ctx = EntryContext.sharedChild;
+    }
+
+    return LocalAssessmentDraft(
+      localDraftId: row.localDraftId,
+      familyId: row.familyId,
+      childId: row.childId,
+      serverAssessmentId: row.serverAssessmentId,
+      subjectKey: key,
+      subject: row.subject,
+      title: row.title,
+      assessmentType: row.assessmentType,
+      difficulty: row.difficulty,
+      rawScore: row.rawScore,
+      maxScore: row.maxScore,
+      localPhotoPath: row.localPhotoPath,
+      entryContext: ctx,
+      occurredAt: row.occurredAt,
+      updatedAt: row.updatedAt,
+    );
   }
 }
