@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-01
-- **Context:** Phase 3 transforms each immutable `VerifiedLearningEvent` into an auditable, deterministic economic award (Reward Points / RP and Study XP). This establishes the pure Growth Engine, double-entry append-only ledgers, balance projections, and tamper-proof concurrency control while explicitly deferring reward redemption, spinning wheels, and mastery graphs.
+- **Context:** Phase 3 transforms each immutable `VerifiedLearningEvent` into an auditable, deterministic economic award (Reward Points / RP and Study XP). This establishes the pure Growth Engine, dual append-only authoritative ledgers (`xp_ledger` and `rp_ledger`), balance projections, and tamper-proof concurrency control while explicitly deferring reward redemption, spinning wheels, and mastery graphs.
 
 ---
 
