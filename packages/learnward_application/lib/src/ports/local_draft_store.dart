@@ -6,6 +6,9 @@ final class LocalAssessmentDraft {
     required this.localDraftId,
     required this.familyId,
     required this.childId,
+    required this.createCommandId,
+    required this.submitCommandId,
+    this.evidenceId,
     this.serverAssessmentId,
     required this.subjectKey,
     required this.subject,
@@ -23,6 +26,9 @@ final class LocalAssessmentDraft {
   final String localDraftId;
   final String familyId;
   final String childId;
+  final String createCommandId;
+  final String submitCommandId;
+  final String? evidenceId;
   final String? serverAssessmentId;
   final SubjectKey subjectKey;
   final String subject;
@@ -35,6 +41,47 @@ final class LocalAssessmentDraft {
   final EntryContext entryContext;
   final DateTime occurredAt;
   final DateTime updatedAt;
+
+  LocalAssessmentDraft copyWith({
+    String? familyId,
+    String? childId,
+    String? createCommandId,
+    String? submitCommandId,
+    String? evidenceId,
+    String? serverAssessmentId,
+    SubjectKey? subjectKey,
+    String? subject,
+    String? title,
+    String? assessmentType,
+    String? difficulty,
+    double? rawScore,
+    double? maxScore,
+    String? localPhotoPath,
+    EntryContext? entryContext,
+    DateTime? occurredAt,
+    DateTime? updatedAt,
+  }) {
+    return LocalAssessmentDraft(
+      localDraftId: localDraftId,
+      familyId: familyId ?? this.familyId,
+      childId: childId ?? this.childId,
+      createCommandId: createCommandId ?? this.createCommandId,
+      submitCommandId: submitCommandId ?? this.submitCommandId,
+      evidenceId: evidenceId ?? this.evidenceId,
+      serverAssessmentId: serverAssessmentId ?? this.serverAssessmentId,
+      subjectKey: subjectKey ?? this.subjectKey,
+      subject: subject ?? this.subject,
+      title: title ?? this.title,
+      assessmentType: assessmentType ?? this.assessmentType,
+      difficulty: difficulty ?? this.difficulty,
+      rawScore: rawScore ?? this.rawScore,
+      maxScore: maxScore ?? this.maxScore,
+      localPhotoPath: localPhotoPath ?? this.localPhotoPath,
+      entryContext: entryContext ?? this.entryContext,
+      occurredAt: occurredAt ?? this.occurredAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
 }
 
 /// Port for local offline assessment drafts storage.

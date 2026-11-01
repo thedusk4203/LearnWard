@@ -17,7 +17,7 @@ class AppDatabase extends _$AppDatabase
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -25,6 +25,20 @@ class AppDatabase extends _$AppDatabase
     onUpgrade: (migrator, from, to) async {
       if (from < 2) {
         await migrator.createTable(localAssessmentDrafts);
+      }
+      if (from < 3) {
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.createCommandId,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.submitCommandId,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.evidenceId,
+        );
       }
     },
     beforeOpen: (details) async {
@@ -64,6 +78,9 @@ class AppDatabase extends _$AppDatabase
         localDraftId: draft.localDraftId,
         familyId: draft.familyId,
         childId: draft.childId,
+        createCommandId: Value(draft.createCommandId),
+        submitCommandId: Value(draft.submitCommandId),
+        evidenceId: Value(draft.evidenceId),
         serverAssessmentId: Value(draft.serverAssessmentId),
         subjectKey: Value(draft.subjectKey.value),
         subject: draft.subject,
@@ -126,6 +143,9 @@ class AppDatabase extends _$AppDatabase
       localDraftId: row.localDraftId,
       familyId: row.familyId,
       childId: row.childId,
+      createCommandId: row.createCommandId ?? row.localDraftId,
+      submitCommandId: row.submitCommandId ?? row.localDraftId,
+      evidenceId: row.evidenceId,
       serverAssessmentId: row.serverAssessmentId,
       subjectKey: key,
       subject: row.subject,

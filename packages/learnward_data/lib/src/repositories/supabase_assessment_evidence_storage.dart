@@ -28,13 +28,24 @@ final class SupabaseAssessmentEvidenceStorage
         '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
 
     // Strictly enforce immutable object identity: upsert = false
-    await _client.storage
-        .from(bucketName)
-        .uploadBinary(
-          storagePath,
-          Uint8List.fromList(bytes),
-          fileOptions: FileOptions(contentType: mediaType, upsert: false),
-        );
+    try {
+      await _client.storage
+          .from(bucketName)
+          .uploadBinary(
+            storagePath,
+            Uint8List.fromList(bytes),
+            fileOptions: FileOptions(contentType: mediaType, upsert: false),
+          );
+    } on StorageException catch (e) {
+      final msg = e.message.toLowerCase();
+      if (e.statusCode == '409' ||
+          msg.contains('already exists') ||
+          msg.contains('duplicate')) {
+        // Idempotent retry: object with this unique opaque UUID already exists in storage
+        return storagePath;
+      }
+      rethrow;
+    }
 
     return storagePath;
   }

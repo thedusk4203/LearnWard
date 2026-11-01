@@ -9,6 +9,12 @@ class LocalAssessmentDrafts extends Table {
 
   TextColumn get childId => text()();
 
+  TextColumn get createCommandId => text().nullable()();
+
+  TextColumn get submitCommandId => text().nullable()();
+
+  TextColumn get evidenceId => text().nullable()();
+
   TextColumn get serverAssessmentId => text().nullable()();
 
   TextColumn get subjectKey => text().withDefault(const Constant('math'))();

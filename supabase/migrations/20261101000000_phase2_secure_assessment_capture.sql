@@ -549,6 +549,15 @@ begin
     raise exception 'Storage path must match family/child/assessment hierarchy with evidence UUID' using errcode = 'LW110';
   end if;
 
+  -- Idempotency check: return existing evidence record if already registered for this assessment
+  select * into v_evidence
+  from public.assessment_evidence
+  where storage_path = trim(p_storage_path);
+
+  if found then
+    return v_evidence;
+  end if;
+
   insert into public.assessment_evidence (
     family_id,
     assessment_id,

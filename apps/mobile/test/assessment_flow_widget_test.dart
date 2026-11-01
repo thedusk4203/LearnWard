@@ -361,6 +361,9 @@ void main() {
       localDraftId: 'draft-offline-123',
       familyId: testFamily.id.value,
       childId: testChild.id.value,
+      createCommandId: 'cmd-create-123',
+      submitCommandId: 'cmd-submit-123',
+      evidenceId: null,
       subjectKey: SubjectKey.science,
       subject: 'Science',
       title: 'Solar System Quiz',
@@ -595,6 +598,220 @@ void main() {
     expect(find.text('ev-lab-1.jpg'), findsAtLeast(1));
     expect(find.text('2.0 KB'), findsOneWidget);
   });
+
+  testWidgets(
+    'AddAssessment: generates distinct create/submit command IDs and reuses them on retry',
+    (tester) async {
+      final trackingRepo = _TrackingAssessmentRepository();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+            familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
+            childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
+            assessmentRepositoryProvider.overrideWithValue(trackingRepo),
+            assessmentEvidenceStorageProvider.overrideWithValue(fakeStorage),
+            localEvidenceFileStoreProvider.overrideWithValue(
+              fakeEvidenceFileStore,
+            ),
+            localDraftStoreProvider.overrideWithValue(fakeDraftStore),
+            activeFamilyProvider.overrideWith(
+              () => _PresetFamilyNotifier(testFamily),
+            ),
+            activeChildModeProvider.overrideWith(
+              () => _PresetActiveChildNotifier(testChild),
+            ),
+          ],
+          child: const LearnWardApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Tap Add Academic Result
+      await tester.tap(find.byKey(const Key('child_add_assessment_button')));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('assessment_title_field')),
+        'Idempotency Test',
+      );
+      await tester.enterText(
+        find.byKey(const Key('assessment_raw_score_field')),
+        '8.0',
+      );
+      await tester.pumpAndSettle();
+
+      // Make first submit attempt fail at submitAssessment
+      trackingRepo.failSubmit = true;
+
+      await tester.ensureVisible(
+        find.byKey(const Key('submit_assessment_button')),
+      );
+      await tester.tap(find.byKey(const Key('submit_assessment_button')));
+      await tester.pumpAndSettle();
+
+      expect(trackingRepo.recordedCreateCommandIds.length, equals(1));
+      final firstCreateCmd = trackingRepo.recordedCreateCommandIds.first;
+      expect(trackingRepo.recordedSubmitCommandIds.length, equals(1));
+      final firstSubmitCmd = trackingRepo.recordedSubmitCommandIds.first;
+
+      // INVARIANT: createCommandId must NOT equal submitCommandId
+      expect(firstCreateCmd, isNot(equals(firstSubmitCmd)));
+
+      // Draft was persisted locally with stable IDs
+      final savedDrafts = await fakeDraftStore.listLocalDrafts(testChild.id);
+      expect(savedDrafts.length, equals(1));
+      expect(savedDrafts.first.createCommandId, equals(firstCreateCmd));
+      expect(savedDrafts.first.submitCommandId, equals(firstSubmitCmd));
+
+      // Now clear failure and retry submitting
+      trackingRepo.failSubmit = false;
+      await tester.ensureVisible(
+        find.byKey(const Key('submit_assessment_button')),
+      );
+      await tester.tap(find.byKey(const Key('submit_assessment_button')));
+      await tester.pumpAndSettle();
+
+      // INVARIANT: retry reuses the exact same create and submit command IDs
+      expect(trackingRepo.recordedCreateCommandIds.length, equals(2));
+      expect(trackingRepo.recordedCreateCommandIds[1], equals(firstCreateCmd));
+      expect(trackingRepo.recordedSubmitCommandIds.length, equals(2));
+      expect(trackingRepo.recordedSubmitCommandIds[1], equals(firstSubmitCmd));
+
+      // Submission succeeded and draft was deleted
+      final remainingDrafts = await fakeDraftStore.listLocalDrafts(
+        testChild.id,
+      );
+      expect(remainingDrafts.isEmpty, isTrue);
+    },
+  );
+
+  testWidgets(
+    'Parent Mode: verify failure displays friendly mapped error without leaking raw exceptions',
+    (tester) async {
+      final failingVerifyRepo = _FailingVerifyAssessmentRepository();
+      final draft = await failingVerifyRepo.createDraft(
+        commandId: 'cmd-ver-fail-1',
+        familyId: testFamily.id,
+        childId: testChild.id,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Review Fail Test',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+      );
+      final submitted = await failingVerifyRepo.submitAssessment(
+        assessmentId: draft.id,
+        expectedVersion: 1,
+        commandId: 'cmd-sub-fail-1',
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+            familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
+            childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
+            assessmentRepositoryProvider.overrideWithValue(failingVerifyRepo),
+            assessmentEvidenceStorageProvider.overrideWithValue(fakeStorage),
+            localEvidenceFileStoreProvider.overrideWithValue(
+              fakeEvidenceFileStore,
+            ),
+            localDraftStoreProvider.overrideWithValue(fakeDraftStore),
+            activeFamilyProvider.overrideWith(
+              () => _PresetFamilyNotifier(testFamily),
+            ),
+          ],
+          child: const LearnWardApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Tap Review
+      await tester.tap(find.byKey(Key('review_button_${submitted.id.value}')));
+      await tester.pumpAndSettle();
+
+      // Tap Verify button to open confirmation dialog
+      await tester.tap(find.byKey(const Key('verify_assessment_button')));
+      await tester.pumpAndSettle();
+
+      // Tap Confirm Verify in dialog
+      await tester.tap(find.byKey(const Key('confirm_verify_button')));
+      await tester.pumpAndSettle();
+
+      // Friendly error should be mapped without raw SQL details
+      expect(find.textContaining('Network connection issue'), findsOneWidget);
+      expect(find.textContaining('PG_ERR_5432'), findsNothing);
+    },
+  );
+}
+
+final class _TrackingAssessmentRepository extends FakeAssessmentRepository {
+  final List<String> recordedCreateCommandIds = [];
+  final List<String> recordedSubmitCommandIds = [];
+  bool failSubmit = false;
+
+  @override
+  Future<Assessment> createDraft({
+    required String commandId,
+    required FamilyId familyId,
+    required ChildId childId,
+    required SubjectKey subjectKey,
+    required String subject,
+    required String title,
+    required AssessmentType type,
+    required AssessmentDifficulty difficulty,
+    required AssessmentScore score,
+    DateTime? occurredAt,
+    EntryContext entryContext = EntryContext.adult,
+  }) async {
+    recordedCreateCommandIds.add(commandId);
+    return super.createDraft(
+      commandId: commandId,
+      familyId: familyId,
+      childId: childId,
+      subjectKey: subjectKey,
+      subject: subject,
+      title: title,
+      type: type,
+      difficulty: difficulty,
+      score: score,
+      occurredAt: occurredAt,
+      entryContext: entryContext,
+    );
+  }
+
+  @override
+  Future<Assessment> submitAssessment({
+    required AssessmentId assessmentId,
+    required int expectedVersion,
+    required String commandId,
+  }) async {
+    recordedSubmitCommandIds.add(commandId);
+    if (failSubmit) {
+      throw Exception('Simulated network failure on submit');
+    }
+    return super.submitAssessment(
+      assessmentId: assessmentId,
+      expectedVersion: expectedVersion,
+      commandId: commandId,
+    );
+  }
+}
+
+final class _FailingVerifyAssessmentRepository
+    extends FakeAssessmentRepository {
+  @override
+  Future<Assessment> verifyAssessment({
+    required AssessmentId assessmentId,
+    required int expectedVersion,
+    required String commandId,
+    String? notes,
+  }) async {
+    throw Exception('PG_ERR_5432: internal connection dropped');
+  }
 }
 
 final class _FailingSubmitAssessmentRepository

@@ -11,10 +11,12 @@ final class UploadAssessmentEvidence {
   const UploadAssessmentEvidence({
     required this.repository,
     required this.storage,
+    this.onCleanupError,
   });
 
   final AssessmentRepository repository;
   final AssessmentEvidenceStorage storage;
+  final void Function(String message, Object? error)? onCleanupError;
 
   static const int maxFileSizeBytes = 10 * 1024 * 1024; // 10 MiB
 
@@ -61,8 +63,12 @@ final class UploadAssessmentEvidence {
     } catch (registrationError) {
       try {
         await storage.deleteEvidence(storagePath);
-      } catch (_) {
-        // Suppress cleanup secondary error to preserve original registration failure
+      } catch (cleanupError) {
+        // Report safe cleanup error without leaking signed URLs, tokens, or paths
+        onCleanupError?.call(
+          'Failed to clean up uploaded evidence object after registration failure.',
+          cleanupError,
+        );
       }
       rethrow;
     }

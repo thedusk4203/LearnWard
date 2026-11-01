@@ -6,9 +6,9 @@ import '../ports/local_draft_store.dart';
 import 'upload_assessment_evidence.dart';
 
 /// Application use case coordinating the complete assessment submission workflow:
-/// 1. Create or ensure server draft (idempotent via commandId)
+/// 1. Create or ensure server draft (idempotent via createCommandId)
 /// 2. Upload and register evidence (with compensation cleanup on failure)
-/// 3. Submit assessment for review
+/// 3. Submit assessment for review (idempotent via submitCommandId)
 /// 4. Delete local offline draft upon success
 final class SubmitAssessmentDraft {
   const SubmitAssessmentDraft({
@@ -22,7 +22,8 @@ final class SubmitAssessmentDraft {
   final LocalDraftStore? localDraftStore;
 
   Future<Assessment> call({
-    required String commandId,
+    required String createCommandId,
+    required String submitCommandId,
     required FamilyId familyId,
     required ChildId childId,
     required SubjectKey subjectKey,
@@ -38,9 +39,9 @@ final class SubmitAssessmentDraft {
     EvidenceId? evidenceId,
     String? localDraftId,
   }) async {
-    // 1. Create server draft via server-authoritative trusted RPC
+    // 1. Create server draft via server-authoritative trusted RPC using createCommandId
     final draft = await repository.createDraft(
-      commandId: commandId,
+      commandId: createCommandId,
       familyId: familyId,
       childId: childId,
       subjectKey: subjectKey,
@@ -52,6 +53,23 @@ final class SubmitAssessmentDraft {
       occurredAt: occurredAt,
       entryContext: entryContext,
     );
+
+    // If local draft store is present and localDraftId is provided, persist serverAssessmentId
+    if (localDraftStore != null && localDraftId != null) {
+      try {
+        final existingLocal = await localDraftStore!.getLocalDraft(
+          localDraftId,
+        );
+        if (existingLocal != null &&
+            existingLocal.serverAssessmentId != draft.id.value) {
+          await localDraftStore!.saveLocalDraft(
+            existingLocal.copyWith(serverAssessmentId: draft.id.value),
+          );
+        }
+      } catch (_) {
+        // Non-blocking local persistence update
+      }
+    }
 
     // 2. Upload evidence if provided (with compensation cleanup on failure)
     if (evidenceBytes != null &&
@@ -73,11 +91,11 @@ final class SubmitAssessmentDraft {
       );
     }
 
-    // 3. Submit assessment for adult review
+    // 3. Submit assessment for adult review with distinct submitCommandId
     final submitted = await repository.submitAssessment(
       assessmentId: draft.id,
       expectedVersion: draft.version,
-      commandId: commandId,
+      commandId: submitCommandId,
     );
 
     // 4. Remove local draft upon successful submission

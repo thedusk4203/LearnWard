@@ -53,6 +53,9 @@ void main() {
           localDraftId: 'draft-1',
           familyId: 'fam-1',
           childId: 'child-1',
+          createCommandId: 'cmd-create-1',
+          submitCommandId: 'cmd-submit-1',
+          evidenceId: 'ev-uuid-1',
           subjectKey: SubjectKey.science,
           subject: 'Science',
           title: 'Quiz 1',
@@ -70,7 +73,10 @@ void main() {
 
         final retrieved = await database.getLocalDraft('draft-1');
         expect(retrieved, isNotNull);
-        expect(retrieved!.subjectKey, equals(SubjectKey.science));
+        expect(retrieved!.createCommandId, equals('cmd-create-1'));
+        expect(retrieved.submitCommandId, equals('cmd-submit-1'));
+        expect(retrieved.evidenceId, equals('ev-uuid-1'));
+        expect(retrieved.subjectKey, equals(SubjectKey.science));
         expect(retrieved.entryContext, equals(EntryContext.sharedChild));
         expect(retrieved.title, equals('Quiz 1'));
 

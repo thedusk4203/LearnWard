@@ -58,9 +58,11 @@ Storage RLS policies on `storage.objects` strictly validate the entire path hier
 - `subject_key`: Canonical academic subject identity (`math`, `english`, `literature`, `science`, `other`) enforced via database check constraint for longitudinal analytics and mastery foundations. Custom subject title/topics (e.g. "Fractions Quiz") are retained in the `subject` and `title` fields.
 - `entry_context`: Ingestion channel provenance (`adult`, `shared_child`, `paired_child`) recorded in both `assessments` and `verified_learning_events`. Invariant: `entry_context` is an audit field only and is never used to grant or deny authorization.
 
-## Decision 7 — Durable local offline storage, compensation cleanup, and native picker
+## Decision 7 — Durable local offline storage, stable retry idempotency, compensation cleanup, and native picker
 
 - Evidence picker utilizes the official `image_picker` plugin on Android/iOS (with in-memory simulator for headless testing).
 - Evidence files attached to offline local drafts are persisted to durable app-private storage (`LocalEvidenceFileStore`) ensuring persistence across process death and device restarts.
 - Unsubmitted local drafts can be reopened, edited, and submitted from the Child Mode screen.
-- Partial upload compensation cleanup: `UploadAssessmentEvidence` deletes the uploaded storage object if database metadata registration fails.
+- Stable Retry Idempotency: `LocalAssessmentDraft` persists distinct `createCommandId`, `submitCommandId`, and `evidenceId` generated once upon draft initialization. A single `commandId` is never shared between `create_draft` and `submit` operations. If a submission is interrupted or fails midway (e.g. network drop after draft creation or storage upload), subsequent retry or app restart reuses the exact same IDs, preventing duplicate rows or command conflicts.
+- Evidence metadata registration (`register_assessment_evidence`) is idempotent on `storage_path`, safely returning existing evidence rows on retry. Storage uploads catch duplicate 409 errors on retry.
+- Partial upload compensation cleanup: `UploadAssessmentEvidence` deletes the uploaded storage object if database metadata registration fails, and reports safe failure callbacks without exposing tokens or sensitive paths.

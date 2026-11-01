@@ -40,6 +40,42 @@ final class FailingRegisterAssessmentRepository
   }
 }
 
+final class FailingDeleteStorage implements AssessmentEvidenceStorage {
+  FailingDeleteStorage(this.inner);
+  final AssessmentEvidenceStorage inner;
+
+  @override
+  Future<String> uploadEvidence({
+    required FamilyId familyId,
+    required ChildId childId,
+    required AssessmentId assessmentId,
+    required EvidenceId evidenceId,
+    required List<int> bytes,
+    required String mediaType,
+  }) => inner.uploadEvidence(
+    familyId: familyId,
+    childId: childId,
+    assessmentId: assessmentId,
+    evidenceId: evidenceId,
+    bytes: bytes,
+    mediaType: mediaType,
+  );
+
+  @override
+  Future<String> getEvidenceSignedUrl({
+    required String storagePath,
+    Duration expiresIn = const Duration(minutes: 10),
+  }) => inner.getEvidenceSignedUrl(
+    storagePath: storagePath,
+    expiresIn: expiresIn,
+  );
+
+  @override
+  Future<void> deleteEvidence(String storagePath) async {
+    throw StateError('Simulated storage delete failure');
+  }
+}
+
 void main() {
   late FakeAssessmentRepository repository;
   late FakeAssessmentEvidenceStorage storage;
@@ -263,6 +299,49 @@ void main() {
     expect(storage.storage.isEmpty, isTrue);
   });
 
+  test('UploadAssessmentEvidence invokes onCleanupError safely when storage deletion fails', () async {
+    final failingRepo = FailingRegisterAssessmentRepository();
+    final failingStorage = FailingDeleteStorage(storage);
+    String? reportedMessage;
+    Object? reportedError;
+
+    final uploadUseCase = UploadAssessmentEvidence(
+      repository: failingRepo,
+      storage: failingStorage,
+      onCleanupError: (msg, err) {
+        reportedMessage = msg;
+        reportedError = err;
+      },
+    );
+
+    final draft = await CreateAssessmentDraft(repository)(
+      commandId: 'cmd-create-fail-del',
+      familyId: familyId,
+      childId: childId,
+      subjectKey: SubjectKey.science,
+      subject: 'Science',
+      title: 'Lab 2',
+      type: AssessmentType.homework,
+      difficulty: AssessmentDifficulty.normal,
+      score: AssessmentScore(rawScore: 8, maxScore: 10),
+    );
+
+    await expectLater(
+      () => uploadUseCase(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: draft.id,
+        evidenceId: EvidenceId('550e8400-e29b-41d4-a716-446655440004'),
+        bytes: [5, 6, 7],
+        mediaType: 'image/jpeg',
+      ),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(reportedMessage, contains('Failed to clean up'));
+    expect(reportedError, isNotNull);
+  });
+
   test(
     'VerifyAssessment creates immutable learning event and is idempotent',
     () async {
@@ -370,7 +449,7 @@ void main() {
     },
   );
 
-  test('SubmitAssessmentDraft coordinates creation, evidence upload, submission, and draft deletion', () async {
+  test('SubmitAssessmentDraft coordinates distinct create/submit commands, evidence upload, and draft deletion', () async {
     final draftStore = InMemoryLocalDraftStore();
     const localId = 'local-draft-42';
     await draftStore.saveLocalDraft(
@@ -378,6 +457,9 @@ void main() {
         localDraftId: localId,
         familyId: familyId.value,
         childId: childId.value,
+        createCommandId: 'cmd-create-wf-1',
+        submitCommandId: 'cmd-submit-wf-1',
+        evidenceId: '550e8400-e29b-41d4-a716-446655440099',
         subjectKey: SubjectKey.english,
         subject: 'English',
         title: 'Spelling Quiz',
@@ -399,7 +481,8 @@ void main() {
     );
 
     final result = await submitWorkflow(
-      commandId: 'cmd-workflow-1',
+      createCommandId: 'cmd-create-wf-1',
+      submitCommandId: 'cmd-submit-wf-1',
       familyId: familyId,
       childId: childId,
       subjectKey: SubjectKey.english,

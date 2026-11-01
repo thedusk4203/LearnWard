@@ -127,13 +127,8 @@ class _ReviewAssessmentScreenState
         context.pop(true);
       }
     } catch (e) {
-      final str = e.toString();
       setState(() {
-        if (str.contains('LW101') || str.contains('modified concurrently')) {
-          _errorMessage = 'This assessment was updated or already reviewed by another parent. Please reload.';
-        } else {
-          _errorMessage = 'Failed to verify: $e';
-        }
+        _errorMessage = _mapFriendlyError(e, action: 'verify');
       });
     } finally {
       if (mounted) {
@@ -237,19 +232,40 @@ class _ReviewAssessmentScreenState
         context.pop(true);
       }
     } catch (e) {
-      final str = e.toString();
       setState(() {
-        if (str.contains('LW101') || str.contains('modified concurrently')) {
-          _errorMessage = 'This assessment was updated or already reviewed by another parent. Please reload.';
-        } else {
-          _errorMessage = 'Failed to reject: $e';
-        }
+        _errorMessage = _mapFriendlyError(e, action: 'reject');
       });
     } finally {
       if (mounted) {
         setState(() => _isProcessing = false);
       }
     }
+  }
+
+  String _mapFriendlyError(Object error, {required String action}) {
+    final str = error.toString().toLowerCase();
+    if (str.contains('lw101') || str.contains('modified concurrently')) {
+      return 'This assessment was updated or already reviewed by another parent. Please reload.';
+    }
+    if (str.contains('socketexception') ||
+        str.contains('clientexception') ||
+        str.contains('network') ||
+        str.contains('connection')) {
+      return 'Network connection issue. Please check your internet connection and try again.';
+    }
+    if (str.contains('timeout')) {
+      return 'The request timed out. Please check your connection and try again.';
+    }
+    if (str.contains('42501') || str.contains('permission denied')) {
+      return 'You do not have permission to review this assessment.';
+    }
+    if (str.contains('lw106') || str.contains('rejection reason')) {
+      return 'A valid rejection reason (up to 500 characters) is required.';
+    }
+    if (str.contains('lw107') || str.contains('notes')) {
+      return 'Verification notes must not exceed 1000 characters.';
+    }
+    return 'Unable to $action assessment at this time. Please try again.';
   }
 
   @override

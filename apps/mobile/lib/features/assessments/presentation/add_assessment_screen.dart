@@ -25,6 +25,11 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   final _formKey = GlobalKey<FormState>();
 
   late String _localDraftId;
+  late String _createCommandId;
+  late String _submitCommandId;
+  String? _evidenceId;
+  String? _serverAssessmentId;
+
   late SubjectKey _selectedSubjectKey;
   late TextEditingController _subjectController;
   late TextEditingController _titleController;
@@ -46,6 +51,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final draft = widget.initialDraft;
     if (draft != null) {
       _localDraftId = draft.localDraftId;
+      _createCommandId = draft.createCommandId;
+      _submitCommandId = draft.submitCommandId;
+      _evidenceId = draft.evidenceId;
+      _serverAssessmentId = draft.serverAssessmentId;
       _selectedSubjectKey = draft.subjectKey;
       _subjectController = TextEditingController(text: draft.subject);
       _titleController = TextEditingController(text: draft.title);
@@ -63,6 +72,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       }
     } else {
       _localDraftId = generateUuid();
+      _createCommandId = generateUuid();
+      _submitCommandId = generateUuid();
+      _evidenceId = null;
+      _serverAssessmentId = null;
       _selectedSubjectKey = SubjectKey.math;
       _subjectController = TextEditingController(
         text: SubjectKey.math.displayLabel,
@@ -151,6 +164,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         bytes: file.bytes,
       );
       setState(() {
+        _evidenceId ??= generateUuid();
         _selectedEvidence = SelectedEvidenceFile(
           bytes: file.bytes,
           fileName: file.fileName,
@@ -161,6 +175,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       });
     } catch (_) {
       setState(() {
+        _evidenceId ??= generateUuid();
         _selectedEvidence = file;
         _errorMessage = null;
       });
@@ -174,7 +189,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         await fileStore.deleteEvidence(_selectedEvidence!.localPath!);
       } catch (_) {}
     }
-    setState(() => _selectedEvidence = null);
+    setState(() {
+      _selectedEvidence = null;
+      _evidenceId = null;
+    });
   }
 
   Future<void> _saveLocalDraft() async {
@@ -188,6 +206,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       localDraftId: _localDraftId,
       familyId: activeChild.familyId.value,
       childId: activeChild.id.value,
+      createCommandId: _createCommandId,
+      submitCommandId: _submitCommandId,
+      evidenceId: _evidenceId,
+      serverAssessmentId: _serverAssessmentId,
       subjectKey: _selectedSubjectKey,
       subject: _subjectController.text.trim().isEmpty
           ? _selectedSubjectKey.displayLabel
@@ -236,18 +258,51 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       final storage = ref.read(assessmentEvidenceStorageProvider);
       final localStore = ref.read(localDraftStoreProvider);
 
+      if (_selectedEvidence != null && _evidenceId == null) {
+        _evidenceId = generateUuid();
+      }
+
+      // Persist local draft state before submitting so that any crash/drop
+      // during or before submit preserves the stable command and evidence IDs.
+      final localDraft = LocalAssessmentDraft(
+        localDraftId: _localDraftId,
+        familyId: activeChild.familyId.value,
+        childId: activeChild.id.value,
+        createCommandId: _createCommandId,
+        submitCommandId: _submitCommandId,
+        evidenceId: _evidenceId,
+        serverAssessmentId: _serverAssessmentId,
+        subjectKey: _selectedSubjectKey,
+        subject: _subjectController.text.trim().isEmpty
+            ? _selectedSubjectKey.displayLabel
+            : _subjectController.text.trim(),
+        title: _titleController.text.trim().isEmpty
+            ? 'Draft Assessment'
+            : _titleController.text.trim(),
+        assessmentType: _selectedType.value,
+        difficulty: _selectedDifficulty.value,
+        rawScore: raw,
+        maxScore: max,
+        localPhotoPath: _selectedEvidence?.localPath,
+        occurredAt: _occurredAt,
+        updatedAt: DateTime.now().toUtc(),
+        entryContext: EntryContext.sharedChild,
+      );
+      await localStore.saveLocalDraft(localDraft);
+
       final submitUseCase = SubmitAssessmentDraft(
         repository: repo,
         storage: storage,
         localDraftStore: localStore,
       );
 
-      final evidenceId = _selectedEvidence != null
-          ? EvidenceId(generateUuid())
+      final evidenceIdObj = _evidenceId != null
+          ? EvidenceId(_evidenceId!)
           : null;
 
       await submitUseCase(
-        commandId: generateUuid(),
+        createCommandId: _createCommandId,
+        submitCommandId: _submitCommandId,
         familyId: activeChild.familyId,
         childId: activeChild.id,
         subjectKey: _selectedSubjectKey,
@@ -260,7 +315,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         entryContext: EntryContext.sharedChild,
         evidenceBytes: _selectedEvidence?.bytes,
         evidenceMediaType: _selectedEvidence?.mediaType,
-        evidenceId: evidenceId,
+        evidenceId: evidenceIdObj,
         localDraftId: _localDraftId,
       );
 

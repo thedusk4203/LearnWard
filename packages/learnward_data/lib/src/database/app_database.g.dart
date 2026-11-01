@@ -309,6 +309,39 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _createCommandIdMeta = const VerificationMeta(
+    'createCommandId',
+  );
+  @override
+  late final GeneratedColumn<String> createCommandId = GeneratedColumn<String>(
+    'create_command_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _submitCommandIdMeta = const VerificationMeta(
+    'submitCommandId',
+  );
+  @override
+  late final GeneratedColumn<String> submitCommandId = GeneratedColumn<String>(
+    'submit_command_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _evidenceIdMeta = const VerificationMeta(
+    'evidenceId',
+  );
+  @override
+  late final GeneratedColumn<String> evidenceId = GeneratedColumn<String>(
+    'evidence_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _serverAssessmentIdMeta =
       const VerificationMeta('serverAssessmentId');
   @override
@@ -446,6 +479,9 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     localDraftId,
     familyId,
     childId,
+    createCommandId,
+    submitCommandId,
+    evidenceId,
     serverAssessmentId,
     subjectKey,
     subject,
@@ -497,6 +533,30 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
       );
     } else if (isInserting) {
       context.missing(_childIdMeta);
+    }
+    if (data.containsKey('create_command_id')) {
+      context.handle(
+        _createCommandIdMeta,
+        createCommandId.isAcceptableOrUnknown(
+          data['create_command_id']!,
+          _createCommandIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('submit_command_id')) {
+      context.handle(
+        _submitCommandIdMeta,
+        submitCommandId.isAcceptableOrUnknown(
+          data['submit_command_id']!,
+          _submitCommandIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('evidence_id')) {
+      context.handle(
+        _evidenceIdMeta,
+        evidenceId.isAcceptableOrUnknown(data['evidence_id']!, _evidenceIdMeta),
+      );
     }
     if (data.containsKey('server_assessment_id')) {
       context.handle(
@@ -622,6 +682,18 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
         DriftSqlType.string,
         data['${effectivePrefix}child_id'],
       )!,
+      createCommandId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}create_command_id'],
+      ),
+      submitCommandId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}submit_command_id'],
+      ),
+      evidenceId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}evidence_id'],
+      ),
       serverAssessmentId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}server_assessment_id'],
@@ -684,6 +756,9 @@ class LocalAssessmentDraftEntry extends DataClass
   final String localDraftId;
   final String familyId;
   final String childId;
+  final String? createCommandId;
+  final String? submitCommandId;
+  final String? evidenceId;
   final String? serverAssessmentId;
   final String subjectKey;
   final String subject;
@@ -700,6 +775,9 @@ class LocalAssessmentDraftEntry extends DataClass
     required this.localDraftId,
     required this.familyId,
     required this.childId,
+    this.createCommandId,
+    this.submitCommandId,
+    this.evidenceId,
     this.serverAssessmentId,
     required this.subjectKey,
     required this.subject,
@@ -719,6 +797,15 @@ class LocalAssessmentDraftEntry extends DataClass
     map['local_draft_id'] = Variable<String>(localDraftId);
     map['family_id'] = Variable<String>(familyId);
     map['child_id'] = Variable<String>(childId);
+    if (!nullToAbsent || createCommandId != null) {
+      map['create_command_id'] = Variable<String>(createCommandId);
+    }
+    if (!nullToAbsent || submitCommandId != null) {
+      map['submit_command_id'] = Variable<String>(submitCommandId);
+    }
+    if (!nullToAbsent || evidenceId != null) {
+      map['evidence_id'] = Variable<String>(evidenceId);
+    }
     if (!nullToAbsent || serverAssessmentId != null) {
       map['server_assessment_id'] = Variable<String>(serverAssessmentId);
     }
@@ -743,6 +830,15 @@ class LocalAssessmentDraftEntry extends DataClass
       localDraftId: Value(localDraftId),
       familyId: Value(familyId),
       childId: Value(childId),
+      createCommandId: createCommandId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(createCommandId),
+      submitCommandId: submitCommandId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(submitCommandId),
+      evidenceId: evidenceId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(evidenceId),
       serverAssessmentId: serverAssessmentId == null && nullToAbsent
           ? const Value.absent()
           : Value(serverAssessmentId),
@@ -771,6 +867,9 @@ class LocalAssessmentDraftEntry extends DataClass
       localDraftId: serializer.fromJson<String>(json['localDraftId']),
       familyId: serializer.fromJson<String>(json['familyId']),
       childId: serializer.fromJson<String>(json['childId']),
+      createCommandId: serializer.fromJson<String?>(json['createCommandId']),
+      submitCommandId: serializer.fromJson<String?>(json['submitCommandId']),
+      evidenceId: serializer.fromJson<String?>(json['evidenceId']),
       serverAssessmentId: serializer.fromJson<String?>(
         json['serverAssessmentId'],
       ),
@@ -794,6 +893,9 @@ class LocalAssessmentDraftEntry extends DataClass
       'localDraftId': serializer.toJson<String>(localDraftId),
       'familyId': serializer.toJson<String>(familyId),
       'childId': serializer.toJson<String>(childId),
+      'createCommandId': serializer.toJson<String?>(createCommandId),
+      'submitCommandId': serializer.toJson<String?>(submitCommandId),
+      'evidenceId': serializer.toJson<String?>(evidenceId),
       'serverAssessmentId': serializer.toJson<String?>(serverAssessmentId),
       'subjectKey': serializer.toJson<String>(subjectKey),
       'subject': serializer.toJson<String>(subject),
@@ -813,6 +915,9 @@ class LocalAssessmentDraftEntry extends DataClass
     String? localDraftId,
     String? familyId,
     String? childId,
+    Value<String?> createCommandId = const Value.absent(),
+    Value<String?> submitCommandId = const Value.absent(),
+    Value<String?> evidenceId = const Value.absent(),
     Value<String?> serverAssessmentId = const Value.absent(),
     String? subjectKey,
     String? subject,
@@ -829,6 +934,13 @@ class LocalAssessmentDraftEntry extends DataClass
     localDraftId: localDraftId ?? this.localDraftId,
     familyId: familyId ?? this.familyId,
     childId: childId ?? this.childId,
+    createCommandId: createCommandId.present
+        ? createCommandId.value
+        : this.createCommandId,
+    submitCommandId: submitCommandId.present
+        ? submitCommandId.value
+        : this.submitCommandId,
+    evidenceId: evidenceId.present ? evidenceId.value : this.evidenceId,
     serverAssessmentId: serverAssessmentId.present
         ? serverAssessmentId.value
         : this.serverAssessmentId,
@@ -855,6 +967,15 @@ class LocalAssessmentDraftEntry extends DataClass
           : this.localDraftId,
       familyId: data.familyId.present ? data.familyId.value : this.familyId,
       childId: data.childId.present ? data.childId.value : this.childId,
+      createCommandId: data.createCommandId.present
+          ? data.createCommandId.value
+          : this.createCommandId,
+      submitCommandId: data.submitCommandId.present
+          ? data.submitCommandId.value
+          : this.submitCommandId,
+      evidenceId: data.evidenceId.present
+          ? data.evidenceId.value
+          : this.evidenceId,
       serverAssessmentId: data.serverAssessmentId.present
           ? data.serverAssessmentId.value
           : this.serverAssessmentId,
@@ -890,6 +1011,9 @@ class LocalAssessmentDraftEntry extends DataClass
           ..write('localDraftId: $localDraftId, ')
           ..write('familyId: $familyId, ')
           ..write('childId: $childId, ')
+          ..write('createCommandId: $createCommandId, ')
+          ..write('submitCommandId: $submitCommandId, ')
+          ..write('evidenceId: $evidenceId, ')
           ..write('serverAssessmentId: $serverAssessmentId, ')
           ..write('subjectKey: $subjectKey, ')
           ..write('subject: $subject, ')
@@ -911,6 +1035,9 @@ class LocalAssessmentDraftEntry extends DataClass
     localDraftId,
     familyId,
     childId,
+    createCommandId,
+    submitCommandId,
+    evidenceId,
     serverAssessmentId,
     subjectKey,
     subject,
@@ -931,6 +1058,9 @@ class LocalAssessmentDraftEntry extends DataClass
           other.localDraftId == this.localDraftId &&
           other.familyId == this.familyId &&
           other.childId == this.childId &&
+          other.createCommandId == this.createCommandId &&
+          other.submitCommandId == this.submitCommandId &&
+          other.evidenceId == this.evidenceId &&
           other.serverAssessmentId == this.serverAssessmentId &&
           other.subjectKey == this.subjectKey &&
           other.subject == this.subject &&
@@ -950,6 +1080,9 @@ class LocalAssessmentDraftsCompanion
   final Value<String> localDraftId;
   final Value<String> familyId;
   final Value<String> childId;
+  final Value<String?> createCommandId;
+  final Value<String?> submitCommandId;
+  final Value<String?> evidenceId;
   final Value<String?> serverAssessmentId;
   final Value<String> subjectKey;
   final Value<String> subject;
@@ -967,6 +1100,9 @@ class LocalAssessmentDraftsCompanion
     this.localDraftId = const Value.absent(),
     this.familyId = const Value.absent(),
     this.childId = const Value.absent(),
+    this.createCommandId = const Value.absent(),
+    this.submitCommandId = const Value.absent(),
+    this.evidenceId = const Value.absent(),
     this.serverAssessmentId = const Value.absent(),
     this.subjectKey = const Value.absent(),
     this.subject = const Value.absent(),
@@ -985,6 +1121,9 @@ class LocalAssessmentDraftsCompanion
     required String localDraftId,
     required String familyId,
     required String childId,
+    this.createCommandId = const Value.absent(),
+    this.submitCommandId = const Value.absent(),
+    this.evidenceId = const Value.absent(),
     this.serverAssessmentId = const Value.absent(),
     this.subjectKey = const Value.absent(),
     required String subject,
@@ -1013,6 +1152,9 @@ class LocalAssessmentDraftsCompanion
     Expression<String>? localDraftId,
     Expression<String>? familyId,
     Expression<String>? childId,
+    Expression<String>? createCommandId,
+    Expression<String>? submitCommandId,
+    Expression<String>? evidenceId,
     Expression<String>? serverAssessmentId,
     Expression<String>? subjectKey,
     Expression<String>? subject,
@@ -1031,6 +1173,9 @@ class LocalAssessmentDraftsCompanion
       if (localDraftId != null) 'local_draft_id': localDraftId,
       if (familyId != null) 'family_id': familyId,
       if (childId != null) 'child_id': childId,
+      if (createCommandId != null) 'create_command_id': createCommandId,
+      if (submitCommandId != null) 'submit_command_id': submitCommandId,
+      if (evidenceId != null) 'evidence_id': evidenceId,
       if (serverAssessmentId != null)
         'server_assessment_id': serverAssessmentId,
       if (subjectKey != null) 'subject_key': subjectKey,
@@ -1052,6 +1197,9 @@ class LocalAssessmentDraftsCompanion
     Value<String>? localDraftId,
     Value<String>? familyId,
     Value<String>? childId,
+    Value<String?>? createCommandId,
+    Value<String?>? submitCommandId,
+    Value<String?>? evidenceId,
     Value<String?>? serverAssessmentId,
     Value<String>? subjectKey,
     Value<String>? subject,
@@ -1070,6 +1218,9 @@ class LocalAssessmentDraftsCompanion
       localDraftId: localDraftId ?? this.localDraftId,
       familyId: familyId ?? this.familyId,
       childId: childId ?? this.childId,
+      createCommandId: createCommandId ?? this.createCommandId,
+      submitCommandId: submitCommandId ?? this.submitCommandId,
+      evidenceId: evidenceId ?? this.evidenceId,
       serverAssessmentId: serverAssessmentId ?? this.serverAssessmentId,
       subjectKey: subjectKey ?? this.subjectKey,
       subject: subject ?? this.subject,
@@ -1097,6 +1248,15 @@ class LocalAssessmentDraftsCompanion
     }
     if (childId.present) {
       map['child_id'] = Variable<String>(childId.value);
+    }
+    if (createCommandId.present) {
+      map['create_command_id'] = Variable<String>(createCommandId.value);
+    }
+    if (submitCommandId.present) {
+      map['submit_command_id'] = Variable<String>(submitCommandId.value);
+    }
+    if (evidenceId.present) {
+      map['evidence_id'] = Variable<String>(evidenceId.value);
     }
     if (serverAssessmentId.present) {
       map['server_assessment_id'] = Variable<String>(serverAssessmentId.value);
@@ -1146,6 +1306,9 @@ class LocalAssessmentDraftsCompanion
           ..write('localDraftId: $localDraftId, ')
           ..write('familyId: $familyId, ')
           ..write('childId: $childId, ')
+          ..write('createCommandId: $createCommandId, ')
+          ..write('submitCommandId: $submitCommandId, ')
+          ..write('evidenceId: $evidenceId, ')
           ..write('serverAssessmentId: $serverAssessmentId, ')
           ..write('subjectKey: $subjectKey, ')
           ..write('subject: $subject, ')
@@ -1375,6 +1538,9 @@ typedef $$LocalAssessmentDraftsTableCreateCompanionBuilder =
       required String localDraftId,
       required String familyId,
       required String childId,
+      Value<String?> createCommandId,
+      Value<String?> submitCommandId,
+      Value<String?> evidenceId,
       Value<String?> serverAssessmentId,
       Value<String> subjectKey,
       required String subject,
@@ -1394,6 +1560,9 @@ typedef $$LocalAssessmentDraftsTableUpdateCompanionBuilder =
       Value<String> localDraftId,
       Value<String> familyId,
       Value<String> childId,
+      Value<String?> createCommandId,
+      Value<String?> submitCommandId,
+      Value<String?> evidenceId,
       Value<String?> serverAssessmentId,
       Value<String> subjectKey,
       Value<String> subject,
@@ -1430,6 +1599,21 @@ class $$LocalAssessmentDraftsTableFilterComposer
 
   ColumnFilters<String> get childId => $composableBuilder(
     column: $table.childId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get createCommandId => $composableBuilder(
+    column: $table.createCommandId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get submitCommandId => $composableBuilder(
+    column: $table.submitCommandId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get evidenceId => $composableBuilder(
+    column: $table.evidenceId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1518,6 +1702,21 @@ class $$LocalAssessmentDraftsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get createCommandId => $composableBuilder(
+    column: $table.createCommandId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get submitCommandId => $composableBuilder(
+    column: $table.submitCommandId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get evidenceId => $composableBuilder(
+    column: $table.evidenceId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get serverAssessmentId => $composableBuilder(
     column: $table.serverAssessmentId,
     builder: (column) => ColumnOrderings(column),
@@ -1598,6 +1797,21 @@ class $$LocalAssessmentDraftsTableAnnotationComposer
 
   GeneratedColumn<String> get childId =>
       $composableBuilder(column: $table.childId, builder: (column) => column);
+
+  GeneratedColumn<String> get createCommandId => $composableBuilder(
+    column: $table.createCommandId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get submitCommandId => $composableBuilder(
+    column: $table.submitCommandId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get evidenceId => $composableBuilder(
+    column: $table.evidenceId,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get serverAssessmentId => $composableBuilder(
     column: $table.serverAssessmentId,
@@ -1699,6 +1913,9 @@ class $$LocalAssessmentDraftsTableTableManager
                 Value<String> localDraftId = const Value.absent(),
                 Value<String> familyId = const Value.absent(),
                 Value<String> childId = const Value.absent(),
+                Value<String?> createCommandId = const Value.absent(),
+                Value<String?> submitCommandId = const Value.absent(),
+                Value<String?> evidenceId = const Value.absent(),
                 Value<String?> serverAssessmentId = const Value.absent(),
                 Value<String> subjectKey = const Value.absent(),
                 Value<String> subject = const Value.absent(),
@@ -1716,6 +1933,9 @@ class $$LocalAssessmentDraftsTableTableManager
                 localDraftId: localDraftId,
                 familyId: familyId,
                 childId: childId,
+                createCommandId: createCommandId,
+                submitCommandId: submitCommandId,
+                evidenceId: evidenceId,
                 serverAssessmentId: serverAssessmentId,
                 subjectKey: subjectKey,
                 subject: subject,
@@ -1735,6 +1955,9 @@ class $$LocalAssessmentDraftsTableTableManager
                 required String localDraftId,
                 required String familyId,
                 required String childId,
+                Value<String?> createCommandId = const Value.absent(),
+                Value<String?> submitCommandId = const Value.absent(),
+                Value<String?> evidenceId = const Value.absent(),
                 Value<String?> serverAssessmentId = const Value.absent(),
                 Value<String> subjectKey = const Value.absent(),
                 required String subject,
@@ -1752,6 +1975,9 @@ class $$LocalAssessmentDraftsTableTableManager
                 localDraftId: localDraftId,
                 familyId: familyId,
                 childId: childId,
+                createCommandId: createCommandId,
+                submitCommandId: submitCommandId,
+                evidenceId: evidenceId,
                 serverAssessmentId: serverAssessmentId,
                 subjectKey: subjectKey,
                 subject: subject,
