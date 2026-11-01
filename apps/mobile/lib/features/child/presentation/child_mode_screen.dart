@@ -100,7 +100,7 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                   ),
                   const SizedBox(height: AppSpacing.sm),
                   Text(
-                    'Capture your scores, test papers, and learning accomplishments.',
+                    'Capture your scores, test papers, and learning results.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -139,14 +139,31 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                           elevation: 0,
                           color: theme.colorScheme.surfaceContainerHighest,
                           child: ListTile(
+                            key: Key('local_draft_${draft.localDraftId}'),
                             leading: const Icon(Icons.edit_note),
                             title: Text(draft.title),
                             subtitle: Text(
-                              '${draft.subject} • ${draft.rawScore} / ${draft.maxScore}',
+                              '${draft.subject} (${draft.subjectKey.displayLabel}) • ${draft.rawScore} / ${draft.maxScore}',
                             ),
+                            onTap: () async {
+                              final result = await context.push<bool>(
+                                AppRoutes.childAddAssessment,
+                                extra: draft,
+                              );
+                              if (result == true) {
+                                unawaited(_loadLocalDrafts());
+                              }
+                            },
                             trailing: IconButton(
                               icon: const Icon(Icons.delete_outline, size: 20),
                               onPressed: () async {
+                                if (draft.localPhotoPath != null) {
+                                  try {
+                                    await ref
+                                        .read(localEvidenceFileStoreProvider)
+                                        .deleteEvidence(draft.localPhotoPath!);
+                                  } catch (_) {}
+                                }
                                 final store = ref.read(localDraftStoreProvider);
                                 await store.deleteLocalDraft(
                                   draft.localDraftId,

@@ -117,6 +117,11 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
   }
 
   @override
+  Future<LocalAssessmentDraft?> getLocalDraft(String localDraftId) async {
+    return _drafts[localDraftId];
+  }
+
+  @override
   Future<List<LocalAssessmentDraft>> listLocalDrafts(ChildId childId) async {
     return _drafts.values.where((d) => d.childId == childId.value).toList();
   }
@@ -136,28 +141,38 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
   int _assessmentCounter = 1;
   int _evidenceCounter = 1;
 
+  final Map<String, String> _commandToAssessmentId = {};
+
   @override
   Future<Assessment> createDraft({
+    required String commandId,
     required FamilyId familyId,
     required ChildId childId,
+    required SubjectKey subjectKey,
     required String subject,
     required String title,
     required AssessmentType type,
     required AssessmentDifficulty difficulty,
     required AssessmentScore score,
     DateTime? occurredAt,
+    EntryContext entryContext = EntryContext.adult,
   }) async {
+    if (_commandToAssessmentId.containsKey(commandId)) {
+      return _assessments[_commandToAssessmentId[commandId]]!;
+    }
     final id = AssessmentId('local-assessment-${_assessmentCounter++}');
     final now = DateTime.now().toUtc();
     final assessment = Assessment(
       id: id,
       familyId: familyId,
       childId: childId,
+      subjectKey: subjectKey,
       subject: subject,
       title: title,
       type: type,
       difficulty: difficulty,
       score: score,
+      entryContext: entryContext,
       status: AssessmentStatus.draft,
       occurredAt: occurredAt ?? now,
       version: 1,
@@ -166,12 +181,14 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
       updatedAt: now,
     );
     _assessments[id.value] = assessment;
+    _commandToAssessmentId[commandId] = id.value;
     return assessment;
   }
 
   @override
   Future<Assessment> updateDraft({
     required AssessmentId assessmentId,
+    required SubjectKey subjectKey,
     required String subject,
     required String title,
     required AssessmentType type,
@@ -190,6 +207,7 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
     }
 
     final updated = existing.copyWith(
+      subjectKey: subjectKey,
       subject: subject,
       title: title,
       type: type,
@@ -255,17 +273,24 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
     );
     _assessments[assessmentId.value] = verified;
 
+    final evidenceCount = _evidence.values
+        .where((e) => e.assessmentId == assessmentId)
+        .length;
+
     _verifiedEvents.add(
       VerifiedLearningEvent(
         id: 'local-event-${_verifiedEvents.length + 1}',
         familyId: verified.familyId,
         childId: verified.childId,
         assessmentId: verified.id,
+        subjectKey: verified.subjectKey,
         subject: verified.subject,
         title: verified.title,
         type: verified.type,
         difficulty: verified.difficulty,
         score: verified.score,
+        evidenceCount: evidenceCount,
+        entryContext: verified.entryContext,
         occurredAt: verified.occurredAt,
         verifiedAt: now,
         verifiedByUserId: 'local-user',
@@ -281,7 +306,7 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
     required AssessmentId assessmentId,
     required int expectedVersion,
     required String commandId,
-    String? reason,
+    required String reason,
   }) async {
     final existing = _assessments[assessmentId.value];
     if (existing == null) throw StateError('Assessment not found');
@@ -389,12 +414,13 @@ final class InMemoryAssessmentEvidenceStorage
     required FamilyId familyId,
     required ChildId childId,
     required AssessmentId assessmentId,
-    required String fileName,
+    required EvidenceId evidenceId,
     required List<int> bytes,
     required String mediaType,
   }) async {
+    final ext = mediaType == 'image/png' ? 'png' : 'jpg';
     final path =
-        '${familyId.value}/${childId.value}/${assessmentId.value}/$fileName';
+        '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
     _storage[path] = bytes;
     return path;
   }
@@ -402,7 +428,7 @@ final class InMemoryAssessmentEvidenceStorage
   @override
   Future<String> getEvidenceSignedUrl({
     required String storagePath,
-    Duration expiresIn = const Duration(minutes: 60),
+    Duration expiresIn = const Duration(minutes: 10),
   }) async {
     return 'https://local-demo-storage.learnward.internal/$storagePath';
   }

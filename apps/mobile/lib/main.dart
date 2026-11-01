@@ -40,7 +40,7 @@ Future<void> main() async {
         displayName: map['display_name'] as String,
         schoolGrade: map['school_grade'] as int?,
         birthYear: map['birth_year'] as int?,
-        avatarKey: map['avatar_key'] as String?,
+        avatarKey: map['avatar_key'] as String? ?? map['avatarKey'] as String?,
         status: ChildProfileStatus.parse(map['status'] as String),
         createdAt: DateTime.parse(map['created_at'] as String),
       );

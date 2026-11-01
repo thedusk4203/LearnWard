@@ -14,7 +14,7 @@ import '../../shared_device/presentation/parent_pin_setup_dialog.dart';
 /// Parent/Guardian home dashboard.
 ///
 /// Displays family overview, pending assessment review queue,
-/// registered children, and access to verified accomplishments.
+/// registered children, and access to verified learning records.
 class FamilyHomeScreen extends ConsumerStatefulWidget {
   const FamilyHomeScreen({super.key});
 

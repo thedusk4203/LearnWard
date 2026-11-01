@@ -66,14 +66,16 @@ class _ReviewAssessmentScreenState
           children: [
             Text(
               'Are you sure you want to verify this result for "${_currentAssessment.title}"? '
-              'This will generate an immutable learning accomplishment record.',
+              'This will generate an immutable verified learning record.',
             ),
             const SizedBox(height: AppSpacing.md),
             TextField(
               key: const Key('verification_notes_field'),
               controller: notesController,
+              maxLength: 1000,
+              maxLines: 3,
               decoration: const InputDecoration(
-                labelText: 'Approval Notes (Optional)',
+                labelText: 'Approval Notes (Optional, max 1000 chars)',
                 hintText: 'e.g. Verified against test paper',
                 border: OutlineInputBorder(),
               ),
@@ -125,8 +127,13 @@ class _ReviewAssessmentScreenState
         context.pop(true);
       }
     } catch (e) {
+      final str = e.toString();
       setState(() {
-        _errorMessage = 'Failed to verify: ${e.toString()}';
+        if (str.contains('LW101') || str.contains('modified concurrently')) {
+          _errorMessage = 'This assessment was updated or already reviewed by another parent. Please reload.';
+        } else {
+          _errorMessage = 'Failed to verify: $e';
+        }
       });
     } finally {
       if (mounted) {
@@ -137,44 +144,68 @@ class _ReviewAssessmentScreenState
 
   Future<void> _rejectAssessment() async {
     final reasonController = TextEditingController();
+    String? dialogError;
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Reject Assessment'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Please provide a feedback note explaining why this submission is being rejected.',
-            ),
-            const SizedBox(height: AppSpacing.md),
-            TextField(
-              key: const Key('rejection_reason_field'),
-              controller: reasonController,
-              decoration: const InputDecoration(
-                labelText: 'Reason for rejection *',
-                hintText: 'e.g. Score does not match evidence photo',
-                border: OutlineInputBorder(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Reject Assessment'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Please provide a feedback note explaining why this submission is being rejected.',
               ),
+              const SizedBox(height: AppSpacing.md),
+              TextField(
+                key: const Key('rejection_reason_field'),
+                controller: reasonController,
+                maxLength: 500,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: 'Reason for rejection * (max 500 chars)',
+                  hintText: 'e.g. Score does not match evidence photo',
+                  errorText: dialogError,
+                  border: const OutlineInputBorder(),
+                ),
+                onChanged: (_) {
+                  if (dialogError != null) {
+                    setDialogState(() => dialogError = null);
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('confirm_reject_button'),
+              onPressed: () {
+                final text = reasonController.text.trim();
+                if (text.isEmpty) {
+                  setDialogState(
+                    () => dialogError = 'Rejection reason is required.',
+                  );
+                  return;
+                }
+                if (text.length > 500) {
+                  setDialogState(
+                    () =>
+                        dialogError = 'Reason must not exceed 500 characters.',
+                  );
+                  return;
+                }
+                Navigator.pop(ctx, true);
+              },
+              child: const Text('Reject'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            key: const Key('confirm_reject_button'),
-            onPressed: () {
-              if (reasonController.text.trim().isEmpty) return;
-              Navigator.pop(ctx, true);
-            },
-            child: const Text('Reject'),
-          ),
-        ],
       ),
     );
 
@@ -206,8 +237,13 @@ class _ReviewAssessmentScreenState
         context.pop(true);
       }
     } catch (e) {
+      final str = e.toString();
       setState(() {
-        _errorMessage = 'Failed to reject: ${e.toString()}';
+        if (str.contains('LW101') || str.contains('modified concurrently')) {
+          _errorMessage = 'This assessment was updated or already reviewed by another parent. Please reload.';
+        } else {
+          _errorMessage = 'Failed to reject: $e';
+        }
       });
     } finally {
       if (mounted) {
@@ -260,11 +296,25 @@ class _ReviewAssessmentScreenState
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Chip(
-                                label: Text(
-                                  _currentAssessment.type.name.toUpperCase(),
-                                  style: const TextStyle(fontSize: 12),
-                                ),
+                              Wrap(
+                                spacing: AppSpacing.xs,
+                                children: [
+                                  Chip(
+                                    label: Text(
+                                      _currentAssessment
+                                          .subjectKey
+                                          .displayLabel,
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                  Chip(
+                                    label: Text(
+                                      _currentAssessment.type.name
+                                          .toUpperCase(),
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                ],
                               ),
                               Chip(
                                 label: Text(
@@ -372,17 +422,7 @@ class _ReviewAssessmentScreenState
                               itemCount: _evidenceList.length,
                               itemBuilder: (ctx, i) {
                                 final ev = _evidenceList[i];
-                                return ListTile(
-                                  dense: true,
-                                  leading: const Icon(Icons.image),
-                                  title: Text(
-                                    ev.storagePath.split('/').last,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  subtitle: Text(
-                                    '${ev.mediaType} • ${(ev.fileSizeBytes / 1024).toStringAsFixed(1)} KB',
-                                  ),
-                                );
+                                return _EvidencePreviewItem(evidence: ev);
                               },
                             ),
                         ],
@@ -426,6 +466,135 @@ class _ReviewAssessmentScreenState
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EvidencePreviewItem extends ConsumerStatefulWidget {
+  const _EvidencePreviewItem({required this.evidence});
+
+  final AssessmentEvidence evidence;
+
+  @override
+  ConsumerState<_EvidencePreviewItem> createState() =>
+      _EvidencePreviewItemState();
+}
+
+class _EvidencePreviewItemState extends ConsumerState<_EvidencePreviewItem> {
+  String? _signedUrl;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSignedUrl();
+  }
+
+  Future<void> _loadSignedUrl() async {
+    try {
+      final storage = ref.read(assessmentEvidenceStorageProvider);
+      final url = await storage.getEvidenceSignedUrl(
+        storagePath: widget.evidence.storagePath,
+        expiresIn: const Duration(minutes: 10),
+      );
+      if (mounted) {
+        setState(() {
+          _signedUrl = url;
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fileName = widget.evidence.storagePath.split('/').last;
+
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      color: theme.colorScheme.surfaceContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.sm),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.photo, size: 18),
+                const SizedBox(width: AppSpacing.xs),
+                Expanded(
+                  child: Text(
+                    fileName,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text(
+                  '${(widget.evidence.fileSizeBytes / 1024).toStringAsFixed(1)} KB',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            if (_isLoading)
+              const SizedBox(
+                height: 120,
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            else if (_signedUrl != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  _signedUrl!,
+                  height: 180,
+                  width: double.infinity,
+                  fit: BoxFit.contain,
+                  errorBuilder: (ctx, err, stack) => Container(
+                    height: 100,
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    alignment: Alignment.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.image, size: 32, color: Colors.grey),
+                        const SizedBox(height: 4),
+                        Text(fileName, style: const TextStyle(fontSize: 11)),
+                      ],
+                    ),
+                  ),
+                  loadingBuilder: (ctx, child, progress) {
+                    if (progress == null) return child;
+                    return const SizedBox(
+                      height: 120,
+                      child: Center(
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    );
+                  },
+                ),
+              )
+            else
+              Container(
+                height: 60,
+                color: theme.colorScheme.surfaceContainerHighest,
+                alignment: Alignment.center,
+                child: const Text(
+                  'Preview unavailable',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+          ],
         ),
       ),
     );

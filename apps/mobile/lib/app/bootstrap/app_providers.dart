@@ -8,6 +8,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/assessments/presentation/evidence_picker_service.dart';
+import '../../features/assessments/services/local_evidence_file_store.dart';
 import '../../features/shared_device/domain/parent_gate_service.dart';
 import 'app_config.dart';
 import 'in_memory_repositories.dart';
@@ -43,9 +44,18 @@ final localDraftStoreProvider = Provider<LocalDraftStore>((ref) {
   return ref.watch(databaseProvider);
 });
 
-/// Evidence picker service provider.
+/// Evidence picker service provider. Defaults to production native image_picker.
 final evidencePickerServiceProvider = Provider<EvidencePickerService>((ref) {
-  return SimulatedEvidencePickerService();
+  final config = ref.watch(appConfigProvider);
+  if (config.canUseLocalDemoRepositories) {
+    return SimulatedEvidencePickerService();
+  }
+  return NativeEvidencePickerService();
+});
+
+/// App-private durable evidence file storage provider.
+final localEvidenceFileStoreProvider = Provider<LocalEvidenceFileStore>((ref) {
+  return DefaultLocalEvidenceFileStore();
 });
 
 /// Parent Gate service provider.
@@ -191,7 +201,8 @@ class ActiveChildModeNotifier extends Notifier<ChildProfile?> {
           displayName: map['display_name'] as String,
           schoolGrade: map['school_grade'] as int?,
           birthYear: map['birth_year'] as int?,
-          avatarKey: map['avatar_key'] as String?,
+          avatarKey:
+              map['avatar_key'] as String? ?? map['avatarKey'] as String?,
           status: ChildProfileStatus.parse(map['status'] as String),
           createdAt: DateTime.parse(map['created_at'] as String),
         );
@@ -208,6 +219,7 @@ class ActiveChildModeNotifier extends Notifier<ChildProfile?> {
       'display_name': child.displayName,
       'school_grade': child.schoolGrade,
       'birth_year': child.birthYear,
+      'avatar_key': child.avatarKey,
       'avatarKey': child.avatarKey,
       'status': child.status.name,
       'created_at': child.createdAt.toIso8601String(),

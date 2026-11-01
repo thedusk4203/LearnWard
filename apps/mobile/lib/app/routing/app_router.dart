@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -119,7 +120,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: AppRoutes.childAddAssessment,
         name: AppRoutes.childAddAssessmentName,
-        builder: (context, state) => const AddAssessmentScreen(),
+        builder: (context, state) {
+          final draft = state.extra as LocalAssessmentDraft?;
+          return AddAssessmentScreen(initialDraft: draft);
+        },
       ),
       GoRoute(
         path: AppRoutes.parentReviewAssessment,

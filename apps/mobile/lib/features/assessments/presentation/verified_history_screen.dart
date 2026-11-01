@@ -6,7 +6,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 
-/// Screen displaying the immutable canonical verified learning accomplishments.
+/// Screen displaying the immutable canonical verified learning records.
 class VerifiedHistoryScreen extends ConsumerStatefulWidget {
   const VerifiedHistoryScreen({
     super.key,
@@ -65,7 +65,7 @@ class _VerifiedHistoryScreenState extends ConsumerState<VerifiedHistoryScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('${widget.childDisplayName}\'s Verified Results'),
+        title: Text('${widget.childDisplayName}\'s Verified Record'),
       ),
       body: SafeArea(
         child: Center(
@@ -128,20 +128,44 @@ class _VerifiedHistoryScreenState extends ConsumerState<VerifiedHistoryScreen> {
                                 mainAxisAlignment:
                                     MainAxisAlignment.spaceBetween,
                                 children: [
-                                  Chip(
-                                    avatar: const Icon(
-                                      Icons.check_circle,
-                                      size: 16,
-                                      color: Colors.green,
-                                    ),
-                                    label: const Text(
-                                      'VERIFIED',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.green,
+                                  Wrap(
+                                    spacing: AppSpacing.xs,
+                                    children: [
+                                      Chip(
+                                        avatar: const Icon(
+                                          Icons.check_circle,
+                                          size: 14,
+                                          color: Colors.green,
+                                        ),
+                                        label: const Text(
+                                          'VERIFIED',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.green,
+                                          ),
+                                        ),
                                       ),
-                                    ),
+                                      Chip(
+                                        label: Text(
+                                          event.subjectKey.displayLabel,
+                                          style: const TextStyle(fontSize: 11),
+                                        ),
+                                      ),
+                                      if (event.evidenceCount > 0)
+                                        Chip(
+                                          avatar: const Icon(
+                                            Icons.photo_outlined,
+                                            size: 14,
+                                          ),
+                                          label: Text(
+                                            '${event.evidenceCount} ${event.evidenceCount == 1 ? 'photo' : 'photos'}',
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
                                   ),
                                   Text(
                                     '${event.score.serverNormalizedScore} / 10',

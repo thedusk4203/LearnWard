@@ -17,6 +17,8 @@ dependencies:
     sdk: flutter
   flutter_riverpod: ^3.4.3
   go_router: ^18.1.2
+  image_picker: ^1.1.2
+  path_provider: ^2.1.5
   learnward_application:
     path: ../../packages/learnward_application
   learnward_data:

@@ -12,7 +12,9 @@ import 'evidence_picker_service.dart';
 /// Screen where a learner captures an academic result, attaches evidence,
 /// and either saves a local draft or submits for parent review.
 class AddAssessmentScreen extends ConsumerStatefulWidget {
-  const AddAssessmentScreen({super.key});
+  const AddAssessmentScreen({super.key, this.initialDraft});
+
+  final LocalAssessmentDraft? initialDraft;
 
   @override
   ConsumerState<AddAssessmentScreen> createState() =>
@@ -22,14 +24,16 @@ class AddAssessmentScreen extends ConsumerStatefulWidget {
 class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  final _subjectController = TextEditingController(text: 'Mathematics');
-  final _titleController = TextEditingController();
-  final _rawScoreController = TextEditingController();
-  final _maxScoreController = TextEditingController(text: '10');
+  late String _localDraftId;
+  late SubjectKey _selectedSubjectKey;
+  late TextEditingController _subjectController;
+  late TextEditingController _titleController;
+  late TextEditingController _rawScoreController;
+  late TextEditingController _maxScoreController;
 
-  AssessmentType _selectedType = AssessmentType.quiz;
-  AssessmentDifficulty _selectedDifficulty = AssessmentDifficulty.normal;
-  final DateTime _occurredAt = DateTime.now();
+  late AssessmentType _selectedType;
+  late AssessmentDifficulty _selectedDifficulty;
+  late DateTime _occurredAt;
   SelectedEvidenceFile? _selectedEvidence;
 
   bool _isSubmitting = false;
@@ -39,8 +43,62 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   @override
   void initState() {
     super.initState();
+    final draft = widget.initialDraft;
+    if (draft != null) {
+      _localDraftId = draft.localDraftId;
+      _selectedSubjectKey = draft.subjectKey;
+      _subjectController = TextEditingController(text: draft.subject);
+      _titleController = TextEditingController(text: draft.title);
+      _rawScoreController = TextEditingController(
+        text: draft.rawScore > 0 ? draft.rawScore.toString() : '',
+      );
+      _maxScoreController = TextEditingController(
+        text: draft.maxScore.toString(),
+      );
+      _selectedType = AssessmentType.fromValue(draft.assessmentType);
+      _selectedDifficulty = AssessmentDifficulty.fromValue(draft.difficulty);
+      _occurredAt = draft.occurredAt;
+      if (draft.localPhotoPath != null) {
+        _restoreEvidenceFile(draft.localPhotoPath!);
+      }
+    } else {
+      _localDraftId = generateUuid();
+      _selectedSubjectKey = SubjectKey.math;
+      _subjectController = TextEditingController(
+        text: SubjectKey.math.displayLabel,
+      );
+      _titleController = TextEditingController();
+      _rawScoreController = TextEditingController();
+      _maxScoreController = TextEditingController(text: '10');
+      _selectedType = AssessmentType.quiz;
+      _selectedDifficulty = AssessmentDifficulty.normal;
+      _occurredAt = DateTime.now();
+    }
+
     _rawScoreController.addListener(_updateScorePreview);
     _maxScoreController.addListener(_updateScorePreview);
+    _updateScorePreview();
+  }
+
+  Future<void> _restoreEvidenceFile(String path) async {
+    try {
+      final store = ref.read(localEvidenceFileStoreProvider);
+      final bytes = await store.loadEvidence(path);
+      if (bytes != null && mounted) {
+        final fileName = path.split(RegExp(r'[/\\]')).last;
+        final mediaType = fileName.toLowerCase().endsWith('.png')
+            ? 'image/png'
+            : 'image/jpeg';
+        setState(() {
+          _selectedEvidence = SelectedEvidenceFile(
+            bytes: bytes,
+            fileName: fileName,
+            mediaType: mediaType,
+            localPath: path,
+          );
+        });
+      }
+    } catch (_) {}
   }
 
   @override
@@ -69,11 +127,54 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   Future<void> _pickEvidence() async {
     final picker = ref.read(evidencePickerServiceProvider);
     final file = await picker.pickEvidencePhoto();
-    if (file != null) {
+    if (file == null) return;
+
+    if (file.bytes.length > 10 * 1024 * 1024) {
+      setState(() {
+        _errorMessage =
+            'The selected photo exceeds the 10 MB limit (${(file.bytes.length / (1024 * 1024)).toStringAsFixed(1)} MB). Please choose a smaller photo.';
+      });
+      return;
+    }
+
+    if (file.mediaType != 'image/jpeg' && file.mediaType != 'image/png') {
+      setState(() {
+        _errorMessage = 'Only JPEG and PNG photos are supported.';
+      });
+      return;
+    }
+
+    try {
+      final fileStore = ref.read(localEvidenceFileStoreProvider);
+      final savedPath = await fileStore.saveEvidence(
+        fileName: file.fileName,
+        bytes: file.bytes,
+      );
+      setState(() {
+        _selectedEvidence = SelectedEvidenceFile(
+          bytes: file.bytes,
+          fileName: file.fileName,
+          mediaType: file.mediaType,
+          localPath: savedPath,
+        );
+        _errorMessage = null;
+      });
+    } catch (_) {
       setState(() {
         _selectedEvidence = file;
+        _errorMessage = null;
       });
     }
+  }
+
+  Future<void> _removeEvidence() async {
+    if (_selectedEvidence?.localPath != null) {
+      try {
+        final fileStore = ref.read(localEvidenceFileStoreProvider);
+        await fileStore.deleteEvidence(_selectedEvidence!.localPath!);
+      } catch (_) {}
+    }
+    setState(() => _selectedEvidence = null);
   }
 
   Future<void> _saveLocalDraft() async {
@@ -84,10 +185,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final max = double.tryParse(_maxScoreController.text.trim()) ?? 10.0;
 
     final draft = LocalAssessmentDraft(
-      localDraftId: generateUuid(),
+      localDraftId: _localDraftId,
       familyId: activeChild.familyId.value,
       childId: activeChild.id.value,
-      subject: _subjectController.text.trim(),
+      subjectKey: _selectedSubjectKey,
+      subject: _subjectController.text.trim().isEmpty
+          ? _selectedSubjectKey.displayLabel
+          : _subjectController.text.trim(),
       title: _titleController.text.trim().isEmpty
           ? 'Draft Assessment'
           : _titleController.text.trim(),
@@ -98,6 +202,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       localPhotoPath: _selectedEvidence?.localPath,
       occurredAt: _occurredAt,
       updatedAt: DateTime.now().toUtc(),
+      entryContext: EntryContext.sharedChild,
     );
 
     final store = ref.read(localDraftStoreProvider);
@@ -129,43 +234,43 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     try {
       final repo = ref.read(assessmentRepositoryProvider);
       final storage = ref.read(assessmentEvidenceStorageProvider);
+      final localStore = ref.read(localDraftStoreProvider);
 
-      // 1. Create Server Draft
-      final createDraft = CreateAssessmentDraft(repo);
-      final draft = await createDraft(
+      final submitUseCase = SubmitAssessmentDraft(
+        repository: repo,
+        storage: storage,
+        localDraftStore: localStore,
+      );
+
+      final evidenceId = _selectedEvidence != null
+          ? EvidenceId(generateUuid())
+          : null;
+
+      await submitUseCase(
+        commandId: generateUuid(),
         familyId: activeChild.familyId,
         childId: activeChild.id,
+        subjectKey: _selectedSubjectKey,
         subject: _subjectController.text.trim(),
         title: _titleController.text.trim(),
         type: _selectedType,
         difficulty: _selectedDifficulty,
         score: AssessmentScore(rawScore: raw, maxScore: max),
         occurredAt: _occurredAt,
+        entryContext: EntryContext.sharedChild,
+        evidenceBytes: _selectedEvidence?.bytes,
+        evidenceMediaType: _selectedEvidence?.mediaType,
+        evidenceId: evidenceId,
+        localDraftId: _localDraftId,
       );
 
-      // 2. Attach Evidence if selected
-      if (_selectedEvidence != null) {
-        final uploadUseCase = UploadAssessmentEvidence(
-          repository: repo,
-          storage: storage,
-        );
-        await uploadUseCase(
-          familyId: activeChild.familyId,
-          childId: activeChild.id,
-          assessmentId: draft.id,
-          fileName: _selectedEvidence!.fileName,
-          bytes: _selectedEvidence!.bytes,
-          mediaType: _selectedEvidence!.mediaType,
-        );
+      // Clean up local evidence file upon success
+      if (_selectedEvidence?.localPath != null) {
+        try {
+          final fileStore = ref.read(localEvidenceFileStoreProvider);
+          await fileStore.deleteEvidence(_selectedEvidence!.localPath!);
+        } catch (_) {}
       }
-
-      // 3. Submit for Review with unique commandId
-      final submitUseCase = SubmitAssessment(repo);
-      await submitUseCase(
-        assessmentId: draft.id,
-        expectedVersion: draft.version,
-        commandId: generateUuid(),
-      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -178,7 +283,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       }
     } catch (e) {
       setState(() {
-        _errorMessage = 'Failed to submit: ${e.toString()}';
+        _errorMessage = _mapFriendlyError(e);
       });
     } finally {
       if (mounted) {
@@ -187,12 +292,39 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     }
   }
 
+  String _mapFriendlyError(Object error) {
+    final str = error.toString().toLowerCase();
+    if (str.contains('socketexception') ||
+        str.contains('clientexception') ||
+        str.contains('network') ||
+        str.contains('connection') ||
+        str.contains('timed out')) {
+      return 'Could not connect to the server. Your work is saved on this device. Please try again when online.';
+    }
+    if (str.contains('42501') || str.contains('permission denied')) {
+      return 'You do not have permission to submit assessments for this family.';
+    }
+    if (str.contains('lw101') || str.contains('version')) {
+      return 'This assessment was updated elsewhere. Please refresh.';
+    }
+    if (str.contains('maximum size') || str.contains('exceeds')) {
+      return 'Attached photo exceeds the allowed size limit (10 MB).';
+    }
+    return 'Failed to submit assessment. Please check your connection and try again.';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Add Assessment Result')),
+      appBar: AppBar(
+        title: Text(
+          widget.initialDraft != null
+              ? 'Edit Assessment Draft'
+              : 'Add Assessment Result',
+        ),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -219,12 +351,44 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                       ),
                       const SizedBox(height: AppSpacing.md),
                     ],
+                    DropdownButtonFormField<SubjectKey>(
+                      key: const Key('assessment_subject_key_dropdown'),
+                      initialValue: _selectedSubjectKey,
+                      decoration: const InputDecoration(
+                        labelText: 'Academic Subject Area *',
+                        prefixIcon: Icon(Icons.category),
+                        border: OutlineInputBorder(),
+                      ),
+                      items: SubjectKey.values
+                          .map(
+                            (k) => DropdownMenuItem(
+                              value: k,
+                              child: Text(k.displayLabel),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() {
+                            _selectedSubjectKey = val;
+                            if (_subjectController.text.isEmpty ||
+                                SubjectKey.values.any(
+                                  (s) =>
+                                      s.displayLabel == _subjectController.text,
+                                )) {
+                              _subjectController.text = val.displayLabel;
+                            }
+                          });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: AppSpacing.md),
                     TextFormField(
                       key: const Key('assessment_subject_field'),
                       controller: _subjectController,
                       decoration: const InputDecoration(
-                        labelText: 'Subject *',
-                        hintText: 'e.g. Mathematics, English, Science',
+                        labelText: 'Subject Detail *',
+                        hintText: 'e.g. Mathematics, Algebra I, Biology',
                         prefixIcon: Icon(Icons.menu_book),
                         border: OutlineInputBorder(),
                       ),
@@ -414,7 +578,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                             ),
                             const SizedBox(height: AppSpacing.xs),
                             const Text(
-                              'Attach a clear photo or worksheet scan for parent verification.',
+                              'Attach a clear photo or worksheet scan for parent verification (max 10 MB, JPEG or PNG).',
                               style: TextStyle(fontSize: 12),
                             ),
                             const SizedBox(height: AppSpacing.sm),
@@ -435,9 +599,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                   ),
                                   IconButton(
                                     icon: const Icon(Icons.close, size: 18),
-                                    onPressed: () {
-                                      setState(() => _selectedEvidence = null);
-                                    },
+                                    onPressed: _removeEvidence,
                                   ),
                                 ],
                               )
