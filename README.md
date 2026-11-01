@@ -70,6 +70,7 @@ Level    │    Wheel   Store
 | [Phase 2 Secure Assessment Capture ADR](docs/adr/0003-phase-2-secure-assessment-capture.md) | Phase 2 assessment capture, generated normalized score, concurrency row lock, and immutable verified events |
 | [Phase 2 Freeze Receipt](docs/freezes/phase-2-secure-assessment-capture-freeze.md) | Frozen Phase 2 baseline, CI receipt, security invariants, test counts, deferred scope and next gate |
 | [Phase 3 Growth Engine & Ledger ADR](docs/adr/0004-phase-3-growth-engine-ledger.md) | Phase 3 Growth Engine v0.1 calculation, integer minor units, append-only ledgers, balance projections, and concurrency serialization |
+| [Phase 3 Freeze Receipt](docs/freezes/phase-3-growth-engine-ledger-freeze.md) | Frozen Phase 3 baseline, CI receipt, Growth engine rules, ledger invariants, test counts and deferred scope |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
@@ -80,7 +81,7 @@ and the Parent PIN containment boundary. Phase 2 must consume this contract with
 
 **Phase 2 — Secure Assessment Capture Vertical Slice is FROZEN.** It delivers family/child tenant-bound assessments, server-authoritative score normalization via stored generated columns, longitudinal subject keys, full-path Storage RLS on private photo evidence with draft-bound mutation lifecycle, optimistic concurrency locking, idempotent review workflows (`verify_assessment`, `reject_assessment`), append-only verified learning events, and durable offline draft recovery.
 
-**Phase 3 — Growth Engine + XP/RP Ledger Foundation is IN DEVELOPMENT.** It establishes the pure Dart Growth Engine v0.1, rolling 3-sample historical baseline calculation, below-level anti-farming protection, deterministic integer minor-unit RP awards, Study XP accumulation, double-entry append-only ledgers (`xp_ledger`, `rp_ledger`), `child_balances` projections with advisory-locked balance reconciliation, and serialized `SELECT FOR UPDATE` exactly-once event processing.
+**Phase 3 — Growth Engine + XP/RP Ledger Foundation is FROZEN.** It establishes the pure Dart Growth Engine v0.1, deterministic integer minor-unit RP awards, Study XP accumulation, immutable grade provenance with fail-closed missing grade handling, rolling 3-sample historical baseline calculation, below-level anti-farming protection, double-entry append-only ledgers (`xp_ledger`, `rp_ledger`), `child_balances` projections with single-MVCC-snapshot read-only balance reconciliation, and serialized `SELECT FOR UPDATE` exactly-once event processing.
 
 Next planned phase: **Phase 4 — Reward Economy & Wheel Experience** (not started).
 
@@ -257,13 +258,13 @@ Run `node scripts/test_last_owner_concurrency.mjs` to execute the multi-session 
 
 ## Product status
 
-**Phase:** Phase 1 — Family + Child Identity Foundation — **FROZEN**  
-**Frozen code baseline:** `2251cf51f47837ec121182f6a0c3d618effd393a`  
-**Post-merge CI:** `41218555546` — **SUCCESS**  
-**Code:** Domain entities, application use cases, Supabase repositories, RLS migrations, pgTAP tests, adult Magic Link auth, family/child flows, persistent shared-device Child Mode, mandatory Parent PIN, and concurrency-safe owner invariants  
+**Phase:** Phase 3 — Growth Engine + XP/RP Ledger Foundation — **FROZEN**  
+**Frozen code baseline:** `c6721497bfbde7cb436467cccaad5b2234d23cc4`  
+**Post-merge CI:** `41293964415` — **SUCCESS**  
+**Code:** Domain entities, pure Dart Growth Engine v0.1, integer minor unit representation, immutable append-only economic ledgers (`xp_ledger`, `rp_ledger`), cached balance projections (`child_balances`), single-snapshot read-only reconciliation (`reconcile_child_balance`), fail-closed immutable grade snapshots, recoverable Growth delivery (`catch_up_unprocessed_growth`), cross-language canonical parity fixtures, and Flutter Growth result presentation  
 **Mobile target:** Flutter → Android + iOS  
 **Backend direction:** Supabase + Postgres + Storage  
-**Next gate:** Phase 2 — **Secure Assessment Capture Vertical Slice**.
+**Next gate:** Phase 4 — **Reward Economy & Wheel Experience** (not started).
 
 ## Working rule
 
