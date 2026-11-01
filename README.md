@@ -71,6 +71,8 @@ Level    │    Wheel   Store
 | [Phase 2 Freeze Receipt](docs/freezes/phase-2-secure-assessment-capture-freeze.md) | Frozen Phase 2 baseline, CI receipt, security invariants, test counts, deferred scope and next gate |
 | [Phase 3 Growth Engine & Ledger ADR](docs/adr/0004-phase-3-growth-engine-ledger.md) | Phase 3 Growth Engine v0.1 calculation, integer minor units, append-only ledgers, balance projections, and concurrency serialization |
 | [Phase 3 Freeze Receipt](docs/freezes/phase-3-growth-engine-ledger-freeze.md) | Frozen Phase 3 baseline, CI receipt, Growth engine rules, ledger invariants, test counts and deferred scope |
+| [Phase 4 Reward Economy Design](docs/11-phase-4-reward-economy-wheel-design-v0.1.md) | Phase 4 detailed design: Reward Store, Celebration Wheel, unified RP economy, lifecycle, and safety invariants |
+| [Phase 4 Reward Economy ADR](docs/adr/0005-phase-4-reward-economy-wheel.md) | Proposed architectural decisions for Phase 4 unified RP economy, server-authoritative spins, and concurrency |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
