@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -11,8 +13,8 @@ import '../../shared_device/presentation/parent_pin_setup_dialog.dart';
 
 /// Parent/Guardian home dashboard.
 ///
-/// Displays family overview, adult role status, and the registered children.
-/// Allows adding child profiles or entering shared-device Child Mode.
+/// Displays family overview, pending assessment review queue,
+/// registered children, and access to verified accomplishments.
 class FamilyHomeScreen extends ConsumerStatefulWidget {
   const FamilyHomeScreen({super.key});
 
@@ -24,6 +26,7 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
   bool _isLoading = false;
   String? _errorMessage;
   List<ChildProfile> _children = [];
+  List<Assessment> _pendingAssessments = [];
 
   @override
   void initState() {
@@ -46,6 +49,7 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
         ref.read(activeFamilyProvider.notifier).selectFamily(null);
         setState(() {
           _children = [];
+          _pendingAssessments = [];
           _isLoading = false;
         });
         return;
@@ -58,8 +62,13 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
       final listChildren = ListFamilyChildren(childRepo);
       final children = await listChildren(currentActive.id);
 
+      final assessmentRepo = ref.read(assessmentRepositoryProvider);
+      final pendingUseCase = ListPendingAssessments(assessmentRepo);
+      final pending = await pendingUseCase.forFamily(currentActive.id);
+
       setState(() {
         _children = children;
+        _pendingAssessments = pending;
       });
     } catch (e) {
       setState(() {
@@ -214,6 +223,78 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                 ),
               ),
               const SizedBox(height: AppSpacing.md),
+
+              // Pending Reviews Section
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        'Pending Reviews',
+                        style: theme.textTheme.titleLarge,
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                      if (_pendingAssessments.isNotEmpty)
+                        Badge.count(
+                          count: _pendingAssessments.length,
+                          backgroundColor: theme.colorScheme.error,
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              if (_pendingAssessments.isEmpty)
+                Card(
+                  elevation: 0,
+                  color: theme.colorScheme.surfaceContainerHighest.withValues(
+                    alpha: 0.5,
+                  ),
+                  child: const Padding(
+                    padding: EdgeInsets.all(AppSpacing.md),
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle_outline, color: Colors.green),
+                        SizedBox(width: AppSpacing.sm),
+                        Text('All caught up! No pending submissions.'),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                ..._pendingAssessments.map(
+                  (assessment) => Card(
+                    key: Key('pending_card_${assessment.id.value}'),
+                    margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+                    child: ListTile(
+                      leading: const CircleAvatar(
+                        child: Icon(Icons.rate_review_outlined),
+                      ),
+                      title: Text(assessment.title),
+                      subtitle: Text(
+                        '${assessment.subject} • Score: ${assessment.score.rawScore} / ${assessment.score.maxScore} (${assessment.score.serverNormalizedScore}/10)',
+                      ),
+                      trailing: FilledButton(
+                        key: Key('review_button_${assessment.id.value}'),
+                        onPressed: () async {
+                          final result = await context.push<bool>(
+                            AppRoutes.parentReviewAssessment,
+                            extra: assessment,
+                          );
+                          if (result == true) {
+                            unawaited(_loadData());
+                          }
+                        },
+                        child: const Text('Review'),
+                      ),
+                    ),
+                  ),
+                ),
+
+              const SizedBox(height: AppSpacing.lg),
+
+              // Child Profiles Section
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -256,50 +337,81 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                   (child) => Card(
                     key: Key('child_card_${child.id.value}'),
                     margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-                    child: ListTile(
-                      leading: CircleAvatar(
-                        child: Text(
-                          child.displayName.isNotEmpty
-                              ? child.displayName[0].toUpperCase()
-                              : 'C',
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: CircleAvatar(
+                            child: Text(
+                              child.displayName.isNotEmpty
+                                  ? child.displayName[0].toUpperCase()
+                                  : 'C',
+                            ),
+                          ),
+                          title: Text(child.displayName),
+                          subtitle: Text(
+                            [
+                              if (child.schoolGrade != null)
+                                'Grade ${child.schoolGrade}',
+                              if (child.birthYear != null)
+                                'Born ${child.birthYear}',
+                              'Status: ${child.status.wireName}',
+                            ].join(' • '),
+                          ),
+                          trailing: FilledButton.tonal(
+                            key: Key('enter_child_mode_${child.id.value}'),
+                            onPressed: () async {
+                              final gateService = ref.read(
+                                parentGateServiceProvider,
+                              );
+                              final hasPin = await gateService
+                                  .hasConfiguredPin();
+                              if (!context.mounted) return;
+
+                              if (!hasPin) {
+                                final pinConfigured =
+                                    await ParentPinSetupDialog.show(context);
+                                if (!pinConfigured || !context.mounted) {
+                                  return;
+                                }
+                              }
+
+                              await ref
+                                  .read(activeChildModeProvider.notifier)
+                                  .selectChild(child);
+                              if (context.mounted) {
+                                context.go(AppRoutes.childMode);
+                              }
+                            },
+                            child: const Text('Child Mode'),
+                          ),
                         ),
-                      ),
-                      title: Text(child.displayName),
-                      subtitle: Text(
-                        [
-                          if (child.schoolGrade != null)
-                            'Grade ${child.schoolGrade}',
-                          if (child.birthYear != null)
-                            'Born ${child.birthYear}',
-                          'Status: ${child.status.wireName}',
-                        ].join(' • '),
-                      ),
-                      trailing: FilledButton.tonal(
-                        key: Key('enter_child_mode_${child.id.value}'),
-                        onPressed: () async {
-                          final gateService = ref.read(
-                            parentGateServiceProvider,
-                          );
-                          final hasPin = await gateService.hasConfiguredPin();
-                          if (!context.mounted) return;
-
-                          if (!hasPin) {
-                            final pinConfigured =
-                                await ParentPinSetupDialog.show(context);
-                            if (!pinConfigured || !context.mounted) {
-                              return;
-                            }
-                          }
-
-                          await ref
-                              .read(activeChildModeProvider.notifier)
-                              .selectChild(child);
-                          if (context.mounted) {
-                            context.go(AppRoutes.childMode);
-                          }
-                        },
-                        child: const Text('Child Mode'),
-                      ),
+                        Padding(
+                          padding: const EdgeInsets.only(
+                            left: AppSpacing.md,
+                            right: AppSpacing.md,
+                            bottom: AppSpacing.sm,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton.icon(
+                                key: Key('view_history_${child.id.value}'),
+                                icon: const Icon(Icons.history, size: 18),
+                                label: const Text('Verified History'),
+                                onPressed: () {
+                                  context.push(
+                                    AppRoutes.parentVerifiedHistory,
+                                    extra: {
+                                      'childId': child.id,
+                                      'childDisplayName': child.displayName,
+                                    },
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),

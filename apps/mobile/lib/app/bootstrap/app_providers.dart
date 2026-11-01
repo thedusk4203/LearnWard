@@ -7,6 +7,7 @@ import 'package:learnward_data/learnward_data.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../features/assessments/presentation/evidence_picker_service.dart';
 import '../../features/shared_device/domain/parent_gate_service.dart';
 import 'app_config.dart';
 import 'in_memory_repositories.dart';
@@ -26,6 +27,25 @@ final databaseProvider = Provider<AppDatabase>((ref) {
 /// Local metadata store provider (defaults to SQLite database in production).
 final localMetadataStoreProvider = Provider<LocalMetadataStore>((ref) {
   return ref.watch(databaseProvider);
+});
+
+/// In-memory local draft store provider for testing/local demo.
+final inMemoryLocalDraftStoreProvider = Provider<LocalDraftStore>((ref) {
+  return InMemoryLocalDraftStore();
+});
+
+/// Local draft store provider.
+final localDraftStoreProvider = Provider<LocalDraftStore>((ref) {
+  final config = ref.watch(appConfigProvider);
+  if (config.canUseLocalDemoRepositories) {
+    return ref.watch(inMemoryLocalDraftStoreProvider);
+  }
+  return ref.watch(databaseProvider);
+});
+
+/// Evidence picker service provider.
+final evidencePickerServiceProvider = Provider<EvidencePickerService>((ref) {
+  return SimulatedEvidencePickerService();
 });
 
 /// Parent Gate service provider.
@@ -96,6 +116,34 @@ final childProfileRepositoryProvider = Provider<ChildProfileRepository>((ref) {
   throw MissingSupabaseConfigurationException(config.environment);
 });
 
+/// Repository for assessment operations.
+final assessmentRepositoryProvider = Provider<AssessmentRepository>((ref) {
+  final config = ref.watch(appConfigProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (client != null) {
+    return SupabaseAssessmentRepository(client);
+  }
+  if (config.canUseLocalDemoRepositories) {
+    return InMemoryAssessmentRepository();
+  }
+  throw MissingSupabaseConfigurationException(config.environment);
+});
+
+/// Storage for assessment evidence assets.
+final assessmentEvidenceStorageProvider = Provider<AssessmentEvidenceStorage>((
+  ref,
+) {
+  final config = ref.watch(appConfigProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (client != null) {
+    return SupabaseAssessmentEvidenceStorage(client);
+  }
+  if (config.canUseLocalDemoRepositories) {
+    return InMemoryAssessmentEvidenceStorage();
+  }
+  throw MissingSupabaseConfigurationException(config.environment);
+});
+
 /// Notifier managing the currently selected family.
 class ActiveFamilyNotifier extends Notifier<Family?> {
   @override
@@ -160,7 +208,7 @@ class ActiveChildModeNotifier extends Notifier<ChildProfile?> {
       'display_name': child.displayName,
       'school_grade': child.schoolGrade,
       'birth_year': child.birthYear,
-      'avatar_key': child.avatarKey,
+      'avatarKey': child.avatarKey,
       'status': child.status.name,
       'created_at': child.createdAt.toIso8601String(),
     });

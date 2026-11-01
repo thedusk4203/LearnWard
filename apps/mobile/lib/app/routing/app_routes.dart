@@ -25,6 +25,15 @@ abstract final class AppRoutes {
   static const String childMode = '/child';
   static const String childModeName = 'childMode';
 
+  static const String childAddAssessment = '/child/assessments/add';
+  static const String childAddAssessmentName = 'childAddAssessment';
+
+  static const String parentReviewAssessment = '/parent/assessments/review';
+  static const String parentReviewAssessmentName = 'parentReviewAssessment';
+
+  static const String parentVerifiedHistory = '/parent/assessments/history';
+  static const String parentVerifiedHistoryName = 'parentVerifiedHistory';
+
   // Reserved for later phases
   static const String pair = '/pair';
 }

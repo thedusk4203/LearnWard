@@ -4,6 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../features/assessments/presentation/add_assessment_screen.dart';
+import '../../features/assessments/presentation/review_assessment_screen.dart';
+import '../../features/assessments/presentation/verified_history_screen.dart';
 import '../../features/auth/presentation/auth_screen.dart';
 import '../../features/child/presentation/child_mode_screen.dart';
 import '../../features/child/presentation/create_child_screen.dart';
@@ -35,7 +38,7 @@ final routerListenableProvider = Provider<RouterListenable>((ref) {
 /// Application router.
 ///
 /// Route guards ensure:
-/// - Child Mode containment: locked in /child until Parent Gate succeeds.
+/// - Child Mode containment: locked in /child routes until Parent Gate succeeds.
 /// - Auth guard: unauthenticated users redirect to /auth when Supabase is configured.
 final routerProvider = Provider<GoRouter>((ref) {
   final listenable = ref.watch(routerListenableProvider);
@@ -50,14 +53,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       // 1. Shared-device Child Mode containment:
       // While in Child Mode, protected parent routes and auth cannot be accessed.
       if (activeChild != null) {
-        if (location != AppRoutes.childMode) {
+        if (!location.startsWith(AppRoutes.childMode)) {
           return AppRoutes.childMode;
         }
         return null;
       }
 
-      // If on /child route without an active child profile, return to parent home
-      if (location == AppRoutes.childMode && activeChild == null) {
+      // If on /child routes without an active child profile, return to parent home
+      if (location.startsWith(AppRoutes.childMode) && activeChild == null) {
         return AppRoutes.parentHome;
       }
 
@@ -112,6 +115,30 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: AppRoutes.childMode,
         name: AppRoutes.childModeName,
         builder: (context, state) => const ChildModeScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.childAddAssessment,
+        name: AppRoutes.childAddAssessmentName,
+        builder: (context, state) => const AddAssessmentScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.parentReviewAssessment,
+        name: AppRoutes.parentReviewAssessmentName,
+        builder: (context, state) {
+          final assessment = state.extra as Assessment;
+          return ReviewAssessmentScreen(assessment: assessment);
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.parentVerifiedHistory,
+        name: AppRoutes.parentVerifiedHistoryName,
+        builder: (context, state) {
+          final extra = state.extra as Map<String, dynamic>;
+          return VerifiedHistoryScreen(
+            childId: extra['childId'] as ChildId,
+            childDisplayName: extra['childDisplayName'] as String,
+          );
+        },
       ),
     ],
   );
