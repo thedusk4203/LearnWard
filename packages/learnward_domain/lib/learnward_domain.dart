@@ -4,8 +4,13 @@
 /// Must never import Flutter, Riverpod, Drift, Supabase or platform plugins.
 library;
 
+export 'src/entities/assessment.dart';
+export 'src/entities/assessment_evidence.dart';
 export 'src/entities/child_profile.dart';
 export 'src/entities/family.dart';
+export 'src/entities/verified_learning_event.dart';
 export 'src/exceptions/domain_exceptions.dart';
+export 'src/value_objects/assessment_enums.dart';
+export 'src/value_objects/assessment_score.dart';
 export 'src/value_objects/identifiers.dart';
 export 'src/value_objects/normalized_score.dart';
