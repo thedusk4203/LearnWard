@@ -20,5 +20,8 @@ if command -v npx >/dev/null 2>&1; then
   npx supabase test db
   if command -v node >/dev/null 2>&1; then
     node scripts/test_last_owner_concurrency.mjs
+    node scripts/test_assessment_verification_concurrency.mjs
+    node scripts/test_storage_evidence_security.mjs
+    node scripts/test_assessment_vertical_slice_retry.mjs
   fi
 fi

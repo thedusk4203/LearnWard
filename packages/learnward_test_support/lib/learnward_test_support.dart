@@ -4,6 +4,8 @@
 /// production behavior.
 library;
 
+export 'src/fake_assessment_evidence_storage.dart';
+export 'src/fake_assessment_repository.dart';
 export 'src/fake_child_profile_repository.dart';
 export 'src/fake_family_repository.dart';
 export 'src/fixed_clock.dart';

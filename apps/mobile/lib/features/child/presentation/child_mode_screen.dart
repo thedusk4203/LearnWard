@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_design_system/learnward_design_system.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
@@ -11,11 +14,36 @@ import '../../shared_device/presentation/parent_gate_dialog.dart';
 ///
 /// Features a restricted child UI that hides adult family configuration,
 /// child profile management, and billing settings.
-class ChildModeScreen extends ConsumerWidget {
+class ChildModeScreen extends ConsumerStatefulWidget {
   const ChildModeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ChildModeScreen> createState() => _ChildModeScreenState();
+}
+
+class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
+  List<LocalAssessmentDraft> _localDrafts = [];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadLocalDrafts());
+  }
+
+  Future<void> _loadLocalDrafts() async {
+    final activeChild = ref.read(activeChildModeProvider);
+    if (activeChild == null) return;
+    try {
+      final store = ref.read(localDraftStoreProvider);
+      final drafts = await store.listLocalDrafts(activeChild.id);
+      if (mounted) {
+        setState(() => _localDrafts = drafts);
+      }
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final activeChild = ref.watch(activeChildModeProvider);
     final theme = Theme.of(context);
 
@@ -53,14 +81,14 @@ class ChildModeScreen extends ConsumerWidget {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 520),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   CircleAvatar(
-                    radius: 48,
+                    radius: 40,
                     backgroundColor: theme.colorScheme.primaryContainer,
                     child: Icon(
                       Icons.school,
-                      size: 48,
+                      size: 40,
                       color: theme.colorScheme.onPrimaryContainer,
                     ),
                   ),
@@ -72,13 +100,83 @@ class ChildModeScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: AppSpacing.sm),
                   Text(
-                    'Your learning journey and verified accomplishments will show up here.',
+                    'Capture your scores, test papers, and learning results.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: AppSpacing.lg),
+                  FilledButton.icon(
+                    key: const Key('child_add_assessment_button'),
+                    icon: const Icon(Icons.add_task),
+                    label: const Text('Add Academic Result'),
+                    onPressed: () async {
+                      final result = await context.push<bool>(
+                        AppRoutes.childAddAssessment,
+                      );
+                      if (result == true) {
+                        unawaited(_loadLocalDrafts());
+                      }
+                    },
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  if (_localDrafts.isNotEmpty) ...[
+                    Text(
+                      'Unsubmitted Local Drafts (${_localDrafts.length})',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _localDrafts.length,
+                      itemBuilder: (ctx, i) {
+                        final draft = _localDrafts[i];
+                        return Card(
+                          elevation: 0,
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          child: ListTile(
+                            key: Key('local_draft_${draft.localDraftId}'),
+                            leading: const Icon(Icons.edit_note),
+                            title: Text(draft.title),
+                            subtitle: Text(
+                              '${draft.subject} (${draft.subjectKey.displayLabel}) • ${draft.rawScore} / ${draft.maxScore}',
+                            ),
+                            onTap: () async {
+                              final result = await context.push<bool>(
+                                AppRoutes.childAddAssessment,
+                                extra: draft,
+                              );
+                              if (result == true) {
+                                unawaited(_loadLocalDrafts());
+                              }
+                            },
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 20),
+                              onPressed: () async {
+                                if (draft.localPhotoPath != null) {
+                                  try {
+                                    await ref
+                                        .read(localEvidenceFileStoreProvider)
+                                        .deleteEvidence(draft.localPhotoPath!);
+                                  } catch (_) {}
+                                }
+                                final store = ref.read(localDraftStoreProvider);
+                                await store.deleteLocalDraft(
+                                  draft.localDraftId,
+                                );
+                                unawaited(_loadLocalDrafts());
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
                   Card(
                     elevation: 0,
                     color: theme.colorScheme.surfaceContainerHighest,

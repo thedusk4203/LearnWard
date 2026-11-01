@@ -67,6 +67,7 @@ Level    │    Wheel   Store
 | [Engineering Foundation ADR](docs/adr/0001-phase-0-foundation-decisions.md) | Phase 0 package, codegen, CI and local-Supabase decisions |
 | [Phase 1 Family & Child Identity ADR](docs/adr/0002-phase-1-family-child-identity.md) | Phase 1 family and child identity decisions, atomic creation, RLS, and shared-device mode |
 | [Phase 1 Freeze Receipt](docs/freezes/phase-1-family-child-identity-freeze.md) | Frozen Phase 1 baseline, CI receipt, security invariants, test counts, deferred scope and next gate |
+| [Phase 2 Secure Assessment Capture ADR](docs/adr/0003-phase-2-secure-assessment-capture.md) | Phase 2 assessment capture, generated normalized score, concurrency row lock, and immutable verified events |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
@@ -74,6 +75,8 @@ Level    │    Wheel   Store
 **Phase 1 — Family + Child Identity Foundation is frozen.** It establishes adult authentication,
 family creation, child profile management, family-scoped database RLS, shared-device Child Mode,
 and the Parent PIN containment boundary. Phase 2 must consume this contract without weakening it.
+
+**Phase 2 — Secure Assessment Capture Vertical Slice is implemented.** It delivers local drafts, server drafts, private photo evidence storage, optimistic concurrency locking, idempotent review workflows (`verify_assessment`, `reject_assessment`), server-normalized scores via stored generated columns, and append-only `VerifiedLearningEvent` records.
 
 ### Repository layout
 

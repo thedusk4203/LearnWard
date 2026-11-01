@@ -41,3 +41,45 @@ final class ChildId {
   @override
   String toString() => value;
 }
+
+/// Strongly-typed identifier for an [Assessment].
+final class AssessmentId {
+  AssessmentId(this.value) {
+    if (value.trim().isEmpty) {
+      throw const InvalidAssessmentException('AssessmentId cannot be empty.');
+    }
+  }
+
+  final String value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is AssessmentId && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => value;
+}
+
+/// Strongly-typed identifier for an [AssessmentEvidence].
+final class EvidenceId {
+  EvidenceId(this.value) {
+    if (value.trim().isEmpty) {
+      throw const InvalidAssessmentException('EvidenceId cannot be empty.');
+    }
+  }
+
+  final String value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is EvidenceId && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => value;
+}

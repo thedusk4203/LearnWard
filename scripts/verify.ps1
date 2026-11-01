@@ -47,5 +47,14 @@ if (Get-Command npx -ErrorAction SilentlyContinue) {
     if (Get-Command node -ErrorAction SilentlyContinue) {
         node scripts\test_last_owner_concurrency.mjs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        node scripts\test_assessment_verification_concurrency.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        node scripts\test_storage_evidence_security.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        node scripts\test_assessment_vertical_slice_retry.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 }

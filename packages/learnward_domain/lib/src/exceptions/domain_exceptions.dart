@@ -17,3 +17,13 @@ final class InvalidChildProfileException implements Exception {
   @override
   String toString() => 'InvalidChildProfileException: $message';
 }
+
+/// Raised when assessment domain invariants are violated.
+final class InvalidAssessmentException implements Exception {
+  const InvalidAssessmentException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'InvalidAssessmentException: $message';
+}
