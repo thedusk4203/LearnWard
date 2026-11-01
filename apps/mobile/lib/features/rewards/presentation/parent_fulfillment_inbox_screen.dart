@@ -99,7 +99,7 @@ class _ParentFulfillmentInboxScreenState
       final commandStore = ref.read(pendingRewardCommandStoreProvider);
       final fulfillUseCase = FulfillRewardRedemption(
         ref.read(rewardRepositoryProvider),
-        commandStore: commandStore,
+        commandStore,
       );
       await fulfillUseCase(familyId: family.id, redemptionId: redemption.id);
       if (mounted) {
@@ -197,7 +197,7 @@ class _ParentFulfillmentInboxScreenState
         final commandStore = ref.read(pendingRewardCommandStoreProvider);
         final cancelUseCase = CancelRewardRedemption(
           ref.read(rewardRepositoryProvider),
-          commandStore: commandStore,
+          commandStore,
         );
         await cancelUseCase(
           familyId: family.id,
@@ -245,7 +245,7 @@ class _ParentFulfillmentInboxScreenState
       if (pending.operation == RewardCommandOperation.fulfillReward) {
         final fulfillUseCase = FulfillRewardRedemption(
           ref.read(rewardRepositoryProvider),
-          commandStore: commandStore,
+          commandStore,
         );
         await fulfillUseCase(
           commandId: pending.commandId,
@@ -255,7 +255,7 @@ class _ParentFulfillmentInboxScreenState
       } else if (pending.operation == RewardCommandOperation.cancelReward) {
         final cancelUseCase = CancelRewardRedemption(
           ref.read(rewardRepositoryProvider),
-          commandStore: commandStore,
+          commandStore,
         );
         await cancelUseCase(
           commandId: pending.commandId,

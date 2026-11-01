@@ -1,20 +1,31 @@
+import 'dart:io';
+
 import 'package:drift/native.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_data/learnward_data.dart';
 import 'package:test/test.dart';
 
 void main() {
+  late Directory tempDir;
+  late File dbFile;
   late AppDatabase database;
 
   setUp(() {
-    database = AppDatabase(NativeDatabase.memory());
+    tempDir = Directory.systemTemp.createTempSync('learnward_drift_test_');
+    dbFile = File('${tempDir.path}/test_db.sqlite');
+    database = AppDatabase(NativeDatabase(dbFile));
   });
 
   tearDown(() async {
     await database.close();
+    if (tempDir.existsSync()) {
+      try {
+        tempDir.deleteSync(recursive: true);
+      } catch (_) {}
+    }
   });
 
-  group('AppDatabase PendingRewardCommandStore', () {
+  group('AppDatabase PendingRewardCommandStore (File-Backed SQLite)', () {
     final now = DateTime.utc(2026, 11, 1, 12, 0, 0);
 
     test('saves, retrieves, and deletes a pending redeem command', () async {
@@ -130,5 +141,33 @@ void main() {
         expect(all.first.commandId, 'cmd-same-id');
       },
     );
+
+    test('persists pending command across database close and reopen on the same SQLite file', () async {
+      final command = PendingRewardCommand(
+        operation: RewardCommandOperation.redeemReward,
+        commandId: 'cmd-persist-001',
+        familyId: 'fam-p1',
+        childId: 'child-p1',
+        rewardId: 'rew-p1',
+        createdAt: now,
+      );
+
+      await database.savePendingCommand(command);
+
+      // Close initial database handle
+      await database.close();
+
+      // Construct a new database instance pointing to the exact same file
+      final reopened = AppDatabase(NativeDatabase(dbFile));
+
+      final retrieved = await reopened.getPendingCommand('cmd-persist-001');
+      expect(retrieved, isNotNull);
+      expect(retrieved!.commandId, 'cmd-persist-001');
+      expect(retrieved.familyId, 'fam-p1');
+      expect(retrieved.childId, 'child-p1');
+      expect(retrieved.rewardId, 'rew-p1');
+
+      await reopened.close();
+    });
   });
 }

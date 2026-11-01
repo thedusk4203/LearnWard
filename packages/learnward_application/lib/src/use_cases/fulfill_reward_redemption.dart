@@ -7,30 +7,21 @@ import '../ports/reward_repository.dart';
 
 final class FulfillRewardRedemption {
   const FulfillRewardRedemption(
-    this._repository, {
-    this.commandStore,
+    this._repository,
+    this._commandStore, {
     this.uuidGenerator,
   });
 
   final RewardRepository _repository;
-  final PendingRewardCommandStore? commandStore;
+  final PendingRewardCommandStore _commandStore;
   final String Function()? uuidGenerator;
 
   Future<RewardRedemption> call({
-    String? commandId,
-    FamilyId? familyId,
+    required FamilyId familyId,
     required RewardRedemptionId redemptionId,
+    String? commandId,
   }) async {
-    if (commandStore == null || familyId == null) {
-      final actualCommandId =
-          commandId ?? (uuidGenerator?.call() ?? _generateUuid());
-      return _repository.fulfillRewardRedemption(
-        commandId: actualCommandId,
-        redemptionId: redemptionId,
-      );
-    }
-
-    final existing = await commandStore!.findPendingRedemptionCommand(
+    final existing = await _commandStore.findPendingRedemptionCommand(
       operation: RewardCommandOperation.fulfillReward,
       redemptionId: redemptionId.value,
     );
@@ -41,7 +32,7 @@ final class FulfillRewardRedemption {
         (uuidGenerator?.call() ?? _generateUuid());
 
     if (existing == null) {
-      await commandStore!.savePendingCommand(
+      await _commandStore.savePendingCommand(
         PendingRewardCommand(
           operation: RewardCommandOperation.fulfillReward,
           commandId: actualCommandId,
@@ -58,11 +49,11 @@ final class FulfillRewardRedemption {
         redemptionId: redemptionId,
       );
 
-      await commandStore!.deletePendingCommand(actualCommandId);
+      await _commandStore.deletePendingCommand(actualCommandId);
       return result;
     } catch (e) {
       if (_isTerminalError(e)) {
-        await commandStore!.deletePendingCommand(actualCommandId);
+        await _commandStore.deletePendingCommand(actualCommandId);
       }
       rethrow;
     }

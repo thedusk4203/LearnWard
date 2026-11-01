@@ -1,5 +1,6 @@
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
+import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:test/test.dart';
 
 class FakeRewardRepository implements RewardRepository {
@@ -310,7 +311,8 @@ void main() {
     test(
       'RedeemStoreReward creates pending redemption and forwards commandId',
       () async {
-        final redeem = RedeemStoreReward(repository);
+        final commandStore = InMemoryPendingRewardCommandStore();
+        final redeem = RedeemStoreReward(repository, commandStore);
 
         repository.rewards['rew-10'] = Reward(
           id: RewardId('rew-10'),
@@ -326,6 +328,7 @@ void main() {
 
         final redemption = await redeem(
           commandId: 'cmd-redeem-1',
+          familyId: familyId,
           rewardId: RewardId('rew-10'),
           childId: childId,
         );
@@ -338,7 +341,8 @@ void main() {
     );
 
     test('FulfillRewardRedemption completes delivery', () async {
-      final fulfill = FulfillRewardRedemption(repository);
+      final commandStore = InMemoryPendingRewardCommandStore();
+      final fulfill = FulfillRewardRedemption(repository, commandStore);
 
       final redId = RewardRedemptionId('red-1');
       repository.redemptions[redId.value] = RewardRedemption(
@@ -356,6 +360,7 @@ void main() {
 
       final fulfilled = await fulfill(
         commandId: 'cmd-fulfill-1',
+        familyId: familyId,
         redemptionId: redId,
       );
 
@@ -366,7 +371,8 @@ void main() {
     });
 
     test('CancelRewardRedemption cancels and records reason', () async {
-      final cancel = CancelRewardRedemption(repository);
+      final commandStore = InMemoryPendingRewardCommandStore();
+      final cancel = CancelRewardRedemption(repository, commandStore);
 
       final redId = RewardRedemptionId('red-2');
       repository.redemptions[redId.value] = RewardRedemption(
@@ -384,6 +390,7 @@ void main() {
 
       final cancelled = await cancel(
         commandId: 'cmd-cancel-1',
+        familyId: familyId,
         redemptionId: redId,
         cancellationReason: 'Event rained out',
       );

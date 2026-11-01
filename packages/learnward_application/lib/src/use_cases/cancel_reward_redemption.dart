@@ -7,32 +7,22 @@ import '../ports/reward_repository.dart';
 
 final class CancelRewardRedemption {
   const CancelRewardRedemption(
-    this._repository, {
-    this.commandStore,
+    this._repository,
+    this._commandStore, {
     this.uuidGenerator,
   });
 
   final RewardRepository _repository;
-  final PendingRewardCommandStore? commandStore;
+  final PendingRewardCommandStore _commandStore;
   final String Function()? uuidGenerator;
 
   Future<RewardRedemption> call({
-    String? commandId,
-    FamilyId? familyId,
+    required FamilyId familyId,
     required RewardRedemptionId redemptionId,
     required String cancellationReason,
+    String? commandId,
   }) async {
-    if (commandStore == null || familyId == null) {
-      final actualCommandId =
-          commandId ?? (uuidGenerator?.call() ?? _generateUuid());
-      return _repository.cancelRewardRedemption(
-        commandId: actualCommandId,
-        redemptionId: redemptionId,
-        cancellationReason: cancellationReason,
-      );
-    }
-
-    final existing = await commandStore!.findPendingRedemptionCommand(
+    final existing = await _commandStore.findPendingRedemptionCommand(
       operation: RewardCommandOperation.cancelReward,
       redemptionId: redemptionId.value,
     );
@@ -44,7 +34,7 @@ final class CancelRewardRedemption {
     final actualReason = existing?.cancellationReason ?? cancellationReason;
 
     if (existing == null) {
-      await commandStore!.savePendingCommand(
+      await _commandStore.savePendingCommand(
         PendingRewardCommand(
           operation: RewardCommandOperation.cancelReward,
           commandId: actualCommandId,
@@ -63,11 +53,11 @@ final class CancelRewardRedemption {
         cancellationReason: actualReason,
       );
 
-      await commandStore!.deletePendingCommand(actualCommandId);
+      await _commandStore.deletePendingCommand(actualCommandId);
       return result;
     } catch (e) {
       if (_isTerminalError(e)) {
-        await commandStore!.deletePendingCommand(actualCommandId);
+        await _commandStore.deletePendingCommand(actualCommandId);
       }
       rethrow;
     }
