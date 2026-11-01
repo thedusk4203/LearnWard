@@ -86,7 +86,7 @@ and the Parent PIN containment boundary. Phase 2 must consume this contract with
 **Phase 3 — Growth Engine + XP/RP Ledger Foundation is FROZEN.** It establishes the pure Dart Growth Engine v0.1, deterministic integer minor-unit RP awards, Study XP accumulation, immutable grade provenance with fail-closed missing grade handling, rolling 3-sample historical baseline calculation, below-level anti-farming protection, dual append-only authoritative ledgers (`xp_ledger`, `rp_ledger`), `child_balances` projections with single-MVCC-snapshot read-only balance reconciliation, and serialized `SELECT FOR UPDATE` on verified learning events for exactly-once event processing.
 
 **Phase 4 — Reward Economy & Wheel Experience is IN DEVELOPMENT.**
-- **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **IN DEVELOPMENT** (Reward catalog management, Store redemption RPC with atomic negative ledger debits, fulfillment and cancellation lifecycles with compensating refunds, parent/child Store presentation).
+- **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **COMPLETE** (Reward catalog management, Store redemption RPC with atomic negative ledger debits, fulfillment and cancellation lifecycles with compensating refunds, parent/child Store presentation, durable client command journaling, file-backed restart persistence).
 - **Phase 4.2 — Celebration Wheel & Parent Controls:** **NOT STARTED** (Server-authoritative wheel spins, daily caps, tiered probability selection, celebration animation).
 
 ### Repository layout

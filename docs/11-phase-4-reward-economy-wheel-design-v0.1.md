@@ -748,3 +748,10 @@ To enforce rigorous architectural boundaries, Phase 4 is partitioned into two in
     - Cross-family reference $\rightarrow$ blocked by FK.
     - Cross-child reference $\rightarrow$ blocked by FK.
 - Mobile UI: Interactive celebration wheel widget, landing animation, celebratory reward presentation dialog.
+
+---
+
+## 20. Implementation Backlog Notes
+
+- **Actor-Aware Pending Command Journaling:**
+  Pending reward command journal does not currently persist originating auth_user_id. If authenticated adult identity changes while a command is unresolved, server replay remains fail-closed through command_receipts.actor_user_id, but actor-aware local recovery/cleanup should be considered before production hardening.
