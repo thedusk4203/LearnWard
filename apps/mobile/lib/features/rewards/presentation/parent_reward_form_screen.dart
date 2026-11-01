@@ -28,6 +28,8 @@ class _ParentRewardFormScreenState
 
   RewardCategory _selectedCategory = RewardCategory.privilege;
   bool _storeEnabled = true;
+  bool _wheelEnabled = false;
+  WheelTier _selectedWheelTier = WheelTier.common;
   String? _selectedTargetChildId;
   List<ChildProfile> _familyChildren = [];
   bool _isSaving = false;
@@ -49,6 +51,8 @@ class _ParentRewardFormScreenState
     if (r != null) {
       _selectedCategory = r.category;
       _storeEnabled = r.storeEnabled;
+      _wheelEnabled = r.wheelEnabled;
+      _selectedWheelTier = r.wheelTier ?? WheelTier.common;
       _selectedTargetChildId = r.targetChildId?.value;
     }
 
@@ -107,6 +111,8 @@ class _ParentRewardFormScreenState
           category: _selectedCategory,
           storeEnabled: _storeEnabled,
           storeCostMinor: _storeEnabled ? costMinor : null,
+          wheelEnabled: _wheelEnabled,
+          wheelTier: _wheelEnabled ? _selectedWheelTier : null,
           targetChildId: targetChild,
         );
         final updateUseCase = UpdateReward(rewardRepo);
@@ -122,6 +128,8 @@ class _ParentRewardFormScreenState
           category: _selectedCategory,
           storeEnabled: _storeEnabled,
           storeCostMinor: _storeEnabled ? costMinor : null,
+          wheelEnabled: _wheelEnabled,
+          wheelTier: _wheelEnabled ? _selectedWheelTier : null,
           targetChildId: targetChild,
         );
       }
@@ -293,6 +301,38 @@ class _ParentRewardFormScreenState
                     });
                   },
                 ),
+                const SizedBox(height: AppSpacing.md),
+                SwitchListTile(
+                  key: const Key('reward_wheel_enabled_switch'),
+                  title: const Text('Available on Celebration Wheel'),
+                  subtitle: const Text(
+                    'Can be won by children spinning the Celebration Wheel',
+                  ),
+                  value: _wheelEnabled,
+                  onChanged: (val) => setState(() => _wheelEnabled = val),
+                ),
+                if (_wheelEnabled) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  DropdownButtonFormField<WheelTier>(
+                    key: const Key('reward_wheel_tier_dropdown'),
+                    initialValue: _selectedWheelTier,
+                    decoration: const InputDecoration(
+                      labelText: 'Wheel Tier & Weight *',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: WheelTier.values.map((tier) {
+                      return DropdownMenuItem(
+                        value: tier,
+                        child: Text(
+                          '${tier.displayName} (Weight: ${tier.relativeWeight})',
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) setState(() => _selectedWheelTier = val);
+                    },
+                  ),
+                ],
                 const SizedBox(height: AppSpacing.lg),
                 FilledButton.icon(
                   key: const Key('save_reward_button'),

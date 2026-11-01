@@ -2,7 +2,8 @@
 enum RewardCommandOperation {
   redeemReward('redeem_reward'),
   fulfillReward('fulfill_reward'),
-  cancelReward('cancel_reward');
+  cancelReward('cancel_reward'),
+  spinWheel('spin_wheel');
 
   const RewardCommandOperation(this.wireValue);
   final String wireValue;
@@ -71,6 +72,12 @@ abstract interface class PendingRewardCommandStore {
 
   /// Retrieves an existing pending command by its unique commandId.
   Future<PendingRewardCommand?> getPendingCommand(String commandId);
+
+  /// Finds an existing pending spin command for a given family and child.
+  Future<PendingRewardCommand?> findPendingSpinCommand({
+    required String familyId,
+    required String childId,
+  });
 
   /// Finds an existing pending redeem command for a given family, child and reward.
   Future<PendingRewardCommand?> findPendingRedeemCommand({

@@ -16,9 +16,11 @@ import '../../features/family/presentation/family_home_screen.dart';
 import '../../features/foundation/presentation/foundation_screen.dart';
 import '../../features/rewards/presentation/child_redemption_history_screen.dart';
 import '../../features/rewards/presentation/child_store_screen.dart';
+import '../../features/rewards/presentation/child_wheel_screen.dart';
 import '../../features/rewards/presentation/parent_fulfillment_inbox_screen.dart';
 import '../../features/rewards/presentation/parent_reward_catalog_screen.dart';
 import '../../features/rewards/presentation/parent_reward_form_screen.dart';
+import '../../features/rewards/presentation/parent_wheel_settings_screen.dart';
 import '../bootstrap/app_providers.dart';
 import 'app_routes.dart';
 
@@ -141,6 +143,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const ParentFulfillmentInboxScreen(),
       ),
       GoRoute(
+        path: AppRoutes.parentWheelSettings,
+        name: AppRoutes.parentWheelSettingsName,
+        builder: (context, state) => const ParentWheelSettingsScreen(),
+      ),
+      GoRoute(
         path: AppRoutes.childMode,
         name: AppRoutes.childModeName,
         builder: (context, state) => const ChildModeScreen(),
@@ -154,6 +161,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: AppRoutes.childRedemptions,
         name: AppRoutes.childRedemptionsName,
         builder: (context, state) => const ChildRedemptionHistoryScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.childWheel,
+        name: AppRoutes.childWheelName,
+        builder: (context, state) => const ChildWheelScreen(),
       ),
       GoRoute(
         path: AppRoutes.childAddAssessment,

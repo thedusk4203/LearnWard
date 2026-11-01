@@ -121,6 +121,15 @@ jobs:
       - name: Run Reward Store vertical slice integration test
         run: node scripts/test_reward_store_vertical_slice.mjs
 
+      - name: Run Celebration Wheel concurrency regression test
+        run: node scripts/test_reward_wheel_concurrency.mjs
+
+      - name: Run Celebration Wheel vertical slice integration test
+        run: node scripts/test_reward_wheel_vertical_slice.mjs
+
+      - name: Run Celebration Wheel timezone boundary test
+        run: node scripts/test_reward_wheel_timezone.mjs
+
   android:
     name: Android debug build
     needs: [quality, database]

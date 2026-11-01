@@ -12,3 +12,4 @@ export 'src/repositories/supabase_child_profile_repository.dart';
 export 'src/repositories/supabase_family_repository.dart';
 export 'src/repositories/supabase_growth_repository.dart';
 export 'src/repositories/supabase_reward_repository.dart';
+export 'src/repositories/supabase_wheel_repository.dart';

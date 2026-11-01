@@ -149,6 +149,21 @@ final class InMemoryPendingRewardCommandStore
   }
 
   @override
+  Future<PendingRewardCommand?> findPendingSpinCommand({
+    required String familyId,
+    required String childId,
+  }) async {
+    for (final cmd in _commands.values.toList().reversed) {
+      if (cmd.operation == RewardCommandOperation.spinWheel &&
+          cmd.familyId == familyId &&
+          cmd.childId == childId) {
+        return cmd;
+      }
+    }
+    return null;
+  }
+
+  @override
   Future<PendingRewardCommand?> findPendingRedeemCommand({
     required String familyId,
     required String childId,
@@ -973,5 +988,267 @@ final class InMemoryRewardRepository implements RewardRepository {
     }).toList();
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return list;
+  }
+}
+
+/// Lightweight in-memory fallback for [WheelRepository] when Supabase
+/// credentials are not configured in local development.
+final class InMemoryWheelRepository implements WheelRepository {
+  InMemoryWheelRepository({this.rewardRepository, this.growthRepository});
+
+  final InMemoryRewardRepository? rewardRepository;
+  final InMemoryGrowthRepository? growthRepository;
+
+  final Map<String, WheelSettings> _settings = {};
+  final List<WheelSpin> _spins = [];
+  final Map<String, WheelSpinResult> _receipts = {};
+
+  @override
+  Future<WheelSettings> getWheelSettings({required FamilyId familyId}) async {
+    final existing = _settings[familyId.value];
+    if (existing != null) return existing;
+    final now = DateTime.now().toUtc();
+    final defaultSettings = WheelSettings(
+      familyId: familyId,
+      createdAt: now,
+      updatedAt: now,
+    );
+    _settings[familyId.value] = defaultSettings;
+    return defaultSettings;
+  }
+
+  @override
+  Future<WheelSettings> updateWheelSettings(WheelSettings settings) async {
+    _settings[settings.familyId.value] = settings;
+    return settings;
+  }
+
+  @override
+  Future<List<Reward>> listWheelRewards({
+    required FamilyId familyId,
+    ChildId? childId,
+  }) async {
+    if (rewardRepository == null) return [];
+    final rewards = await rewardRepository!.listFamilyRewards(
+      familyId: familyId,
+      activeOnly: true,
+    );
+    return rewards.where((r) {
+      if (!r.wheelEnabled || r.wheelTier == null) return false;
+      if (childId != null && !r.isEligibleFor(childId)) return false;
+      return true;
+    }).toList();
+  }
+
+  @override
+  Future<int> getTodaySpinCount({
+    required FamilyId familyId,
+    required ChildId childId,
+  }) async {
+    final now = DateTime.now().toUtc();
+    final todayStart = DateTime.utc(now.year, now.month, now.day);
+    final tomorrowStart = todayStart.add(const Duration(days: 1));
+
+    return _spins.where((s) {
+      return s.familyId == familyId &&
+          s.childId == childId &&
+          s.createdAt.isAfter(
+            todayStart.subtract(const Duration(milliseconds: 1)),
+          ) &&
+          s.createdAt.isBefore(tomorrowStart);
+    }).length;
+  }
+
+  @override
+  Future<List<WheelSpin>> listWheelSpins({
+    required FamilyId familyId,
+    ChildId? childId,
+    int? limit,
+  }) async {
+    final list = _spins.where((s) {
+      if (s.familyId != familyId) return false;
+      if (childId != null && s.childId != childId) return false;
+      return true;
+    }).toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    if (limit != null && list.length > limit) {
+      return list.sublist(0, limit);
+    }
+    return list;
+  }
+
+  @override
+  Future<WheelSpinResult> spinRewardWheel({
+    required String commandId,
+    required ChildId childId,
+  }) async {
+    final existing = _receipts[commandId];
+    if (existing != null) return existing;
+
+    final rewards =
+        rewardRepository?._rewards.values
+            .where(
+              (r) =>
+                  r.isActive &&
+                  r.wheelEnabled &&
+                  r.wheelTier != null &&
+                  r.isEligibleFor(childId),
+            )
+            .toList() ??
+        [];
+
+    if (rewards.isEmpty) {
+      throw const InvalidWheelException('No rewards available in wheel pool');
+    }
+
+    final familyId = rewards.first.familyId;
+    final settings = await getWheelSettings(familyId: familyId);
+
+    if (!settings.isEnabled) {
+      throw const InvalidWheelException(
+        'Wheel is currently disabled for this family (LW206)',
+      );
+    }
+
+    if (rewards.length < 3) {
+      throw InvalidWheelException(
+        'Wheel requires at least 3 active eligible rewards (LW203). Found: ${rewards.length}',
+      );
+    }
+
+    if (growthRepository != null) {
+      final balance = await growthRepository!.getChildBalance(childId);
+      final currentMinor = balance?.rpBalanceMinor.value ?? 0;
+      if (currentMinor < settings.spinCostMinor) {
+        throw const InvalidWheelException('Insufficient RP balance (LW201)');
+      }
+    }
+
+    final todaySpins = await getTodaySpinCount(
+      familyId: familyId,
+      childId: childId,
+    );
+    if (todaySpins >= settings.dailySpinCap) {
+      throw InvalidWheelException(
+        'Daily spin limit reached ($todaySpins/${settings.dailySpinCap}) (LW202)',
+      );
+    }
+
+    rewards.sort((a, b) => a.id.value.compareTo(b.id.value));
+    final totalWeight = rewards.fold<int>(
+      0,
+      (sum, r) => sum + r.wheelTier!.relativeWeight,
+    );
+    const draw = 0;
+    int cumulative = 0;
+    Reward? winner;
+    final List<WheelPoolItem> poolItems = [];
+
+    for (final r in rewards) {
+      final w = r.wheelTier!.relativeWeight;
+      final start = cumulative;
+      final end = cumulative + w;
+      final pct = double.parse(((w / totalWeight) * 100.0).toStringAsFixed(2));
+
+      poolItems.add(
+        WheelPoolItem(
+          rewardId: r.id,
+          title: r.title,
+          category: r.category,
+          iconKey: r.iconKey,
+          tier: r.wheelTier!,
+          weight: w,
+          intervalStart: start,
+          intervalEnd: end,
+          probabilityPct: pct,
+        ),
+      );
+
+      if (winner == null && draw >= start && draw < end) {
+        winner = r;
+      }
+      cumulative = end;
+    }
+    winner ??= rewards.first;
+
+    final now = DateTime.now().toUtc();
+    final spinId = WheelSpinId('spin-${_spins.length + 1}');
+    final redemptionId = RewardRedemptionId('redemp-${_spins.length + 1}');
+
+    final snapshot = WheelSelectionSnapshot(
+      wheelConfigVersion: 'wheel-v0.1',
+      spinCostMinor: settings.spinCostMinor,
+      deterministicOrdering: 'reward_id_asc',
+      totalWeight: totalWeight,
+      randomDraw: draw,
+      winningRewardId: winner.id,
+      orderedPool: poolItems,
+    );
+
+    final spin = WheelSpin(
+      id: spinId,
+      familyId: familyId,
+      childId: childId,
+      rewardId: winner.id,
+      redemptionId: redemptionId,
+      origin: RewardOrigin.wheel,
+      spinCostMinor: settings.spinCostMinor,
+      selectionSnapshot: snapshot,
+      createdAt: now,
+    );
+    _spins.add(spin);
+
+    int newBalanceMinor = 0;
+    if (growthRepository != null) {
+      final balance = await growthRepository!.getChildBalance(childId);
+      final currentMinor = balance?.rpBalanceMinor.value ?? 0;
+      newBalanceMinor = currentMinor - settings.spinCostMinor;
+      growthRepository!._balancesByChild[childId.value] = ChildBalance(
+        familyId: familyId,
+        childId: childId,
+        xpTotal: balance?.xpTotal ?? const XpAmount(0),
+        rpBalanceMinor: RpMinor(newBalanceMinor),
+        updatedAt: now,
+      );
+    }
+
+    if (rewardRepository != null) {
+      rewardRepository!._redemptions[redemptionId.value] = RewardRedemption(
+        id: redemptionId,
+        familyId: familyId,
+        childId: childId,
+        rewardId: winner.id,
+        origin: RewardOrigin.wheel,
+        rpCostMinor: settings.spinCostMinor,
+        status: RewardRedemptionStatus.pendingFulfillment,
+        rewardSnapshot: {
+          'title': winner.title,
+          'category': winner.category.value,
+          'icon_key': winner.iconKey,
+          'wheel_tier': winner.wheelTier!.value,
+        },
+        createdAt: now,
+        updatedAt: now,
+      );
+    }
+
+    final result = WheelSpinResult(
+      spinId: spinId,
+      redemptionId: redemptionId,
+      familyId: familyId,
+      childId: childId,
+      rewardId: winner.id,
+      rewardTitle: winner.title,
+      rewardCategory: winner.category,
+      rewardIconKey: winner.iconKey,
+      wheelTier: winner.wheelTier!,
+      spinCostMinor: settings.spinCostMinor,
+      newBalanceMinor: newBalanceMinor,
+      selectionSnapshot: snapshot,
+      createdAt: now,
+    );
+
+    _receipts[commandId] = result;
+    return result;
   }
 }

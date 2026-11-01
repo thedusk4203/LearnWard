@@ -87,7 +87,7 @@ and the Parent PIN containment boundary. Phase 2 must consume this contract with
 
 **Phase 4 — Reward Economy & Wheel Experience is IN DEVELOPMENT.**
 - **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **COMPLETE** (Reward catalog management, Store redemption RPC with atomic negative ledger debits, fulfillment and cancellation lifecycles with compensating refunds, parent/child Store presentation, durable client command journaling, file-backed restart persistence).
-- **Phase 4.2 — Celebration Wheel & Parent Controls:** **NOT STARTED** (Server-authoritative wheel spins, daily caps, tiered probability selection, celebration animation).
+- **Phase 4.2 — Celebration Wheel & Parent Controls:** **IN DEVELOPMENT** (Server-authoritative wheel spins, daily caps, tiered probability selection, celebration animation, durable client journaling).
 
 ### Repository layout
 
@@ -264,14 +264,14 @@ Run `node scripts/test_last_owner_concurrency.mjs` to execute the multi-session 
 
 **Current Phase:** Phase 4 — Reward Economy & Wheel Experience — **IN DEVELOPMENT**  
 - **Phase 3:** **FROZEN** (Baseline `c6721497bfbde7cb436467cccaad5b2234d23cc4`, Post-merge CI `41293964415`)  
-- **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **IN DEVELOPMENT**  
-- **Phase 4.2 — Celebration Wheel & Parent Controls:** **NOT STARTED**  
+- **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **COMPLETE** (Merge `8ca9bbc47aa45b96e8ae441671ec57d57ce95dea`, Post-merge CI `41332029263`)  
+- **Phase 4.2 — Celebration Wheel & Parent Controls:** **IN DEVELOPMENT**  
 **Frozen code baseline:** `c6721497bfbde7cb436467cccaad5b2234d23cc4`  
 **Post-merge CI:** `41293964415` — **SUCCESS**  
-**Code:** Domain entities, pure Dart Growth Engine v0.1, integer minor unit representation, immutable append-only economic ledgers (`xp_ledger`, `rp_ledger`), cached balance projections (`child_balances`), single-snapshot read-only reconciliation (`reconcile_child_balance`), fail-closed immutable grade snapshots, recoverable Growth delivery (`catch_up_unprocessed_growth`), cross-language canonical parity fixtures, and Flutter Growth result presentation  
+**Code:** Domain entities, pure Dart Growth Engine v0.1, integer minor unit representation, immutable append-only economic ledgers (`xp_ledger`, `rp_ledger`), cached balance projections (`child_balances`), single-snapshot read-only reconciliation (`reconcile_child_balance`), fail-closed immutable grade snapshots, recoverable Growth delivery (`catch_up_unprocessed_growth`), cross-language canonical parity fixtures, reward catalog, store redemption RPC, celebration wheel RPC with server-authoritative pseudorandom tier selection, parent wheel controls, and Flutter presentation  
 **Mobile target:** Flutter → Android + iOS  
 **Backend direction:** Supabase + Postgres + Storage  
-**Next gate:** Phase 4.1 review, followed by Phase 4.2 Celebration Wheel & Parent Controls.
+**Next gate:** Phase 4.2 independent review.
 
 ## Working rule
 
