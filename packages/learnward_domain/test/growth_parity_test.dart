@@ -39,6 +39,7 @@ void main() {
         final assessmentType = AssessmentType.fromValue(
           current['assessment_type'] as String,
         );
+        final currentGrade = (current['grade_level'] as num?)?.toInt() ?? 5;
         final rawScore = (current['raw_score'] as num).toDouble();
         final maxScore = (current['max_score'] as num).toDouble();
 
@@ -49,6 +50,7 @@ void main() {
           final hDiff = AssessmentDifficulty.fromValue(
             h['difficulty'] as String,
           );
+          final hGrade = (h['grade_level'] as num?)?.toInt() ?? 5;
           final daysAgo = h['days_ago'] as int;
 
           return ComparableResult(
@@ -57,6 +59,7 @@ void main() {
             normalizedScore: hScore,
             difficulty: hDiff,
             assessmentType: hType,
+            gradeLevel: hGrade,
             occurredAt: now.subtract(Duration(days: daysAgo)),
             verifiedAt: now.subtract(Duration(days: daysAgo, minutes: -5)),
           );
@@ -71,6 +74,7 @@ void main() {
           ),
           difficulty: difficulty,
           assessmentType: assessmentType,
+          gradeLevel: currentGrade,
           occurredAt: now,
           verifiedAt: now.add(const Duration(minutes: 5)),
           comparableHistory: history,

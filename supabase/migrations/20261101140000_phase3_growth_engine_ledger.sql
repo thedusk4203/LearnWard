@@ -2,13 +2,81 @@
 -- Migration: 20261101140000_phase3_growth_engine_ledger.sql
 
 -- ---------------------------------------------------------------------------
--- 0. EXTEND COMMAND RECEIPTS OPERATION CHECK
+-- 0. EXTEND COMMAND RECEIPTS & IMMUTABLE GRADE SNAPSHOT PROVENANCE
 -- ---------------------------------------------------------------------------
 
 alter table public.command_receipts
   drop constraint if exists command_receipts_operation_check,
   add constraint command_receipts_operation_check
     check (operation in ('create_draft', 'submit', 'verify', 'reject', 'process_growth'));
+
+-- Immutable grade-level snapshot provenance for longitudinal Growth comparability
+alter table public.assessments
+  add column if not exists grade_level_snapshot integer;
+
+alter table public.verified_learning_events
+  add column if not exists grade_level_snapshot integer;
+
+-- Server-side trigger to snapshot school_grade from child_profiles at assessment creation
+create or replace function private.set_assessment_grade_snapshot()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.grade_level_snapshot is null then
+    select cp.school_grade into new.grade_level_snapshot
+    from public.child_profiles cp
+    where cp.id = new.child_id and cp.family_id = new.family_id;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_assessment_grade_snapshot on public.assessments;
+create trigger trg_assessment_grade_snapshot
+  before insert on public.assessments
+  for each row execute function private.set_assessment_grade_snapshot();
+
+-- Server-side trigger to preserve assessment's grade_level_snapshot into verified_learning_events
+create or replace function private.set_vle_grade_snapshot()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.grade_level_snapshot is null then
+    select a.grade_level_snapshot into new.grade_level_snapshot
+    from public.assessments a
+    where a.id = new.assessment_id;
+    if new.grade_level_snapshot is null then
+      select cp.school_grade into new.grade_level_snapshot
+      from public.child_profiles cp
+      where cp.id = new.child_id and cp.family_id = new.family_id;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_vle_grade_snapshot on public.verified_learning_events;
+create trigger trg_vle_grade_snapshot
+  before insert on public.verified_learning_events
+  for each row execute function private.set_vle_grade_snapshot();
+
+-- Backfill existing rows if any
+update public.assessments a
+set grade_level_snapshot = cp.school_grade
+from public.child_profiles cp
+where a.child_id = cp.id and a.grade_level_snapshot is null;
+
+update public.verified_learning_events vle
+set grade_level_snapshot = coalesce(a.grade_level_snapshot, cp.school_grade)
+from public.assessments a
+join public.child_profiles cp on cp.id = a.child_id
+where vle.assessment_id = a.id and vle.grade_level_snapshot is null;
 
 -- ---------------------------------------------------------------------------
 -- 1. GROWTH EVENTS AUDIT TABLE
@@ -259,6 +327,7 @@ declare
   v_normalized_score numeric(4, 2);
   v_difficulty text;
   v_subject_key text;
+  v_grade_level integer;
 
   v_comparables record;
   v_count int := 0;
@@ -339,16 +408,23 @@ begin
   v_normalized_score := v_event.normalized_score;
   v_difficulty := v_event.difficulty;
   v_subject_key := v_event.subject_key;
+  v_grade_level := v_event.grade_level_snapshot;
+  if v_grade_level is null then
+    select school_grade into v_grade_level
+    from public.child_profiles
+    where id = v_event.child_id;
+  end if;
 
   -- 6. Retrieve strictly prior comparable records:
   -- - Same child
   -- - Same canonical subject_key
   -- - Excludes current event
   -- - Strictly occurred before current event (or verified earlier)
+  -- - Grade level comparability (matching grade_level_snapshot)
   -- - Assessment type compatibility band (evaluative: quiz/exam, formative: homework/practice, other)
   -- - Difficulty compatibility band (standard: normal/hard, challenge, below_level)
   for v_comparables in
-    select id, normalized_score, difficulty, assessment_type, occurred_at, verified_at
+    select id, normalized_score, difficulty, assessment_type, grade_level_snapshot, occurred_at, verified_at
     from public.verified_learning_events
     where child_id = v_event.child_id
       and subject_key = v_subject_key
@@ -356,6 +432,10 @@ begin
       and (
         occurred_at < v_event.occurred_at
         or (occurred_at = v_event.occurred_at and verified_at < v_event.verified_at)
+      )
+      and (
+        grade_level_snapshot = v_grade_level
+        or (grade_level_snapshot is null and v_grade_level is null)
       )
       and (
         case
@@ -388,7 +468,8 @@ begin
         'score', v_comparables.normalized_score,
         'occurred_at', v_comparables.occurred_at,
         'assessment_type', v_comparables.assessment_type,
-        'difficulty', v_comparables.difficulty
+        'difficulty', v_comparables.difficulty,
+        'grade_level', v_comparables.grade_level_snapshot
       );
     end if;
   end loop;
@@ -480,6 +561,7 @@ begin
     'assessment_id', v_event.assessment_id,
     'child_id', v_event.child_id,
     'subject_key', v_subject_key,
+    'grade_level', v_grade_level,
     'normalized_score', v_normalized_score,
     'difficulty', v_difficulty,
     'assessment_type', v_event.assessment_type,
@@ -654,10 +736,6 @@ as $$
 declare
   v_user_id uuid;
   v_fam_id uuid;
-  v_proj_xp bigint := 0;
-  v_proj_rp bigint := 0;
-  v_ledg_xp bigint := 0;
-  v_ledg_rp bigint := 0;
 begin
   -- 1. Authentication check
   v_user_id := (select auth.uid());
@@ -682,29 +760,31 @@ begin
     raise exception 'Permission denied: unauthorized for child balance reconciliation' using errcode = '42501';
   end if;
 
-  -- 4. Read projection
-  select coalesce(cb.xp_total, 0), coalesce(cb.rp_balance_minor, 0)
-  into v_proj_xp, v_proj_rp
-  from public.child_balances cb
-  where cb.child_id = p_child_id;
-
-  -- 5. Read ledger sums
-  select coalesce(sum(xl.amount), 0) into v_ledg_xp
-  from public.xp_ledger xl
-  where xl.child_id = p_child_id;
-
-  select coalesce(sum(rl.amount_minor), 0) into v_ledg_rp
-  from public.rp_ledger rl
-  where rl.child_id = p_child_id;
-
-  return query select
+  -- 4. Single-snapshot read-only integrity check:
+  -- Evaluates projection and ledger sums within a single MVCC query snapshot to prevent
+  -- transient drift reporting under concurrent growth processing.
+  return query
+  select
     p_child_id,
     v_fam_id,
-    (v_proj_xp = v_ledg_xp and v_proj_rp = v_ledg_rp) as is_reconciled,
-    v_proj_xp,
-    v_ledg_xp,
-    v_proj_rp,
-    v_ledg_rp;
+    (coalesce(cb.xp_total, 0) = coalesce(xl.xp_sum, 0) and
+     coalesce(cb.rp_balance_minor, 0) = coalesce(rl.rp_sum, 0)) as is_reconciled,
+    coalesce(cb.xp_total, 0)::bigint as projected_xp,
+    coalesce(xl.xp_sum, 0)::bigint as ledger_xp,
+    coalesce(cb.rp_balance_minor, 0)::bigint as projected_rp_minor,
+    coalesce(rl.rp_sum, 0)::bigint as ledger_rp_minor
+  from (select p_child_id as cid) target
+  left join public.child_balances cb on cb.child_id = target.cid
+  cross join (
+    select coalesce(sum(amount), 0)::bigint as xp_sum
+    from public.xp_ledger
+    where child_id = p_child_id
+  ) xl
+  cross join (
+    select coalesce(sum(amount_minor), 0)::bigint as rp_sum
+    from public.rp_ledger
+    where child_id = p_child_id
+  ) rl;
 end;
 $$;
 

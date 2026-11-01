@@ -139,6 +139,7 @@ final class SupabaseGrowthRepository implements GrowthRepository {
       score: AssessmentScore(rawScore: rawScore, maxScore: maxScore),
       evidenceCount: (row['evidence_count'] as num?)?.toInt() ?? 0,
       entryContext: entryContext,
+      gradeLevelSnapshot: (row['grade_level_snapshot'] as num?)?.toInt(),
       occurredAt: DateTime.parse(row['occurred_at'] as String),
       verifiedAt: DateTime.parse(row['verified_at'] as String),
       verifiedByUserId: row['verified_by_user_id'] as String,

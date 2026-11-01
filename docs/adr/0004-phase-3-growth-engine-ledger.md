@@ -23,6 +23,7 @@ The core Growth Engine algorithm lives in `packages/learnward_domain` as a zero-
 A child's performance baseline must be objective, individualized, and resistant to manipulation:
 1. **Longitudinal Comparability:** A prior result is comparable if and only if it shares:
    - the identical `subject_key` (`math`, `english`, `literature`, `science`, `other`);
+   - matching **Grade Level Snapshot**: results must share identical `grade_level_snapshot`;
    - a compatible **Assessment Type Band**:
      - *Evaluative band*: `quiz`, `exam`
      - *Formative band*: `homework`, `practice`
@@ -31,11 +32,13 @@ A child's performance baseline must be objective, individualized, and resistant 
      - *Standard band*: `normal`, `hard` (core curriculum)
      - *Challenge band*: `challenge` (advanced enrichment)
      - *Below-level band*: `below_level` (isolated anti-farming)
-2. **Strict Chronological Precedence:** Only results occurring strictly before the current event are eligible: `occurred_at < current_event.occurred_at` OR (`occurred_at == current_event.occurred_at` AND `verified_at < current_event.verified_at`).
-3. **Self-Exclusion:** The current event ID is strictly excluded from its own baseline calculation.
-4. **Rolling Window Size:** The baseline is the unweighted arithmetic mean of the last 3 prior comparable results (rounded to 2 decimal places: `round(mean * 100) / 100`).
-5. **Cold-Start Handling:** If fewer than 3 prior comparable results exist, the baseline score is `null`, and no growth or high-performer maintenance bonus is awarded (`baseline_sample_count` is recorded for progress transparency).
-6. **Baseline Integrity & Auditability:** The calculation snapshot in `inputs_snapshot` records the current assessment type and difficulty band, as well as the exact comparators used (including their `id`, `normalized_score`, `occurred_at`, `assessment_type`, and `difficulty`).
+2. **Immutable Server-Side Grade Snapshot:** `child_profiles.school_grade` is mutable as children advance in school. To prevent historical results from older grades contaminating future grade baselines, each assessment snapshots the child's school grade server-side upon creation (`grade_level_snapshot`), which is preserved immutably into `verified_learning_events`.
+3. **Topic Behavior in Growth v0.1:** `docs/03-growth-engine-v0.1.md` notes that topic-specific comparison requires reliable, standardized topic taxonomy. Because Phase 2 captures assessments with unstructured titles without formal taxonomy tags, Growth v0.1 deterministically applies the documented subject-level fallback rather than fabricating an ad-hoc topic taxonomy.
+4. **Strict Chronological Precedence:** Only results occurring strictly before the current event are eligible: `occurred_at < current_event.occurred_at` OR (`occurred_at == current_event.occurred_at` AND `verified_at < current_event.verified_at`).
+5. **Self-Exclusion:** The current event ID is strictly excluded from its own baseline calculation.
+6. **Rolling Window Size:** The baseline is the unweighted arithmetic mean of the last 3 prior comparable results (rounded to 2 decimal places: `round(mean * 100) / 100`).
+7. **Cold-Start Handling:** If fewer than 3 prior comparable results exist, the baseline score is `null`, and no growth or high-performer maintenance bonus is awarded (`baseline_sample_count` is recorded for progress transparency).
+8. **Baseline Integrity & Auditability:** The calculation snapshot in `inputs_snapshot` records the current grade level, assessment type, and difficulty band, as well as the exact comparators used (including their `id`, `normalized_score`, `grade_level`, `occurred_at`, `assessment_type`, and `difficulty`).
 
 ---
 
@@ -102,12 +105,13 @@ All economic mutations must execute through the trusted `SECURITY DEFINER` funct
 1. **Immutable Ledgers:** `xp_ledger` and `rp_ledger` are strictly append-only. A PostgreSQL trigger `prevent_ledger_mutation` blocks any `UPDATE` or `DELETE` attempt (`LW102`).
 2. **Projection Table:** `public.child_balances` caches current balances (`xp_total`, `rp_balance_minor`) for fast mobile queries.
 3. **Ledger is Source of Truth:** `child_balances` is purely a derived projection.
-4. **Reconciliation Security:** The function `public.reconcile_child_balance(p_child_id)`:
+4. **Read-Only Reconciliation Integrity Check:** The function `public.reconcile_child_balance(p_child_id)`:
+   - Acts strictly as a **read-only audit / integrity verification check** rather than a mutative repair function; it returns verification status (`is_in_sync`, projected vs ledger sums) without modifying rows or acquiring exclusive table-level locks.
    - Enforces authentication (`auth.uid() is not null`, error `42501`).
    - Resolves the target child's family from `child_profiles` (`LW105`).
    - Strictly authorizes the caller: requires active adult membership in the child's family or the exact paired child device identity (`42501`).
    - Cross-family calls, sibling child devices, and anonymous callers are rejected.
-   - Recalculates the projection from `SUM(xp_ledger.amount)` and `SUM(rp_ledger.amount_minor)` under an exclusive child advisory lock.
+   - Evaluates the projected `child_balances` values and the exact `SUM(xp_ledger.amount)` and `SUM(rp_ledger.amount_minor)` within a **single SQL statement / single MVCC snapshot**. This guarantees point-in-time consistency and prevents transient false drift detections during concurrent Growth event commits.
 
 ---
 

@@ -1,5 +1,5 @@
 begin;
-select plan(39);
+select plan(42);
 
 -- ---------------------------------------------------------------------------
 -- 0. FIXTURES SETUP (superuser context)
@@ -544,6 +544,75 @@ select is(
   (select count(*)::int from public.get_unprocessed_verified_learning_events('f3000000-0000-0000-0000-000000000001'::uuid)),
   0,
   'get_unprocessed_verified_learning_events returns 0 after catch-up completed'
+);
+
+-- ---------------------------------------------------------------------------
+-- 11. GRADE LEVEL COMPARABILITY EXCLUSION
+-- ---------------------------------------------------------------------------
+
+reset role;
+
+insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year)
+values ('c3000000-0000-0000-0000-000000000009'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'Grade Test Child', 5, 2015);
+
+-- Insert 3 historical Grade 4 assessments and verified events
+do $$
+begin
+  -- g4_1: Grade 4 (8.00)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, grade_level_snapshot, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000041'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G4_1', 'quiz', 'normal', 8, 10, 4, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, grade_level_snapshot, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000041'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000041'::uuid, 'math', 'Math', 'G4_1', 'quiz', 'normal', 8, 10, 8.00, 4, now() - interval '30 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- g4_2: Grade 4 (8.50)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, grade_level_snapshot, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000042'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G4_2', 'quiz', 'normal', 8.5, 10, 4, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, grade_level_snapshot, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000042'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000042'::uuid, 'math', 'Math', 'G4_2', 'quiz', 'normal', 8.5, 10, 8.50, 4, now() - interval '20 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- g4_3: Grade 4 (9.00)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, grade_level_snapshot, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000043'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G4_3', 'quiz', 'normal', 9, 10, 4, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, grade_level_snapshot, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000043'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000043'::uuid, 'math', 'Math', 'G4_3', 'quiz', 'normal', 9, 10, 9.00, 4, now() - interval '10 days', '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+
+  -- Current Grade 5 target assessment (trigger automatically snapshots grade 5 from child profile)
+  insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id)
+  values ('a3000000-0000-0000-0000-000000000044'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'math', 'Math', 'G5_Target', 'quiz', 'normal', 8, 10, 'verified', '30000000-0000-0000-0000-000000000001'::uuid);
+  insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id)
+  values ('93000000-0000-0000-0000-000000000044'::uuid, 'f3000000-0000-0000-0000-000000000001'::uuid, 'c3000000-0000-0000-0000-000000000009'::uuid, 'a3000000-0000-0000-0000-000000000044'::uuid, 'math', 'Math', 'G5_Target', 'quiz', 'normal', 8, 10, 8.00, now(), '30000000-0000-0000-0000-000000000001'::uuid, 'e3000000-0000-0000-0000-000000000099'::uuid);
+end;
+$$;
+
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "30000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+
+create temp table grade_test_res as
+select * from public.process_verified_learning_event('93000000-0000-0000-0000-000000000044'::uuid, null);
+
+-- Test 40: Grade 4 history is strictly excluded when processing Grade 5 event -> baseline is null
+select is(
+  (select baseline_score from grade_test_res),
+  null,
+  'Incompatible grade-level history (Grade 4 vs Grade 5) is excluded from rolling baseline'
+);
+
+-- Test 41: inputs_snapshot records current grade_level as 5
+select is(
+  (select (inputs_snapshot->>'grade_level')::int from grade_test_res),
+  5,
+  'inputs_snapshot records current grade_level snapshot'
+);
+
+-- ---------------------------------------------------------------------------
+-- 12. SINGLE-SNAPSHOT READ-ONLY RECONCILIATION INTEGRITY
+-- ---------------------------------------------------------------------------
+
+-- Test 42: Single-snapshot read-only reconciliation returns is_reconciled = true
+select is(
+  (select is_reconciled from public.reconcile_child_balance('c3000000-0000-0000-0000-000000000009'::uuid)),
+  true,
+  'Single-snapshot reconcile_child_balance confirms projection equals ledger totals'
 );
 
 select * from finish();

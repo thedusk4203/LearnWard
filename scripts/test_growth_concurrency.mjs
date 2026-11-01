@@ -229,7 +229,71 @@ async function main() {
     process.exit(1);
   }
 
-  console.log('\n*** ALL CONCURRENCY CHECKS PASSED: Exactly-once invariant preserved under concurrent load ***');
+  console.log('\n--- Part 2: Single-Snapshot Reconciliation Concurrency Invariant ---');
+  console.log('Testing that concurrent Growth commits cannot cause reconcile_child_balance to report false drift...');
+
+  // Setup a second verified assessment
+  const targetVle2Id = crypto.randomUUID();
+  const setup2Sql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
+
+    do $$
+    declare
+      v_a public.assessments;
+    begin
+      v_a := public.create_assessment_draft(
+        '${crypto.randomUUID()}'::uuid, '${FAMILY_ID}'::uuid, '${CHILD_ID}'::uuid,
+        'math', 'Mathematics', 'Weekly Test 2', 'quiz', 'normal', 8.0, 10.0, now(), 'adult'
+      );
+      perform public.submit_assessment(v_a.id, 1, '${crypto.randomUUID()}'::uuid);
+      perform public.verify_assessment(v_a.id, 2, '${crypto.randomUUID()}'::uuid, 'Approved');
+      update public.verified_learning_events set id = '${targetVle2Id}'::uuid where assessment_id = v_a.id;
+    end $$;
+  `;
+  await runPsql(setup2Sql);
+
+  const reconLoopSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
+
+    do $$
+    declare
+      v_recon record;
+      i int;
+    begin
+      for i in 1..8 loop
+        select * into v_recon from public.reconcile_child_balance('${CHILD_ID}') r;
+        if not v_recon.is_reconciled then
+          raise exception 'False drift detected during concurrent processing: proj_xp=%, ledg_xp=%, proj_rp=%, ledg_rp=%',
+            v_recon.projected_xp, v_recon.ledger_xp, v_recon.projected_rp_minor, v_recon.ledger_rp_minor;
+        end if;
+        perform pg_sleep(0.05);
+      end loop;
+    end $$;
+    select 'RECON_LOOP_SUCCESS';
+  `;
+
+  const mutateSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
+
+    select pg_sleep(0.1);
+    select public.process_verified_learning_event('${targetVle2Id}'::uuid, '${crypto.randomUUID()}'::uuid);
+  `;
+
+  const [reconRes, mutateRes] = await Promise.all([
+    runPsql(reconLoopSql),
+    runPsql(mutateSql),
+  ]);
+
+  if (reconRes.code !== 0 || !reconRes.stdout.includes('RECON_LOOP_SUCCESS')) {
+    console.error('FAILED: Reconciliation loop observed torn state / false drift:', reconRes.stderr);
+    process.exit(1);
+  }
+  console.log('PASS: Single-snapshot reconciliation observed 0 false drift events during concurrent commit.');
+
+  console.log('\n*** ALL CONCURRENCY CHECKS PASSED: Exactly-once invariant and atomic reconciliation preserved ***');
   process.exit(0);
 }
 

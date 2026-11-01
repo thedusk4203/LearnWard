@@ -91,7 +91,8 @@ async function main() {
       p_difficulty text,
       p_raw_score numeric,
       p_max_score numeric,
-      p_occurred_at timestamptz
+      p_occurred_at timestamptz,
+      p_grade integer default null
     ) returns uuid language plpgsql security definer as $$
     declare
       v_a public.assessments;
@@ -102,6 +103,9 @@ async function main() {
         p_subject_key, 'Subject', 'Test Title', p_type, p_difficulty,
         p_raw_score, p_max_score, p_occurred_at, 'adult'
       );
+      if p_grade is not null then
+        update public.assessments set grade_level_snapshot = p_grade where id = v_a.id;
+      end if;
       perform public.submit_assessment(v_a.id, 1, gen_random_uuid());
       perform public.verify_assessment(v_a.id, 2, gen_random_uuid(), 'verified');
       select * into v_vle from public.verified_learning_events where assessment_id = v_a.id;
@@ -126,6 +130,8 @@ async function main() {
     const { id, description, current, history, expected } = fixture;
     const childId = crypto.randomUUID();
 
+    const currentGrade = current.grade_level ?? 5;
+
     // 1. Create Child profile
     // 2. Insert and verify history
     // 3. Insert and verify current event
@@ -135,13 +141,14 @@ async function main() {
       perform public.test_create_and_verify(
         '${FAMILY_ID}'::uuid, '${childId}'::uuid, '${current.subject_key}',
         '${h.type}', '${h.difficulty}', ${h.score}, 10.0,
-        now() - interval '${h.days_ago} days'
+        now() - interval '${h.days_ago} days',
+        ${h.grade_level ? h.grade_level : 'null'}
       );
     `).join('\n');
 
     const testSql = `
       insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year)
-      values ('${childId}', '${FAMILY_ID}', 'Child ${id}', 5, 2015);
+      values ('${childId}', '${FAMILY_ID}', 'Child ${id}', ${currentGrade}, 2015);
 
       set role authenticated;
       select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
@@ -156,7 +163,8 @@ async function main() {
         select public.test_create_and_verify(
           '${FAMILY_ID}'::uuid, '${childId}'::uuid, '${current.subject_key}',
           '${current.assessment_type}', '${current.difficulty}',
-          ${current.raw_score}, ${current.max_score}, now()
+          ${current.raw_score}, ${current.max_score}, now(),
+          ${currentGrade}
         ) as vle_id
       ) t
       cross join lateral public.process_verified_learning_event(t.vle_id) g;

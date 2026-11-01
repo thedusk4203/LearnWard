@@ -11,6 +11,7 @@ final class ComparableResult {
     required this.assessmentType,
     required this.occurredAt,
     required this.verifiedAt,
+    this.gradeLevel = 5,
   });
 
   final String id;
@@ -20,6 +21,7 @@ final class ComparableResult {
   final AssessmentType assessmentType;
   final DateTime occurredAt;
   final DateTime verifiedAt;
+  final int gradeLevel;
 
   @override
   bool operator ==(Object other) =>
@@ -30,5 +32,5 @@ final class ComparableResult {
 
   @override
   String toString() =>
-      'ComparableResult($id, ${subjectKey.value}, score: $normalizedScore, $difficulty, occurred: $occurredAt)';
+      'ComparableResult($id, ${subjectKey.value}, score: $normalizedScore, grade: $gradeLevel, $difficulty, occurred: $occurredAt)';
 }

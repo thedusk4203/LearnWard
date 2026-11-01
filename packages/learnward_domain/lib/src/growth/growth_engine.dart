@@ -48,6 +48,7 @@ final class GrowthEngine {
     final comparables = input.comparableHistory.where((c) {
       if (c.id == input.currentEventId) return false;
       if (c.subjectKey != input.subjectKey) return false;
+      if (c.gradeLevel != input.gradeLevel) return false;
 
       final isPrior =
           c.occurredAt.isBefore(input.occurredAt) ||
@@ -228,6 +229,7 @@ final class GrowthEngine {
       'engine_version': engineVersion,
       'current_event_id': input.currentEventId,
       'subject_key': input.subjectKey.value,
+      'grade_level': input.gradeLevel,
       'normalized_score': currentScoreValue,
       'difficulty': input.difficulty.value,
       'assessment_type': input.assessmentType.value,
@@ -242,6 +244,7 @@ final class GrowthEngine {
               'occurred_at': c.occurredAt.toIso8601String(),
               'assessment_type': c.assessmentType.value,
               'difficulty': c.difficulty.value,
+              'grade_level': c.gradeLevel,
             },
           )
           .toList(),

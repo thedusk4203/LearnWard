@@ -11,6 +11,7 @@ void main() {
       SubjectKey subjectKey = SubjectKey.math,
       AssessmentDifficulty difficulty = AssessmentDifficulty.normal,
       AssessmentType type = AssessmentType.quiz,
+      int gradeLevel = 5,
       int daysAgo = 1,
       int minutesAgo = 0,
     }) {
@@ -20,6 +21,7 @@ void main() {
         normalizedScore: score,
         difficulty: difficulty,
         assessmentType: type,
+        gradeLevel: gradeLevel,
         occurredAt: now.subtract(Duration(days: daysAgo, minutes: minutesAgo)),
         verifiedAt: now.subtract(
           Duration(days: daysAgo, minutes: minutesAgo - 5),
@@ -833,11 +835,91 @@ void main() {
         expect(samples[0]['id'], equals('comp_1'));
         expect(samples[0]['assessment_type'], equals('quiz'));
         expect(samples[0]['difficulty'], equals('normal'));
+        expect(samples[0]['grade_level'], equals(5));
         expect(samples[1]['id'], equals('comp_2'));
         expect(samples[2]['id'], equals('comp_3'));
         expect(samples[2]['assessment_type'], equals('exam'));
         expect(samples[2]['difficulty'], equals('hard'));
+        expect(samples[2]['grade_level'], equals(5));
       });
+    });
+
+    group('Grade level comparability', () {
+      test('Incompatible grade history (Grade 4 vs Grade 5) is strictly excluded from baseline', () {
+        final history = [
+          makeResult(id: 'g4_1', score: 8.0, gradeLevel: 4, daysAgo: 30),
+          makeResult(id: 'g4_2', score: 8.5, gradeLevel: 4, daysAgo: 20),
+          makeResult(id: 'g4_3', score: 9.0, gradeLevel: 4, daysAgo: 10),
+        ];
+
+        final input = GrowthInput(
+          currentEventId: 'current',
+          subjectKey: SubjectKey.math,
+          currentScore: NormalizedScore.fromRaw(rawScore: 8, maxScore: 10),
+          difficulty: AssessmentDifficulty.normal,
+          assessmentType: AssessmentType.quiz,
+          gradeLevel: 5,
+          occurredAt: now,
+          verifiedAt: now.add(const Duration(minutes: 5)),
+          comparableHistory: history,
+        );
+
+        final result = GrowthEngine.calculate(input);
+        final b = result.breakdown;
+
+        expect(b.baselineScore, isNull);
+        expect(b.baselineSampleCount, equals(0));
+        expect(b.growthDelta, isNull);
+        expect(b.historicalBest, isNull);
+
+        expect(result.inputsSnapshot['grade_level'], equals(5));
+        expect(
+          (result.inputsSnapshot['baseline_samples_used'] as List).isEmpty,
+          isTrue,
+        );
+      });
+
+      test(
+        'Multi-grade history only includes matching grade level in baseline',
+        () {
+          final history = [
+            makeResult(id: 'g4_1', score: 9.0, gradeLevel: 4, daysAgo: 40),
+            makeResult(id: 'g5_1', score: 6.0, gradeLevel: 5, daysAgo: 3),
+            makeResult(id: 'g5_2', score: 6.5, gradeLevel: 5, daysAgo: 2),
+            makeResult(id: 'g5_3', score: 7.0, gradeLevel: 5, daysAgo: 1),
+          ];
+
+          final input = GrowthInput(
+            currentEventId: 'current',
+            subjectKey: SubjectKey.math,
+            currentScore: NormalizedScore.fromRaw(rawScore: 8, maxScore: 10),
+            difficulty: AssessmentDifficulty.normal,
+            assessmentType: AssessmentType.quiz,
+            gradeLevel: 5,
+            occurredAt: now,
+            verifiedAt: now.add(const Duration(minutes: 5)),
+            comparableHistory: history,
+          );
+
+          final result = GrowthEngine.calculate(input);
+          final b = result.breakdown;
+
+          // Mean of g5_1 (6.0), g5_2 (6.5), g5_3 (7.0) = 6.50
+          expect(b.baselineScore, equals(6.50));
+          expect(b.baselineSampleCount, equals(3));
+          expect(b.growthDelta, equals(1.50));
+          expect(
+            b.historicalBest,
+            equals(7.00),
+          ); // g4_1 (9.0) excluded from historical best!
+
+          final samples =
+              (result.inputsSnapshot['baseline_samples_used'] as List)
+                  .cast<Map<String, dynamic>>();
+          expect(samples.length, equals(3));
+          expect(samples.every((s) => s['grade_level'] == 5), isTrue);
+        },
+      );
     });
   });
 }

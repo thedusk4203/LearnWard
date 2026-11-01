@@ -429,5 +429,35 @@
       "total_rp_minor": 750,
       "xp_awarded": 25
     }
+  },
+  {
+    "id": "incompatible_grade_history",
+    "description": "Incompatible grade-level history (Grade 4 vs Grade 5) is excluded from rolling baseline",
+    "current": {
+      "subject_key": "math",
+      "grade_level": 5,
+      "raw_score": 8.0,
+      "max_score": 10.0,
+      "difficulty": "normal",
+      "assessment_type": "quiz"
+    },
+    "history": [
+      { "id": "h1", "score": 7.5, "type": "quiz", "difficulty": "normal", "grade_level": 4, "days_ago": 30 },
+      { "id": "h2", "score": 8.0, "type": "quiz", "difficulty": "normal", "grade_level": 4, "days_ago": 20 },
+      { "id": "h3", "score": 8.5, "type": "quiz", "difficulty": "normal", "grade_level": 4, "days_ago": 10 }
+    ],
+    "expected": {
+      "baseline_score": null,
+      "baseline_sample_count": 0,
+      "growth_delta": null,
+      "historical_best": null,
+      "score_rp_minor": 800,
+      "growth_rp_minor": 0,
+      "high_performer_rp_minor": 0,
+      "personal_best_rp_minor": 0,
+      "difficulty_rp_minor": 0,
+      "total_rp_minor": 800,
+      "xp_awarded": 26
+    }
   }
 ]
