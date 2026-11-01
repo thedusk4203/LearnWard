@@ -1,7 +1,7 @@
 # Phase 4 Detailed Design — Reward Economy & Wheel Experience v0.1
 
-**Status:** PROPOSED (Updated with resolved product decisions & architectural hardening)  
-**Document Version:** `v0.1.1`  
+**Status:** PROPOSED (Hardened with exact relational invariants, DST calendar bounds, and SECURITY DEFINER execution order)  
+**Document Version:** `v0.1.2`  
 **Date:** 2026-11-01  
 **Target Milestone:** Phase 4 — Reward Economy & Wheel Experience  
 **Frozen Code Baseline:** `c6721497bfbde7cb436467cccaad5b2234d23cc4`  
@@ -116,7 +116,7 @@ The reward catalog is family-scoped. LearnWard does not hardcode static rewards;
 ### Deletion and Soft-Disable Policy
 - Rewards with historical redemptions or wheel spins **must never be hard-deleted**.
 - Parents deactivate rewards by toggling `is_active = false`.
-- If a child profile is deleted, any child-specific reward has `target_child_id` protected via `ON DELETE RESTRICT` (or soft-deactivated) rather than `ON DELETE SET NULL`, preventing a child-specific reward from accidentally becoming family-wide.
+- `target_child_id` uses `ON DELETE RESTRICT` rather than `ON DELETE SET NULL`, preventing a child-specific reward from accidentally becoming family-wide if a child profile is removed.
 
 ---
 
@@ -184,7 +184,7 @@ $$\text{Total Weight } W = (3 \times 60) + (2 \times 30) + (1 \times 10) = 180 +
 
 ---
 
-## 9. Server-Authoritative Spin Architecture & Auditable Snapshot
+## 9. Server-Authoritative Pseudorandom Selection & Auditable Snapshot
 
 Under zero circumstances does the client device determine or bias the winning prize.
 
@@ -197,7 +197,7 @@ CLIENT                                      SERVER (PostgreSQL RPC: spin_reward_
   │                                                    ├── 4. Check balance >= spin_cost_minor
   │                                                    ├── 5. Check daily spin cap (family timezone)
   │                                                    ├── 6. Lock & snapshot active pool (N >= 3)
-  │                                                    ├── 7. Deterministic random selection
+  │                                                    ├── 7. Server pseudorandom selection
   │                                                    ├── 8. Append negative rp_ledger row
   │                                                    ├── 9. Insert reward_redemptions row
   │                                                    ├── 10. Insert wheel_spins audit row
@@ -218,7 +218,7 @@ CLIENT                                      SERVER (PostgreSQL RPC: spin_reward_
 4. Calculate cumulative weight boundaries:
    $$\text{Candidate } k \text{ occupies } [S_k, S_k + w_k) \quad \text{where } S_0 = 0 \text{ and } S_k = \sum_{j=0}^{k-1} w_j$$
 5. Compute total weight $W = \sum w_j$.
-6. Draw random integer $R = \text{floor}(\text{random}() \times W)$, ensuring $0 \le R < W$.
+6. Draw pseudorandom integer $R = \text{floor}(\text{random}() \times W)$, ensuring $0 \le R < W$.
 7. Find the unique candidate $k$ where $S_k \le R < S_k + w_k$.
 8. Persist the complete `selection_snapshot` into `wheel_spins`.
 
@@ -255,6 +255,15 @@ CLIENT                                      SERVER (PostgreSQL RPC: spin_reward_
 ```
 *Auditability Invariant:* Any historical spin can be mathematically verified years later without reading mutable current catalog state.
 
+### Threat Model for Randomness:
+- **Server-Authoritative Pseudorandom Selection:** Uses PostgreSQL `random()`. It is NOT claimed to be a cryptographically secure RNG.
+- **Threat Mitigations:**
+  - Client cannot choose or supply the winning seed.
+  - Client cannot manipulate or bias outcome.
+  - Server commits the outcome atomically to DB before client receives result.
+  - Sufficiently unbiased for a family celebration wheel.
+  - Not designed or intended for real-money gambling or regulated gaming.
+
 ---
 
 ## 10. Idempotency & Retry Model
@@ -262,8 +271,9 @@ CLIENT                                      SERVER (PostgreSQL RPC: spin_reward_
 Network dropouts during transaction submission must never cause double debits or lost spins:
 
 1. **Client-Generated Command ID:** Every spin, store redemption, fulfillment, or cancellation generates a unique UUID (`p_command_id`) stored locally before transmission.
-2. **Command Receipts Table:**
-   - Extended operations: `'redeem_reward'`, `'spin_wheel'`, `'fulfill_reward'`, `'cancel_reward'`.
+2. **Command Receipts Table Operations:**
+   - PR 4.1 adds: `'redeem_reward'`, `'fulfill_reward'`, `'cancel_reward'`.
+   - PR 4.2 adds: `'spin_wheel'`.
    - If `p_command_id` was already committed, the RPC returns the existing outcome without re-executing debits, random draws, or refunds.
 3. **Ledger Idempotency Keys:**
    - Store redemption: `'rp:redemption:' || v_redemption_id`
@@ -316,9 +326,9 @@ When a parent cancels a redemption:
 
 ---
 
-## 13. Proposed Database Schema (Tenant-Hardened)
+## 13. Proposed Database Schema (Tenant- & Consistency-Hardened)
 
-The schema utilizes composite foreign keys to enforce tenant isolation at the database constraint level:
+The schema enforces tenant isolation and cross-table consistency at the database constraint level.
 
 ```mermaid
 erDiagram
@@ -327,7 +337,7 @@ erDiagram
     CHILD_PROFILES ||--o{ REWARD_REDEMPTIONS : claims
     REWARDS ||--o{ REWARD_REDEMPTIONS : provides
     CHILD_PROFILES ||--o{ WHEEL_SPINS : executes
-    REWARD_REDEMPTIONS ||--|| WHEEL_SPINS : audits
+    REWARD_REDEMPTIONS ||--|| WHEEL_SPINS : audits_and_matches
     REWARD_REDEMPTIONS ||--o{ RP_LEDGER : debits_and_refunds
 ```
 
@@ -394,6 +404,10 @@ create table if not exists public.reward_redemptions (
   -- Composite unique key for downstream references
   constraint uq_reward_redemptions_id_family_child unique (id, family_id, child_id),
 
+  -- Composite unique key for Wheel linking (Option A: relational enforcement)
+  constraint uq_reward_redemptions_wheel_link
+    unique (id, family_id, child_id, reward_id, origin, rp_cost_minor),
+
   -- Composite FK: child_id must belong to family_id
   constraint fk_redemptions_child_family
     foreign key (child_id, family_id)
@@ -410,13 +424,14 @@ create table if not exists public.reward_redemptions (
 create index if not exists idx_redemptions_child_status on public.reward_redemptions(child_id, status, created_at desc);
 create index if not exists idx_redemptions_family_status on public.reward_redemptions(family_id, status);
 
--- 4. Wheel Spins Audit Record
+-- 4. Wheel Spins Audit Record (Relational Invariant Hardened)
 create table if not exists public.wheel_spins (
   id uuid primary key default gen_random_uuid(),
   family_id uuid not null references public.families(id) on delete cascade,
   child_id uuid not null,
   reward_id uuid not null,
   redemption_id uuid not null unique,
+  origin text not null default 'wheel' check (origin = 'wheel'),
   spin_cost_minor bigint not null check (spin_cost_minor between 500 and 5000),
   selection_snapshot jsonb not null,
   created_at timestamptz not null default now(),
@@ -432,31 +447,87 @@ create table if not exists public.wheel_spins (
     references public.rewards(id, family_id)
     on delete restrict,
 
-  constraint fk_wheel_spins_redemption_family_child
-    foreign key (redemption_id, family_id, child_id)
-    references public.reward_redemptions(id, family_id, child_id)
+  -- Comprehensive Relational Link to Redemptions:
+  -- Proves redemption_id matches family_id, child_id, reward_id, origin='wheel', and spin_cost_minor==rp_cost_minor!
+  constraint fk_wheel_spins_redemption_composite
+    foreign key (redemption_id, family_id, child_id, reward_id, origin, spin_cost_minor)
+    references public.reward_redemptions(id, family_id, child_id, reward_id, origin, rp_cost_minor)
     on delete restrict
 );
 
 create index if not exists idx_wheel_spins_child_date on public.wheel_spins(child_id, created_at desc);
 
--- 5. Command Receipts Operation Constraint Extension
+-- 5. Command Receipts Operation Constraint Extension (PR-Gated Sequencing)
+
+-- In PR 4.1 Migration:
+-- Extend command_receipts_operation_check to include Store operations:
 alter table public.command_receipts
   drop constraint if exists command_receipts_operation_check,
   add constraint command_receipts_operation_check
     check (operation in (
       'create_draft', 'submit', 'verify', 'reject', 'process_growth',
-      'redeem_reward', 'spin_wheel', 'fulfill_reward', 'cancel_reward'
+      'redeem_reward', 'fulfill_reward', 'cancel_reward'
     ));
+
+-- In PR 4.2 Migration:
+-- Extend command_receipts_operation_check again to include Wheel spin operation:
+-- check (operation in (
+--   'create_draft', 'submit', 'verify', 'reject', 'process_growth',
+--   'redeem_reward', 'fulfill_reward', 'cancel_reward',
+--   'spin_wheel'
+-- ));
 ```
 
 ---
 
-## 14. Proposed Trusted SECURITY DEFINER RPCs
+## 14. Proposed Trusted SECURITY DEFINER RPCs & Execution Contract
 
-All mutating operations run through hardened `SECURITY DEFINER` RPCs with `search_path = ''`:
+All mutating operations run through hardened `SECURITY DEFINER` RPCs with `search_path = ''`.
 
-### 1. `redeem_store_reward`
+### Standard Privilege Revocation
+```sql
+revoke all on function public.redeem_store_reward from public, anon;
+grant execute on function public.redeem_store_reward to authenticated;
+
+revoke all on function public.spin_reward_wheel from public, anon;
+grant execute on function public.spin_reward_wheel to authenticated;
+
+revoke all on function public.fulfill_reward_redemption from public, anon;
+grant execute on function public.fulfill_reward_redemption to authenticated;
+
+revoke all on function public.cancel_reward_redemption from public, anon;
+grant execute on function public.cancel_reward_redemption to authenticated;
+```
+
+### Strict 8-Step Execution Order Inside Every Phase 4 RPC:
+Every RPC follows an identical, fail-closed ordering:
+1. **Authentication Check:** `auth.uid()` cannot be null (`42501`).
+2. **Resource Load & Authoritative Family Resolution from Database:**
+   - Never trust caller-supplied `family_id`. Load authoritative records from database tables under row-level lock.
+3. **Authorization Verification:**
+   - Verify caller is active family adult (`private.is_active_family_adult(v_family_id)`) or active paired child device (`private.is_active_child_device(v_family_id, p_child_id)`).
+   - If unauthorized, raise exception `Permission denied` (`42501`).
+4. **Idempotency Replay Inspection (ONLY AFTER Step 3 Authorization):**
+   - Query `command_receipts` for `command_id = p_command_id`.
+   - If found: validate `operation`, `actor_user_id == auth.uid()`, `resource_id`, and `family_id`. If mismatch, raise exception `Invalid command replay` (`42501`).
+   - If valid, return existing logical outcome immediately.
+5. **Precondition & Concurrency Verification:**
+   - Lock `child_balances` row `FOR UPDATE`.
+   - Verify balance $\ge$ cost.
+   - For fulfill/cancel: verify status is `pending_fulfillment`.
+6. **State Mutation:**
+   - Append negative debit / compensating refund to `rp_ledger`.
+   - Insert/update `reward_redemptions` / `wheel_spins`.
+   - Update `child_balances`.
+7. **Record Command Receipt:**
+   - Insert row into `public.command_receipts`.
+8. **Commit & Return Outcome.**
+
+---
+
+### Detailed RPC Contracts
+
+#### 1. `redeem_store_reward`
 ```text
 public.redeem_store_reward(
   p_reward_id uuid,
@@ -464,47 +535,47 @@ public.redeem_store_reward(
   p_child_id uuid default null
 ) returns public.reward_redemptions
 ```
-- Authenticates caller (`auth.uid() is not null`).
-- Resolves family: if caller is active family adult, acts for target child profile within that family. (If caller is paired child device, verifies `auth.uid()` matches linked child).
-- Checks `command_receipts` for `operation = 'redeem_reward'`.
-- Locks `child_balances` row `FOR UPDATE`.
-- Locks `rewards` row `FOR UPDATE`. Verifies active, store-enabled, child-eligible.
-- Verifies balance $\ge$ `store_cost_minor`.
-- Appends negative debit to `rp_ledger`, inserts `reward_redemptions`, updates `child_balances`, records `command_receipts`.
+- Step 1: `auth.uid() is not null`.
+- Step 2: Load child profile from `child_profiles` to resolve authoritative `v_family_id`. Lock target `rewards` row: `select * into v_reward from public.rewards where id = p_reward_id for update;`.
+- Step 3: Authorize: caller must be active family adult of `v_family_id` OR exact paired child device.
+- Step 4: Inspect `command_receipts` for `operation = 'redeem_reward'`. Return existing redemption if replay.
+- Step 5: Lock `child_balances` for `p_child_id` `FOR UPDATE`. Verify `v_reward.is_active = true`, `v_reward.store_enabled = true`, child eligible, and `rp_balance_minor >= v_reward.store_cost_minor`.
+- Step 6: Insert into `rp_ledger` (`amount_minor = -store_cost_minor`, `reason_code = 'store_redemption'`). Insert into `reward_redemptions` (`origin = 'store'`). Update `child_balances`.
+- Step 7: Insert `command_receipts` row. Return redemption.
 
-### 2. `spin_reward_wheel`
+#### 2. `spin_reward_wheel`
 ```text
 public.spin_reward_wheel(
   p_command_id uuid,
   p_child_id uuid default null
 ) returns jsonb
 ```
-- Authenticates and authorizes caller.
-- Resolves family and reads `families.timezone`.
-- Checks `command_receipts` for idempotent replay.
-- Locks `child_balances` `FOR UPDATE`.
-- Locks `family_wheel_settings` `FOR UPDATE`. Verifies `is_enabled = true`.
-- Verifies balance $\ge$ `spin_cost_minor`.
-- Daily Cap Check: Evaluates family-local calendar day using `families.timezone`. If spins today $\ge \text{daily\_spin\_cap}$, aborts with `LW202: Daily spin cap reached`.
-- Pool Check: Gathers active eligible items (`wheel_enabled = true`). If distinct items $< 3$, aborts with `LW203: Minimum 3 active wheel rewards required`.
-- Performs deterministic random selection; builds `selection_snapshot`.
-- Appends negative debit to `rp_ledger`, inserts `reward_redemptions` (`origin = 'wheel'`), inserts `wheel_spins`, updates `child_balances`, records `command_receipts`.
+- Step 1: `auth.uid() is not null`.
+- Step 2: Load child profile from `child_profiles` to resolve authoritative `v_family_id`. Load `families.timezone`.
+- Step 3: Authorize: caller must be active family adult of `v_family_id` OR exact paired child device.
+- Step 4: Inspect `command_receipts` for `operation = 'spin_wheel'`. Return existing spin/redemption if replay.
+- Step 5: Lock `child_balances` for `p_child_id` `FOR UPDATE`. Lock `family_wheel_settings` for `v_family_id` `FOR UPDATE`. Verify `is_enabled = true` and `rp_balance_minor >= spin_cost_minor`.
+- Daily Cap Verification: Calculate calendar day using `families.timezone`. If spins today $\ge \text{daily\_spin\_cap}$, abort with `LW202`.
+- Pool Verification: Gather active rewards where `wheel_enabled = true` and child eligible. If count $< 3$, abort with `LW203`.
+- Step 6: Server pseudorandom selection; construct `selection_snapshot`. Insert into `rp_ledger` (`amount_minor = -spin_cost_minor`). Insert into `reward_redemptions` (`origin = 'wheel'`). Insert into `wheel_spins`. Update `child_balances`.
+- Step 7: Insert `command_receipts` row. Return payload.
 
-### 3. `fulfill_reward_redemption`
+#### 3. `fulfill_reward_redemption`
 ```text
 public.fulfill_reward_redemption(
   p_redemption_id uuid,
   p_command_id uuid
 ) returns public.reward_redemptions
 ```
-- Authenticates caller; authorizes caller as active family adult.
-- Checks `command_receipts` for idempotent replay.
-- Locks `reward_redemptions` row `FOR UPDATE`.
-- Verifies status is `pending_fulfillment`.
-- Updates status to `fulfilled`, sets `fulfilled_at = now()`, `fulfilled_by_user_id = auth.uid()`.
-- Records `command_receipts`.
+- Step 1: `auth.uid() is not null`.
+- Step 2: Lock redemption: `select * into v_redemption from public.reward_redemptions where id = p_redemption_id for update;`. Derive `v_family_id := v_redemption.family_id`.
+- Step 3: Authorize: caller must be active family adult (`private.is_active_family_adult(v_family_id)`). Paired child devices are strictly denied.
+- Step 4: Inspect `command_receipts` for `operation = 'fulfill_reward'`. Return existing redemption if replay.
+- Step 5: Verify `v_redemption.status == 'pending_fulfillment'`. If terminal, raise `LW204`.
+- Step 6: Update status to `'fulfilled'`, set `fulfilled_at = now()`, `fulfilled_by_user_id = auth.uid()`.
+- Step 7: Insert `command_receipts` row. Return redemption.
 
-### 4. `cancel_reward_redemption`
+#### 4. `cancel_reward_redemption`
 ```text
 public.cancel_reward_redemption(
   p_redemption_id uuid,
@@ -512,14 +583,13 @@ public.cancel_reward_redemption(
   p_cancellation_reason text
 ) returns public.reward_redemptions
 ```
-- Authenticates caller; authorizes caller as active family adult.
-- Checks `command_receipts` for idempotent replay.
-- Locks `reward_redemptions` row `FOR UPDATE`.
-- Verifies status is `pending_fulfillment`.
-- Updates status to `cancelled`, sets `cancellation_reason = p_cancellation_reason`.
-- Appends compensating credit to `rp_ledger` (`amount_minor = +rp_cost_minor`, `reason_code = 'redemption_refund'`).
-- Restores `child_balances.rp_balance_minor`.
-- Records `command_receipts`.
+- Step 1: `auth.uid() is not null`.
+- Step 2: Lock redemption: `select * into v_redemption from public.reward_redemptions where id = p_redemption_id for update;`. Derive `v_family_id := v_redemption.family_id`.
+- Step 3: Authorize: caller must be active family adult (`private.is_active_family_adult(v_family_id)`). Paired child devices are strictly denied.
+- Step 4: Inspect `command_receipts` for `operation = 'cancel_reward'`. Return existing redemption if replay.
+- Step 5: Verify `v_redemption.status == 'pending_fulfillment'`. If terminal, raise `LW204`.
+- Step 6: Update status to `'cancelled'`, set `cancellation_reason`. Insert compensating credit into `rp_ledger` (`amount_minor = +v_redemption.rp_cost_minor`, `reason_code = 'redemption_refund'`). Restore `child_balances.rp_balance_minor`.
+- Step 7: Insert `command_receipts` row. Return redemption.
 
 ---
 
@@ -580,20 +650,31 @@ No spending action may occur on a single tap. The child must confirm before an i
 
 ---
 
-## 17. Family Timezone Policy & Calendar Day Calculation
+## 17. Family Timezone Policy & Calendar Day Calculation Across DST
 
-To ensure fair daily caps, "day" is evaluated using the family's registered `timezone` from `public.families`:
+To ensure fair daily caps that never drift due to Daylight Saving Time (DST) transitions, the calendar day boundaries are derived directly from the family's registered `timezone` in `public.families.timezone`:
 
 ```sql
--- Retrieve family timezone (persisted in families table)
+-- 1. Resolve family timezone from DB state; fail closed if invalid
 select timezone into v_family_tz from public.families where id = v_family_id;
 v_family_tz := coalesce(nullif(trim(v_family_tz), ''), 'UTC');
 
--- Evaluate calendar day boundaries in family-local time
-v_today_start := (date_trunc('day', now() at time zone v_family_tz) at time zone v_family_tz);
-v_today_end := v_today_start + interval '1 day';
+begin
+  perform now() at time zone v_family_tz;
+exception when others then
+  raise exception 'Invalid family timezone: %', v_family_tz using errcode = 'LW206';
+end;
 
--- Count spins today
+-- 2. Derive local calendar date
+v_local_date := (now() at time zone v_family_tz)::date;
+
+-- 3. Local midnight start of today
+v_today_start := (v_local_date::timestamp at time zone v_family_tz);
+
+-- 4. Local midnight start of tomorrow (advancing calendar date by 1, then converting to timestamptz)
+v_today_end := ((v_local_date + 1)::timestamp at time zone v_family_tz);
+
+-- 5. Count spins within [v_today_start, v_today_end)
 select count(*) into v_spins_today
 from public.wheel_spins
 where child_id = v_child_id
@@ -601,11 +682,18 @@ where child_id = v_child_id
   and created_at < v_today_end;
 ```
 
-### Edge-Case Testing Requirements:
-1. Spin executed at 23:59:58 local time counts toward Day 1.
-2. Spin executed at 00:00:02 local time counts toward Day 2.
-3. Daylight Saving Time (DST) transitions do not corrupt the 24-hour day boundary.
-4. Families across UTC+7 (Vietnam), UTC-5 (US Eastern), etc., calculate resets at their true local midnight.
+### Invariant:
+The cap window is strictly `[local midnight today, local midnight tomorrow)` in the family's timezone. It is NOT `[now, now + 24 hours)`.
+
+### Test Suite Requirements:
+- Testing with `America/New_York` (DST-observing):
+  - Normal 24h day.
+  - Spring-forward day (23h day in March): window covers exactly 23 absolute hours, local midnight resets cleanly.
+  - Fall-back day (25h day in November): window covers exactly 25 absolute hours, local midnight resets cleanly.
+  - 23:59:59 local time counts toward today; 00:00:01 local time counts toward tomorrow.
+- Testing with `Asia/Ho_Chi_Minh` (UTC+7, non-DST):
+  - Verifies exact 24h daily boundaries with zero offset drift.
+- Invalid timezone strings fail closed with `LW206` before any debit.
 
 ---
 
@@ -631,15 +719,32 @@ To enforce rigorous architectural boundaries, Phase 4 is partitioned into two in
 
 ### PR 4.1: Reward Catalog + Store Redemption Foundation
 *Goal:* Deliver full catalog management, Store redemptions, ledger spending, and fulfillment lifecycle without randomness complexity.
-- Schema: `rewards`, `reward_redemptions`, composite FKs, RLS policies.
+- Schema: `rewards`, `reward_redemptions`, composite FKs (`fk_rewards_target_child_family`, `fk_redemptions_child_family`, `fk_redemptions_reward_family`), RLS policies.
+- Operation CHECK Migration: Extend `command_receipts_operation_check` to include: `'redeem_reward', 'fulfill_reward', 'cancel_reward'`.
 - RPCs: `redeem_store_reward`, `fulfill_reward_redemption`, `cancel_reward_redemption`.
 - Tests: pgTAP tests for catalog RLS, balance overdraft protection, single-transaction atomic debits, compensating refunds, terminal lifecycle transitions, command idempotency, and multi-session concurrency.
+- Adversarial Security Tests:
+  - Processed command replay from Family B caller fails (`42501`).
+  - Command ID reused with wrong operation fails (`42501`).
+  - Command ID reused against another redemption fails (`42501`).
+  - Command ID reused by another actor fails (`42501`).
+  - Unauthenticated calls fail (`42501`).
+  - Paired child attempting parent-only fulfill/cancel fails (`42501`).
 - Mobile UI: Parent reward catalog editor and fulfillment inbox; Child Store screen and confirmation dialog.
-- **Gating Rule:** PR 4.1 must pass independent review and CI before PR 4.2 begins.
+- **Gating Rule:** PR 4.1 must pass independent review and CI on `main` before PR 4.2 begins.
 
 ### PR 4.2: Celebration Wheel Experience
-*Goal:* Layer server-authoritative random selection, wheel configuration, and celebratory presentation on top of the validated redemption foundation.
-- Schema: `family_wheel_settings`, `wheel_spins`, operation check constraint extension.
-- RPC: `spin_reward_wheel` with daily cap, timezone evaluation, selection snapshot, and pool validation ($\ge 3$).
-- Tests: Mathematical distribution tests, pool constraint validation, daily cap reset tests, timezone boundary tests.
+*Goal:* Layer server-authoritative pseudorandom selection, wheel configuration, and celebratory presentation on top of the validated redemption foundation.
+- Schema: `family_wheel_settings`, `wheel_spins`, relational composite invariant `fk_wheel_spins_redemption_composite` (enforcing same reward, `origin = 'wheel'`, and `spin_cost_minor == rp_cost_minor`).
+- Operation CHECK Migration: Extend `command_receipts_operation_check` to add `'spin_wheel'`.
+- RPC: `spin_reward_wheel` with daily cap, family timezone evaluation across DST, selection snapshot, and pool validation ($\ge 3$).
+- Tests:
+  - Mathematical distribution tests and pool constraint validation ($\ge 3$).
+  - Daily cap reset tests and DST boundary tests (`America/New_York` spring-forward/fall-back).
+  - Malicious mismatch tests:
+    - Same family/child, different reward $\rightarrow$ blocked by FK.
+    - Store redemption referenced by a Wheel spin $\rightarrow$ blocked by FK.
+    - Wrong cost (`spin_cost_minor != rp_cost_minor`) $\rightarrow$ blocked by FK.
+    - Cross-family reference $\rightarrow$ blocked by FK.
+    - Cross-child reference $\rightarrow$ blocked by FK.
 - Mobile UI: Interactive celebration wheel widget, landing animation, celebratory reward presentation dialog.
