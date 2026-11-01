@@ -103,6 +103,12 @@ jobs:
       - name: Run assessment vertical slice and retry regression test
         run: node scripts/test_assessment_vertical_slice_retry.mjs
 
+      - name: Run Growth Engine and ledger concurrency regression test
+        run: node scripts/test_growth_concurrency.mjs
+
+      - name: Run Growth Engine vertical slice integration test
+        run: node scripts/test_growth_vertical_slice.mjs
+
   android:
     name: Android debug build
     needs: [quality, database]

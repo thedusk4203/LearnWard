@@ -69,17 +69,20 @@ Level    │    Wheel   Store
 | [Phase 1 Freeze Receipt](docs/freezes/phase-1-family-child-identity-freeze.md) | Frozen Phase 1 baseline, CI receipt, security invariants, test counts, deferred scope and next gate |
 | [Phase 2 Secure Assessment Capture ADR](docs/adr/0003-phase-2-secure-assessment-capture.md) | Phase 2 assessment capture, generated normalized score, concurrency row lock, and immutable verified events |
 | [Phase 2 Freeze Receipt](docs/freezes/phase-2-secure-assessment-capture-freeze.md) | Frozen Phase 2 baseline, CI receipt, security invariants, test counts, deferred scope and next gate |
+| [Phase 3 Growth Engine & Ledger ADR](docs/adr/0004-phase-3-growth-engine-ledger.md) | Phase 3 Growth Engine v0.1 calculation, integer minor units, append-only ledgers, balance projections, and concurrency serialization |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
 
-**Phase 1 — Family + Child Identity Foundation is frozen.** It establishes adult authentication,
+**Phase 1 — Family + Child Identity Foundation is FROZEN.** It establishes adult authentication,
 family creation, child profile management, family-scoped database RLS, shared-device Child Mode,
 and the Parent PIN containment boundary. Phase 2 must consume this contract without weakening it.
 
 **Phase 2 — Secure Assessment Capture Vertical Slice is FROZEN.** It delivers family/child tenant-bound assessments, server-authoritative score normalization via stored generated columns, longitudinal subject keys, full-path Storage RLS on private photo evidence with draft-bound mutation lifecycle, optimistic concurrency locking, idempotent review workflows (`verify_assessment`, `reject_assessment`), append-only verified learning events, and durable offline draft recovery.
 
-Next planned phase: **Phase 3 — Growth Engine + XP/RP Ledger Foundation** (not started).
+**Phase 3 — Growth Engine + XP/RP Ledger Foundation is IN DEVELOPMENT.** It establishes the pure Dart Growth Engine v0.1, rolling 3-sample historical baseline calculation, below-level anti-farming protection, deterministic integer minor-unit RP awards, Study XP accumulation, double-entry append-only ledgers (`xp_ledger`, `rp_ledger`), `child_balances` projections with advisory-locked balance reconciliation, and serialized `SELECT FOR UPDATE` exactly-once event processing.
+
+Next planned phase: **Phase 4 — Reward Economy & Wheel Experience** (not started).
 
 ### Repository layout
 

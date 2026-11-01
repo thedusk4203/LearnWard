@@ -10,3 +10,4 @@ export 'src/repositories/supabase_assessment_evidence_storage.dart';
 export 'src/repositories/supabase_assessment_repository.dart';
 export 'src/repositories/supabase_child_profile_repository.dart';
 export 'src/repositories/supabase_family_repository.dart';
+export 'src/repositories/supabase_growth_repository.dart';

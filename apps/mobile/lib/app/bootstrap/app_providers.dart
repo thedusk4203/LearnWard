@@ -154,6 +154,24 @@ final assessmentEvidenceStorageProvider = Provider<AssessmentEvidenceStorage>((
   throw MissingSupabaseConfigurationException(config.environment);
 });
 
+/// Repository for Growth Engine calculations, ledgers and balances.
+final growthRepositoryProvider = Provider<GrowthRepository>((ref) {
+  final config = ref.watch(appConfigProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (client != null) {
+    return SupabaseGrowthRepository(client);
+  }
+  if (config.canUseLocalDemoRepositories) {
+    final assessmentRepo = ref.watch(assessmentRepositoryProvider);
+    return InMemoryGrowthRepository(
+      assessmentRepository: assessmentRepo is InMemoryAssessmentRepository
+          ? assessmentRepo
+          : null,
+    );
+  }
+  throw MissingSupabaseConfigurationException(config.environment);
+});
+
 /// Notifier managing the currently selected family.
 class ActiveFamilyNotifier extends Notifier<Family?> {
   @override
