@@ -6,6 +6,7 @@ import 'package:learnward/app/bootstrap/in_memory_repositories.dart';
 import 'package:learnward/features/rewards/presentation/child_store_screen.dart';
 import 'package:learnward/features/rewards/presentation/parent_fulfillment_inbox_screen.dart';
 import 'package:learnward/features/rewards/presentation/parent_reward_catalog_screen.dart';
+import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 
 class _PresetChildModeNotifier extends ActiveChildModeNotifier {
@@ -226,6 +227,83 @@ void main() {
       // Check insufficient balance indication
       expect(find.text('Need 45 more'), findsOneWidget);
     });
+
+    testWidgets(
+      'shows recovery banner for pending redeem command and allows retry',
+      (tester) async {
+        final inMemoryGrowth = InMemoryGrowthRepository();
+        inMemoryGrowth.balancesByChild[testChild.id.value] = ChildBalance(
+          familyId: testFamily.id,
+          childId: testChild.id,
+          xpTotal: const XpAmount(100),
+          rpBalanceMinor: const RpMinor(5000),
+          updatedAt: DateTime.utc(2026, 11, 1),
+        );
+        final inMemoryRewards = InMemoryRewardRepository(
+          growthRepository: inMemoryGrowth,
+        );
+        final createdReward = await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: testRewardAffordable.title,
+          description: testRewardAffordable.description,
+          category: testRewardAffordable.category,
+          storeCostMinor: testRewardAffordable.storeCostMinor,
+          storeEnabled: true,
+        );
+        final commandStore = InMemoryPendingRewardCommandStore();
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.redeemReward,
+            commandId: 'pending-cmd-123',
+            familyId: testFamily.id.value,
+            childId: testChild.id.value,
+            rewardId: createdReward.id.value,
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              activeFamilyProvider.overrideWith(
+                () => _PresetActiveFamilyNotifier(testFamily),
+              ),
+              activeChildModeProvider.overrideWith(
+                () => _PresetChildModeNotifier(testChild),
+              ),
+              growthRepositoryProvider.overrideWithValue(inMemoryGrowth),
+              rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+              pendingRewardCommandStoreProvider.overrideWithValue(commandStore),
+            ],
+            child: const MaterialApp(home: ChildStoreScreen()),
+          ),
+        );
+
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('pending_redeem_recovery_banner')),
+          findsOneWidget,
+        );
+        expect(
+          find.text(
+            "We're checking whether your reward request was completed.",
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('Checking...'), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('retry_pending_redeem_button')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('pending_redeem_recovery_banner')),
+          findsNothing,
+        );
+        expect(find.text('40.00 RP'), findsOneWidget);
+        expect(await commandStore.listPendingCommands(), isEmpty);
+      },
+    );
   });
 
   group('ParentRewardCatalogScreen Widget Tests', () {
@@ -438,6 +516,74 @@ void main() {
           testChild.id,
         );
         expect(refundedBalance?.rpBalanceMinor.value, 1000);
+      },
+    );
+
+    testWidgets(
+      'shows recovery banner for pending fulfillment update and allows retry',
+      (tester) async {
+        final inMemoryRewards = InMemoryRewardRepository();
+        final created = await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: 'Book',
+          category: RewardCategory.item,
+          storeCostMinor: 1000,
+          storeEnabled: true,
+        );
+        final redemption = await inMemoryRewards.redeemStoreReward(
+          commandId: 'cmd-pre-1',
+          rewardId: created.id,
+          childId: testChild.id,
+        );
+
+        final commandStore = InMemoryPendingRewardCommandStore();
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.fulfillReward,
+            commandId: 'cmd-fulfill-recovery-1',
+            familyId: testFamily.id.value,
+            redemptionId: redemption.id.value,
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              activeFamilyProvider.overrideWith(
+                () => _PresetActiveFamilyNotifier(testFamily),
+              ),
+              childProfileRepositoryProvider.overrideWithValue(
+                InMemoryChildProfileRepository()..children.add(testChild),
+              ),
+              rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+              pendingRewardCommandStoreProvider.overrideWithValue(commandStore),
+            ],
+            child: const MaterialApp(home: ParentFulfillmentInboxScreen()),
+          ),
+        );
+
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('pending_fulfillment_recovery_banner')),
+          findsOneWidget,
+        );
+        expect(
+          find.text("We're checking whether a reward update was completed."),
+          findsOneWidget,
+        );
+
+        await tester.tap(
+          find.byKey(const Key('retry_pending_fulfillment_button')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('pending_fulfillment_recovery_banner')),
+          findsNothing,
+        );
+        expect(await commandStore.listPendingCommands(), isEmpty);
       },
     );
   });

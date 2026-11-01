@@ -11,6 +11,7 @@ export 'src/ports/family_repository.dart';
 export 'src/ports/growth_repository.dart';
 export 'src/ports/local_draft_store.dart';
 export 'src/ports/local_metadata_store.dart';
+export 'src/ports/pending_reward_command_store.dart';
 export 'src/ports/reward_repository.dart';
 export 'src/use_cases/archive_child_profile.dart';
 export 'src/use_cases/cancel_reward_redemption.dart';

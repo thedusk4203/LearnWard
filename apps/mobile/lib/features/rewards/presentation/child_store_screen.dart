@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,7 +11,7 @@ import '../../../app/bootstrap/app_providers.dart';
 import '../../../app/routing/app_routes.dart';
 
 /// Screen allowing children to view available family rewards and redeem them
-/// with explicit balance confirmation safeguards.
+/// with explicit balance confirmation safeguards and restart-safe durable idempotency.
 class ChildStoreScreen extends ConsumerStatefulWidget {
   const ChildStoreScreen({super.key});
 
@@ -25,20 +24,13 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
   String? _errorMessage;
   List<Reward> _storeRewards = [];
   ChildBalance? _childBalance;
+  List<PendingRewardCommand> _pendingRedeems = [];
+  final Set<String> _inFlightRewardIds = {};
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
-  }
-
-  String _generateCommandId() {
-    final random = Random.secure();
-    final values = List<int>.generate(16, (i) => random.nextInt(256));
-    values[6] = (values[6] & 0x0f) | 0x40;
-    values[8] = (values[8] & 0x3f) | 0x80;
-    final hex = values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
   }
 
   Future<void> _loadData() async {
@@ -62,10 +54,20 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
         childId: activeChild.id,
       );
 
+      final commandStore = ref.read(pendingRewardCommandStoreProvider);
+      final pendingCommands = await commandStore.listPendingCommands(
+        familyId: family.id.value,
+        childId: activeChild.id.value,
+      );
+      final pendingRedeems = pendingCommands
+          .where((cmd) => cmd.operation == RewardCommandOperation.redeemReward)
+          .toList();
+
       if (mounted) {
         setState(() {
           _childBalance = balance;
           _storeRewards = rewards;
+          _pendingRedeems = pendingRedeems;
           _isLoading = false;
         });
       }
@@ -81,7 +83,14 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
 
   Future<void> _confirmAndRedeem(Reward reward) async {
     final activeChild = ref.read(activeChildModeProvider);
-    if (activeChild == null) return;
+    final family = ref.read(activeFamilyProvider);
+    if (activeChild == null || family == null) return;
+
+    // Prevent double-tapping while one logical command is pending
+    if (_inFlightRewardIds.contains(reward.id.value) ||
+        _pendingRedeems.any((p) => p.rewardId == reward.id.value)) {
+      return;
+    }
 
     final costMinor = reward.storeCostMinor ?? 0;
     final costRp = (costMinor / 100.0).toStringAsFixed(
@@ -149,13 +158,15 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
     );
 
     if (confirmed == true) {
-      final commandId = _generateCommandId();
+      setState(() => _inFlightRewardIds.add(reward.id.value));
       try {
+        final commandStore = ref.read(pendingRewardCommandStoreProvider);
         final redeemUseCase = RedeemStoreReward(
           ref.read(rewardRepositoryProvider),
+          commandStore: commandStore,
         );
         await redeemUseCase(
-          commandId: commandId,
+          familyId: family.id,
           rewardId: reward.id,
           childId: activeChild.id,
         );
@@ -172,11 +183,76 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
         }
         await _loadData();
       } catch (e) {
+        await _loadData();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Redemption failed: ${e.toString()}')),
-          );
+          final isTerminal =
+              e.toString().contains('LW201') ||
+              e.toString().contains('LW204') ||
+              e.toString().contains('LW205') ||
+              e.toString().contains('LW206');
+          final msg = isTerminal
+              ? 'Redemption failed: ${e.toString()}'
+              : "We're checking whether your reward request was completed. Tap Retry to verify.";
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
         }
+      } finally {
+        if (mounted) {
+          setState(() => _inFlightRewardIds.remove(reward.id.value));
+        }
+      }
+    }
+  }
+
+  Future<void> _resolvePendingRedeem(PendingRewardCommand pending) async {
+    final activeChild = ref.read(activeChildModeProvider);
+    final family = ref.read(activeFamilyProvider);
+    if (activeChild == null || family == null || pending.rewardId == null) {
+      return;
+    }
+
+    setState(() => _inFlightRewardIds.add(pending.rewardId!));
+    try {
+      final commandStore = ref.read(pendingRewardCommandStoreProvider);
+      final redeemUseCase = RedeemStoreReward(
+        ref.read(rewardRepositoryProvider),
+        commandStore: commandStore,
+      );
+      await redeemUseCase(
+        commandId: pending.commandId,
+        familyId: family.id,
+        rewardId: RewardId(pending.rewardId!),
+        childId: activeChild.id,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Reward claim confirmed! Ask your parent to fulfill it.',
+            ),
+            backgroundColor: Theme.of(context).colorScheme.primary,
+          ),
+        );
+      }
+      await _loadData();
+    } catch (e) {
+      await _loadData();
+      if (mounted) {
+        final isTerminal =
+            e.toString().contains('LW201') ||
+            e.toString().contains('LW204') ||
+            e.toString().contains('LW205') ||
+            e.toString().contains('LW206');
+        final msg = isTerminal
+            ? 'Redemption failed: ${e.toString()}'
+            : "We're checking whether your reward request was completed. Tap Retry to verify.";
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _inFlightRewardIds.remove(pending.rewardId!));
       }
     }
   }
@@ -268,7 +344,47 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
                 ),
               ),
 
-              // 2. Celebration Wheel Banner (Coming Soon in Phase 4.2)
+              // 2. Unresolved Pending Command Recovery Banner
+              if (_pendingRedeems.isNotEmpty)
+                Container(
+                  key: const Key('pending_redeem_recovery_banner'),
+                  width: double.infinity,
+                  margin: const EdgeInsets.all(AppSpacing.md),
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.tertiaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: theme.colorScheme.tertiary),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.hourglass_top,
+                        color: theme.colorScheme.onTertiaryContainer,
+                      ),
+                      const SizedBox(width: AppSpacing.md),
+                      Expanded(
+                        child: Text(
+                          "We're checking whether your reward request was completed.",
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onTertiaryContainer,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      FilledButton.tonal(
+                        key: const Key('retry_pending_redeem_button'),
+                        onPressed: _inFlightRewardIds.isNotEmpty
+                            ? null
+                            : () =>
+                                  _resolvePendingRedeem(_pendingRedeems.first),
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+
+              // 3. Celebration Wheel Banner (Coming Soon in Phase 4.2)
               Padding(
                 padding: const EdgeInsets.fromLTRB(
                   AppSpacing.md,
@@ -323,7 +439,7 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
                 ),
               ),
 
-              // 3. Catalog Items List
+              // 4. Catalog Items List
               Expanded(child: _buildStoreList(theme, balanceMinor)),
             ],
           ),
@@ -392,6 +508,10 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
         final reward = _storeRewards[index];
         final costMinor = reward.storeCostMinor ?? 0;
         final isAffordable = balanceMinor >= costMinor;
+        final isPending = _pendingRedeems.any(
+          (p) => p.rewardId == reward.id.value,
+        );
+        final isInFlight = _inFlightRewardIds.contains(reward.id.value);
         final costRp = (costMinor / 100.0).toStringAsFixed(
           costMinor % 100 == 0 ? 0 : 2,
         );
@@ -479,11 +599,16 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 isAffordable
-                    ? FilledButton(
-                        key: Key('redeem_button_${reward.id.value}'),
-                        onPressed: () => _confirmAndRedeem(reward),
-                        child: const Text('Get reward'),
-                      )
+                    ? (isInFlight || isPending
+                          ? const FilledButton(
+                              onPressed: null,
+                              child: Text('Checking...'),
+                            )
+                          : FilledButton(
+                              key: Key('redeem_button_${reward.id.value}'),
+                              onPressed: () => _confirmAndRedeem(reward),
+                              child: const Text('Get reward'),
+                            ))
                     : OutlinedButton(
                         onPressed: null,
                         child: Text(

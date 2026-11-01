@@ -133,6 +133,71 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
   }
 }
 
+/// Lightweight in-memory fallback for [PendingRewardCommandStore] in test and local demo modes.
+final class InMemoryPendingRewardCommandStore
+    implements PendingRewardCommandStore {
+  final Map<String, PendingRewardCommand> _commands = {};
+
+  @override
+  Future<void> savePendingCommand(PendingRewardCommand command) async {
+    _commands[command.commandId] = command;
+  }
+
+  @override
+  Future<PendingRewardCommand?> getPendingCommand(String commandId) async {
+    return _commands[commandId];
+  }
+
+  @override
+  Future<PendingRewardCommand?> findPendingRedeemCommand({
+    required String familyId,
+    required String childId,
+    required String rewardId,
+  }) async {
+    for (final cmd in _commands.values.toList().reversed) {
+      if (cmd.operation == RewardCommandOperation.redeemReward &&
+          cmd.familyId == familyId &&
+          cmd.childId == childId &&
+          cmd.rewardId == rewardId) {
+        return cmd;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<PendingRewardCommand?> findPendingRedemptionCommand({
+    required RewardCommandOperation operation,
+    required String redemptionId,
+  }) async {
+    for (final cmd in _commands.values.toList().reversed) {
+      if (cmd.operation == operation && cmd.redemptionId == redemptionId) {
+        return cmd;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<List<PendingRewardCommand>> listPendingCommands({
+    String? familyId,
+    String? childId,
+  }) async {
+    final list = _commands.values.where((cmd) {
+      if (familyId != null && cmd.familyId != familyId) return false;
+      if (childId != null && cmd.childId != childId) return false;
+      return true;
+    }).toList();
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
+  @override
+  Future<void> deletePendingCommand(String commandId) async {
+    _commands.remove(commandId);
+  }
+}
+
 /// Lightweight in-memory fallback for [AssessmentRepository] in local demo mode.
 final class InMemoryAssessmentRepository implements AssessmentRepository {
   final Map<String, Assessment> _assessments = {};

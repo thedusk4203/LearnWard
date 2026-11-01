@@ -44,6 +44,23 @@ final localDraftStoreProvider = Provider<LocalDraftStore>((ref) {
   return ref.watch(databaseProvider);
 });
 
+/// In-memory pending reward command store provider for testing/local demo.
+final inMemoryPendingRewardCommandStoreProvider =
+    Provider<PendingRewardCommandStore>((ref) {
+      return InMemoryPendingRewardCommandStore();
+    });
+
+/// Pending reward command store provider.
+final pendingRewardCommandStoreProvider = Provider<PendingRewardCommandStore>((
+  ref,
+) {
+  final config = ref.watch(appConfigProvider);
+  if (config.canUseLocalDemoRepositories) {
+    return ref.watch(inMemoryPendingRewardCommandStoreProvider);
+  }
+  return ref.watch(databaseProvider);
+});
+
 /// Evidence picker service provider. Defaults to production native image_picker.
 final evidencePickerServiceProvider = Provider<EvidencePickerService>((ref) {
   final config = ref.watch(appConfigProvider);

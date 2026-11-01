@@ -180,6 +180,7 @@ create policy rewards_select on public.rewards
     private.is_active_family_adult(family_id)
     or (
       is_active = true
+      and store_enabled = true
       and (
         (target_child_id is null and exists (
           select 1 from public.child_device_grants cdg

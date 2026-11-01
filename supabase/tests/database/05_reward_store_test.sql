@@ -1,5 +1,5 @@
 begin;
-select plan(43);
+select plan(49);
 
 -- ---------------------------------------------------------------------------
 -- 0. FIXTURES SETUP (superuser context)
@@ -106,6 +106,62 @@ select is_empty(
     returning *
   $$,
   'Paired child device cannot DELETE rewards catalog'
+);
+
+-- Test 3a: Paired child A1 can SELECT active family-wide Store reward
+select results_eq(
+  $$
+    select id from public.rewards
+    where id = 'ea000000-0000-0000-0000-000000000001'::uuid
+  $$,
+  $$ values ('ea000000-0000-0000-0000-000000000001'::uuid) $$,
+  'Paired child A1 can SELECT active family-wide Store reward'
+);
+
+-- Test 3b: Paired child A1 can SELECT A1-targeted Store reward
+select results_eq(
+  $$
+    select id from public.rewards
+    where id = 'ea000000-0000-0000-0000-000000000002'::uuid
+  $$,
+  $$ values ('ea000000-0000-0000-0000-000000000002'::uuid) $$,
+  'Paired child A1 can SELECT A1-targeted Store reward'
+);
+
+-- Test 3c: Paired child A1 cannot SELECT A2-targeted sibling reward
+select is_empty(
+  $$
+    select id from public.rewards
+    where id = 'ea000000-0000-0000-0000-000000000003'::uuid
+  $$,
+  'Paired child A1 cannot SELECT A2-targeted sibling reward'
+);
+
+-- Test 3d: Paired child cannot SELECT inactive reward (is_active = false)
+select is_empty(
+  $$
+    select id from public.rewards
+    where id = 'ea000000-0000-0000-0000-000000000004'::uuid
+  $$,
+  'Paired child cannot SELECT inactive reward (is_active = false)'
+);
+
+-- Test 3e: Paired child cannot SELECT store_enabled = false (Wheel-only reward)
+select is_empty(
+  $$
+    select id from public.rewards
+    where id = 'ea000000-0000-0000-0000-000000000005'::uuid
+  $$,
+  'Paired child cannot SELECT store_enabled = false (Wheel-only reward)'
+);
+
+-- Test 3f: Paired child cannot SELECT another family reward
+select is_empty(
+  $$
+    select id from public.rewards
+    where id = 'eb000000-0000-0000-0000-000000000001'::uuid
+  $$,
+  'Paired child cannot SELECT another family reward'
 );
 
 -- Test 4: Direct client INSERT into reward_redemptions is revoked

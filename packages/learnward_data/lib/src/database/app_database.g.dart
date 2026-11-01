@@ -1327,6 +1327,582 @@ class LocalAssessmentDraftsCompanion
   }
 }
 
+class $PendingRewardCommandsTable extends PendingRewardCommands
+    with TableInfo<$PendingRewardCommandsTable, PendingRewardCommandEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $PendingRewardCommandsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _operationMeta = const VerificationMeta(
+    'operation',
+  );
+  @override
+  late final GeneratedColumn<String> operation = GeneratedColumn<String>(
+    'operation',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _commandIdMeta = const VerificationMeta(
+    'commandId',
+  );
+  @override
+  late final GeneratedColumn<String> commandId = GeneratedColumn<String>(
+    'command_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways('UNIQUE'),
+  );
+  static const VerificationMeta _familyIdMeta = const VerificationMeta(
+    'familyId',
+  );
+  @override
+  late final GeneratedColumn<String> familyId = GeneratedColumn<String>(
+    'family_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _childIdMeta = const VerificationMeta(
+    'childId',
+  );
+  @override
+  late final GeneratedColumn<String> childId = GeneratedColumn<String>(
+    'child_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _rewardIdMeta = const VerificationMeta(
+    'rewardId',
+  );
+  @override
+  late final GeneratedColumn<String> rewardId = GeneratedColumn<String>(
+    'reward_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _redemptionIdMeta = const VerificationMeta(
+    'redemptionId',
+  );
+  @override
+  late final GeneratedColumn<String> redemptionId = GeneratedColumn<String>(
+    'redemption_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _cancellationReasonMeta =
+      const VerificationMeta('cancellationReason');
+  @override
+  late final GeneratedColumn<String> cancellationReason =
+      GeneratedColumn<String>(
+        'cancellation_reason',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    operation,
+    commandId,
+    familyId,
+    childId,
+    rewardId,
+    redemptionId,
+    cancellationReason,
+    createdAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'pending_reward_commands';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<PendingRewardCommandEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('operation')) {
+      context.handle(
+        _operationMeta,
+        operation.isAcceptableOrUnknown(data['operation']!, _operationMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_operationMeta);
+    }
+    if (data.containsKey('command_id')) {
+      context.handle(
+        _commandIdMeta,
+        commandId.isAcceptableOrUnknown(data['command_id']!, _commandIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_commandIdMeta);
+    }
+    if (data.containsKey('family_id')) {
+      context.handle(
+        _familyIdMeta,
+        familyId.isAcceptableOrUnknown(data['family_id']!, _familyIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_familyIdMeta);
+    }
+    if (data.containsKey('child_id')) {
+      context.handle(
+        _childIdMeta,
+        childId.isAcceptableOrUnknown(data['child_id']!, _childIdMeta),
+      );
+    }
+    if (data.containsKey('reward_id')) {
+      context.handle(
+        _rewardIdMeta,
+        rewardId.isAcceptableOrUnknown(data['reward_id']!, _rewardIdMeta),
+      );
+    }
+    if (data.containsKey('redemption_id')) {
+      context.handle(
+        _redemptionIdMeta,
+        redemptionId.isAcceptableOrUnknown(
+          data['redemption_id']!,
+          _redemptionIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('cancellation_reason')) {
+      context.handle(
+        _cancellationReasonMeta,
+        cancellationReason.isAcceptableOrUnknown(
+          data['cancellation_reason']!,
+          _cancellationReasonMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  PendingRewardCommandEntry map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return PendingRewardCommandEntry(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      operation: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}operation'],
+      )!,
+      commandId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}command_id'],
+      )!,
+      familyId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}family_id'],
+      )!,
+      childId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}child_id'],
+      ),
+      rewardId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}reward_id'],
+      ),
+      redemptionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}redemption_id'],
+      ),
+      cancellationReason: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}cancellation_reason'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $PendingRewardCommandsTable createAlias(String alias) {
+    return $PendingRewardCommandsTable(attachedDatabase, alias);
+  }
+}
+
+class PendingRewardCommandEntry extends DataClass
+    implements Insertable<PendingRewardCommandEntry> {
+  final int id;
+  final String operation;
+  final String commandId;
+  final String familyId;
+  final String? childId;
+  final String? rewardId;
+  final String? redemptionId;
+  final String? cancellationReason;
+  final DateTime createdAt;
+  const PendingRewardCommandEntry({
+    required this.id,
+    required this.operation,
+    required this.commandId,
+    required this.familyId,
+    this.childId,
+    this.rewardId,
+    this.redemptionId,
+    this.cancellationReason,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['operation'] = Variable<String>(operation);
+    map['command_id'] = Variable<String>(commandId);
+    map['family_id'] = Variable<String>(familyId);
+    if (!nullToAbsent || childId != null) {
+      map['child_id'] = Variable<String>(childId);
+    }
+    if (!nullToAbsent || rewardId != null) {
+      map['reward_id'] = Variable<String>(rewardId);
+    }
+    if (!nullToAbsent || redemptionId != null) {
+      map['redemption_id'] = Variable<String>(redemptionId);
+    }
+    if (!nullToAbsent || cancellationReason != null) {
+      map['cancellation_reason'] = Variable<String>(cancellationReason);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  PendingRewardCommandsCompanion toCompanion(bool nullToAbsent) {
+    return PendingRewardCommandsCompanion(
+      id: Value(id),
+      operation: Value(operation),
+      commandId: Value(commandId),
+      familyId: Value(familyId),
+      childId: childId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(childId),
+      rewardId: rewardId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(rewardId),
+      redemptionId: redemptionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(redemptionId),
+      cancellationReason: cancellationReason == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cancellationReason),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory PendingRewardCommandEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return PendingRewardCommandEntry(
+      id: serializer.fromJson<int>(json['id']),
+      operation: serializer.fromJson<String>(json['operation']),
+      commandId: serializer.fromJson<String>(json['commandId']),
+      familyId: serializer.fromJson<String>(json['familyId']),
+      childId: serializer.fromJson<String?>(json['childId']),
+      rewardId: serializer.fromJson<String?>(json['rewardId']),
+      redemptionId: serializer.fromJson<String?>(json['redemptionId']),
+      cancellationReason: serializer.fromJson<String?>(
+        json['cancellationReason'],
+      ),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'operation': serializer.toJson<String>(operation),
+      'commandId': serializer.toJson<String>(commandId),
+      'familyId': serializer.toJson<String>(familyId),
+      'childId': serializer.toJson<String?>(childId),
+      'rewardId': serializer.toJson<String?>(rewardId),
+      'redemptionId': serializer.toJson<String?>(redemptionId),
+      'cancellationReason': serializer.toJson<String?>(cancellationReason),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  PendingRewardCommandEntry copyWith({
+    int? id,
+    String? operation,
+    String? commandId,
+    String? familyId,
+    Value<String?> childId = const Value.absent(),
+    Value<String?> rewardId = const Value.absent(),
+    Value<String?> redemptionId = const Value.absent(),
+    Value<String?> cancellationReason = const Value.absent(),
+    DateTime? createdAt,
+  }) => PendingRewardCommandEntry(
+    id: id ?? this.id,
+    operation: operation ?? this.operation,
+    commandId: commandId ?? this.commandId,
+    familyId: familyId ?? this.familyId,
+    childId: childId.present ? childId.value : this.childId,
+    rewardId: rewardId.present ? rewardId.value : this.rewardId,
+    redemptionId: redemptionId.present ? redemptionId.value : this.redemptionId,
+    cancellationReason: cancellationReason.present
+        ? cancellationReason.value
+        : this.cancellationReason,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  PendingRewardCommandEntry copyWithCompanion(
+    PendingRewardCommandsCompanion data,
+  ) {
+    return PendingRewardCommandEntry(
+      id: data.id.present ? data.id.value : this.id,
+      operation: data.operation.present ? data.operation.value : this.operation,
+      commandId: data.commandId.present ? data.commandId.value : this.commandId,
+      familyId: data.familyId.present ? data.familyId.value : this.familyId,
+      childId: data.childId.present ? data.childId.value : this.childId,
+      rewardId: data.rewardId.present ? data.rewardId.value : this.rewardId,
+      redemptionId: data.redemptionId.present
+          ? data.redemptionId.value
+          : this.redemptionId,
+      cancellationReason: data.cancellationReason.present
+          ? data.cancellationReason.value
+          : this.cancellationReason,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PendingRewardCommandEntry(')
+          ..write('id: $id, ')
+          ..write('operation: $operation, ')
+          ..write('commandId: $commandId, ')
+          ..write('familyId: $familyId, ')
+          ..write('childId: $childId, ')
+          ..write('rewardId: $rewardId, ')
+          ..write('redemptionId: $redemptionId, ')
+          ..write('cancellationReason: $cancellationReason, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    operation,
+    commandId,
+    familyId,
+    childId,
+    rewardId,
+    redemptionId,
+    cancellationReason,
+    createdAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is PendingRewardCommandEntry &&
+          other.id == this.id &&
+          other.operation == this.operation &&
+          other.commandId == this.commandId &&
+          other.familyId == this.familyId &&
+          other.childId == this.childId &&
+          other.rewardId == this.rewardId &&
+          other.redemptionId == this.redemptionId &&
+          other.cancellationReason == this.cancellationReason &&
+          other.createdAt == this.createdAt);
+}
+
+class PendingRewardCommandsCompanion
+    extends UpdateCompanion<PendingRewardCommandEntry> {
+  final Value<int> id;
+  final Value<String> operation;
+  final Value<String> commandId;
+  final Value<String> familyId;
+  final Value<String?> childId;
+  final Value<String?> rewardId;
+  final Value<String?> redemptionId;
+  final Value<String?> cancellationReason;
+  final Value<DateTime> createdAt;
+  const PendingRewardCommandsCompanion({
+    this.id = const Value.absent(),
+    this.operation = const Value.absent(),
+    this.commandId = const Value.absent(),
+    this.familyId = const Value.absent(),
+    this.childId = const Value.absent(),
+    this.rewardId = const Value.absent(),
+    this.redemptionId = const Value.absent(),
+    this.cancellationReason = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  });
+  PendingRewardCommandsCompanion.insert({
+    this.id = const Value.absent(),
+    required String operation,
+    required String commandId,
+    required String familyId,
+    this.childId = const Value.absent(),
+    this.rewardId = const Value.absent(),
+    this.redemptionId = const Value.absent(),
+    this.cancellationReason = const Value.absent(),
+    required DateTime createdAt,
+  }) : operation = Value(operation),
+       commandId = Value(commandId),
+       familyId = Value(familyId),
+       createdAt = Value(createdAt);
+  static Insertable<PendingRewardCommandEntry> custom({
+    Expression<int>? id,
+    Expression<String>? operation,
+    Expression<String>? commandId,
+    Expression<String>? familyId,
+    Expression<String>? childId,
+    Expression<String>? rewardId,
+    Expression<String>? redemptionId,
+    Expression<String>? cancellationReason,
+    Expression<DateTime>? createdAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (operation != null) 'operation': operation,
+      if (commandId != null) 'command_id': commandId,
+      if (familyId != null) 'family_id': familyId,
+      if (childId != null) 'child_id': childId,
+      if (rewardId != null) 'reward_id': rewardId,
+      if (redemptionId != null) 'redemption_id': redemptionId,
+      if (cancellationReason != null) 'cancellation_reason': cancellationReason,
+      if (createdAt != null) 'created_at': createdAt,
+    });
+  }
+
+  PendingRewardCommandsCompanion copyWith({
+    Value<int>? id,
+    Value<String>? operation,
+    Value<String>? commandId,
+    Value<String>? familyId,
+    Value<String?>? childId,
+    Value<String?>? rewardId,
+    Value<String?>? redemptionId,
+    Value<String?>? cancellationReason,
+    Value<DateTime>? createdAt,
+  }) {
+    return PendingRewardCommandsCompanion(
+      id: id ?? this.id,
+      operation: operation ?? this.operation,
+      commandId: commandId ?? this.commandId,
+      familyId: familyId ?? this.familyId,
+      childId: childId ?? this.childId,
+      rewardId: rewardId ?? this.rewardId,
+      redemptionId: redemptionId ?? this.redemptionId,
+      cancellationReason: cancellationReason ?? this.cancellationReason,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (operation.present) {
+      map['operation'] = Variable<String>(operation.value);
+    }
+    if (commandId.present) {
+      map['command_id'] = Variable<String>(commandId.value);
+    }
+    if (familyId.present) {
+      map['family_id'] = Variable<String>(familyId.value);
+    }
+    if (childId.present) {
+      map['child_id'] = Variable<String>(childId.value);
+    }
+    if (rewardId.present) {
+      map['reward_id'] = Variable<String>(rewardId.value);
+    }
+    if (redemptionId.present) {
+      map['redemption_id'] = Variable<String>(redemptionId.value);
+    }
+    if (cancellationReason.present) {
+      map['cancellation_reason'] = Variable<String>(cancellationReason.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PendingRewardCommandsCompanion(')
+          ..write('id: $id, ')
+          ..write('operation: $operation, ')
+          ..write('commandId: $commandId, ')
+          ..write('familyId: $familyId, ')
+          ..write('childId: $childId, ')
+          ..write('rewardId: $rewardId, ')
+          ..write('redemptionId: $redemptionId, ')
+          ..write('cancellationReason: $cancellationReason, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -1334,6 +1910,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       $LocalMetadataEntriesTable(this);
   late final $LocalAssessmentDraftsTable localAssessmentDrafts =
       $LocalAssessmentDraftsTable(this);
+  late final $PendingRewardCommandsTable pendingRewardCommands =
+      $PendingRewardCommandsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1341,6 +1919,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   List<DatabaseSchemaEntity> get allSchemaEntities => [
     localMetadataEntries,
     localAssessmentDrafts,
+    pendingRewardCommands,
   ];
 }
 
@@ -2033,6 +2612,311 @@ typedef $$LocalAssessmentDraftsTableProcessedTableManager =
       LocalAssessmentDraftEntry,
       PrefetchHooks Function()
     >;
+typedef $$PendingRewardCommandsTableCreateCompanionBuilder =
+    PendingRewardCommandsCompanion Function({
+      Value<int> id,
+      required String operation,
+      required String commandId,
+      required String familyId,
+      Value<String?> childId,
+      Value<String?> rewardId,
+      Value<String?> redemptionId,
+      Value<String?> cancellationReason,
+      required DateTime createdAt,
+    });
+typedef $$PendingRewardCommandsTableUpdateCompanionBuilder =
+    PendingRewardCommandsCompanion Function({
+      Value<int> id,
+      Value<String> operation,
+      Value<String> commandId,
+      Value<String> familyId,
+      Value<String?> childId,
+      Value<String?> rewardId,
+      Value<String?> redemptionId,
+      Value<String?> cancellationReason,
+      Value<DateTime> createdAt,
+    });
+
+class $$PendingRewardCommandsTableFilterComposer
+    extends Composer<_$AppDatabase, $PendingRewardCommandsTable> {
+  $$PendingRewardCommandsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get operation => $composableBuilder(
+    column: $table.operation,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get commandId => $composableBuilder(
+    column: $table.commandId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get familyId => $composableBuilder(
+    column: $table.familyId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get childId => $composableBuilder(
+    column: $table.childId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get rewardId => $composableBuilder(
+    column: $table.rewardId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get redemptionId => $composableBuilder(
+    column: $table.redemptionId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get cancellationReason => $composableBuilder(
+    column: $table.cancellationReason,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$PendingRewardCommandsTableOrderingComposer
+    extends Composer<_$AppDatabase, $PendingRewardCommandsTable> {
+  $$PendingRewardCommandsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get operation => $composableBuilder(
+    column: $table.operation,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get commandId => $composableBuilder(
+    column: $table.commandId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get familyId => $composableBuilder(
+    column: $table.familyId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get childId => $composableBuilder(
+    column: $table.childId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get rewardId => $composableBuilder(
+    column: $table.rewardId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get redemptionId => $composableBuilder(
+    column: $table.redemptionId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get cancellationReason => $composableBuilder(
+    column: $table.cancellationReason,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$PendingRewardCommandsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $PendingRewardCommandsTable> {
+  $$PendingRewardCommandsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get operation =>
+      $composableBuilder(column: $table.operation, builder: (column) => column);
+
+  GeneratedColumn<String> get commandId =>
+      $composableBuilder(column: $table.commandId, builder: (column) => column);
+
+  GeneratedColumn<String> get familyId =>
+      $composableBuilder(column: $table.familyId, builder: (column) => column);
+
+  GeneratedColumn<String> get childId =>
+      $composableBuilder(column: $table.childId, builder: (column) => column);
+
+  GeneratedColumn<String> get rewardId =>
+      $composableBuilder(column: $table.rewardId, builder: (column) => column);
+
+  GeneratedColumn<String> get redemptionId => $composableBuilder(
+    column: $table.redemptionId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get cancellationReason => $composableBuilder(
+    column: $table.cancellationReason,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$PendingRewardCommandsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $PendingRewardCommandsTable,
+          PendingRewardCommandEntry,
+          $$PendingRewardCommandsTableFilterComposer,
+          $$PendingRewardCommandsTableOrderingComposer,
+          $$PendingRewardCommandsTableAnnotationComposer,
+          $$PendingRewardCommandsTableCreateCompanionBuilder,
+          $$PendingRewardCommandsTableUpdateCompanionBuilder,
+          (
+            PendingRewardCommandEntry,
+            BaseReferences<
+              _$AppDatabase,
+              $PendingRewardCommandsTable,
+              PendingRewardCommandEntry
+            >,
+          ),
+          PendingRewardCommandEntry,
+          PrefetchHooks Function()
+        > {
+  $$PendingRewardCommandsTableTableManager(
+    _$AppDatabase db,
+    $PendingRewardCommandsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$PendingRewardCommandsTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$PendingRewardCommandsTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$PendingRewardCommandsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<String> operation = const Value.absent(),
+                Value<String> commandId = const Value.absent(),
+                Value<String> familyId = const Value.absent(),
+                Value<String?> childId = const Value.absent(),
+                Value<String?> rewardId = const Value.absent(),
+                Value<String?> redemptionId = const Value.absent(),
+                Value<String?> cancellationReason = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+              }) => PendingRewardCommandsCompanion(
+                id: id,
+                operation: operation,
+                commandId: commandId,
+                familyId: familyId,
+                childId: childId,
+                rewardId: rewardId,
+                redemptionId: redemptionId,
+                cancellationReason: cancellationReason,
+                createdAt: createdAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required String operation,
+                required String commandId,
+                required String familyId,
+                Value<String?> childId = const Value.absent(),
+                Value<String?> rewardId = const Value.absent(),
+                Value<String?> redemptionId = const Value.absent(),
+                Value<String?> cancellationReason = const Value.absent(),
+                required DateTime createdAt,
+              }) => PendingRewardCommandsCompanion.insert(
+                id: id,
+                operation: operation,
+                commandId: commandId,
+                familyId: familyId,
+                childId: childId,
+                rewardId: rewardId,
+                redemptionId: redemptionId,
+                cancellationReason: cancellationReason,
+                createdAt: createdAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<
+                    $PendingRewardCommandsTable,
+                    PendingRewardCommandEntry
+                  >(table),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $PendingRewardCommandsTable,
+                    PendingRewardCommandEntry
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$PendingRewardCommandsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $PendingRewardCommandsTable,
+      PendingRewardCommandEntry,
+      $$PendingRewardCommandsTableFilterComposer,
+      $$PendingRewardCommandsTableOrderingComposer,
+      $$PendingRewardCommandsTableAnnotationComposer,
+      $$PendingRewardCommandsTableCreateCompanionBuilder,
+      $$PendingRewardCommandsTableUpdateCompanionBuilder,
+      (
+        PendingRewardCommandEntry,
+        BaseReferences<
+          _$AppDatabase,
+          $PendingRewardCommandsTable,
+          PendingRewardCommandEntry
+        >,
+      ),
+      PendingRewardCommandEntry,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -2041,4 +2925,6 @@ class $AppDatabaseManager {
       $$LocalMetadataEntriesTableTableManager(_db, _db.localMetadataEntries);
   $$LocalAssessmentDraftsTableTableManager get localAssessmentDrafts =>
       $$LocalAssessmentDraftsTableTableManager(_db, _db.localAssessmentDrafts);
+  $$PendingRewardCommandsTableTableManager get pendingRewardCommands =>
+      $$PendingRewardCommandsTableTableManager(_db, _db.pendingRewardCommands);
 }

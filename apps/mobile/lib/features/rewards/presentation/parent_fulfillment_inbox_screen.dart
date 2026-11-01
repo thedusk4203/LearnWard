@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:learnward_application/learnward_application.dart';
@@ -8,8 +6,8 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 
-/// Screen allowing parents to review pending reward claims, deliver them,
-/// or cancel with a compensating RP refund.
+/// Parent inbox for managing and fulfilling pending child reward claims
+/// with durable restart-safe idempotency.
 class ParentFulfillmentInboxScreen extends ConsumerStatefulWidget {
   const ParentFulfillmentInboxScreen({super.key});
 
@@ -26,20 +24,13 @@ class _ParentFulfillmentInboxScreenState
   Map<String, String> _childNames = {};
   RewardRedemptionStatus? _statusFilter =
       RewardRedemptionStatus.pendingFulfillment;
+  List<PendingRewardCommand> _pendingUpdates = [];
+  final Set<String> _inFlightRedemptionIds = {};
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
-  }
-
-  String _generateCommandId() {
-    final random = Random.secure();
-    final values = List<int>.generate(16, (i) => random.nextInt(256));
-    values[6] = (values[6] & 0x0f) | 0x40;
-    values[8] = (values[8] & 0x3f) | 0x80;
-    final hex = values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
   }
 
   Future<void> _loadData() async {
@@ -64,10 +55,23 @@ class _ParentFulfillmentInboxScreenState
         status: _statusFilter,
       );
 
+      final commandStore = ref.read(pendingRewardCommandStoreProvider);
+      final pendingCommands = await commandStore.listPendingCommands(
+        familyId: family.id.value,
+      );
+      final pendingUpdates = pendingCommands
+          .where(
+            (cmd) =>
+                cmd.operation == RewardCommandOperation.fulfillReward ||
+                cmd.operation == RewardCommandOperation.cancelReward,
+          )
+          .toList();
+
       if (mounted) {
         setState(() {
           _redemptions = redemptions;
           _childNames = names;
+          _pendingUpdates = pendingUpdates;
           _isLoading = false;
         });
       }
@@ -82,12 +86,22 @@ class _ParentFulfillmentInboxScreenState
   }
 
   Future<void> _fulfill(RewardRedemption redemption) async {
-    final commandId = _generateCommandId();
+    final family = ref.read(activeFamilyProvider);
+    if (family == null) return;
+
+    if (_inFlightRedemptionIds.contains(redemption.id.value) ||
+        _pendingUpdates.any((p) => p.redemptionId == redemption.id.value)) {
+      return;
+    }
+
+    setState(() => _inFlightRedemptionIds.add(redemption.id.value));
     try {
+      final commandStore = ref.read(pendingRewardCommandStoreProvider);
       final fulfillUseCase = FulfillRewardRedemption(
         ref.read(rewardRepositoryProvider),
+        commandStore: commandStore,
       );
-      await fulfillUseCase(commandId: commandId, redemptionId: redemption.id);
+      await fulfillUseCase(familyId: family.id, redemptionId: redemption.id);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -99,15 +113,34 @@ class _ParentFulfillmentInboxScreenState
       }
       await _loadData();
     } catch (e) {
+      await _loadData();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to fulfill reward: ${e.toString()}')),
-        );
+        final isTerminal =
+            e.toString().contains('LW204') ||
+            e.toString().contains('LW004') ||
+            e.toString().contains('InvalidRedemptionException');
+        final msg = isTerminal
+            ? 'Failed to fulfill reward: ${e.toString()}'
+            : "We're checking whether the delivery was saved. Tap retry if needed.";
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _inFlightRedemptionIds.remove(redemption.id.value));
       }
     }
   }
 
   Future<void> _cancelAndRefund(RewardRedemption redemption) async {
+    final family = ref.read(activeFamilyProvider);
+    if (family == null) return;
+
+    if (_inFlightRedemptionIds.contains(redemption.id.value) ||
+        _pendingUpdates.any((p) => p.redemptionId == redemption.id.value)) {
+      return;
+    }
+
     final reasonController = TextEditingController();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -159,13 +192,15 @@ class _ParentFulfillmentInboxScreenState
     );
 
     if (confirmed == true && reasonController.text.trim().isNotEmpty) {
-      final commandId = _generateCommandId();
+      setState(() => _inFlightRedemptionIds.add(redemption.id.value));
       try {
+        final commandStore = ref.read(pendingRewardCommandStoreProvider);
         final cancelUseCase = CancelRewardRedemption(
           ref.read(rewardRepositoryProvider),
+          commandStore: commandStore,
         );
         await cancelUseCase(
-          commandId: commandId,
+          familyId: family.id,
           redemptionId: redemption.id,
           cancellationReason: reasonController.text.trim(),
         );
@@ -180,11 +215,79 @@ class _ParentFulfillmentInboxScreenState
         }
         await _loadData();
       } catch (e) {
+        await _loadData();
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to cancel reward: ${e.toString()}')),
-          );
+          final isTerminal =
+              e.toString().contains('LW204') ||
+              e.toString().contains('LW004') ||
+              e.toString().contains('InvalidRedemptionException');
+          final msg = isTerminal
+              ? 'Failed to cancel reward: ${e.toString()}'
+              : "We're checking whether the cancellation was processed. Tap retry if needed.";
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
         }
+      } finally {
+        if (mounted) {
+          setState(() => _inFlightRedemptionIds.remove(redemption.id.value));
+        }
+      }
+    }
+  }
+
+  Future<void> _resolvePendingUpdate(PendingRewardCommand pending) async {
+    final family = ref.read(activeFamilyProvider);
+    if (family == null || pending.redemptionId == null) return;
+
+    setState(() => _inFlightRedemptionIds.add(pending.redemptionId!));
+    try {
+      final commandStore = ref.read(pendingRewardCommandStoreProvider);
+      if (pending.operation == RewardCommandOperation.fulfillReward) {
+        final fulfillUseCase = FulfillRewardRedemption(
+          ref.read(rewardRepositoryProvider),
+          commandStore: commandStore,
+        );
+        await fulfillUseCase(
+          commandId: pending.commandId,
+          familyId: family.id,
+          redemptionId: RewardRedemptionId(pending.redemptionId!),
+        );
+      } else if (pending.operation == RewardCommandOperation.cancelReward) {
+        final cancelUseCase = CancelRewardRedemption(
+          ref.read(rewardRepositoryProvider),
+          commandStore: commandStore,
+        );
+        await cancelUseCase(
+          commandId: pending.commandId,
+          familyId: family.id,
+          redemptionId: RewardRedemptionId(pending.redemptionId!),
+          cancellationReason:
+              pending.cancellationReason ?? 'Cancelled by parent',
+        );
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pending reward update verified!')),
+        );
+      }
+      await _loadData();
+    } catch (e) {
+      await _loadData();
+      if (mounted) {
+        final isTerminal =
+            e.toString().contains('LW204') ||
+            e.toString().contains('LW004') ||
+            e.toString().contains('InvalidRedemptionException');
+        final msg = isTerminal
+            ? 'Update failed: ${e.toString()}'
+            : "We're checking whether the update was processed. Tap retry to verify.";
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _inFlightRedemptionIds.remove(pending.redemptionId!));
       }
     }
   }
@@ -229,6 +332,49 @@ class _ParentFulfillmentInboxScreenState
               ),
             ),
             const Divider(height: 1),
+
+            // Pending Update Recovery Banner
+            if (_pendingUpdates.isNotEmpty)
+              Container(
+                key: const Key('pending_fulfillment_recovery_banner'),
+                width: double.infinity,
+                margin: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.md,
+                  vertical: AppSpacing.xs,
+                ),
+                padding: const EdgeInsets.all(AppSpacing.md),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: theme.colorScheme.tertiary),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.hourglass_top,
+                      color: theme.colorScheme.onTertiaryContainer,
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: Text(
+                        "We're checking whether a reward update was completed.",
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onTertiaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    FilledButton.tonal(
+                      key: const Key('retry_pending_fulfillment_button'),
+                      onPressed: _inFlightRedemptionIds.isNotEmpty
+                          ? null
+                          : () => _resolvePendingUpdate(_pendingUpdates.first),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+
             Expanded(
               child: RefreshIndicator(
                 onRefresh: _loadData,
@@ -309,6 +455,10 @@ class _ParentFulfillmentInboxScreenState
     String childName,
   ) {
     final costRp = item.rpCost;
+    final isPendingUpdate = _pendingUpdates.any(
+      (p) => p.redemptionId == item.id.value,
+    );
+    final isInFlight = _inFlightRedemptionIds.contains(item.id.value);
 
     return Card(
       key: Key('redemption_card_${item.id.value}'),
@@ -350,50 +500,63 @@ class _ParentFulfillmentInboxScreenState
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Date: ${item.createdAt.toLocal().toString().split('.').first}',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.outline,
+                        ),
+                      ),
                     ],
                   ),
                 ),
-                _buildStatusBadge(theme, item.status),
+                _buildStatusChip(theme, item.status),
               ],
             ),
-            if (item.cancellationReason != null) ...[
-              const SizedBox(height: 8),
+            if (item.status == RewardRedemptionStatus.cancelled &&
+                item.cancellationReason != null) ...[
+              const SizedBox(height: AppSpacing.sm),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(AppSpacing.sm),
                 decoration: BoxDecoration(
                   color: theme.colorScheme.errorContainer.withValues(
-                    alpha: 0.4,
+                    alpha: 0.3,
                   ),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  'Reason: ${item.cancellationReason!}',
+                  'Cancellation Reason: ${item.cancellationReason}',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onErrorContainer,
+                    fontStyle: FontStyle.italic,
                   ),
                 ),
               ),
             ],
-            if (item.isPending) ...[
-              const SizedBox(height: 12),
+            if (item.status == RewardRedemptionStatus.pendingFulfillment) ...[
+              const SizedBox(height: AppSpacing.md),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   OutlinedButton(
                     key: Key('cancel_button_${item.id.value}'),
-                    onPressed: () => _cancelAndRefund(item),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: theme.colorScheme.error,
-                    ),
+                    onPressed: isInFlight || isPendingUpdate
+                        ? null
+                        : () => _cancelAndRefund(item),
                     child: const Text('Cancel & Refund'),
                   ),
-                  const SizedBox(width: 8),
-                  FilledButton.icon(
+                  const SizedBox(width: AppSpacing.sm),
+                  FilledButton(
                     key: Key('fulfill_button_${item.id.value}'),
-                    onPressed: () => _fulfill(item),
-                    icon: const Icon(Icons.check, size: 18),
-                    label: const Text('Deliver Reward'),
+                    onPressed: isInFlight || isPendingUpdate
+                        ? null
+                        : () => _fulfill(item),
+                    child: Text(
+                      isInFlight || isPendingUpdate
+                          ? 'Checking...'
+                          : 'Mark as Delivered',
+                    ),
                   ),
                 ],
               ),
@@ -404,23 +567,26 @@ class _ParentFulfillmentInboxScreenState
     );
   }
 
-  Widget _buildStatusBadge(ThemeData theme, RewardRedemptionStatus status) {
+  Widget _buildStatusChip(ThemeData theme, RewardRedemptionStatus status) {
     Color bg;
     Color fg;
-    final label = status.displayName;
+    String label;
 
     switch (status) {
       case RewardRedemptionStatus.pendingFulfillment:
-        bg = Colors.amber.withValues(alpha: 0.2);
-        fg = Colors.amber.shade900;
+        bg = theme.colorScheme.tertiaryContainer;
+        fg = theme.colorScheme.onTertiaryContainer;
+        label = 'Pending';
         break;
       case RewardRedemptionStatus.fulfilled:
-        bg = Colors.green.withValues(alpha: 0.2);
-        fg = Colors.green.shade800;
+        bg = theme.colorScheme.primaryContainer;
+        fg = theme.colorScheme.onPrimaryContainer;
+        label = 'Fulfilled';
         break;
       case RewardRedemptionStatus.cancelled:
-        bg = Colors.grey.withValues(alpha: 0.2);
-        fg = Colors.grey.shade800;
+        bg = theme.colorScheme.errorContainer;
+        fg = theme.colorScheme.onErrorContainer;
+        label = 'Cancelled';
         break;
     }
 
@@ -428,11 +594,11 @@ class _ParentFulfillmentInboxScreenState
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Text(
         label,
-        style: TextStyle(color: fg, fontWeight: FontWeight.bold, fontSize: 12),
+        style: TextStyle(color: fg, fontSize: 11, fontWeight: FontWeight.bold),
       ),
     );
   }
