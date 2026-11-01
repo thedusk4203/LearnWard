@@ -22,8 +22,26 @@ abstract final class AppRoutes {
   static const String createChild = '/parent/children/create';
   static const String createChildName = 'createChild';
 
+  static const String parentRewards = '/parent/rewards';
+  static const String parentRewardsName = 'parentRewards';
+
+  static const String parentCreateReward = '/parent/rewards/create';
+  static const String parentCreateRewardName = 'parentCreateReward';
+
+  static const String parentEditReward = '/parent/rewards/edit';
+  static const String parentEditRewardName = 'parentEditReward';
+
+  static const String parentFulfillmentInbox = '/parent/redemptions';
+  static const String parentFulfillmentInboxName = 'parentFulfillmentInbox';
+
   static const String childMode = '/child';
   static const String childModeName = 'childMode';
+
+  static const String childStore = '/child/store';
+  static const String childStoreName = 'childStore';
+
+  static const String childRedemptions = '/child/redemptions';
+  static const String childRedemptionsName = 'childRedemptions';
 
   static const String childAddAssessment = '/child/assessments/add';
   static const String childAddAssessmentName = 'childAddAssessment';

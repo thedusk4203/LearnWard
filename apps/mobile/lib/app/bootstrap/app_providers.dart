@@ -172,6 +172,24 @@ final growthRepositoryProvider = Provider<GrowthRepository>((ref) {
   throw MissingSupabaseConfigurationException(config.environment);
 });
 
+/// Repository for reward catalog, store redemptions and fulfillment.
+final rewardRepositoryProvider = Provider<RewardRepository>((ref) {
+  final config = ref.watch(appConfigProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (client != null) {
+    return SupabaseRewardRepository(client);
+  }
+  if (config.canUseLocalDemoRepositories) {
+    final growthRepo = ref.watch(growthRepositoryProvider);
+    return InMemoryRewardRepository(
+      growthRepository: growthRepo is InMemoryGrowthRepository
+          ? growthRepo
+          : null,
+    );
+  }
+  throw MissingSupabaseConfigurationException(config.environment);
+});
+
 /// Notifier managing the currently selected family.
 class ActiveFamilyNotifier extends Notifier<Family?> {
   @override

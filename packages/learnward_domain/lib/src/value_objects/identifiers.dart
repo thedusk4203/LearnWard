@@ -83,3 +83,48 @@ final class EvidenceId {
   @override
   String toString() => value;
 }
+
+/// Strongly-typed identifier for a [Reward].
+final class RewardId {
+  RewardId(this.value) {
+    if (value.trim().isEmpty) {
+      throw const InvalidRewardException('RewardId cannot be empty.');
+    }
+  }
+
+  final String value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is RewardId && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => value;
+}
+
+/// Strongly-typed identifier for a [RewardRedemption].
+final class RewardRedemptionId {
+  RewardRedemptionId(this.value) {
+    if (value.trim().isEmpty) {
+      throw const InvalidRedemptionException(
+        'RewardRedemptionId cannot be empty.',
+      );
+    }
+  }
+
+  final String value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RewardRedemptionId && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => value;
+}

@@ -28,6 +28,7 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
   List<ChildProfile> _children = [];
   List<Assessment> _pendingAssessments = [];
   Map<String, ChildBalance> _childBalances = {};
+  int _pendingRedemptionsCount = 0;
 
   @override
   void initState() {
@@ -72,6 +73,17 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
         await growthRepo.catchUpUnprocessedGrowth(currentActive.id);
       } catch (_) {}
       final getBalance = GetChildBalance(growthRepo);
+      int pendingRedemptionsCount = 0;
+      try {
+        final rewardRepo = ref.read(rewardRepositoryProvider);
+        final listRedemptions = ListRewardRedemptions(rewardRepo);
+        final redemptions = await listRedemptions(
+          familyId: currentActive.id,
+          status: RewardRedemptionStatus.pendingFulfillment,
+        );
+        pendingRedemptionsCount = redemptions.length;
+      } catch (_) {}
+
       final balances = <String, ChildBalance>{};
       for (final c in children) {
         try {
@@ -84,6 +96,7 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
         _children = children;
         _pendingAssessments = pending;
         _childBalances = balances;
+        _pendingRedemptionsCount = pendingRedemptionsCount;
       });
     } catch (e) {
       setState(() {
@@ -232,6 +245,87 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                             ),
                           ],
                         ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+
+              // Reward Management Section
+              Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: theme.colorScheme.outlineVariant),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.card_giftcard,
+                                color: theme.colorScheme.primary,
+                                size: 20,
+                              ),
+                              const SizedBox(width: AppSpacing.xs),
+                              Text(
+                                'Family Rewards',
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (_pendingRedemptionsCount > 0)
+                            Badge.count(
+                              count: _pendingRedemptionsCount,
+                              backgroundColor: theme.colorScheme.error,
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              key: const Key('parent_reward_catalog_button'),
+                              icon: const Icon(Icons.storefront, size: 18),
+                              label: const Text('Reward Catalog'),
+                              onPressed: () async {
+                                await context.push(AppRoutes.parentRewards);
+                                if (mounted) unawaited(_loadData());
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: FilledButton.tonalIcon(
+                              key: const Key('parent_fulfillment_inbox_button'),
+                              icon: const Icon(
+                                Icons.inventory_2_outlined,
+                                size: 18,
+                              ),
+                              label: Text(
+                                _pendingRedemptionsCount > 0
+                                    ? 'Inbox ($_pendingRedemptionsCount)'
+                                    : 'Fulfillment Inbox',
+                              ),
+                              onPressed: () async {
+                                await context.push(
+                                  AppRoutes.parentFulfillmentInbox,
+                                );
+                                if (mounted) unawaited(_loadData());
+                              },
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
