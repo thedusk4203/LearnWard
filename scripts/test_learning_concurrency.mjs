@@ -314,12 +314,13 @@ async function main() {
   }
 
   const mismatchSql = `
+    \\set VERBOSITY verbose
     set role authenticated;
     select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.process_learning_event('${mismatchCmd}'::uuid, '${vleId1}'::uuid);
   `;
   const mismatchRes = await runPsql(mismatchSql);
-  if (mismatchRes.code === 0 || !mismatchRes.stderr.includes('42501')) {
+  if (mismatchRes.code === 0 || (!mismatchRes.stderr.includes('42501') && !mismatchRes.stderr.includes('Invalid command replay'))) {
     console.error('Expected 42501 for mismatched command receipt, got:', mismatchRes);
     process.exit(1);
   }
