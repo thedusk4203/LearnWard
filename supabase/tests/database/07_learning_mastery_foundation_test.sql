@@ -819,7 +819,7 @@ insert into auth.users (id, aud, role, email) values
   ('50000000-0000-0000-0000-000000000005'::uuid, 'authenticated', 'authenticated', 'p51_adult_a2@test.com')
 on conflict (id) do nothing;
 insert into public.family_memberships (family_id, auth_user_id, role, status) values
-  ('f5000000-0000-0000-0000-000000000001'::uuid, '50000000-0000-0000-0000-000000000005'::uuid, 'adult', 'active')
+  ('f5000000-0000-0000-0000-000000000001'::uuid, '50000000-0000-0000-0000-000000000005'::uuid, 'parent', 'active')
 on conflict (family_id, auth_user_id) do nothing;
 
 -- Test 61: Reused command ID with different actor fails 42501
