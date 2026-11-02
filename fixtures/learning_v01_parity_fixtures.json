@@ -232,8 +232,8 @@
     ],
     "expected": {
       "mastery_score": 90.83,
-      "confidence_units": 3,
-      "confidence_band": "medium",
+      "confidence_units": 4,
+      "confidence_band": "high",
       "mastery_band": "mastery_candidate"
     }
   },

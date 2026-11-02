@@ -81,17 +81,16 @@ void main() {
         for (var stepIdx = 0; stepIdx < evidenceEvents.length; stepIdx++) {
           final subList = evidenceEvents.sublist(0, stepIdx + 1);
           final stepScore = rebuild.steps[stepIdx].resultScore;
-          final stepAsOf = subList.last.verifiedAt;
           final stepEval = ConfidenceEngine.evaluate(
             masteryScore: stepScore,
             evidence: subList,
-            asOf: stepAsOf,
+            asOf: asOf,
           );
           if (attainedAt == null &&
               stepScore >= 85.0 &&
               stepEval.confidenceBand == ConfidenceBand.high &&
               stepEval.distinctRecentVles >= 2) {
-            attainedAt = stepAsOf;
+            attainedAt = asOf;
           }
         }
 
