@@ -114,6 +114,9 @@ async function main() {
   const revId = crypto.randomUUID();
   const revCmd = crypto.randomUUID();
   const verifySql = `
+    insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+    values ('${revCmd}', 'verify', '${ownerId}', '${assessId}', '${familyId}');
+
     insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
     values ('${revId}', '${revCmd}', '${familyId}', '${assessId}', 'verified', 'pending_review', 'verified', '${ownerId}');
 

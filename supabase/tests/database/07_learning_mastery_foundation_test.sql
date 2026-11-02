@@ -315,6 +315,14 @@ select is(
 -- Test 27: Updating verified assessment is rejected by frozen LW103
 update public.assessments set status = 'pending_review' where id = 'a5000000-0000-0000-0000-000000000001'::uuid;
 
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000001'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000001'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid
+) on conflict do nothing;
+
 insert into public.assessment_review_events (
   id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
 ) values (
@@ -523,6 +531,14 @@ select throws_ok(
 
 -- Test 40: Cannot map verified assessment
 reset role;
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000002'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000002'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid
+) on conflict do nothing;
+
 insert into public.assessment_review_events (
   id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
 ) values (

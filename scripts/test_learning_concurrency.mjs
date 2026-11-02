@@ -114,6 +114,12 @@ async function main() {
       ('${familyId}', '${assessId1}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 80, 100),
       ('${familyId}', '${assessId2}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 100, 100);
 
+    -- Insert command receipts for review events
+    insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+    values
+      ('${revCmd1}', 'verify', '${ownerId}', '${assessId1}', '${familyId}'),
+      ('${revCmd2}', 'verify', '${ownerId}', '${assessId2}', '${familyId}');
+
     -- Insert assessment review events
     insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
     values
@@ -246,6 +252,9 @@ async function main() {
   const addVle3Sql = `
     insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title, occurred_at, raw_score, max_score)
     values ('${assessId3}', '${familyId}', '${childId}', '${ownerId}', 'verified', 'math', 'Mathematics', 'quiz', 'Quiz 3', now(), 95, 100);
+
+    insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+    values ('${revCmd3}', 'verify', '${ownerId}', '${assessId3}', '${familyId}');
 
     insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
     values ('${revId3}', '${revCmd3}', '${familyId}', '${assessId3}', 'verified', 'pending_review', 'verified', '${ownerId}');
