@@ -221,10 +221,11 @@ final class ChildMasteryProjection {
 
   factory ChildMasteryProjection.fromJson(Map<String, dynamic> json) {
     return ChildMasteryProjection(
-      childId: ChildId(json['child_id'] as String),
+      childId: ChildId((json['child_id'] ?? '') as String),
       learningNodeId: LearningNodeId(json['learning_node_id'] as String),
-      nodeCanonicalKey: json['node_canonical_key'] as String,
-      nodeTitle: json['node_title'] as String,
+      nodeCanonicalKey:
+          (json['node_canonical_key'] ?? json['canonical_key']) as String,
+      nodeTitle: (json['node_title'] ?? json['title']) as String,
       nodeType: LearningNodeType.fromValue(json['node_type'] as String),
       subjectKey: json['subject_key'] as String,
       masteryScore: (json['mastery_score'] as num).toDouble(),

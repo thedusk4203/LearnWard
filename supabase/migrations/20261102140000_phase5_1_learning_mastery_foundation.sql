@@ -1528,9 +1528,12 @@ begin
 
   -- Query child mastery joined with learning nodes and evaluate confidence/bands
   select jsonb_agg(jsonb_build_object(
+    'child_id', p_child_id,
     'learning_node_id', cms.learning_node_id,
     'canonical_key', n.canonical_key,
+    'node_canonical_key', n.canonical_key,
     'title', n.title,
+    'node_title', n.title,
     'node_type', n.node_type,
     'subject_key', n.subject_key,
     'catalog_version', n.catalog_version,

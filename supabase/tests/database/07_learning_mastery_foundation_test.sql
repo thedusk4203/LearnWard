@@ -665,8 +665,8 @@ select is(
      '00000000-0000-0000-0000-000000000001'::uuid,
      '15000000-0000-0000-0000-000000000002'::uuid
    ) ->> 'status'),
-  'completed',
-  'Same-command replay returns clean completed status'
+  'processed',
+  'Same-command replay returns clean processed status'
 );
 
 -- Test 50: Evidence count is still exactly 2 (mapped skill + subject fallback)
@@ -683,8 +683,8 @@ select is(
      '00000000-0000-0000-0000-000000000002'::uuid,
      '15000000-0000-0000-0000-000000000002'::uuid
    ) ->> 'status'),
-  'completed',
-  'New command ID on processed VLE binds receipt and returns completed result'
+  'processed',
+  'New command ID on processed VLE binds receipt and returns processed result'
 );
 
 -- Test 52: Reused command ID with different VLE fails with 42501
@@ -894,12 +894,15 @@ select throws_ok(
 -- Test 71: Direct client writes on learning_processing_events denied
 select throws_ok(
   $$ insert into public.learning_processing_events (
-       verified_learning_event_id, family_id, child_id, result_snapshot
+       verified_learning_event_id, assessment_id, family_id, child_id, evidence_count, affected_node_ids, status
      ) values (
        '15000000-0000-0000-0000-000000000001'::uuid,
+       'a5000000-0000-0000-0000-000000000001'::uuid,
        'f5000000-0000-0000-0000-000000000001'::uuid,
        'c5000000-0000-0000-0000-000000000001'::uuid,
-       '{}'::jsonb
+       1,
+       array['b0000003-0000-0000-0000-000000000001'::uuid],
+       'processed'
      ) $$,
   '42501',
   NULL,
