@@ -78,7 +78,7 @@ Phase 4 establishes the consumption half of LearnWard's reward economy: empoweri
 - **Historical Snapshot Resilience:** Redemptions snapshot title, description, category, and icon at purchase time; future catalog edits never alter historical redemptions.
 
 ### C. Celebration Wheel Invariants
-- **Spin Cost:** Default = `1000 rp_minor` ($10.00\text{ RP}$). Configurable by parents within `500–5000 rp_minor` ($5.00–50.00\text{ RP}$).
+- **Spin Cost:** Default = `1000 rp_minor` (10 RP). Configurable by parents within `500–5000 rp_minor` (5–50 RP).
 - **Daily Cap:** Default = `3 spins/day/child`. Configurable by parents within `1–5 spins/day/child`.
 - **Minimum Active Pool:** The Wheel strictly requires $\ge 3$ distinct active eligible rewards configured for that child (`LW203` fail-closed).
 - **Fixed Relative Tier Weights:**
@@ -158,7 +158,7 @@ The committed `selection_snapshot` JSONB captures:
   ]
 }
 ```
-**Client Presentation Rule:** The mobile client's animation is strictly a presentation layer for the server-committed outcome. The animation controller reads `winning_reward_id` from the RPC response and eases into the corresponding wedge.
+**Client Presentation Rule:** The mobile client's animation is strictly a presentation layer for the server-committed outcome. The animation controller reads the committed `selection_snapshot`/winner from the RPC result and lands within the recorded winning wedge.
 
 ---
 
@@ -172,9 +172,9 @@ LOCK TABLE public.rewards IN SHARE MODE;
   - `SHARE` mode conflicts with `ROW EXCLUSIVE` (`INSERT`, `UPDATE`, `DELETE`), serializing concurrent parent catalog mutations.
   - If parent mutation commits first $\implies$ spin waits and materializes the **complete NEW pool**.
   - If spin snapshot acquires lock first $\implies$ parent mutation waits and spin materializes the **complete OLD pool**.
-  - Hybrid/skewed catalog pools are mathematically prohibited.
+  - Hybrid/skewed catalog pools are prohibited by the frozen synchronization contract.
 - **Store Concurrency Compatibility:**
-  - `SHARE` mode is fully compatible with `ROW SHARE` (`SELECT ... FOR SHARE`), ensuring concurrent Store redemptions proceed without lock contention.
+  - Store redemption locks its target reward row with `SELECT ... FOR UPDATE`. PostgreSQL uses a `ROW SHARE` table-level lock for that statement, which is compatible with the Wheel's table-level `SHARE` lock. The target Store reward row itself is still row-locked `FOR UPDATE`.
 - **Architectural Scope & Backlog Note:**
   - This is a v0.1 correctness-first global table lock.
   - *Backlog:* Replace global reward catalog SHARE locking with a scalable family-scoped coordination mechanism only if production multi-tenant contention justifies it, preserving OLD-or-NEW snapshot semantics and Store/Wheel deadlock safety.
@@ -197,81 +197,116 @@ The Celebration Wheel daily spin cap is evaluated strictly against the family's 
 
 ---
 
-## 6. Strict Authorization, Replay, and Execution Ordering
+## 6. Strict Authorization, Replay, and Execution Contracts
 
-Phase 4 separates execution contracts into two clearly defined models: **Trusted Economic Mutations** (which consume client command IDs and record command receipts) and **Read-Only Status RPCs**.
+Phase 4 separates execution contracts into **command-based trusted economic mutations** and the **read-only Wheel status query**.
 
-### A. Common Phase 4 Trusted Economic Mutation Ordering
+### A. Common Security and Idempotency Invariants
 
-For command-based economic mutations (`redeem_store_reward`, `fulfill_reward_redemption`, `cancel_reward_redemption`, `spin_reward_wheel`), the frozen common invariant sequence is:
+The command-based mutation functions are `redeem_store_reward`, `fulfill_reward_redemption`, `cancel_reward_redemption`, and `spin_reward_wheel`.
+
+They do **not** share one identical statement ordering. Their frozen common guarantees are:
+- an authenticated caller is required;
+- target resources and authoritative `family_id` values come from database state rather than caller-supplied family identity;
+- authorization occurs before command-receipt replay data is returned and, for Wheel, before family timezone/settings are inspected;
+- replay validates `operation`, `actor_user_id`, `family_id`, and operation-specific `resource_id`/resource binding;
+- valid replay returns the committed logical outcome without repeating economic effects;
+- new commands use operation-specific locks and business preconditions;
+- mutation and command-receipt insertion are atomic in the same transaction;
+- `public.command_receipts` stores exactly `command_id`, `operation`, `actor_user_id`, `resource_id`, `family_id`, and `created_at`; there is no generic `payload` column.
+
+These guarantees do **not** claim target-resource existence confidentiality. Current RPCs may load a resource before authorization, so an authenticated caller can distinguish `P0002` (missing target) from `42501` (existing but unauthorized target). Hiding resource existence is a future hardening concern, not a frozen Phase 4 property.
+
+### B. Exact Operation-Specific Ordering
+
+#### Store Redemption — `redeem_store_reward`
 ```text
-1. Input Validation: Check non-null UUIDs and required arguments (p_command_id, resource IDs) -> 22000
-2. Authentication Check: auth.uid() cannot be null -> 42501
-3. Authoritative Resource Lookup & Family Derivation:
-   - Load target resource (child, reward, redemption) from database state
-   - Derive v_family_id from authoritative database state -> P0002 if missing
-4. Authorization Verification (BEFORE resource/family configuration inspection or command replay):
-   - Verify caller authority (active adult private.is_active_family_adult or active paired child device private.is_active_child_device as authorized for operation)
-   - If unauthorized -> 42501 immediately
-   - Invariant: Eliminates target-family configuration state or resource existence oracles (unauthorized callers cannot distinguish valid from corrupt timezones or non-existent items).
-5. Command Receipt Replay Inspection (BEFORE new-command validation):
-   - Check public.command_receipts for (p_command_id, expected_operation)
-   - If matching replay found: verify family_id, actor_id, and resource bindings, then return committed historical result immediately
-   - Replay survives subsequent configuration changes, timezone corruption, or catalog modifications.
-6. New-Command Operation-Specific Preconditions & Locks:
-   - Acquire necessary row/table locks and validate business preconditions for the operation
-7. Atomic Mutation Execution:
-   - Execute ledger entries, balance adjustments, status transitions, and audit records
-8. Command Receipt Recording:
-   - Insert into public.command_receipts with (command_id, family_id, actor_id, operation, resource_id, payload)
-9. Return Operation Result:
-   - Return structured result matching the initial execution contract
+authenticate
+→ validate command_id / child_id / reward_id
+→ load child and derive child family
+→ load reward
+→ reject cross-family child/reward mismatch
+→ authorize active family adult OR exact paired child device
+→ inspect and validate command receipt replay
+→ lock target reward row FOR UPDATE
+→ validate active/store-enabled/child eligibility/cost
+→ lock child_balances FOR UPDATE
+→ validate sufficient RP (LW201)
+→ create store redemption + append negative RP ledger debit + decrement balance
+→ insert command_receipt
+→ return redemption
 ```
 
-### B. Celebration Wheel-Specific New-Command Ordering
-
-When executing `spin_reward_wheel` as a new command:
+#### Fulfillment — `fulfill_reward_redemption`
 ```text
-1. Input Validation: Check non-null UUIDs (p_command_id, p_child_id) -> 22000
-2. Authentication Check: auth.uid() cannot be null -> 42501
-3. Authoritative Child Lookup & Family Derivation: Derive v_family_id from database under RLS -> P0002
-4. Authorization Verification (BEFORE configuration inspection):
-   - Verify caller is active adult (private.is_active_family_adult) OR paired child device (private.is_active_child_device)
-   - If unauthorized -> 42501 immediately
-5. Command Receipt Replay Inspection (BEFORE new-command validation):
-   - If valid replay found -> return committed historical result immediately
-6. NEW COMMAND ONLY Validation:
-   - Validate family timezone fail-closed -> LW004
-7. Preconditions & Concurrency Locks:
-   - Load & lock family_wheel_settings FOR SHARE -> LW206 if disabled
-   - Acquire LOCK TABLE public.rewards IN SHARE MODE (serializes concurrent parent catalog mutations while remaining compatible with Store FOR SHARE)
-   - Materialize child-eligible pool -> LW203 if < 3 items
-   - Lock child_balances FOR UPDATE
-   - Check balance >= cost -> LW201
-   - Check family-local calendar day cap [00:00, 24:00) across DST -> LW202
-8. Pseudorandom Draw:
-   - Server-authoritative pseudorandom draw from stabilized in-memory pool
-9. Atomic Commits:
-   - Insert reward_redemptions (status = 'pending_fulfillment', origin = 'wheel')
-   - Insert wheel_spins (composite FK consistency)
-   - Append rp_ledger debit (amount_minor = -spin_cost_minor, reason_code = 'wheel_spin', source_type = 'reward_redemption')
-   - Update child_balances (decrement rp_balance_minor projection)
-   - Insert command_receipts (operation = 'spin_wheel')
-10. Return result payload
+authenticate
+→ validate command_id / redemption_id
+→ lock reward_redemptions row FOR UPDATE
+→ derive family from locked redemption
+→ authorize active family adult
+→ inspect and validate command receipt replay
+→ validate pending_fulfillment (LW204 if terminal)
+→ transition to fulfilled
+→ insert command_receipt
+→ return redemption
 ```
 
-### C. Read-Only Query Contract: `get_wheel_status`
+#### Cancellation — `cancel_reward_redemption`
+```text
+authenticate
+→ validate command_id / redemption_id / cancellation_reason
+→ lock reward_redemptions row FOR UPDATE
+→ derive family from locked redemption
+→ authorize active family adult
+→ inspect and validate command receipt replay
+→ validate pending_fulfillment (LW204 if terminal)
+→ lock child_balances FOR UPDATE
+→ transition to cancelled
+→ append positive redemption_refund ledger row
+→ restore child balance projection
+→ insert command_receipt
+→ return redemption
+```
 
-`get_wheel_status` is a read-only query function. It does **not** consume a command ID, does **not** create command receipts, does **not** acquire catalog locks, does **not** debit RP, and does **not** mutate economy state.
+#### Celebration Wheel Spin — `spin_reward_wheel`
+```text
+validate command_id / child_id
+→ authenticate
+→ load child and derive family
+→ authorize active family adult OR exact paired child device
+→ inspect and validate command receipt replay
+→ NEW command only: validate family timezone (LW004)
+→ lock family_wheel_settings FOR SHARE (LW206 if disabled)
+→ LOCK TABLE public.rewards IN SHARE MODE
+→ materialize one child-eligible pool (LW203 if < 3)
+→ lock child_balances FOR UPDATE
+→ validate sufficient RP (LW201)
+→ enforce family-local daily cap by counting wheel_spins (LW202)
+→ server-authoritative pseudorandom selection from stabilized pool
+→ create reward_redemption + wheel_spin + negative RP ledger debit + decrement balance
+→ insert command_receipt
+→ return committed spin result
+```
 
-Its execution sequence:
-1. **Authentication:** `auth.uid() is not null` (`42501`).
-2. **Authoritative Child Lookup & Family Derivation:** Load child record and derive `family_id` (`P0002`).
-3. **Authorization:** Verify caller is active family adult or paired child device for child (`42501`).
-4. **Timezone Validation:** Load and validate `families.timezone` fail-closed (`LW004`).
-5. **Settings & Cap Evaluation:** Read `family_wheel_settings` (defaults if unset) and calculate family-local day boundaries $[00:00, 24:00)$ across DST transitions.
-6. **Query Status Metrics:** Count wheel redemptions today and count active child-eligible wheel rewards.
-7. **Return Status Record:** Returns `(spins_today, spins_remaining, spin_cost_minor, daily_spin_cap, is_enabled, local_day_start, local_day_end, eligible_reward_count)`.
+### C. Read-Only Query Contract — `get_wheel_status`
+
+`get_wheel_status` does **not** consume a command ID, create command receipts, acquire the Wheel catalog table lock, debit RP, create spin rows, or mutate economy state.
+
+Its frozen implementation sequence is:
+```text
+validate child_id
+→ authenticate
+→ load active child and derive family
+→ authorize active family adult OR exact paired child device
+→ validate families.timezone (LW004)
+→ read family_wheel_settings, or use function defaults if no row exists
+→ calculate family-local [midnight, next midnight) bounds
+→ count wheel_spins for the child inside that local-day window
+→ count active child-eligible wheel rewards
+→ return status
+```
+
+The returned status includes `spins_today`, `spins_remaining`, `spin_cost_minor`, `daily_spin_cap`, `is_enabled`, `local_day_start`, `local_day_end`, and `eligible_reward_count`.
 
 ---
 
@@ -285,17 +320,15 @@ To guarantee client-side idempotency across network drops, timeouts, and app pro
     3. `CancelRewardRedemption` (`operation = 'cancel_reward'`): persists `(command_id, family_id, redemption_id, cancellation_reason, created_at)`.
     4. `SpinRewardWheel` (`operation = 'spin_wheel'`): persists `(command_id, family_id, child_id, created_at)`.
 - **Uncertain Failure Retention & Retry Reuse:**
-  - If a network drop, timeout, or application crash occurs during execution, the journal record remains persisted in SQLite.
-  - On retry, the application reuses the exact same journaled `command_id`, ensuring server-side command receipts safely replay or deduplicate the request without duplicate RP debits or double redemptions.
-  - The journal row is cleared **only** upon confirmed resolution (either successful RPC outcome or deterministic terminal business rejection).
+  - If a network drop, timeout, or application crash occurs during execution, the journal record remains persisted in SQLite unless the application classifies the response as a deterministic terminal rejection.
+  - On retry, the application reuses the exact same journaled `command_id` and logical payload, ensuring server-side command receipts safely replay or deduplicate the request without duplicate RP debits or duplicate state transitions.
+  - The journal row is cleared only upon confirmed resolution or deterministic terminal business rejection.
 - **Process Restart Persistence:**
   - **Verified Automated Evidence:** Automated tests prove file-backed persistence across database close/reopen and reconstruction of application/data-layer instances on a real SQLite file, modeling process-restart recovery.
   - **Architectural Expectation:** Because the journal is stored in persistent SQLite on the filesystem, it is designed to survive normal device restarts, but an actual hardware/device reboot was not part of the automated Phase 4 CI evidence.
 - **Neutral Recovery UX:**
-  - In `ChildWheelScreen` (and corresponding store/inbox views), if an uncertain failure occurs and a pending journaled command remains, definite failure error wording (`Could not spin`, `Spin failed`) is suppressed.
-  - Renders a neutral recovery card:
-    > *"We're checking whether your spin was completed. A previous spin was interrupted by a network issue. Check now to see your reward without spending extra RP."* with `[Check / Retry Spin]`.
-  - Tapping retry replays the journaled command, resolves the server-committed outcome, and clears the journal row upon confirmed resolution.
+  - When an economic outcome remains uncertain and a pending journal entry still exists, the client must not present the operation as definitely failed.
+  - Wheel recovery explicitly exposes a neutral `Check / Retry Spin` path and replays the persisted command rather than creating a new spin intent.
 
 ---
 
@@ -332,25 +365,25 @@ pending_fulfillment ────► fulfilled (terminal)
 
 ## 10. Security & Relational Invariants
 
-- **Tenant Isolation:** All operations enforce `family_id` boundary via PostgreSQL Row Level Security (RLS) and security-definer helper functions.
+- **Tenant Isolation:** Phase 4 tables and trusted functions enforce family/child boundaries through database constraints, RLS where directly exposed, and trusted authorization helpers.
 - **Role Permissions:**
   - Children cannot create, update, or delete rewards (`public.rewards`), nor alter wheel settings (`public.family_wheel_settings`).
-  - Adults have full catalog management and redemption fulfillment authority within their family.
-  - Direct client `INSERT`, `UPDATE`, `DELETE` on ledgers (`rp_ledger`, `xp_ledger`), balances (`child_balances`), command receipts (`command_receipts`), and spin records (`wheel_spins`) is strictly revoked.
+  - Adults have catalog management and redemption fulfillment authority only within their authorized family.
+  - Direct client `INSERT`, `UPDATE`, `DELETE` on ledgers (`rp_ledger`, `xp_ledger`), balances (`child_balances`), command receipts (`command_receipts`), and spin records (`wheel_spins`) is revoked.
 - **Table Immutability:**
   - `command_receipts` is strictly immutable (trigger rejects UPDATE/DELETE with `LW102`).
   - `wheel_spins` is strictly immutable (trigger rejects UPDATE/DELETE with `LW102`).
-- **Composite Consistency Foreign Keys:**
-  - `fk_wheel_spins_redemption_composite` enforces that `wheel_spins` and `reward_redemptions` match on:
-    `(redemption_id, family_id, child_id, reward_id, spin_cost_minor)`.
-  - Database rejects cross-entity mismatch even if application or RPC logic is flawed.
+- **Composite Consistency Foreign Key:**
+  - `fk_wheel_spins_redemption_composite` binds the Wheel spin tuple `(redemption_id, family_id, child_id, reward_id, origin, spin_cost_minor)` to `reward_redemptions(id, family_id, child_id, reward_id, origin, rp_cost_minor)`.
+  - This enforces the same redemption, family, child, reward, Wheel origin, and RP cost at the database layer.
+  - Database rejects relational mismatch even if application or RPC logic is flawed.
 
 ---
 
 ## 11. Anti-Compulsion & Child Welfare Rules
 
 The Celebration Wheel strictly enforces child-welfare guardrails:
-1. **Zero-Loss Guarantee:** Every spin awards a tangible, parent-approved reward.
+1. **Zero-Loss Guarantee:** Every successful spin awards a tangible, parent-approved reward.
 2. **No Real-Money Cash-Out:** RP cannot be redeemed for fiat currency.
 3. **No Purchased Spins:** Spins cannot be bought with money, in-app purchases, or ads.
 4. **No Near-Miss Manipulation:** Visual animations never artificially linger on high-tier wedges before sliding to low-tier wedges.
@@ -389,7 +422,7 @@ The Celebration Wheel strictly enforces child-welfare guardrails:
 - `scripts/test_growth_parity.mjs` — PASS
 - `scripts/test_reward_store_concurrency.mjs` — PASS
 - `scripts/test_reward_store_vertical_slice.mjs` — PASS
-- `scripts/test_reward_wheel_concurrency.mjs` — PASS (4 scenarios: double-spin race, daily cap race, Store-vs-Wheel race, deterministic Case 4A and 4B lock wait assertions)
+- `scripts/test_reward_wheel_concurrency.mjs` — PASS (double-spin race, daily-cap race, Store-vs-Wheel race, deterministic catalog OLD/NEW lock-wait cases)
 - `scripts/test_reward_wheel_vertical_slice.mjs` — PASS
 - `scripts/test_reward_wheel_timezone.mjs` — PASS (DST spring-forward 23h, fall-back 25h, standard 24h, corrupt fail-closed)
 
@@ -403,10 +436,12 @@ The Celebration Wheel strictly enforces child-welfare guardrails:
 
 The following items are deferred to future hardening and do not block Phase 4 freeze:
 1. **Actor-Aware Pending Command Journal:**
-   Pending client commands currently index by `(familyId, childId)`. Server command receipts are actor-bound and fail closed. Future enhancement: persist `auth_user_id` in SQLite journal for explicit multi-user shared device journal cleanup.
+   Pending reward commands do not persist the originating `auth_user_id`. Lookup keys are operation-specific (family/child/reward for Store redemption, redemption for fulfill/cancel, family/child for Wheel spin). Server command receipts remain actor-bound and fail closed. Future enhancement: persist `auth_user_id` for explicit multi-user shared-device journal cleanup/recovery.
 2. **Family-Scoped Catalog Stabilization Lock:**
    The v0.1 implementation uses a global `LOCK TABLE public.rewards IN SHARE MODE`. Optimize to a family-scoped coordination lock only if production multi-tenant contention justifies it.
-3. **Exact-Timestamp Growth Comparator Tie:**
+3. **Resource-Existence Confidentiality:**
+   Phase 4 trusted mutations may load a target resource before authorization and therefore can distinguish missing (`P0002`) from existing-but-unauthorized (`42501`) targets. Consider existence-hiding lookup/authorization patterns during production security hardening if this becomes a requirement.
+4. **Exact-Timestamp Growth Comparator Tie:**
    Existing Phase 3 backlog item remains unchanged.
-4. **Android Release Signing:**
+5. **Android Release Signing:**
    Release keystores and signing configurations deferred to release hardening.
