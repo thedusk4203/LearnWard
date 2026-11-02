@@ -280,9 +280,15 @@ values
   ('pilot-v0.2-bad-edge', 'domain', 'math', 'pilot-v0.2-bad-edge:math:domain1', 'Domain 1',
    (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-bad-edge' and canonical_key = 'pilot-v0.2-bad-edge:subject:math'));
 
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2-bad-edge', 'topic', 'math', 'pilot-v0.2-bad-edge:math:topic1', 'Topic 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-bad-edge' and canonical_key = 'pilot-v0.2-bad-edge:math:domain1'));
+
 insert into public.learning_nodes (id, catalog_version, node_type, subject_key, canonical_key, title, parent_id)
 values
-  ('c0000002-0000-0000-0000-000000000001'::uuid, 'pilot-v0.2-bad-edge', 'skill', 'math', 'pilot-v0.2-bad-edge:math:skill1', 'Skill 1', null);
+  ('c0000002-0000-0000-0000-000000000001'::uuid, 'pilot-v0.2-bad-edge', 'skill', 'math', 'pilot-v0.2-bad-edge:math:skill1', 'Skill 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-bad-edge' and canonical_key = 'pilot-v0.2-bad-edge:math:topic1'));
 
 insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
 values
