@@ -80,19 +80,26 @@ A full national curriculum is not required. The pilot starts with a small curate
 
 ### Catalog-version provenance & lifecycle
 To guarantee deterministic processing across time and platform updates:
-- **Legacy migration policy & immutability preservation (DDL-safe bootstrap):** When the Phase 5 migration runs, all existing assessments and `verified_learning_events` that predate catalog-version provenance are deterministically assigned the initial frozen catalog version: `pilot-v0.1`. Crucially, this is accomplished via additive DDL (`ADD COLUMN ... DEFAULT 'pilot-v0.1' NOT NULL`) without executing row-level `UPDATE` statements or disabling/weakening frozen Phase 2 immutability triggers (`LW103` preventing verified/rejected assessment modification and `LW102` preventing VLE modification).
-- **Catalog registry source of truth & atomic promotion:** A dedicated catalog version registry (`learning_catalog_versions`) tracks version identifiers, lifecycle state (`draft | active | retired`), activation timestamp, and creation timestamp. Promoting a new catalog version to `active` automatically retires the previous active version in the same atomic transaction, ensuring exactly ONE version has `status = 'active'` at commit time.
-- **Server-controlled active version:** When an assessment is created, the server snapshots the active platform catalog version into `assessments.learning_catalog_version`. The client/caller cannot select or override this version. If no valid active catalog version exists at assessment creation, the server fails closed (`LW501_NO_ACTIVE_CATALOG`).
+- **Legacy migration policy, DDL-safe bootstrap & write-path integration:** When the Phase 5 migration runs, all existing assessments and `verified_learning_events` that predate catalog-version provenance are deterministically assigned the initial frozen catalog version: `pilot-v0.1`. Crucially, this is accomplished via additive DDL:
+  1. Seed `pilot-v0.1` registry + required roots and graph.
+  2. Add columns with `DEFAULT 'pilot-v0.1' NOT NULL` to populate legacy rows instantaneously without executing row-level `UPDATE` statements or firing frozen Phase 2 immutability triggers (`LW103` preventing verified/rejected assessment modification and `LW102` preventing VLE modification).
+  3. Execute `ALTER TABLE ... ALTER COLUMN learning_catalog_version DROP DEFAULT` on both tables so steady-state writes cannot silently fall back to an obsolete default.
+  4. Install a `BEFORE INSERT` trigger on `assessments` that snapshots the active registry version into `NEW.learning_catalog_version` (ignoring caller input and raising SQLSTATE `LW501` with message 'No active learning catalog' if no active catalog exists).
+  5. Install a `BEFORE INSERT` trigger on `verified_learning_events` that copies `NEW.learning_catalog_version` directly from the parent assessment snapshot, never from current active catalog and never from a static default.
+- **Catalog registry lifecycle & atomic promotion contract:** A dedicated catalog version registry (`learning_catalog_versions`) tracks version identifiers, lifecycle state (`draft | active | retired`), activation timestamp, and creation timestamp. Promoting a new catalog version to `active` executes a trusted serialized promotion routine that:
+  1. Serializes promotion attempts via coordination locking;
+  2. Locks and validates that `p_new_version` exists and is strictly `draft` before retiring current active catalog;
+  3. Validates the candidate catalog is publishable (all five canonical Subject roots exist, hierarchy is valid, prerequisite graph is valid and acyclic);
+  4. Retires the previous active version (`status = 'retired'`) and activates the candidate (`status = 'active'`, `activated_at = clock_timestamp()`) atomically;
+  5. Asserts exactly one active catalog exists before commit; failure raises SQLSTATE `LW501` ('No active learning catalog'), rolling back the transaction.
+- **Catalog content immutability vs registry lifecycle metadata:** Published **catalog content (nodes and prerequisite edges)** in active or retired versions is completely immutable. In-place node mutations, deactivations (`is_active = false`), and reparenting are strictly forbidden and rejected. Registry lifecycle metadata transitions strictly `draft -> active -> retired` through the trusted promotion routine; `retired` is terminal.
 - **Complete pilot catalog bootstrap:** The initial `pilot-v0.1` catalog MUST contain exactly one Subject root node for every frozen canonical subject key (`math`, `english`, `literature`, `science`, `other`). Missing subject roots would cause unmapped VLE fallback processing to fail closed.
-- **Verification snapshot:** Upon adult verification, that version snapshot is copied directly into `verified_learning_events.learning_catalog_version`.
-- **Processing isolation:** Immediate learning processing, delayed processing, and bulk catch-up use the VLE's immutable snapshot version exclusively. Catch-up never infers historical catalog version from the currently active platform catalog.
-- **Published version immutability:** Published, active, and retired catalog versions are completely immutable. Node definitions, titles, parent links, grade spans, and node availability (`is_active = true`) must never be modified or deactivated in place within an existing version. Deactivations and semantic changes require publishing a new catalog version.
 - **Cross-version recommendation semantics & scoped authoring:** Historical evidence and mastery remain permanently attached to their original catalog nodes and version. The recommendation engine evaluates candidates against the current active catalog. Phase 5 v0.1 does not perform automatic cross-version mastery migration; cross-version transfer requires a future explicit crosswalk policy. Furthermore, an assessment authored under `pilot-v0.1` that is in `pending_review` when `pilot-v0.2` becomes active remains fully map-able and verifiable against `pilot-v0.1` via catalog version-scoped reads.
 
 ### Graph & mapping integrity
 - **Subject root uniqueness:** Exactly one Subject root exists per `(catalog_version, subject_key)`, with `node_type = 'subject'` and `parent_id IS NULL`. Enforced via unique constraint/index: `unique (catalog_version, subject_key) where parent_id is null`.
 - **Hierarchy subject integrity:** For every parent/child edge (`Domain -> Subject`, `Topic -> Domain`, `Skill -> Topic`), child and parent must have identical `catalog_version` AND `subject_key`. Cross-subject or cross-version edges are rejected.
-- **Prerequisite graph cross-version & cross-subject integrity:** `learning_prerequisites` requires both prerequisite and dependent nodes to be Skill nodes belonging to the exact SAME `catalog_version` and the exact SAME `subject_key`. Cross-subject and cross-version edges are strictly forbidden. Traversal in recommendations filters strictly by `catalog_version = current_active_catalog_version`.
+- **Prerequisite graph schema & enforcement:** `learning_prerequisites` carries `(catalog_version, subject_key)` with composite foreign keys linking both `prerequisite_node_id` and `dependent_node_id` to `learning_nodes(catalog_version, subject_key, id)`. This enforces same-catalog-version and same-subject at schema level. Endpoint `node_type = 'skill'` and acyclic DAG constraints are validated during catalog authoring and enforced by the promotion gate before a draft catalog can become active. Traversal in recommendations filters strictly by `catalog_version = current_active_catalog_version`.
 - **Mapping integrity:** `assessment_learning_mappings.learning_node_id` must point to a node whose `catalog_version == assessment.learning_catalog_version` and `subject_key == assessment.subject_key`. Mappings must never cross subjects.
 
 **Consequence:** Curriculum scope is bounded, evidence references stable learning identities, and delayed catch-up resolves to the exact catalog version under which the assessment was authored.
@@ -508,7 +515,8 @@ resource_id = verified_learning_event_id
    - If unprocessed, proceed with evidence materialization and projection rebuild.
 
 ### Idempotency, replay result snapshot & command receipt semantics
-- **Immutable replay result snapshot:** `learning_processing_events` preserves an immutable processing result summary (`id`, `verified_learning_event_id UNIQUE`, `assessment_id`, `child_id`, `family_id`, `processed_at`, `evidence_count`, `affected_node_ids`, `status = 'processed'`).
+- **Immutable replay result snapshot:** `learning_processing_events` preserves an immutable processing result summary (`id`, `verified_learning_event_id UNIQUE`, `assessment_id`, `child_id`, `family_id`, `processed_at`, `evidence_count`, `affected_node_ids`, `status = 'processed'`), with composite tenant foreign key `(child_id, family_id) REFERENCES public.child_profiles(id, family_id)`.
+- **Sorted node IDs:** `affected_node_ids` is stored in canonical sorted node-ID order (ascending) to guarantee that historical replay responses are byte- and logically stable.
 - **Same command replay:** If the same `command_id` is replayed with identical `actor_user_id`, `operation = 'process_learning'`, `family_id`, and `resource_id = verified_learning_event_id`, return the committed processing result snapshot directly from `learning_processing_events`. The result is NEVER recomputed from mutable `child_mastery_states`, ensuring that subsequent VLEs for the child do not alter the historical command response. Any mismatch on actor, family, operation, or resource is rejected.
 - **Same VLE, new command ID:** If the target VLE has already completed logical processing (`learning_processing_events`), a new command ID binds and records a valid command receipt for that command with `resource_id = verified_learning_event_id` and returns the committed processing result snapshot. It creates NO new evidence and NO new revisions.
 - **Reused command ID, different VLE:** Strictly rejected.
@@ -576,18 +584,19 @@ The design PR itself contains no Phase 5 migration or runtime implementation.
 This ADR may move from **PROPOSED** to **ACCEPTED** only when the final implementation demonstrably satisfies:
 
 1. **Catalog provenance, registry & hierarchy integrity:**
-   - legacy assessments and VLEs predating catalog version provenance are deterministically assigned `pilot-v0.1` via additive DDL (`DEFAULT 'pilot-v0.1' NOT NULL`) without row updates or disabling frozen Phase 2 immutability triggers (`LW102`, `LW103`);
+   - legacy assessments and VLEs predating catalog version provenance are deterministically assigned `pilot-v0.1` via additive DDL (`DEFAULT 'pilot-v0.1' NOT NULL` then `DROP DEFAULT`) without row updates or disabling frozen Phase 2 immutability triggers (`LW102`, `LW103`);
+   - steady-state assessment creation snapshots active catalog version via `BEFORE INSERT` trigger ignoring caller input;
+   - steady-state VLE creation copies assessment snapshot via `BEFORE INSERT` trigger;
    - `pilot-v0.1` contains exactly one Subject root node for every canonical subject key (`math`, `english`, `literature`, `science`, `other`);
-   - catalog version registry enforces exactly one active catalog version at a time via atomic promotion transactions;
-   - new assessment creation fails closed if no active catalog exists (`LW501_NO_ACTIVE_CATALOG`);
-   - caller cannot choose or override catalog version;
-   - published catalog versions are completely immutable (no in-place deactivations or mutations) and client writes are denied;
+   - catalog version registry enforces exactly one active catalog version at a time via a trusted promotion procedure that validates publishability and asserts exactly one active row before commit (raising SQLSTATE `LW501` with message 'No active learning catalog' if missing);
+   - published catalog content is completely immutable (no in-place deactivations or mutations) and client writes are denied;
    - `pending_review` assessments remain map-able to their authored catalog version even after a newer version is activated;
    - delayed catch-up after catalog rollout preserves original VLE catalog version;
    - exactly one Subject root exists per `(catalog_version, subject_key)`;
    - duplicate Subject root is rejected;
    - cross-subject or cross-version hierarchy parent edges are rejected;
-   - `learning_prerequisites` enforces composite FKs to same `catalog_version` and strict same-`subject_key` constraint (cross-subject and cross-version edges rejected);
+   - `learning_prerequisites` carries `subject_key` with composite FKs to `learning_nodes(catalog_version, subject_key, id)` (cross-subject and cross-version edges rejected at schema level);
+   - prerequisite Skill-only and DAG acyclicity are verified at catalog promotion;
    - mapping to a node with mismatched subject or catalog version is rejected;
    - recommendations evaluate against active catalog without silent cross-version mastery transfer.
 2. **Mapping lifecycle & direct-mutation security:**
@@ -626,6 +635,7 @@ This ADR may move from **PROPOSED** to **ACCEPTED** only when the final implemen
    - pure Dart domain engines accept explicit `DateTime asOf` parameter;
    - exact boundary fixtures (14 days, 30 days, 45 days, 60 days) yield identical outputs in Dart and PostgreSQL.
 7. **Idempotency, post-lock recheck & catch-up contract:**
+   - `learning_processing_events` enforces composite tenant foreign key to `child_profiles(id, family_id)` and stores `affected_node_ids` in canonical sorted order;
    - same command and same VLE replay returns committed result snapshot directly from immutable `learning_processing_events` without recomputing from mutable `child_mastery_states`, proving replay invariance after subsequent VLEs mutate current projection;
    - concurrent same-command calls serialize on VLE lock, recheck receipts, and return clean replays without primary-key collisions;
    - new command ID targeting an already-processed VLE binds a new command receipt and returns committed result without duplicating evidence or revisions;
