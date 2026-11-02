@@ -250,6 +250,7 @@ final class ChildMasteryState {
     required this.distinctAssessmentCount,
     required this.lastEvidenceEventId,
     required this.lastEvidenceOccurredAt,
+    this.masteryAttainedAt,
     required this.updatedAt,
   });
 
@@ -262,6 +263,7 @@ final class ChildMasteryState {
   final int distinctAssessmentCount;
   final String lastEvidenceEventId;
   final DateTime lastEvidenceOccurredAt;
+  final DateTime? masteryAttainedAt;
   final DateTime updatedAt;
 }
 
@@ -280,6 +282,7 @@ final class ChildMasteryProjection {
     required this.confidenceBand,
     required this.confidenceUnits,
     required this.masteryBand,
+    this.masteryAttainedAt,
     required this.asOf,
     required this.updatedAt,
   });
@@ -296,6 +299,7 @@ final class ChildMasteryProjection {
   final ConfidenceBand confidenceBand;
   final double confidenceUnits;
   final MasteryBand masteryBand;
+  final DateTime? masteryAttainedAt;
   final DateTime asOf;
   final DateTime updatedAt;
 
@@ -308,6 +312,7 @@ final class ChildMasteryProjection {
     if (updatedAtStr == null) {
       throw const FormatException('Missing required field: updated_at');
     }
+    final attainedAtStr = json['mastery_attained_at'] as String?;
 
     return ChildMasteryProjection(
       childId: ChildId(json['child_id'] as String),
@@ -328,6 +333,9 @@ final class ChildMasteryProjection {
       ),
       confidenceUnits: (json['confidence_units'] as num).toDouble(),
       masteryBand: MasteryBand.fromValue(json['mastery_band'] as String),
+      masteryAttainedAt: attainedAtStr != null
+          ? DateTime.parse(attainedAtStr)
+          : null,
       asOf: DateTime.parse(asOfStr),
       updatedAt: DateTime.parse(updatedAtStr),
     );

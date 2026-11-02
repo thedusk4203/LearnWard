@@ -194,7 +194,10 @@ CREATE UNIQUE INDEX uq_learning_catalog_versions_single_active
 Atomic promotion contract & lifecycle metadata:
 - Exactly ONE version has `status = 'active'` at any time.
 - Catalog authoring and promotion is strictly a **platform administration / deployment concern**, NOT an application tenant capability. Family adults, shared-child sessions, and paired-child identities have zero catalog administration privileges. Family membership is irrelevant to global curriculum administration.
-- Draft catalogs and their content (`draft learning_catalog_versions`, `learning_nodes`, `learning_prerequisites`) are platform-owned and authored solely via migrations, controlled seed/content-release tooling, or privileged platform/service-role administrative paths. They are never family-created data, and direct client writes (`INSERT`, `UPDATE`, `DELETE`) remain denied.
+- Draft catalogs and their content (`draft learning_catalog_versions`, `learning_nodes`, `learning_prerequisites`) are platform-owned and authored solely via migrations, controlled seed/content-release tooling, or privileged platform administrative paths. Direct client writes (`INSERT`, `UPDATE`, `DELETE`) remain revoked from all client roles (`anon`, `authenticated`, `public`).
+- Generic DML on `learning_catalog_versions` is revoked from `service_role` (which receives `SELECT` only); direct `INSERT`, `UPDATE`, or `DELETE` on `learning_catalog_versions` by `service_role` strictly fails with `42501` (permission denied).
+- Draft creation occurs exclusively through `public.create_learning_catalog_draft(p_version text)` with `SECURITY DEFINER` (granted only to `service_role`), and catalog promotion occurs solely via `public.promote_learning_catalog_version(p_new_version text)` with `SECURITY DEFINER` (granted only to `service_role`).
+- Ambient caller-settable GUCs (e.g. `learnward.in_catalog_promotion` or `learnward.bootstrap`) are strictly eliminated and never used as authorization tokens. The migration bootstraps `pilot-v0.1` as `draft` and invokes `public.promote_learning_catalog_version('pilot-v0.1')` within the migration transaction itself.
 - Registry lifecycle metadata transitions strictly `draft -> active -> retired` through the trusted promotion procedure; `retired` is terminal.
 - Promoting a `draft` version to `active` executes a trusted serialized promotion routine (`promote_learning_catalog_version(p_new_version text)`):
   ```sql
@@ -664,6 +667,13 @@ The calculation components are included in the audit revision snapshot.
 
 Child-facing UI should favor bands and explanation over false precision.
 
+### 9.1 Sticky Mastery Attainment & Invariance
+- **Schema persistence:** Both `child_mastery_states` and `mastery_state_revisions` persist `mastery_attained_at timestamptz NULL`. When initial attainment criteria are met (`mastery_score >= 85 AND confidence = High AND >= 2 distinct recent verified assessments`), `mastery_attained_at` is stamped with the triggering evidence's verification timestamp.
+- **Sticky retention against time decay:** Once attained, `mastery_attained_at` is durable and sticky; it is never reverted to NULL by elapsed time or read-time confidence decay.
+- **Confidence vs. Mastery orthogonality:** When time passes without new assessments (e.g. 61+ days), read-time `confidence_band` decays from `high` to `low`, but `mastery_band` remains `mastered` while `mastery_attained_at` remains unchanged. The system distinguishes between "historical mastery attained" and "recency/confidence of current evidence".
+- **Preservation across lower-scoring evidence:** If subsequent verified assessments yield lower performance, the numeric `mastery_score` updates downwards via EWMA, but `mastery_attained_at` is preserved and `mastery_band` remains `mastered`.
+- **Prerequisite unlock safety:** A prerequisite skill that was attained retains its attained status across time decay, guaranteeing that downstream dependent skills maintain prerequisite satisfaction for Phase 5.2 unlock eligibility.
+
 ---
 
 ## 10. Canonical Evidence Ordering & Late Evidence
@@ -716,6 +726,7 @@ Proposed fields:
 - `new_mastery_score numeric not null`
 - `effective_evidence_count integer not null`
 - `latest_evidence_at timestamptz not null`
+- `mastery_attained_at timestamptz null`
 - `calculation_snapshot jsonb not null`
 - `created_at timestamptz not null`
 
@@ -752,6 +763,7 @@ Fields include:
 - `last_evidence_occurred_at`
 - `last_verified_at`
 - `latest_revision_id`
+- `mastery_attained_at`
 - `updated_at`
 
 This is a server-controlled cache/projection, not historical source truth. Direct client mutation is revoked.

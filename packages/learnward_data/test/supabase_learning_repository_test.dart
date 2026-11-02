@@ -203,6 +203,7 @@ void main() {
         'confidence_band': 'high',
         'confidence_units': 4.25,
         'mastery_band': 'mastered',
+        'mastery_attained_at': '2026-11-01T15:00:00Z',
         'as_of': '2026-11-02T12:00:00Z',
         'updated_at': '2026-11-02T09:00:00Z',
       };
@@ -221,6 +222,10 @@ void main() {
       expect(projection.confidenceBand, equals(ConfidenceBand.high));
       expect(projection.confidenceUnits, equals(4.25));
       expect(projection.masteryBand, equals(MasteryBand.mastered));
+      expect(
+        projection.masteryAttainedAt,
+        equals(DateTime.utc(2026, 11, 1, 15, 0, 0)),
+      );
       expect(projection.asOf, equals(DateTime.utc(2026, 11, 2, 12, 0, 0)));
       expect(projection.updatedAt, equals(DateTime.utc(2026, 11, 2, 9, 0, 0)));
     });

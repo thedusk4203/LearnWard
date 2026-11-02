@@ -1,5 +1,5 @@
 begin;
-select plan(110);
+select plan(128);
 
 -- ===========================================================================
 -- FIXTURES SETUP (Superuser context)
@@ -240,6 +240,25 @@ select throws_ok(
   '42501',
   NULL,
   'Active family adult cannot execute promote_learning_catalog_version'
+);
+
+-- Test 21a: Anonymous caller cannot invoke create_learning_catalog_draft
+set local role anon;
+select throws_ok(
+  $$ select public.create_learning_catalog_draft('draft-unauth-anon') $$,
+  '42501',
+  NULL,
+  'Anonymous caller cannot execute create_learning_catalog_draft'
+);
+
+-- Test 21b: Active family adult caller cannot invoke create_learning_catalog_draft
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.create_learning_catalog_draft('draft-unauth-adult') $$,
+  '42501',
+  NULL,
+  'Active family adult cannot execute create_learning_catalog_draft'
 );
 
 -- Reset to service_role / superuser context
@@ -1443,32 +1462,72 @@ select throws_ok(
   'VLE insertion fails closed with P0002 when parent assessment is missing'
 );
 
--- Test 98: Direct UPDATE draft -> active rejected with LW102
-insert into public.learning_catalog_versions (version, status) values ('draft-bypass-v1', 'draft');
+-- ===========================================================================
+-- SECTION 11: CATALOG LIFECYCLE ENFORCEMENT & PLATFORM PRIVILEGES (Tests 98-109)
+-- ===========================================================================
+
+-- Create a draft version for lifecycle privilege tests using platform routine
+do $$
+begin
+  perform public.create_learning_catalog_draft('draft-bypass-v1');
+end;
+$$;
+
+-- service_role privilege model: service_role has SELECT only on learning_catalog_versions.
+-- Direct INSERT/UPDATE/DELETE MUST fail with 42501 (permission denied).
+set local role service_role;
+
+-- Test 98: service_role cannot directly UPDATE draft -> active (42501)
 select throws_ok(
   $$ update public.learning_catalog_versions set status = 'active' where version = 'draft-bypass-v1' $$,
-  'LW102',
+  '42501',
   NULL,
-  'Direct UPDATE draft -> active rejected with LW102'
+  'service_role cannot directly UPDATE draft -> active (42501)'
 );
 
--- Test 99: Direct UPDATE active -> retired rejected with LW102
+-- Test 99: service_role cannot directly UPDATE active -> retired (42501)
 select throws_ok(
   $$ update public.learning_catalog_versions set status = 'retired' where version = 'pilot-v0.2' $$,
-  'LW102',
+  '42501',
   NULL,
-  'Direct UPDATE active -> retired rejected with LW102'
+  'service_role cannot directly UPDATE active -> retired (42501)'
 );
 
--- Test 100: Reactivating retired catalog version rejected with LW102
+-- Test 100: service_role cannot spoof session/GUC flag to bypass lifecycle (42501)
+select set_config('learnward.in_catalog_promotion', 'true', true);
 select throws_ok(
-  $$ update public.learning_catalog_versions set status = 'active' where version = 'pilot-v0.1' $$,
-  'LW102',
+  $$ update public.learning_catalog_versions set status = 'active' where version = 'draft-bypass-v1' $$,
+  '42501',
   NULL,
-  'Reactivating retired catalog version rejected with LW102'
+  'service_role cannot spoof session/GUC flag to bypass lifecycle (42501)'
 );
 
--- Test 101: Direct INSERT of non-draft catalog version rejected with LW102
+-- Test 101: service_role cannot directly INSERT into learning_catalog_versions (42501)
+select throws_ok(
+  $$ insert into public.learning_catalog_versions (version, status) values ('draft-sr-direct', 'draft') $$,
+  '42501',
+  NULL,
+  'service_role cannot directly INSERT into learning_catalog_versions (42501)'
+);
+
+-- Test 102: service_role cannot directly DELETE from learning_catalog_versions (42501)
+select throws_ok(
+  $$ delete from public.learning_catalog_versions where version = 'draft-bypass-v1' $$,
+  '42501',
+  NULL,
+  'service_role cannot directly DELETE from learning_catalog_versions (42501)'
+);
+
+-- Test 103: normal platform draft-authoring path (create_learning_catalog_draft) works for service_role
+select lives_ok(
+  $$ select public.create_learning_catalog_draft('draft-platform-v1') $$,
+  'service_role can author catalog draft via create_learning_catalog_draft'
+);
+
+reset role;
+
+-- Trigger & superuser lifecycle enforcement tests
+-- Test 104: Direct INSERT of non-draft catalog version rejected with LW102
 select throws_ok(
   $$ insert into public.learning_catalog_versions (version, status) values ('active-bypass-v1', 'active') $$,
   'LW102',
@@ -1476,7 +1535,7 @@ select throws_ok(
   'Direct INSERT of non-draft catalog version rejected with LW102'
 );
 
--- Test 102: Direct DELETE of active catalog version rejected with LW102
+-- Test 105: Direct DELETE of active catalog version rejected with LW102
 select throws_ok(
   $$ delete from public.learning_catalog_versions where version = 'pilot-v0.2' $$,
   'LW102',
@@ -1484,7 +1543,7 @@ select throws_ok(
   'Direct DELETE of active catalog version rejected with LW102'
 );
 
--- Test 103: Direct DELETE of retired catalog version rejected with LW102
+-- Test 106: Direct DELETE of retired catalog version rejected with LW102
 select throws_ok(
   $$ delete from public.learning_catalog_versions where version = 'pilot-v0.1' $$,
   'LW102',
@@ -1492,10 +1551,342 @@ select throws_ok(
   'Direct DELETE of retired catalog version rejected with LW102'
 );
 
--- Test 104: Direct DELETE of draft catalog version succeeds
+-- Test 107: Reactivating retired catalog version rejected with LW102 (retired is terminal)
+select throws_ok(
+  $$ update public.learning_catalog_versions set status = 'active' where version = 'pilot-v0.1' $$,
+  'LW102',
+  NULL,
+  'Reactivating retired catalog version rejected with LW102 (retired is terminal)'
+);
+
+-- Test 108: Promoting a retired catalog version is rejected with LW102
+select throws_ok(
+  $$ select public.promote_learning_catalog_version('pilot-v0.1') $$,
+  'LW102',
+  NULL,
+  'Promoting a retired catalog version is rejected with LW102'
+);
+
+-- Test 109: Direct DELETE of draft catalog version by superuser succeeds
 select lives_ok(
   $$ delete from public.learning_catalog_versions where version = 'draft-bypass-v1' $$,
   'Direct DELETE of draft catalog version succeeds'
+);
+
+-- ===========================================================================
+-- SECTION 12: STICKY MASTERY SEMANTICS & AGING INVARIANCE (Tests 110-120)
+-- ===========================================================================
+
+-- Setup Child 51A2 assessments and VLEs targeting Single Digit Addition
+-- Prerequisite skill: b0000003-0000-0000-0000-000000000001 (Single Digit Addition)
+-- Dependent skill:    b0000003-0000-0000-0000-000000000002 (Double Digit Addition)
+
+-- Assessment 1: 95/100, occurred 10 days ago
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
+  occurred_at, raw_score, max_score, learning_catalog_version
+) values (
+  'a5000000-0000-0000-0000-000000000011'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'verified', 'math', 'Mathematics', 'quiz', 'Sticky Quiz 1',
+  now() - interval '10 days', 95, 100, 'pilot-v0.1'
+);
+
+insert into public.assessment_learning_mappings (
+  assessment_id, learning_node_id, component_key, family_id, child_id, score_source, confirmed_by_user_id
+) values (
+  'a5000000-0000-0000-0000-000000000011'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'assessment_total',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
+insert into public.verified_learning_events (
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
+) values (
+  '15000000-0000-0000-0000-000000000011'::uuid,
+  'a5000000-0000-0000-0000-000000000011'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'math', 'Mathematics', 'Sticky Quiz 1', 'quiz', 'normal',
+  95, 100, 9.50, now() - interval '10 days', now() - interval '10 days', '50000000-0000-0000-0000-000000000001'::uuid,
+  gen_random_uuid(), 2, 'pilot-v0.1'
+);
+
+-- Assessment 2: 90/100, occurred 8 days ago
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
+  occurred_at, raw_score, max_score, learning_catalog_version
+) values (
+  'a5000000-0000-0000-0000-000000000012'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'verified', 'math', 'Mathematics', 'quiz', 'Sticky Quiz 2',
+  now() - interval '8 days', 90, 100, 'pilot-v0.1'
+);
+
+insert into public.assessment_learning_mappings (
+  assessment_id, learning_node_id, component_key, family_id, child_id, score_source, confirmed_by_user_id
+) values (
+  'a5000000-0000-0000-0000-000000000012'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'assessment_total',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
+insert into public.verified_learning_events (
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
+) values (
+  '15000000-0000-0000-0000-000000000012'::uuid,
+  'a5000000-0000-0000-0000-000000000012'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'math', 'Mathematics', 'Sticky Quiz 2', 'quiz', 'normal',
+  90, 100, 9.00, now() - interval '8 days', now() - interval '8 days', '50000000-0000-0000-0000-000000000001'::uuid,
+  gen_random_uuid(), 2, 'pilot-v0.1'
+);
+
+-- Assessment 3: 92/100, occurred 5 days ago
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
+  occurred_at, raw_score, max_score, learning_catalog_version
+) values (
+  'a5000000-0000-0000-0000-000000000013'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'verified', 'math', 'Mathematics', 'quiz', 'Sticky Quiz 3',
+  now() - interval '5 days', 92, 100, 'pilot-v0.1'
+);
+
+insert into public.assessment_learning_mappings (
+  assessment_id, learning_node_id, component_key, family_id, child_id, score_source, confirmed_by_user_id
+) values (
+  'a5000000-0000-0000-0000-000000000013'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'assessment_total',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
+insert into public.verified_learning_events (
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
+) values (
+  '15000000-0000-0000-0000-000000000013'::uuid,
+  'a5000000-0000-0000-0000-000000000013'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'math', 'Mathematics', 'Sticky Quiz 3', 'quiz', 'normal',
+  92, 100, 9.20, now() - interval '5 days', now() - interval '5 days', '50000000-0000-0000-0000-000000000001'::uuid,
+  gen_random_uuid(), 2, 'pilot-v0.1'
+);
+
+-- Assessment 4: 96/100, occurred 2 days ago
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
+  occurred_at, raw_score, max_score, learning_catalog_version
+) values (
+  'a5000000-0000-0000-0000-000000000014'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'verified', 'math', 'Mathematics', 'quiz', 'Sticky Quiz 4',
+  now() - interval '2 days', 96, 100, 'pilot-v0.1'
+);
+
+insert into public.assessment_learning_mappings (
+  assessment_id, learning_node_id, component_key, family_id, child_id, score_source, confirmed_by_user_id
+) values (
+  'a5000000-0000-0000-0000-000000000014'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'assessment_total',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
+insert into public.verified_learning_events (
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
+) values (
+  '15000000-0000-0000-0000-000000000014'::uuid,
+  'a5000000-0000-0000-0000-000000000014'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'math', 'Mathematics', 'Sticky Quiz 4', 'quiz', 'normal',
+  96, 100, 9.60, now() - interval '2 days', now() - interval '2 days', '50000000-0000-0000-0000-000000000001'::uuid,
+  gen_random_uuid(), 2, 'pilot-v0.1'
+);
+
+-- Process all 4 events sequentially to build up evidence and reach High confidence
+do $$
+begin
+  perform private.execute_learning_event_processing('15000000-0000-0000-0000-000000000011'::uuid);
+  perform private.execute_learning_event_processing('15000000-0000-0000-0000-000000000012'::uuid);
+  perform private.execute_learning_event_processing('15000000-0000-0000-0000-000000000013'::uuid);
+  perform private.execute_learning_event_processing('15000000-0000-0000-0000-000000000014'::uuid);
+end;
+$$;
+
+-- Test 110: Initial attainment records non-null mastery_attained_at
+select ok(
+  (select mastery_attained_at from public.child_mastery_states
+   where child_id = 'c5000000-0000-0000-0000-000000000002'::uuid
+     and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid) is not null,
+  'mastery_attained_at timestamp recorded in child_mastery_states on initial attainment'
+);
+
+-- Test 111: Initial attainment evaluates to Mastered band
+select is(
+  (select elem ->> 'mastery_band'
+   from jsonb_array_elements(private.get_child_mastery_at('c5000000-0000-0000-0000-000000000002'::uuid, now())) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'mastered',
+  'Initial attainment evaluates to Mastered band'
+);
+
+-- Test 112: Initial attainment evaluates to High confidence band
+select is(
+  (select elem ->> 'confidence_band'
+   from jsonb_array_elements(private.get_child_mastery_at('c5000000-0000-0000-0000-000000000002'::uuid, now())) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'high',
+  'Initial attainment evaluates to High confidence band'
+);
+
+-- Test 113: Time-only aging (61+ days): confidence band drops to Low
+select is(
+  (select elem ->> 'confidence_band'
+   from jsonb_array_elements(private.get_child_mastery_at('c5000000-0000-0000-0000-000000000002'::uuid, now() + interval '61 days')) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'low',
+  'Confidence band decays to Low after 61 days of no evidence'
+);
+
+-- Test 114: Time-only aging (61+ days): mastery band remains Mastered (sticky)
+select is(
+  (select elem ->> 'mastery_band'
+   from jsonb_array_elements(private.get_child_mastery_at('c5000000-0000-0000-0000-000000000002'::uuid, now() + interval '61 days')) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'mastered',
+  'Mastery band remains Mastered despite confidence decay after 61 days'
+);
+
+-- Test 115: Time-only aging (61+ days): mastery_attained_at is unchanged
+select is(
+  (select elem ->> 'mastery_attained_at'
+   from jsonb_array_elements(private.get_child_mastery_at('c5000000-0000-0000-0000-000000000002'::uuid, now() + interval '61 days')) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  (select mastery_attained_at::text
+   from public.child_mastery_states
+   where child_id = 'c5000000-0000-0000-0000-000000000002'::uuid
+     and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid),
+  'mastery_attained_at in projection matches stored child_mastery_states after 61 days'
+);
+
+-- Test 116: Historical stability: repeated reads / projections do not alter or delete mastery_attained_at
+select ok(
+  (select mastery_attained_at from public.child_mastery_states
+   where child_id = 'c5000000-0000-0000-0000-000000000002'::uuid
+     and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid) is not null,
+  'Repeated projection reads preserve child_mastery_states.mastery_attained_at'
+);
+
+-- Assessment 5: Lower-scoring evidence arrives (score 60/100, performance 60%)
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
+  occurred_at, raw_score, max_score, learning_catalog_version
+) values (
+  'a5000000-0000-0000-0000-000000000015'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'verified', 'math', 'Mathematics', 'quiz', 'Lower Score Quiz 5',
+  now() - interval '1 day', 60, 100, 'pilot-v0.1'
+);
+
+insert into public.assessment_learning_mappings (
+  assessment_id, learning_node_id, component_key, family_id, child_id, score_source, confirmed_by_user_id
+) values (
+  'a5000000-0000-0000-0000-000000000015'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'assessment_total',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
+insert into public.verified_learning_events (
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
+) values (
+  '15000000-0000-0000-0000-000000000015'::uuid,
+  'a5000000-0000-0000-0000-000000000015'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000002'::uuid,
+  'math', 'Mathematics', 'Lower Score Quiz 5', 'quiz', 'normal',
+  60, 100, 6.00, now() - interval '1 day', now() - interval '1 day', '50000000-0000-0000-0000-000000000001'::uuid,
+  gen_random_uuid(), 2, 'pilot-v0.1'
+);
+
+do $$
+begin
+  perform private.execute_learning_event_processing('15000000-0000-0000-0000-000000000015'::uuid);
+end;
+$$;
+
+-- Test 117: Subsequent lower score updates numeric mastery score downwards via EWMA (< 85)
+select ok(
+  (select mastery_score from public.child_mastery_states
+   where child_id = 'c5000000-0000-0000-0000-000000000002'::uuid
+     and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid) < 85.00,
+  'Subsequent lower score updates numeric mastery score downwards via EWMA (< 85)'
+);
+
+-- Test 118: Subsequent lower score preserves mastery_attained_at (sticky)
+select ok(
+  (select mastery_attained_at from public.child_mastery_states
+   where child_id = 'c5000000-0000-0000-0000-000000000002'::uuid
+     and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid) is not null,
+  'Subsequent lower score preserves mastery_attained_at (sticky)'
+);
+
+-- Test 119: Mastery band in projection remains Mastered despite lower numeric score
+select is(
+  (select elem ->> 'mastery_band'
+   from jsonb_array_elements(private.get_child_mastery_at('c5000000-0000-0000-0000-000000000002'::uuid, now())) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'mastered',
+  'Mastery band remains Mastered even after lower-scoring evidence brings score below 85'
+);
+
+-- Test 120: Prerequisite safety: mastered prerequisite remains attained after confidence decay, preserving Phase 5.2 unlock eligibility
+select is(
+  (select count(*)::integer
+   from public.learning_prerequisites p
+   join public.child_mastery_states cms
+     on cms.learning_node_id = p.prerequisite_node_id
+    and cms.child_id = 'c5000000-0000-0000-0000-000000000002'::uuid
+   where p.dependent_node_id = 'b0000003-0000-0000-0000-000000000002'::uuid
+     and cms.mastery_attained_at is not null),
+  1,
+  'Prerequisite skill remains attained past confidence decay, preserving Phase 5.2 unlock eligibility'
 );
 
 reset role;

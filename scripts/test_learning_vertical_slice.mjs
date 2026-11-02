@@ -248,8 +248,7 @@ async function main() {
 
   console.log('8. Promoting platform catalog version to pilot-v0.2 and testing provenance...');
   const promoteSql = `
-    insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2', 'draft')
-    on conflict (version) do nothing;
+    select public.create_learning_catalog_draft('pilot-v0.2');
 
     insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
     values
@@ -273,12 +272,6 @@ async function main() {
     process.exit(1);
   }
   console.log('  -> PASS: Platform promotion activated pilot-v0.2 and subsequent assessments snapshot pilot-v0.2.');
-
-  // Clean up: return active version to pilot-v0.1
-  await runPsql(`
-    update public.learning_catalog_versions set status = 'retired' where version = 'pilot-v0.2';
-    update public.learning_catalog_versions set status = 'active' where version = 'pilot-v0.1';
-  `);
 
   console.log('\nAll Learning Mastery Vertical Slice Integration Tests PASSED!');
 }

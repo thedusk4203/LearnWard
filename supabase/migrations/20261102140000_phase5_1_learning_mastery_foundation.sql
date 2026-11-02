@@ -39,11 +39,13 @@ create policy learning_catalog_versions_select on public.learning_catalog_versio
   to authenticated
   using (status in ('active', 'retired'));
 
--- Direct client writes are revoked; platform administration only
+-- Direct client writes are revoked; platform administration only via controlled RPCs
 revoke all on public.learning_catalog_versions from public;
 revoke all on public.learning_catalog_versions from anon;
+revoke all on public.learning_catalog_versions from authenticated;
+revoke all on public.learning_catalog_versions from service_role;
 grant select on public.learning_catalog_versions to authenticated;
-grant all on public.learning_catalog_versions to service_role;
+grant select on public.learning_catalog_versions to service_role;
 
 create or replace function private.validate_learning_catalog_version_mutation()
 returns trigger
@@ -51,15 +53,9 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
-declare
-  v_in_promo boolean;
-  v_in_boot boolean;
 begin
-  v_in_promo := (coalesce(current_setting('learnward.in_catalog_promotion', true), 'false') = 'true');
-  v_in_boot := (coalesce(current_setting('learnward.bootstrap', true), 'false') = 'true');
-
   if tg_op = 'INSERT' then
-    if new.status != 'draft' and not v_in_boot then
+    if new.status != 'draft' then
       raise exception 'New catalog versions must start in draft status' using errcode = 'LW102';
     end if;
     return new;
@@ -74,24 +70,15 @@ begin
       raise exception 'Retired catalog cannot be modified or reactivated' using errcode = 'LW102';
     end if;
 
-    if old.status = 'active' and new.status = 'retired' then
-      if not v_in_promo then
-        raise exception 'Direct catalog retirement is not permitted; use promote_learning_catalog_version' using errcode = 'LW102';
-      end if;
-      return new;
+    if old.status in ('active', 'retired') and new.status = old.status then
+      raise exception 'Published catalog versions are immutable' using errcode = 'LW102';
     end if;
 
     if old.status = 'draft' and new.status = 'active' then
-      if not v_in_promo and not v_in_boot then
-        raise exception 'Direct catalog activation is not permitted; use promote_learning_catalog_version' using errcode = 'LW102';
-      end if;
       return new;
     end if;
 
-    if old.status = new.status then
-      if old.status in ('active', 'retired') and not v_in_promo then
-        raise exception 'Published catalog versions are immutable' using errcode = 'LW102';
-      end if;
+    if old.status = 'active' and new.status = 'retired' then
       return new;
     end if;
 
@@ -178,9 +165,7 @@ begin
       raise exception 'Catalog version does not exist' using errcode = 'LW004';
     end if;
     if v_cat_status != 'draft' then
-      if current_setting('learnward.bootstrap', true) != 'true' or session_user not in ('postgres', 'supabase_admin') then
-        raise exception 'Cannot add or update nodes in published catalog' using errcode = 'LW102';
-      end if;
+      raise exception 'Cannot add or update nodes in published catalog' using errcode = 'LW102';
     end if;
 
     -- Validate hierarchy parent integrity
@@ -297,9 +282,7 @@ begin
       raise exception 'Catalog version does not exist' using errcode = 'LW004';
     end if;
     if v_cat_status != 'draft' then
-      if current_setting('learnward.bootstrap', true) != 'true' or session_user not in ('postgres', 'supabase_admin') then
-        raise exception 'Cannot add or update prerequisites in published catalog' using errcode = 'LW102';
-      end if;
+      raise exception 'Cannot add or update prerequisites in published catalog' using errcode = 'LW102';
     end if;
 
     -- Validate endpoints are Skills
@@ -348,8 +331,45 @@ grant select on public.learning_prerequisites to authenticated;
 grant all on public.learning_prerequisites to service_role;
 
 -- ---------------------------------------------------------------------------
--- 4. PLATFORM-ONLY CATALOG PROMOTION RPC
+-- 4. PLATFORM-ONLY CATALOG AUTHORING AND PROMOTION RPCs
 -- ---------------------------------------------------------------------------
+
+create or replace function public.create_learning_catalog_draft(
+  p_version text
+)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_trimmed text;
+begin
+  if p_version is null or trim(p_version) = '' then
+    raise exception 'Catalog version parameter is required' using errcode = '22000';
+  end if;
+
+  v_trimmed := trim(p_version);
+
+  if not (v_trimmed ~ '^[a-z0-9][a-z0-9_.-]*$') then
+    raise exception 'Invalid catalog version format: %', v_trimmed using errcode = '22000';
+  end if;
+
+  if exists (select 1 from public.learning_catalog_versions where version = v_trimmed) then
+    raise exception 'Catalog version % already exists', v_trimmed using errcode = 'LW004';
+  end if;
+
+  insert into public.learning_catalog_versions (version, status, created_at)
+  values (v_trimmed, 'draft', clock_timestamp());
+
+  return v_trimmed;
+end;
+$$;
+
+revoke all on function public.create_learning_catalog_draft(text) from public;
+revoke all on function public.create_learning_catalog_draft(text) from anon;
+revoke all on function public.create_learning_catalog_draft(text) from authenticated;
+grant execute on function public.create_learning_catalog_draft(text) to service_role;
 
 create or replace function public.promote_learning_catalog_version(
   p_new_version text
@@ -370,9 +390,6 @@ begin
   if p_new_version is null or trim(p_new_version) = '' then
     raise exception 'Catalog version parameter is required' using errcode = '22000';
   end if;
-
-  -- Set transaction-local promotion context
-  perform set_config('learnward.in_catalog_promotion', 'true', true);
 
   -- 1. Coordination locking on the catalog registry
   perform 1 from public.learning_catalog_versions for update;
@@ -462,9 +479,6 @@ begin
     raise exception 'No active learning catalog' using errcode = 'LW501';
   end if;
 
-  -- Reset promotion context
-  perform set_config('learnward.in_catalog_promotion', 'false', true);
-
   return jsonb_build_object(
     'status', 'success',
     'promoted_version', p_new_version,
@@ -483,12 +497,10 @@ grant execute on function public.promote_learning_catalog_version(text) to servi
 -- 5. INITIAL PILOT-V0.1 BOOTSTRAP
 -- ---------------------------------------------------------------------------
 
-set learnward.bootstrap = 'true';
-
--- Seed pilot-v0.1 version record
-insert into public.learning_catalog_versions (version, status, activated_at, created_at)
-values ('pilot-v0.1', 'active', clock_timestamp(), clock_timestamp())
-on conflict (version) do update set status = 'active';
+-- Seed pilot-v0.1 version record as draft
+insert into public.learning_catalog_versions (version, status, created_at)
+values ('pilot-v0.1', 'draft', clock_timestamp())
+on conflict (version) do nothing;
 
 -- Seed the 5 canonical Subject root nodes
 insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id, sort_order, is_active)
@@ -549,7 +561,8 @@ select
 from public.learning_nodes n where n.catalog_version = 'pilot-v0.1' and n.canonical_key = 'pilot-v0.1:english:grammar:punctuation'
 on conflict (catalog_version, canonical_key) do nothing;
 
-set learnward.bootstrap = 'false';
+-- Promote pilot-v0.1 to active via canonical promotion routine
+select public.promote_learning_catalog_version('pilot-v0.1');
 
 -- ---------------------------------------------------------------------------
 -- 6. ADDITIVE CATALOG PROVENANCE ON ASSESSMENTS & VLEs
@@ -1059,6 +1072,7 @@ create table if not exists public.mastery_state_revisions (
   new_mastery_score numeric(5,2) not null check (new_mastery_score between 0 and 100),
   effective_evidence_count integer not null check (effective_evidence_count >= 1),
   latest_evidence_at timestamptz not null,
+  mastery_attained_at timestamptz,
   calculation_snapshot jsonb not null,
   created_at timestamptz not null default clock_timestamp(),
   foreign key (child_id, family_id) references public.child_profiles(id, family_id)
@@ -1109,6 +1123,7 @@ create table if not exists public.child_mastery_states (
   last_evidence_occurred_at timestamptz not null,
   last_verified_at timestamptz not null,
   latest_revision_id uuid not null references public.mastery_state_revisions(id),
+  mastery_attained_at timestamptz,
   updated_at timestamptz not null default clock_timestamp(),
   primary key (child_id, learning_node_id),
   foreign key (child_id, family_id) references public.child_profiles(id, family_id)
@@ -1213,6 +1228,10 @@ declare
   v_last_ev record;
   v_distinct_assessments integer;
   v_proc record;
+  v_prev_attained_at timestamptz;
+  v_mastery_attained_at timestamptz;
+  v_conf_units numeric(5,2);
+  v_distinct_recent_vles integer;
 begin
   -- 1. Load VLE
   select id, assessment_id, family_id, child_id, subject_key,
@@ -1329,11 +1348,15 @@ begin
     v_current_score := null;
     v_step_count := 0;
     v_steps := '[]'::jsonb;
+    v_prev_score := null;
+    v_prev_attained_at := null;
 
-    -- Load previous projection score for revision logging
-    select mastery_score into v_prev_score
+    -- Load previous projection score and attainment status for revision logging
+    select mastery_score, mastery_attained_at into v_prev_score, v_prev_attained_at
     from public.child_mastery_states
     where child_id = v_vle.child_id and learning_node_id = v_node_id;
+
+    v_mastery_attained_at := v_prev_attained_at;
 
     -- Read complete immutable evidence set in canonical chronology
     for v_ev in
@@ -1367,6 +1390,23 @@ begin
           'result_score', v_current_score
         );
       end if;
+
+      -- Check if mastery was first attained at this evidence step
+      if v_mastery_attained_at is null then
+        select
+          coalesce(sum(ev.specificity_weight * ev.level_weight), 0)::numeric(5,2),
+          count(distinct ev.verified_learning_event_id)
+        into v_conf_units, v_distinct_recent_vles
+        from public.learning_evidence_events ev
+        where ev.child_id = v_vle.child_id
+          and ev.learning_node_id = v_node_id
+          and ev.effective_occurred_at >= v_ev.effective_occurred_at - interval '60 days'
+          and ev.effective_occurred_at <= v_ev.effective_occurred_at;
+
+        if v_current_score >= 85.00 and v_conf_units > 3.5 and v_distinct_recent_vles >= 2 then
+          v_mastery_attained_at := v_ev.verified_at;
+        end if;
+      end if;
     end loop;
 
     -- Count distinct assessments
@@ -1378,15 +1418,17 @@ begin
     insert into public.mastery_state_revisions (
       family_id, child_id, learning_node_id, trigger_verified_learning_event_id,
       engine_version, previous_mastery_score, new_mastery_score,
-      effective_evidence_count, latest_evidence_at, calculation_snapshot
+      effective_evidence_count, latest_evidence_at, mastery_attained_at, calculation_snapshot
     ) values (
       v_vle.family_id, v_vle.child_id, v_node_id, v_vle.id,
       'mastery-v0.1', v_prev_score, v_current_score,
       v_step_count, v_last_ev.effective_occurred_at,
+      v_mastery_attained_at,
       jsonb_build_object(
         'steps', v_steps,
         'final_score', v_current_score,
-        'distinct_assessments', v_distinct_assessments
+        'distinct_assessments', v_distinct_assessments,
+        'mastery_attained_at', v_mastery_attained_at
       )
     ) returning id into v_revision_id;
 
@@ -1395,12 +1437,12 @@ begin
       child_id, learning_node_id, family_id, engine_version,
       mastery_score, effective_evidence_count, distinct_assessment_count,
       last_evidence_event_id, last_evidence_occurred_at, last_verified_at,
-      latest_revision_id, updated_at
+      latest_revision_id, mastery_attained_at, updated_at
     ) values (
       v_vle.child_id, v_node_id, v_vle.family_id, 'mastery-v0.1',
       v_current_score, v_step_count, v_distinct_assessments,
       v_last_ev.id, v_last_ev.effective_occurred_at, v_last_ev.verified_at,
-      v_revision_id, clock_timestamp()
+      v_revision_id, v_mastery_attained_at, clock_timestamp()
     )
     on conflict (child_id, learning_node_id) do update set
       mastery_score = excluded.mastery_score,
@@ -1410,6 +1452,7 @@ begin
       last_evidence_occurred_at = excluded.last_evidence_occurred_at,
       last_verified_at = excluded.last_verified_at,
       latest_revision_id = excluded.latest_revision_id,
+      mastery_attained_at = coalesce(child_mastery_states.mastery_attained_at, excluded.mastery_attained_at),
       updated_at = excluded.updated_at;
   end loop;
 
@@ -1702,12 +1745,14 @@ begin
     'confidence_band', conf.band,
     'confidence_units', conf.units,
     'mastery_band', case
+      when cms.mastery_attained_at is not null then 'mastered'
       when cms.mastery_score >= 85 and conf.band = 'high' and conf.distinct_recent_vles >= 2 then 'mastered'
       when cms.mastery_score >= 85 then 'mastery_candidate'
       when cms.mastery_score >= 70 then 'secure'
       when cms.mastery_score >= 50 then 'developing'
       else 'emerging'
     end,
+    'mastery_attained_at', cms.mastery_attained_at,
     'as_of', v_as_of,
     'updated_at', cms.updated_at
   )) into v_result

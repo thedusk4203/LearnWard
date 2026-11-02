@@ -172,5 +172,66 @@ void main() {
       expect(eval.distinctRecentVles, equals(0));
       expect(eval.masteryBand, equals(MasteryBand.noData));
     });
+
+    test('sticky mastery: once attained, aging past 60 days preserves Mastered band even when confidence drops to Low', () {
+      final attainedAt = asOf.subtract(const Duration(days: 65));
+      final oldEv1 = LearningEvidenceEvent(
+        id: 'ev-old1',
+        familyId: familyId,
+        childId: childId,
+        verifiedLearningEventId: 'vle-old1',
+        learningNodeId: nodeId,
+        nodeType: LearningNodeType.skill,
+        subjectKey: 'math',
+        scoreSource: ScoreSource.assessmentTotal,
+        performancePct: 90.0,
+        specificityWeight: 1.0,
+        levelWeight: 1.0,
+        effectiveOccurredAt: attainedAt,
+        verifiedAt: attainedAt,
+      );
+
+      final eval = ConfidenceEngine.evaluate(
+        masteryScore: 90.0,
+        evidence: [oldEv1],
+        asOf: asOf,
+        masteryAttainedAt: attainedAt,
+      );
+
+      // Confidence has aged out (0 units in last 60 days, Low confidence)
+      expect(eval.confidenceUnits, equals(0.0));
+      expect(eval.confidenceBand, equals(ConfidenceBand.low));
+      // Sticky mastery ensures masteryBand remains Mastered
+      expect(eval.masteryBand, equals(MasteryBand.mastered));
+    });
+
+    test('sticky mastery: later lower score updates numeric score but preserves Mastered band when masteryAttainedAt is present', () {
+      final attainedAt = asOf.subtract(const Duration(days: 30));
+      final recentEv = LearningEvidenceEvent(
+        id: 'ev-recent',
+        familyId: familyId,
+        childId: childId,
+        verifiedLearningEventId: 'vle-recent',
+        learningNodeId: nodeId,
+        nodeType: LearningNodeType.skill,
+        subjectKey: 'math',
+        scoreSource: ScoreSource.assessmentTotal,
+        performancePct: 60.0,
+        specificityWeight: 1.0,
+        levelWeight: 1.0,
+        effectiveOccurredAt: asOf.subtract(const Duration(days: 2)),
+        verifiedAt: asOf.subtract(const Duration(days: 2)),
+      );
+
+      final eval = ConfidenceEngine.evaluate(
+        masteryScore: 75.0,
+        evidence: [recentEv],
+        asOf: asOf,
+        masteryAttainedAt: attainedAt,
+      );
+
+      // Numeric score is 75.0, but historic attainment is sticky
+      expect(eval.masteryBand, equals(MasteryBand.mastered));
+    });
   });
 }

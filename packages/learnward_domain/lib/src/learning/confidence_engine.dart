@@ -28,6 +28,7 @@ class ConfidenceEngine {
     required double? masteryScore,
     required Iterable<LearningEvidenceEvent> evidence,
     required DateTime asOf,
+    DateTime? masteryAttainedAt,
   }) {
     final windowStart = asOf.subtract(const Duration(days: rollingWindowDays));
     final distinctVles = <String>{};
@@ -56,7 +57,9 @@ class ConfidenceEngine {
 
     // Evaluate MasteryBand
     final MasteryBand mastBand;
-    if (masteryScore == null || distinctCount == 0) {
+    if (masteryAttainedAt != null) {
+      mastBand = MasteryBand.mastered;
+    } else if (masteryScore == null || distinctCount == 0) {
       mastBand = MasteryBand.noData;
     } else if (masteryScore >= 85.0 &&
         confBand == ConfidenceBand.high &&
