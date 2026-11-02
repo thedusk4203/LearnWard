@@ -1104,10 +1104,11 @@ select is(
 
 -- Test 87: Anonymous role cannot read learning_catalog_versions
 set local role anon;
-select is(
-  (select count(*)::integer from public.learning_catalog_versions),
-  0,
-  'Anonymous role cannot read any learning catalog versions'
+select throws_ok(
+  $$ select count(*)::integer from public.learning_catalog_versions $$,
+  '42501',
+  NULL,
+  'Anonymous role cannot read learning catalog versions (permission denied)'
 );
 
 -- Test 88: Authenticated role cannot see draft catalog versions
