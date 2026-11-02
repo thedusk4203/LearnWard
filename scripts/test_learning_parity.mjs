@@ -176,7 +176,14 @@ async function main() {
       continue;
     }
 
-    const items = JSON.parse(queryRes.stdout);
+    const lines = queryRes.stdout.split('\n');
+    const jsonLine = lines.find((l) => l.trim().startsWith('['));
+    if (!jsonLine) {
+      console.error(`FAIL: [${scenario}] Could not find JSON array in response:`, queryRes.stdout);
+      failed++;
+      continue;
+    }
+    const items = JSON.parse(jsonLine.trim());
     const item = items.find((i) => i.learning_node_id === nodeId);
 
     if (!item) {

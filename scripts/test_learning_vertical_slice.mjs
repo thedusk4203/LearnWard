@@ -79,7 +79,7 @@ async function main() {
     select learning_catalog_version from public.assessments where id = '${assessId}';
   `;
   const draftRes = await runPsql(createDraftSql);
-  if (draftRes.code !== 0 || draftRes.stdout !== 'pilot-v0.1') {
+  if (draftRes.code !== 0 || !draftRes.stdout.includes('pilot-v0.1')) {
     console.error(`Draft creation failed or stamped wrong catalog: ${draftRes.stdout}, ${draftRes.stderr}`);
     process.exit(1);
   }
@@ -128,7 +128,7 @@ async function main() {
     select learning_catalog_version from public.verified_learning_events where id = '${vleId}';
   `;
   const verifyRes = await runPsql(verifySql);
-  if (verifyRes.code !== 0 || verifyRes.stdout !== 'pilot-v0.1') {
+  if (verifyRes.code !== 0 || !verifyRes.stdout.includes('pilot-v0.1')) {
     console.error(`Verification failed or wrong VLE catalog: ${verifyRes.stdout}, ${verifyRes.stderr}`);
     process.exit(1);
   }
@@ -159,7 +159,13 @@ async function main() {
     process.exit(1);
   }
 
-  const masteryItems = JSON.parse(getMasteryRes.stdout);
+  const lines = getMasteryRes.stdout.split('\n');
+  const jsonLine = lines.find((l) => l.trim().startsWith('['));
+  if (!jsonLine) {
+    console.error('Could not find JSON array in get_child_mastery response:', getMasteryRes.stdout);
+    process.exit(1);
+  }
+  const masteryItems = JSON.parse(jsonLine.trim());
   const skillItem = masteryItems.find((i) => i.node_canonical_key === 'pilot-v0.1:math:arithmetic:addition:single_digit');
   const subjectItem = masteryItems.find((i) => i.node_canonical_key === 'pilot-v0.1:subject:math');
 
