@@ -457,8 +457,14 @@ async function main() {
     process.exit(1);
   }
 
-  const waitMatchA = waitCheckARes.stdout.match(/\b(\d+)\b/);
-  console.log(`Lock observation: ${waitMatchA ? waitMatchA[1] : 0} spin process(es) observed waiting for table lock.`);
+  const waitMatchA = waitCheckARes.stdout.match(/waiting_count\s*\r?\n-+\s*\r?\n\s*(\d+)/) || waitCheckARes.stdout.match(/\b(\d+)\b/);
+  const waitingCountA = waitMatchA ? parseInt(waitMatchA[1], 10) : 0;
+  console.log(`Lock observation: ${waitingCountA} spin process(es) observed waiting for table lock.`);
+  if (waitingCountA < 1) {
+    console.error(`FAILED: Scenario 4A expected waiting_count >= 1 (spin waiting on ShareLock granted=false), but observed: ${waitingCountA}`);
+    process.exit(1);
+  }
+  console.log('PASS: Spin was observed waiting on ShareLock (granted = false) while parent held catalog write lock.');
   console.log('PASS: Parent catalog mutation committed before spin completed.');
 
   // Verify the snapshot contains the COMPLETE NEW POOL (not hybrid)
@@ -570,8 +576,14 @@ async function main() {
     process.exit(1);
   }
 
-  const waitMatchB = waitCheckBRes.stdout.match(/\b(\d+)\b/);
-  console.log(`Lock observation: ${waitMatchB ? waitMatchB[1] : 0} parent write process(es) observed waiting for table lock.`);
+  const waitMatchB = waitCheckBRes.stdout.match(/waiting_count\s*\r?\n-+\s*\r?\n\s*(\d+)/) || waitCheckBRes.stdout.match(/\b(\d+)\b/);
+  const waitingCountB = waitMatchB ? parseInt(waitMatchB[1], 10) : 0;
+  console.log(`Lock observation: ${waitingCountB} parent write process(es) observed waiting for table lock.`);
+  if (waitingCountB < 1) {
+    console.error(`FAILED: Scenario 4B expected waiting_count >= 1 (parent writer waiting on RowExclusiveLock granted=false), but observed: ${waitingCountB}`);
+    process.exit(1);
+  }
+  console.log('PASS: Parent writer was observed waiting on RowExclusiveLock (granted = false) while spin held ShareLock.');
   console.log('PASS: Spin committed before parent mutation was allowed to commit.');
 
   // Verify the snapshot contains the COMPLETE OLD POOL (R6_NEW_B_ID must be absent)

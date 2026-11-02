@@ -54,7 +54,7 @@ final class WheelPoolItem {
   }
 }
 
-/// Immutable cryptographic/audit snapshot of the Wheel pool and random draw state at spin time.
+/// Immutable server-committed selection/audit snapshot of the Wheel pool and random draw state at spin time.
 final class WheelSelectionSnapshot {
   WheelSelectionSnapshot({
     required this.wheelConfigVersion,

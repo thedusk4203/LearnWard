@@ -741,13 +741,19 @@ update public.families
 set timezone = 'Corrupted/Timezone_Name'
 where id = 'fa420000-0000-0000-0000-000000000001'::uuid;
 
+select set_config(
+  'test.expected_spin_id',
+  (select resource_id::text from public.command_receipts where command_id = 'ca420000-0000-0000-0000-000000000104'::uuid),
+  false
+);
+
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
 
 -- Test 62: Replay of existing committed spin succeeds despite subsequent timezone corruption
 select is(
   (select (public.spin_reward_wheel('ca420000-0000-0000-0000-000000000104'::uuid, 'ca420000-0000-0000-0000-000000000001'::uuid) ->> 'spin_id')),
-  (select id::text from public.wheel_spins where child_id = 'ca420000-0000-0000-0000-000000000001'::uuid limit 1),
+  current_setting('test.expected_spin_id'),
   'Replay returns historical spin even if family timezone was corrupted after initial commit'
 );
 

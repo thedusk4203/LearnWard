@@ -298,7 +298,7 @@ class _ParentWheelSettingsScreenState
                     ),
                     const SizedBox(height: AppSpacing.md),
 
-                    // Active Pool Guardrail Warning or Inspection Card
+                    // Configured Wheel Rewards Guardrail Warning or Inspection Card
                     if (_wheelRewards.length < 3) ...[
                       Card(
                         key: const Key('wheel_pool_warning_banner'),
@@ -315,7 +315,7 @@ class _ParentWheelSettingsScreenState
                               const SizedBox(width: AppSpacing.sm),
                               Expanded(
                                 child: Text(
-                                  'Celebration Wheel requires at least 3 active eligible rewards in the pool (found: ${_wheelRewards.length}). Wheel spins will be blocked until more rewards are enabled in the Catalog.',
+                                  'At least 3 active Wheel rewards must be configured before any child can spin (currently ${_wheelRewards.length} configured). Wheel spins will be blocked until more rewards are enabled in the Catalog.',
                                   style: TextStyle(
                                     color: theme.colorScheme.onErrorContainer,
                                     fontWeight: FontWeight.w600,
@@ -336,23 +336,21 @@ class _ParentWheelSettingsScreenState
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  'Active Wheel Pool',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                Chip(
-                                  label: Text('${_wheelRewards.length} items'),
-                                  backgroundColor: _wheelRewards.length >= 3
-                                      ? Colors.green.withValues(alpha: 0.15)
-                                      : Colors.amber.withValues(alpha: 0.2),
-                                ),
-                              ],
+                            const Text(
+                              'Configured Wheel Rewards',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              '${_wheelRewards.length} active Wheel rewards configured',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade700,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
                             const SizedBox(height: AppSpacing.sm),
                             _buildTierProbabilitySummary(),
@@ -421,6 +419,11 @@ class _ParentWheelSettingsScreenState
             color: Colors.grey.shade600,
             fontStyle: FontStyle.italic,
           ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'Each child needs at least 3 active rewards that are eligible for them before they can spin.\nChild-targeted rewards count only for that child.',
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
         ),
       ],
     );

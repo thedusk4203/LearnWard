@@ -562,7 +562,7 @@ public.spin_reward_wheel(
 - Step 10: Atomic writes:
   - `reward_redemptions` (`origin = 'wheel'`, `status = 'pending_fulfillment'`)
   - `wheel_spins` (composite FK `fk_wheel_spins_redemption_composite` linked to redemption)
-  - `rp_ledger` (`amount_minor = -spin_cost_minor`, `reason_code = 'wheel_spin'`, `source_type = 'reward_redemption'`, `source_id = v_redemption_id`, `metadata.spin_id = v_spin_id`). The economic transaction is anchored to the immutable `reward_redemption`, keeping redemption debits and cancellation refunds linked to the same source entity while `wheel_spins` provides the cryptographic/audit snapshot.
+  - `rp_ledger` (`amount_minor = -spin_cost_minor`, `reason_code = 'wheel_spin'`, `source_type = 'reward_redemption'`, `source_id = v_redemption_id`, `metadata.spin_id = v_spin_id`). The economic transaction is anchored to the immutable `reward_redemption`, keeping redemption debits and cancellation refunds linked to the same source entity while `wheel_spins` provides the server-committed selection/audit snapshot.
   - `child_balances` (decrement balance)
   - `command_receipts` (insert receipt)
 - Step 11: Return result payload.

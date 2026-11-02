@@ -219,7 +219,9 @@ void main() {
           findsOneWidget,
         );
         expect(
-          find.textContaining('requires at least 3 active eligible rewards'),
+          find.textContaining(
+            'At least 3 active Wheel rewards must be configured before any child can spin',
+          ),
           findsOneWidget,
         );
       },
@@ -284,6 +286,15 @@ void main() {
 
         await tester.pumpAndSettle();
 
+        // Verify truthful configured title and count
+        expect(find.text('Configured Wheel Rewards'), findsOneWidget);
+        expect(find.text('3 active Wheel rewards configured'), findsOneWidget);
+
+        // Invariant: ZERO false family-wide "eligible pool" or "ready to spin" claims
+        expect(find.textContaining('eligible pool'), findsNothing);
+        expect(find.textContaining('Ready to spin'), findsNothing);
+        expect(find.textContaining('valid pool'), findsNothing);
+
         // Verify tier items and weights are displayed
         expect(
           find.text('Common — weight 60 — 1 configured items'),
@@ -298,10 +309,22 @@ void main() {
           findsOneWidget,
         );
 
-        // Verify eligibility disclaimer
+        // Verify eligibility disclaimer and per-child rule note
         expect(
           find.text(
             'Actual probability depends on which rewards are eligible for each child.',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining(
+            'Each child needs at least 3 active rewards that are eligible for them before they can spin.',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining(
+            'Child-targeted rewards count only for that child.',
           ),
           findsOneWidget,
         );
