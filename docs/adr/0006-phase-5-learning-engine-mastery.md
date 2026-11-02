@@ -64,7 +64,7 @@ verification_weight = 1.00
 
 ---
 
-## Decision 3 — Platform-Owned Versioned Knowledge Hierarchy
+## Decision 3 — Platform-Owned Versioned Knowledge Hierarchy & Authoritative Catalog Provenance
 
 Phase 5 introduces a curated reference hierarchy:
 
@@ -78,11 +78,23 @@ The graph is platform-owned and read-only to clients in v0.1. Families do not cr
 
 A full national curriculum is not required. The pilot starts with a small curated graph.
 
-**Consequence:** Curriculum scope is bounded while evidence can still reference stable learning identities.
+### Catalog-version provenance
+To guarantee deterministic processing across time and platform updates:
+- When an assessment is created, the server snapshots the active platform catalog version into `assessments.learning_catalog_version`. The client/caller cannot select or override this version. If no active catalog version is valid at assessment creation, the server fails closed.
+- Upon adult verification, that version snapshot is copied into `verified_learning_events.learning_catalog_version`.
+- Immediate learning processing, delayed processing, and bulk catch-up use the VLE's immutable snapshot version exclusively. Catch-up never infers historical catalog version from the currently active platform catalog.
+
+### Graph & mapping integrity
+- **Subject root uniqueness:** Exactly one Subject root exists per `(catalog_version, subject_key)`, with `node_type = 'subject'` and `parent_id IS NULL`.
+- **Hierarchy subject integrity:** For every parent/child edge (`Domain -> Subject`, `Topic -> Domain`, `Skill -> Topic`), child and parent must have identical `catalog_version` AND `subject_key`.
+- **Mapping integrity:** `assessment_learning_mappings.learning_node_id` must point to a node whose `catalog_version == assessment.learning_catalog_version` and `subject_key == assessment.subject_key`. Mappings must never cross subjects.
+- **Deactivation semantics:** Subsequent deactivation of a node (`learning_nodes.is_active = false`) affects only future catalog presentation, mapping authoring, and recommendations. It must never make already-verified historical evidence unprocessable or invalidate historical mappings.
+
+**Consequence:** Curriculum scope is bounded, evidence references stable learning identities, and delayed catch-up resolves to the exact catalog version under which the assessment was authored.
 
 ---
 
-## Decision 4 — Evidence Granularity Caps Mastery Granularity
+## Decision 4 — Evidence Granularity Caps Mastery Granularity & Effective Observation Invariant
 
 Every VLE creates broad subject-root evidence automatically.
 
@@ -96,11 +108,20 @@ Skill evidence requires a supported component score or item group.
 
 No evidence is automatically propagated to every ancestor, descendant, or sibling node.
 
-**Consequence:** LearnWard never claims more diagnostic detail than the source evidence supports.
+### Effective observation invariant
+At most **one** effective mastery observation exists per:
+
+```text
+(verified_learning_event_id, learning_node_id)
+```
+
+Subject fallback naturally produces one Subject-root observation. For detailed nodes, multiple mappings/components for the same node must be deterministically aggregated into one effective observation prior to EWMA evaluation. One assessment must never feed multiple sequential EWMA steps into the same node.
+
+**Consequence:** LearnWard never claims more diagnostic detail than the source evidence supports, and one assessment cannot overweight a node or bias EWMA ordering.
 
 ---
 
-## Decision 5 — Detailed Mappings Are Adult-Confirmed and Frozen with Verification
+## Decision 5 — Detailed Mappings Are Adult-Confirmed, Frozen with Verification & Deterministically Aggregated
 
 Detailed assessment-to-learning mappings are optional.
 
@@ -110,42 +131,79 @@ Once the assessment becomes `verified` or `rejected`, the mapping set is immutab
 
 Missing mappings never block assessment verification.
 
-**Consequence:** Subject-level learning state works with low parent burden; detailed skill state is available when the family has enough information to support it.
+### Component identity & non-overlapping authoring
+Each detailed mapping requires a stable component identity:
+
+```text
+component_key text not null
+```
+
+Within one `(assessment_id, learning_node_id)`, duplicate `component_key` values are strictly rejected. If parent authoring cannot prove components/item groups are non-overlapping, they must be represented as one aggregate mapping.
+
+### Deterministic aggregation
+When multiple mappings target the same `learning_node_id` on one assessment:
+- **`component_score`**: aggregated by score mass:
+  ```text
+  performance_pct = (sum(component_raw_score) / sum(component_max_score)) * 100
+  ```
+- **`item_group`**: aggregated by item and correct counts:
+  ```text
+  item_count = sum(item_count)
+  correct_count = sum(correct_count)
+  performance_pct = (sum(correct_count) / sum(item_count)) * 100
+  ```
+- **Mixed source types fail-closed:** Mixing different `score_source` types (`assessment_total`, `component_score`, `item_group`) on the same node for one assessment is strictly forbidden.
+- **Confidence:** Confidence units count the single effective observation once (`confidence_units = specificity_weight * level_weight`), preventing artificial confidence inflation from split mappings.
+
+**Consequence:** Subject-level learning state works with low parent burden; detailed skill state is available when supported; aggregation is deterministic and independent of mapping insertion order.
 
 ---
 
-## Decision 6 — Immutable Learning Evidence Atoms Separate Source from Projection
+## Decision 6 — Immutable Learning Evidence Atoms Preserve Diagnostic Facts
 
-Processing a VLE materializes immutable `learning_evidence_events` containing only the academic facts needed by the Learning Engine, including:
+Processing a VLE materializes immutable `learning_evidence_events` containing the academic facts needed by the Learning Engine:
 
 - source VLE/assessment,
 - child/family,
 - learning node,
+- catalog version,
+- node type and subject key,
 - grade snapshot,
 - assessment type/difficulty,
 - score source,
 - 0–100 observed performance,
 - specificity/level weights,
+- immutable diagnostic facts: nullable `item_count` and `correct_count` (with derived `incorrect_count = item_count - correct_count`),
 - academic occurrence and verification timestamps.
 
 Evidence rows are append-only and directly non-mutable by clients.
 
-**Consequence:** Mastery can be rebuilt deterministically without rereading mutable UI/draft state or media.
+Uniqueness enforces the effective observation contract:
+
+```text
+unique (verified_learning_event_id, learning_node_id)
+```
+
+Diagnostic counts are validated (`item_count > 0`, `0 <= correct_count <= item_count`) and populated for `item_group` (summed if aggregated); they are `NULL` for `component_score` and `assessment_total`.
+
+**Consequence:** Mastery and recovery can be evaluated deterministically from immutable evidence without rereading mutable UI/draft state or media.
 
 ---
 
-## Decision 7 — Mastery Engine v0.1 Uses Explainable EWMA
+## Decision 7 — Mastery Engine v0.1 Uses Explainable EWMA with Option A Initialization
 
 The internal mastery estimate uses `0..100`.
 
-First credible observation:
-
+### First credible observation (Option A)
 ```text
 M_1 = P_1
 ```
 
-Later observations:
+First credible evidence initializes the estimate directly to observed performance `P_1`.
 
+Level and specificity weights govern update influence (`alpha_effective`) on subsequent observations, not the initial score. As a deliberate pilot hypothesis: if first evidence is below-level with 100% score, initial mastery estimate is 100, but confidence units remain constrained (`confidence_units = 1.00 * 0.50 = 0.50 < 1.5` -> Low confidence), preventing `Mastered` declaration until declaration conditions (High confidence and >= 2 distinct recent verified assessments) are met.
+
+### Subsequent observations
 ```text
 M_new = M_old + alpha_effective * (P - M_old)
 ```
@@ -182,7 +240,7 @@ alpha_effective = 0.35 * specificity_weight * level_weight
 
 Hard/challenge work receives no arbitrary mastery bonus.
 
-**Consequence:** The model is deterministic, inspectable, conservative, and calibratable during pilots.
+**Consequence:** The model is deterministic, inspectable, conservative, and calibratable during pilots without premature mastery declaration.
 
 ---
 
@@ -224,11 +282,27 @@ Direct client mutation of revisions/projections is revoked.
 
 ---
 
-## Decision 10 — Confidence and Freshness Are Read-Time Interpretations
+## Decision 10 — Confidence and Freshness Are Read-Time Interpretations with Explicit Time Context
+
+### Time determinism & single `as_of` clock
+Confidence, freshness, recovery recency, and next-challenge ranking depend on current time. To prevent boundary divergence across query layers and ensure exact Dart/PostgreSQL parity:
+- Every server-authoritative learning read captures ONE `as_of timestamptz` at request start (`v_as_of := transaction_timestamp();`).
+- The client does not supply or choose the authoritative `as_of`. The response may include `as_of` for explanation and UI audit.
+- Pure Dart domain engines accept an explicit `DateTime asOf` parameter; direct calls to `DateTime.now()` are forbidden inside deterministic calculation logic.
+- If future-dated evidence arrives due to inaccurate device clocks (`occurred_at > as_of`), elapsed time is clamped:
+  ```text
+  elapsed = max(interval '0 seconds', as_of - occurred_at)
+  ```
+  preventing negative elapsed time from granting an artificial freshness advantage.
 
 ### Confidence
+Derived at read time from effective evidence with:
 
-Use effective evidence from the last 60 days.
+```text
+occurred_at >= as_of - interval '60 days'
+```
+
+For verified-only v0.1 evidence:
 
 ```text
 confidence_units = specificity_weight * level_weight
@@ -239,22 +313,23 @@ Bands:
 ```text
 < 1.5          Low
 1.5 .. 3.5     Medium
-> 3.5          High, only with >= 2 distinct recent verified events
+> 3.5          High, only with >= 2 distinct recent verified assessments
 ```
 
-### Freshness
+Confidence units count each effective VLE/node observation once. Splitting an assessment across multiple mappings never increases confidence.
 
-Based on latest credible academic `occurred_at`:
+### Freshness
+Based on elapsed time from the latest credible academic `occurred_at` relative to `as_of`:
 
 ```text
-<= 14 days          Recent
->14 and <=45 days   Aging
->45 days            Needs refresh
+<= 14 days          Recent (elapsed <= 14 days)
+> 14 and <= 45 days Aging (14 days < elapsed <= 45 days)
+> 45 days           Needs refresh (elapsed > 45 days)
 ```
 
 Time passing does not mutate or silently decay the mastery score.
 
-**Consequence:** No scheduled job is required merely to age labels, and historic achievement is preserved.
+**Consequence:** No scheduled job is required merely to age labels, historic achievement is preserved, and parity between database functions and Dart is provably exact.
 
 ---
 
@@ -285,7 +360,7 @@ A high score with sparse evidence remains `Mastery candidate` rather than `Maste
 
 ---
 
-## Decision 12 — Phase 5 Recovery Is a Signal, Not a Fake Quest Lifecycle
+## Decision 12 — Phase 5 Recovery Is a Deterministic Signal Driven by Evidence Diagnostics
 
 Phase 5 v0.1 supports:
 
@@ -294,18 +369,33 @@ none
 review_suggested
 ```
 
-A Topic/Skill can receive `review_suggested` from sufficiently diagnostic recent component/item evidence showing meaningful weakness.
+The recovery signal is evaluated at read time for Topic and Skill nodes using immutable diagnostic facts preserved on evidence atoms:
 
-The states:
+### Raise rules (Topic/Skill only)
+- **`item_group` observation:** raised when:
+  ```text
+  performance_pct < 70
+  AND item_count >= 3
+  AND incorrect_count >= 2
+  ```
+- **`component_score` observation:** raised when:
+  ```text
+  performance_pct <= 50
+  ```
+- **Forbidden sources:** `assessment_total` and Subject fallback MUST NOT raise Skill or Topic recovery.
+
+### Clear rule
+An existing `review_suggested` signal on a node is cleared when a later credible effective observation for the SAME node achieves:
 
 ```text
-recovery_active
-recovery_verified
+performance_pct >= 70
 ```
 
-remain reserved until LearnWard has a real persisted learning-challenge execution lifecycle.
+Allowed clearing sources are `component_score` and `item_group`. Broad `assessment_total` cannot clear a Skill recovery signal because it lacks matching granularity.
 
-**Consequence:** The product can point to recent mistakes without pretending that an unimplemented recovery workflow exists.
+The states `recovery_active` and `recovery_verified` remain reserved until LearnWard has a real persisted learning-challenge execution lifecycle.
+
+**Consequence:** The product highlights actionable recent mistakes without faking an interactive quest system.
 
 ---
 
@@ -337,7 +427,7 @@ E Exploration
 
 Unlock requires explicit prerequisites to be `Mastered`.
 
-Recommendations are generated from current academic state, graph prerequisites, current-grade compatibility and freshness. Reward/economy data is excluded.
+Recommendations are generated from current academic state, graph prerequisites, current-grade compatibility and freshness relative to `as_of`. Reward/economy data is excluded.
 
 Recommendation rows are not persisted as authoritative learning state in v0.1.
 
@@ -366,23 +456,32 @@ Direct node evidence and descendant roll-up summaries remain distinct.
 
 ---
 
-## Decision 16 — Trusted Processing Is Idempotent and Recoverable
+## Decision 16 — Trusted Processing Is Idempotent, Command-Bound and Recoverable
 
-Phase 5 implementation introduces an explicit trusted processing operation for verified learning events, with:
+Phase 5 implementation introduces an explicit trusted processing operation for verified learning events:
 
-- authenticated adult authorization,
-- command receipt replay validation,
-- unique logical processing per VLE,
-- immutable evidence insertion,
-- per-child/node serialization,
-- deterministic projection rebuild,
-- append-only audit revision,
-- atomic receipt/processing result,
-- catch-up for verified VLEs that were not processed due to network interruption.
+```text
+command_receipts.operation = process_learning
+resource_id = verified_learning_event_id
+```
 
-Phase 5 does not rely on the client remaining online after verification.
+### Authorization & validation ordering
+1. Authenticate caller.
+2. Load VLE and derive family and child from server database state.
+3. Authorize active family adult (paired children cannot trigger manual processing).
+4. Inspect and validate command receipt replay.
+5. Serialize logical processing for this VLE.
 
-**Consequence:** A lost response or app restart cannot duplicate mastery effects or permanently skip a verified learning event.
+### Idempotency & command receipt semantics
+- **Same command replay:** If the same `command_id` is replayed with identical `actor_user_id`, `operation = 'process_learning'`, `family_id`, and `resource_id = verified_learning_event_id`, return the committed result without duplicating evidence or revisions. Any mismatch on actor, family, operation, or resource is rejected.
+- **Same VLE, new command ID:** If the target VLE has already completed logical processing (`learning_processing_events`), a new command ID binds and records a valid command receipt for that command with `resource_id = verified_learning_event_id` and returns the committed processing result. It creates NO new evidence and NO new revisions.
+- **Reused command ID, different VLE:** Strictly rejected.
+- **Logical uniqueness:** `learning_processing_events` enforces `unique(verified_learning_event_id)`.
+
+### Bulk catch-up contract
+`catch_up_unprocessed_learning(family_id)` discovers VLEs lacking `learning_processing_events`. For each discovered VLE, it invokes an internal trusted processing routine whose idempotency is anchored directly by `unique(verified_learning_event_id)`. It does not invent synthetic public command IDs. If catch-up audit is needed, it uses an independent batch run identifier.
+
+**Consequence:** Lost responses or network failures replay cleanly, multiple adult clients replaying different commands converge safely, and bulk catch-up never bypasses or corrupts command receipt semantics.
 
 ---
 
@@ -440,15 +539,49 @@ The design PR itself contains no Phase 5 migration or runtime implementation.
 
 This ADR may move from **PROPOSED** to **ACCEPTED** only when the final implementation demonstrably satisfies:
 
-1. verified-only authoritative mastery input,
-2. evidence-granularity enforcement,
-3. canonical late-evidence determinism,
-4. concurrency-safe first-write and subsequent projection rebuild,
-5. append-only audit + server-controlled projection,
-6. confidence/freshness separation,
-7. reward-independence invariance tests,
-8. cross-family/sibling RLS tests,
-9. domain/database parity,
-10. recovery/catch-up behavior,
-11. Android/iOS CI,
-12. independent review + green post-merge CI.
+1. **Catalog provenance & hierarchy integrity:**
+   - delayed catch-up after catalog rollout preserves original VLE catalog version;
+   - exactly one Subject root exists per `(catalog_version, subject_key)`;
+   - duplicate Subject root is rejected;
+   - cross-subject or cross-version hierarchy parent edges are rejected;
+   - mapping to a node with mismatched subject or catalog version is rejected;
+   - mappings to a node that later becomes inactive remain fully processable historically.
+2. **Observation aggregation & single-observation invariant:**
+   - at most one effective mastery observation per `(verified_learning_event_id, learning_node_id)`;
+   - duplicate same-node component mapping identity (`component_key`) is rejected;
+   - multiple component mappings aggregate deterministically by score mass;
+   - multiple item groups aggregate deterministically by item/correct counts;
+   - mixed score source types on the same node fail closed;
+   - aggregation result is invariant to mapping insertion order;
+   - confidence counts each effective observation once without inflation from split mappings.
+3. **Recovery diagnostic provenance:**
+   - immutable diagnostic facts (`item_count`, `correct_count`) are preserved on evidence atoms;
+   - item-group weakness raises `review_suggested` when `performance_pct < 70 AND item_count >= 3 AND incorrect_count >= 2`;
+   - component-score weakness raises `review_suggested` when `performance_pct <= 50`;
+   - broad `assessment_total` and Subject fallback never raise or clear Skill recovery;
+   - subsequent observation with `performance_pct >= 70` clears recovery.
+4. **Time determinism & boundary parity:**
+   - single server-authoritative `as_of` timestamp captured at request start;
+   - pure Dart domain engines accept explicit `DateTime asOf` parameter;
+   - exact boundary fixtures (14 days, 45 days, 60 days) yield identical outputs in Dart and PostgreSQL;
+   - future-dated evidence has elapsed time clamped to zero.
+5. **Idempotency & catch-up contract:**
+   - same command and same VLE replay returns committed result;
+   - new command ID targeting an already-processed VLE binds a new command receipt and returns committed result without duplicating evidence or revisions;
+   - reused command ID targeting a different VLE is denied;
+   - concurrent manual processing and catch-up converge safely;
+   - concurrent catch-up workers converge without race conditions;
+   - exactly one logical processing event and effective evidence set per VLE.
+6. **First-observation initialization:**
+   - first observation initializes `M_1 = P_1` (Option A);
+   - below-level 100% initializes score to 100 while confidence remains constrained (<1.5 Low), preventing premature `Mastered` declaration.
+7. **Concurrency & rebuild determinism:**
+   - first-write and subsequent projection rebuilds execute under transaction-scoped child+node serialization locks;
+   - late-arriving older evidence rebuilds to identical canonical mastery projection.
+8. **Audit & security integrity:**
+   - append-only `mastery_state_revisions` and server-controlled `child_mastery_states`;
+   - cross-family and paired-child sibling RLS security tests pass;
+   - reward-independence invariance tests prove no XP/RP/reward input affects mastery or recommendations.
+9. **Build & review gates:**
+   - Android debug build and iOS simulator compile succeed in CI;
+   - independent review passes and post-merge CI on `main` succeeds.
