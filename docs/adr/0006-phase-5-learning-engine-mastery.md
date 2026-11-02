@@ -78,15 +78,19 @@ The graph is platform-owned and read-only to clients in v0.1. Families do not cr
 
 A full national curriculum is not required. The pilot starts with a small curated graph.
 
-### Catalog-version provenance
+### Catalog-version provenance & lifecycle
 To guarantee deterministic processing across time and platform updates:
-- When an assessment is created, the server snapshots the active platform catalog version into `assessments.learning_catalog_version`. The client/caller cannot select or override this version. If no active catalog version is valid at assessment creation, the server fails closed.
-- Upon adult verification, that version snapshot is copied into `verified_learning_events.learning_catalog_version`.
-- Immediate learning processing, delayed processing, and bulk catch-up use the VLE's immutable snapshot version exclusively. Catch-up never infers historical catalog version from the currently active platform catalog.
+- **Legacy migration policy:** When the Phase 5 migration runs, all existing assessments and `verified_learning_events` that predate catalog-version provenance are deterministically assigned the initial frozen catalog version: `pilot-v0.1`. The migration must never infer a different version from execution time.
+- **Catalog registry source of truth:** A dedicated catalog version registry (`learning_catalog_versions`) tracks version identifiers, lifecycle state (`draft | active | retired`), activation timestamp, and creation timestamp. Exactly ONE version has `status = 'active'` at any time.
+- **Server-controlled active version:** When an assessment is created, the server snapshots the active platform catalog version into `assessments.learning_catalog_version`. The client/caller cannot select or override this version. If no valid active catalog version exists at assessment creation, the server fails closed.
+- **Verification snapshot:** Upon adult verification, that version snapshot is copied directly into `verified_learning_events.learning_catalog_version`.
+- **Processing isolation:** Immediate learning processing, delayed processing, and bulk catch-up use the VLE's immutable snapshot version exclusively. Catch-up never infers historical catalog version from the currently active platform catalog.
+- **Published version immutability:** Published, active, and retired catalog versions are immutable. Node definitions, titles, parent links, and grade spans must never be modified in place within an existing version. Semantic changes require a new version.
+- **Cross-version recommendation semantics:** Historical evidence and mastery remain permanently attached to their original catalog nodes and version. The recommendation engine evaluates candidates against the current active catalog. Phase 5 v0.1 does not perform automatic cross-version mastery migration; cross-version transfer requires a future explicit crosswalk policy.
 
 ### Graph & mapping integrity
-- **Subject root uniqueness:** Exactly one Subject root exists per `(catalog_version, subject_key)`, with `node_type = 'subject'` and `parent_id IS NULL`.
-- **Hierarchy subject integrity:** For every parent/child edge (`Domain -> Subject`, `Topic -> Domain`, `Skill -> Topic`), child and parent must have identical `catalog_version` AND `subject_key`.
+- **Subject root uniqueness:** Exactly one Subject root exists per `(catalog_version, subject_key)`, with `node_type = 'subject'` and `parent_id IS NULL`. Enforced via unique constraint/index: `unique (catalog_version, subject_key) where parent_id is null`.
+- **Hierarchy subject integrity:** For every parent/child edge (`Domain -> Subject`, `Topic -> Domain`, `Skill -> Topic`), child and parent must have identical `catalog_version` AND `subject_key`. Cross-subject or cross-version edges are rejected.
 - **Mapping integrity:** `assessment_learning_mappings.learning_node_id` must point to a node whose `catalog_version == assessment.learning_catalog_version` and `subject_key == assessment.subject_key`. Mappings must never cross subjects.
 - **Deactivation semantics:** Subsequent deactivation of a node (`learning_nodes.is_active = false`) affects only future catalog presentation, mapping authoring, and recommendations. It must never make already-verified historical evidence unprocessable or invalidate historical mappings.
 
@@ -121,15 +125,20 @@ Subject fallback naturally produces one Subject-root observation. For detailed n
 
 ---
 
-## Decision 5 — Detailed Mappings Are Adult-Confirmed, Frozen with Verification & Deterministically Aggregated
+## Decision 5 — Detailed Mappings Are Authoritative in `pending_review` Only, RPC-Controlled & Deterministically Aggregated
 
 Detailed assessment-to-learning mappings are optional.
 
-An active family adult manages authoritative mappings while the assessment is non-terminal. Mapping mutation serializes on the assessment row so mapping changes cannot race the verification transition.
-
-Once the assessment becomes `verified` or `rejected`, the mapping set is immutable.
-
-Missing mappings never block assessment verification.
+### Mapping lifecycle vs mutable drafts
+- In Phase 2, `update_assessment_draft` allows editing `subject_key`, assessment type, difficulty, score, and dates while status is `draft`.
+- Allowing authoritative mappings on drafts risks corrupt or dangling mappings when draft attributes change.
+- Therefore, authoritative `assessment_learning_mappings` may be created or replaced **ONLY when `assessment.status = 'pending_review'`**.
+- Direct client `INSERT`, `UPDATE`, and `DELETE` on `assessment_learning_mappings` are revoked.
+- An active family adult manages authoritative mappings exclusively through a trusted mapping RPC. Paired child identities cannot author mappings.
+- The mapping RPC locks the assessment row `FOR UPDATE`, verifies `status = 'pending_review'`, validates subject/catalog consistency, and replaces the mapping set atomically.
+- Assessment verification/rejection locks the same assessment row `FOR UPDATE`, ensuring mapping mutations and terminal transitions serialize deterministically.
+- Once the assessment becomes `verified` or `rejected`, mappings are immutable.
+- Missing mappings never block assessment verification.
 
 ### Component identity & non-overlapping authoring
 Each detailed mapping requires a stable component identity:
@@ -138,7 +147,7 @@ Each detailed mapping requires a stable component identity:
 component_key text not null
 ```
 
-Within one `(assessment_id, learning_node_id)`, duplicate `component_key` values are strictly rejected. If parent authoring cannot prove components/item groups are non-overlapping, they must be represented as one aggregate mapping.
+Within one `(assessment_id, learning_node_id)`, duplicate `component_key` values are strictly rejected via unique constraint `unique (assessment_id, learning_node_id, component_key)`. For `assessment_total`, a reserved component key (`'assessment_total'`) enforces that a whole-assessment score is never mapped more than once to the same node. If parent authoring cannot prove components/item groups are non-overlapping, they must be represented as one aggregate mapping.
 
 ### Deterministic aggregation
 When multiple mappings target the same `learning_node_id` on one assessment:
@@ -155,7 +164,7 @@ When multiple mappings target the same `learning_node_id` on one assessment:
 - **Mixed source types fail-closed:** Mixing different `score_source` types (`assessment_total`, `component_score`, `item_group`) on the same node for one assessment is strictly forbidden.
 - **Confidence:** Confidence units count the single effective observation once (`confidence_units = specificity_weight * level_weight`), preventing artificial confidence inflation from split mappings.
 
-**Consequence:** Subject-level learning state works with low parent burden; detailed skill state is available when supported; aggregation is deterministic and independent of mapping insertion order.
+**Consequence:** Subject-level learning state works with low parent burden; detailed skill state is available when supported; draft editing never desynchronizes mappings; aggregation is deterministic and independent of mapping insertion order.
 
 ---
 
@@ -174,7 +183,8 @@ Processing a VLE materializes immutable `learning_evidence_events` containing th
 - 0–100 observed performance,
 - specificity/level weights,
 - immutable diagnostic facts: nullable `item_count` and `correct_count` (with derived `incorrect_count = item_count - correct_count`),
-- academic occurrence and verification timestamps.
+- raw `occurred_at` and `effective_occurred_at`,
+- verification timestamp.
 
 Evidence rows are append-only and directly non-mutable by clients.
 
@@ -244,12 +254,20 @@ Hard/challenge work receives no arbitrary mastery bonus.
 
 ---
 
-## Decision 8 — Canonical Chronology + Full Node Rebuild Eliminates Arrival-Order Bias
+## Decision 8 — Effective Chronology + Full Node Rebuild Eliminates Arrival-Order Bias and Future Skew
+
+To prevent future timestamps from falsely granting permanent recency or bypassing confidence windows, the server derives an immutable effective timestamp:
+
+```text
+effective_occurred_at = least(occurred_at, verified_at)
+```
+
+(with fail-safe `least(..., as_of)` in read contexts). Raw `occurred_at` is preserved for audit provenance.
 
 Mastery evidence for one child/node is ordered by:
 
 ```text
-occurred_at ASC,
+effective_occurred_at ASC,
 verified_at ASC,
 learning_evidence_event.id ASC
 ```
@@ -262,7 +280,7 @@ For concurrent processing, implementation must serialize each affected `(child_i
 
 Affected node locks must be acquired in deterministic node-ID order.
 
-**Consequence:** The same evidence set converges to the same mastery state even when an older assessment is verified later or two VLEs are processed concurrently.
+**Consequence:** The same evidence set converges to the same mastery state even when an older assessment is verified later, two VLEs are processed concurrently, or device clocks skew into the future.
 
 ---
 
@@ -282,24 +300,23 @@ Direct client mutation of revisions/projections is revoked.
 
 ---
 
-## Decision 10 — Confidence and Freshness Are Read-Time Interpretations with Explicit Time Context
+## Decision 10 — Confidence v0.1 in Phase 5.1 & Freshness Interpretation with Explicit Time Context
+
+### Scope alignment: Confidence v0.1 belongs to Phase 5.1
+Because the final `Mastered` band requires `Confidence = High`, Confidence v0.1 is included in Phase 5.1 alongside the Mastery Engine. Freshness, Recovery signal, and Next Challenge recommendations remain in Phase 5.2.
 
 ### Time determinism & single `as_of` clock
 Confidence, freshness, recovery recency, and next-challenge ranking depend on current time. To prevent boundary divergence across query layers and ensure exact Dart/PostgreSQL parity:
 - Every server-authoritative learning read captures ONE `as_of timestamptz` at request start (`v_as_of := transaction_timestamp();`).
 - The client does not supply or choose the authoritative `as_of`. The response may include `as_of` for explanation and UI audit.
 - Pure Dart domain engines accept an explicit `DateTime asOf` parameter; direct calls to `DateTime.now()` are forbidden inside deterministic calculation logic.
-- If future-dated evidence arrives due to inaccurate device clocks (`occurred_at > as_of`), elapsed time is clamped:
-  ```text
-  elapsed = max(interval '0 seconds', as_of - occurred_at)
-  ```
-  preventing negative elapsed time from granting an artificial freshness advantage.
 
-### Confidence
-Derived at read time from effective evidence with:
+### Confidence (Phase 5.1)
+Derived at read time from effective evidence with strict lower and upper bounds:
 
 ```text
-occurred_at >= as_of - interval '60 days'
+effective_occurred_at >= as_of - interval '60 days'
+AND effective_occurred_at <= as_of
 ```
 
 For verified-only v0.1 evidence:
@@ -318,16 +335,18 @@ Bands:
 
 Confidence units count each effective VLE/node observation once. Splitting an assessment across multiple mappings never increases confidence.
 
-### Freshness
-Based on elapsed time from the latest credible academic `occurred_at` relative to `as_of`:
+### Freshness (Phase 5.2)
+Based on elapsed time from the latest credible academic `effective_occurred_at` relative to `as_of`:
 
 ```text
+elapsed = as_of - latest_effective_occurred_at
+
 <= 14 days          Recent (elapsed <= 14 days)
 > 14 and <= 45 days Aging (14 days < elapsed <= 45 days)
 > 45 days           Needs refresh (elapsed > 45 days)
 ```
 
-Time passing does not mutate or silently decay the mastery score.
+No negative elapsed time can occur. Time passing does not mutate or silently decay the mastery score.
 
 **Consequence:** No scheduled job is required merely to age labels, historic achievement is preserved, and parity between database functions and Dart is provably exact.
 
@@ -354,13 +373,13 @@ AND confidence = High
 AND >= 2 distinct recent verified assessments
 ```
 
-A high score with sparse evidence remains `Mastery candidate` rather than `Mastered`.
+A high score with sparse evidence remains `Mastery candidate` rather than `Mastered`. Because Confidence v0.1 is delivered in Phase 5.1, the `Mastered` band is legitimately evaluable and valid in Phase 5.1.
 
 **Consequence:** One 10/10 worksheet cannot instantly declare durable mastery.
 
 ---
 
-## Decision 12 — Phase 5 Recovery Is a Deterministic Signal Driven by Evidence Diagnostics
+## Decision 12 — Phase 5 Recovery Is a Deterministic Signal with 30-Day Recency Window
 
 Phase 5 v0.1 supports:
 
@@ -384,8 +403,17 @@ The recovery signal is evaluated at read time for Topic and Skill nodes using im
   ```
 - **Forbidden sources:** `assessment_total` and Subject fallback MUST NOT raise Skill or Topic recovery.
 
+### Recency and expiry contract
+A `review_suggested` signal is eligible only if the latest unresolved recovery-triggering observation is within **30 days** of `as_of`:
+
+```text
+as_of - effective_occurred_at <= interval '30 days'
+```
+
+If older than 30 days without newer confirming weakness, the recovery signal decays to `none`. This does not mutate historical evidence, but prevents stale errors from indefinitely hijacking top-priority recommendations.
+
 ### Clear rule
-An existing `review_suggested` signal on a node is cleared when a later credible effective observation for the SAME node achieves:
+An existing `review_suggested` signal on a node is cleared immediately when a later credible effective observation for the SAME node achieves:
 
 ```text
 performance_pct >= 70
@@ -395,7 +423,7 @@ Allowed clearing sources are `component_score` and `item_group`. Broad `assessme
 
 The states `recovery_active` and `recovery_verified` remain reserved until LearnWard has a real persisted learning-challenge execution lifecycle.
 
-**Consequence:** The product highlights actionable recent mistakes without faking an interactive quest system.
+**Consequence:** The product highlights actionable recent mistakes without faking an interactive quest system or allowing year-old errors to permanently block progress.
 
 ---
 
@@ -465,12 +493,16 @@ command_receipts.operation = process_learning
 resource_id = verified_learning_event_id
 ```
 
-### Authorization & validation ordering
+### Authorization, locking & post-lock recheck ordering
 1. Authenticate caller.
 2. Load VLE and derive family and child from server database state.
 3. Authorize active family adult (paired children cannot trigger manual processing).
-4. Inspect and validate command receipt replay.
-5. Serialize logical processing for this VLE.
+4. Inspect command receipt replay.
+5. Acquire per-VLE serialization lock.
+6. **Post-lock recheck:** In a fresh statement snapshot inside the lock, re-read both `command_receipts` and `learning_processing_events`.
+   - If the same command was committed by a racing caller, return the committed result cleanly.
+   - If the VLE was committed under a different command, bind the new command receipt and return the committed result without duplicate processing.
+   - If unprocessed, proceed with evidence materialization and projection rebuild.
 
 ### Idempotency & command receipt semantics
 - **Same command replay:** If the same `command_id` is replayed with identical `actor_user_id`, `operation = 'process_learning'`, `family_id`, and `resource_id = verified_learning_event_id`, return the committed result without duplicating evidence or revisions. Any mismatch on actor, family, operation, or resource is rejected.
@@ -481,7 +513,7 @@ resource_id = verified_learning_event_id
 ### Bulk catch-up contract
 `catch_up_unprocessed_learning(family_id)` discovers VLEs lacking `learning_processing_events`. For each discovered VLE, it invokes an internal trusted processing routine whose idempotency is anchored directly by `unique(verified_learning_event_id)`. It does not invent synthetic public command IDs. If catch-up audit is needed, it uses an independent batch run identifier.
 
-**Consequence:** Lost responses or network failures replay cleanly, multiple adult clients replaying different commands converge safely, and bulk catch-up never bypasses or corrupts command receipt semantics.
+**Consequence:** Lost responses or network failures replay cleanly, concurrent calls with identical command IDs return clean replays without primary-key collisions, and bulk catch-up never bypasses or corrupts command receipt semantics.
 
 ---
 
@@ -494,7 +526,7 @@ Private learning state obeys the existing authorization contract:
 - sibling paired device: denied,
 - shared Child Mode under adult auth: UX containment only, not sibling cryptographic isolation.
 
-Reference curriculum data is global/read-only and contains no child PII.
+Reference curriculum data is global/read-only and contains no child PII. Direct client mutations on `learning_nodes`, `learning_catalog_versions`, `learning_prerequisites`, and `assessment_learning_mappings` are revoked.
 
 Trusted Phase 5 public functions use the repository's hardened `SECURITY DEFINER` pattern with empty search path, exact grants, and explicit authorization.
 
@@ -539,49 +571,75 @@ The design PR itself contains no Phase 5 migration or runtime implementation.
 
 This ADR may move from **PROPOSED** to **ACCEPTED** only when the final implementation demonstrably satisfies:
 
-1. **Catalog provenance & hierarchy integrity:**
+1. **Catalog provenance, registry & hierarchy integrity:**
+   - legacy assessments and VLEs predating catalog version provenance are deterministically assigned `pilot-v0.1`;
+   - catalog version registry enforces exactly one active catalog version at a time;
+   - new assessment creation fails closed if no active catalog exists;
+   - caller cannot choose or override catalog version;
+   - published catalog versions are immutable and client writes are denied;
    - delayed catch-up after catalog rollout preserves original VLE catalog version;
    - exactly one Subject root exists per `(catalog_version, subject_key)`;
    - duplicate Subject root is rejected;
    - cross-subject or cross-version hierarchy parent edges are rejected;
    - mapping to a node with mismatched subject or catalog version is rejected;
-   - mappings to a node that later becomes inactive remain fully processable historically.
-2. **Observation aggregation & single-observation invariant:**
+   - mappings to a node that later becomes inactive remain fully processable historically;
+   - recommendations evaluate against active catalog without silent cross-version mastery transfer.
+2. **Mapping lifecycle & direct-mutation security:**
+   - authoritative mappings permitted ONLY when `assessment.status = 'pending_review'`;
+   - draft assessment editing freely updates subject/score without desynchronizing mappings;
+   - cannot map while in `draft` status; cannot map after `verified` or `rejected`;
+   - direct client `INSERT`, `UPDATE`, and `DELETE` on `assessment_learning_mappings` are denied;
+   - paired child cannot set or replace mappings;
+   - cross-family mapping attempt is denied;
+   - mapping mutation racing verification produces either complete mapping set before verify or verification wins and mapping fails closed.
+3. **Observation aggregation & single-observation invariant:**
    - at most one effective mastery observation per `(verified_learning_event_id, learning_node_id)`;
    - duplicate same-node component mapping identity (`component_key`) is rejected;
+   - `assessment_total` mapping cannot be duplicated on the same node;
    - multiple component mappings aggregate deterministically by score mass;
    - multiple item groups aggregate deterministically by item/correct counts;
    - mixed score source types on the same node fail closed;
    - aggregation result is invariant to mapping insertion order;
    - confidence counts each effective observation once without inflation from split mappings.
-3. **Recovery diagnostic provenance:**
+4. **Effective chronology & future timestamp bounds:**
+   - server derives `effective_occurred_at = least(occurred_at, verified_at)`;
+   - canonical chronology orders by `effective_occurred_at ASC, verified_at ASC, id ASC`;
+   - confidence requires `effective_occurred_at >= as_of - interval '60 days' AND effective_occurred_at <= as_of`;
+   - future raw timestamps cannot extend confidence window indefinitely;
+   - future raw timestamps cannot dominate freshness or recommendation recency;
+   - freshness elapsed time cannot be negative.
+5. **Recovery diagnostic provenance & 30-day recency:**
    - immutable diagnostic facts (`item_count`, `correct_count`) are preserved on evidence atoms;
    - item-group weakness raises `review_suggested` when `performance_pct < 70 AND item_count >= 3 AND incorrect_count >= 2`;
    - component-score weakness raises `review_suggested` when `performance_pct <= 50`;
    - broad `assessment_total` and Subject fallback never raise or clear Skill recovery;
-   - subsequent observation with `performance_pct >= 70` clears recovery.
-4. **Time determinism & boundary parity:**
+   - recovery signal expires to `none` when latest unresolved weak observation is older than 30 days from `as_of`;
+   - subsequent observation with `performance_pct >= 70` clears recovery immediately.
+6. **Time determinism & boundary parity:**
    - single server-authoritative `as_of` timestamp captured at request start;
    - pure Dart domain engines accept explicit `DateTime asOf` parameter;
-   - exact boundary fixtures (14 days, 45 days, 60 days) yield identical outputs in Dart and PostgreSQL;
-   - future-dated evidence has elapsed time clamped to zero.
-5. **Idempotency & catch-up contract:**
+   - exact boundary fixtures (14 days, 30 days, 45 days, 60 days) yield identical outputs in Dart and PostgreSQL.
+7. **Idempotency, post-lock recheck & catch-up contract:**
    - same command and same VLE replay returns committed result;
+   - concurrent same-command calls serialize on VLE lock, recheck receipts, and return clean replays without primary-key collisions;
    - new command ID targeting an already-processed VLE binds a new command receipt and returns committed result without duplicating evidence or revisions;
    - reused command ID targeting a different VLE is denied;
    - concurrent manual processing and catch-up converge safely;
    - concurrent catch-up workers converge without race conditions;
    - exactly one logical processing event and effective evidence set per VLE.
-6. **First-observation initialization:**
+8. **First-observation initialization:**
    - first observation initializes `M_1 = P_1` (Option A);
    - below-level 100% initializes score to 100 while confidence remains constrained (<1.5 Low), preventing premature `Mastered` declaration.
-7. **Concurrency & rebuild determinism:**
+9. **Concurrency & rebuild determinism:**
    - first-write and subsequent projection rebuilds execute under transaction-scoped child+node serialization locks;
    - late-arriving older evidence rebuilds to identical canonical mastery projection.
-8. **Audit & security integrity:**
-   - append-only `mastery_state_revisions` and server-controlled `child_mastery_states`;
-   - cross-family and paired-child sibling RLS security tests pass;
+10. **Audit & security integrity:**
+   - direct client mutation denied for `learning_prerequisites`, `learning_catalog_versions`, and published `learning_nodes`;
+   - append-only mutation rejection on `learning_processing_events`, `learning_evidence_events`, and `mastery_state_revisions`;
+   - direct projection mutation denied;
+   - cross-family process/read denied;
+   - paired-child sibling isolation verified;
    - reward-independence invariance tests prove no XP/RP/reward input affects mastery or recommendations.
-9. **Build & review gates:**
+11. **Build & review gates:**
    - Android debug build and iOS simulator compile succeed in CI;
    - independent review passes and post-merge CI on `main` succeeds.
