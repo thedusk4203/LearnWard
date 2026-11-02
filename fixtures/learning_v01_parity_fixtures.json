@@ -1,0 +1,189 @@
+[
+  {
+    "scenario": "Option A initialization on Skill node",
+    "node_type": "skill",
+    "difficulty_level": "standard",
+    "observations": [
+      {
+        "performance_pct": 85,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 85,
+      "confidence_units": 1,
+      "confidence_band": "low",
+      "mastery_band": "mastery_candidate"
+    }
+  },
+  {
+    "scenario": "Option A initialization with Below-level 100%",
+    "node_type": "skill",
+    "difficulty_level": "below_level",
+    "observations": [
+      {
+        "performance_pct": 100,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 100,
+      "confidence_units": 0.5,
+      "confidence_band": "low",
+      "mastery_band": "mastery_candidate"
+    }
+  },
+  {
+    "scenario": "Subsequent EWMA on Skill node (alpha = 0.35)",
+    "node_type": "skill",
+    "difficulty_level": "standard",
+    "observations": [
+      {
+        "performance_pct": 80,
+        "occurred_offset_days": 20
+      },
+      {
+        "performance_pct": 100,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 87,
+      "confidence_units": 2,
+      "confidence_band": "medium",
+      "mastery_band": "mastery_candidate"
+    }
+  },
+  {
+    "scenario": "Subsequent EWMA on Topic node (alpha = 0.2625)",
+    "node_type": "topic",
+    "difficulty_level": "standard",
+    "observations": [
+      {
+        "performance_pct": 60,
+        "occurred_offset_days": 20
+      },
+      {
+        "performance_pct": 80,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 65.25,
+      "confidence_units": 1.5,
+      "confidence_band": "medium",
+      "mastery_band": "developing"
+    }
+  },
+  {
+    "scenario": "Subsequent EWMA on Domain node (alpha = 0.1750)",
+    "node_type": "domain",
+    "difficulty_level": "standard",
+    "observations": [
+      {
+        "performance_pct": 70,
+        "occurred_offset_days": 20
+      },
+      {
+        "performance_pct": 90,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 73.5,
+      "confidence_units": 1,
+      "confidence_band": "low",
+      "mastery_band": "secure"
+    }
+  },
+  {
+    "scenario": "Subsequent EWMA on Subject node (alpha = 0.1225)",
+    "node_type": "subject",
+    "difficulty_level": "standard",
+    "observations": [
+      {
+        "performance_pct": 70,
+        "occurred_offset_days": 20
+      },
+      {
+        "performance_pct": 90,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 72.45,
+      "confidence_units": 0.7,
+      "confidence_band": "low",
+      "mastery_band": "secure"
+    }
+  },
+  {
+    "scenario": "Below-level subsequent observation on Skill node (alpha = 0.1750)",
+    "node_type": "skill",
+    "difficulty_level": "below_level",
+    "observations": [
+      {
+        "performance_pct": 80,
+        "occurred_offset_days": 20,
+        "difficulty_override": "standard"
+      },
+      {
+        "performance_pct": 100,
+        "occurred_offset_days": 10,
+        "difficulty_override": "below_level"
+      }
+    ],
+    "expected": {
+      "mastery_score": 83.5,
+      "confidence_units": 1.5,
+      "confidence_band": "medium",
+      "mastery_band": "secure"
+    }
+  },
+  {
+    "scenario": "Mastered band declaration with High confidence and >= 2 VLEs",
+    "node_type": "skill",
+    "difficulty_level": "standard",
+    "observations": [
+      {
+        "performance_pct": 85,
+        "occurred_offset_days": 25
+      },
+      {
+        "performance_pct": 90,
+        "occurred_offset_days": 20
+      },
+      {
+        "performance_pct": 92,
+        "occurred_offset_days": 15
+      },
+      {
+        "performance_pct": 95,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 90.83,
+      "confidence_units": 4,
+      "confidence_band": "high",
+      "mastery_band": "mastered"
+    }
+  },
+  {
+    "scenario": "Emerging band when score is below 50",
+    "node_type": "skill",
+    "difficulty_level": "standard",
+    "observations": [
+      {
+        "performance_pct": 45,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 45,
+      "confidence_units": 1,
+      "confidence_band": "low",
+      "mastery_band": "emerging"
+    }
+  }
+]

@@ -49,6 +49,9 @@ abstract final class AppRoutes {
   static const String childWheel = '/child/wheel';
   static const String childWheelName = 'childWheel';
 
+  static const String childMastery = '/child/mastery';
+  static const String childMasteryName = 'childMastery';
+
   static const String childAddAssessment = '/child/assessments/add';
   static const String childAddAssessmentName = 'childAddAssessment';
 

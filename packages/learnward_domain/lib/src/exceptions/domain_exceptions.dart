@@ -55,5 +55,15 @@ final class InvalidWheelException implements Exception {
   final String message;
 
   @override
-  String toString() => 'InvalidWheelException: ';
+  String toString() => 'InvalidWheelException: $message';
+}
+
+/// Raised when learning or mastery domain invariants are violated.
+final class InvalidLearningException implements Exception {
+  const InvalidLearningException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'InvalidLearningException: $message';
 }

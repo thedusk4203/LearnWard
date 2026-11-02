@@ -149,3 +149,24 @@ final class WheelSpinId {
   @override
   String toString() => value;
 }
+
+/// Strongly-typed identifier for a [LearningNode].
+final class LearningNodeId {
+  LearningNodeId(this.value) {
+    if (value.trim().isEmpty) {
+      throw const InvalidLearningException('LearningNodeId cannot be empty.');
+    }
+  }
+
+  final String value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is LearningNodeId && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => value;
+}
