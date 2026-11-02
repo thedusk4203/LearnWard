@@ -126,47 +126,51 @@ select throws_ok(
 -- SECTION 3: HIERARCHY & PREREQUISITE INTEGRITY (Tests 11-16)
 -- ===========================================================================
 
--- Test 11: Cross-subject parent rejected
+-- Seed a test draft catalog for hierarchy mutation validation
+insert into public.learning_catalog_versions (version, status) values ('draft-test-v1', 'draft');
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values ('draft-test-v1', 'subject', 'math', 'draft-test-v1:subject:math', 'Math', null);
+
+-- Test 11: Cross-subject parent rejected with LW004
 select throws_ok(
   $$ insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
-     select 'pilot-v0.1', 'domain', 'english', 'pilot-v0.1:english:test_domain', 'Test Domain', id
-     from public.learning_nodes where catalog_version = 'pilot-v0.1' and canonical_key = 'pilot-v0.1:subject:math' $$,
-  'LW502',
+     select 'draft-test-v1', 'domain', 'english', 'draft-test-v1:english:test_domain', 'Test Domain', id
+     from public.learning_nodes where catalog_version = 'draft-test-v1' and canonical_key = 'draft-test-v1:subject:math' $$,
+  'LW004',
   NULL,
-  'Node pointing to parent in different subject is rejected with LW502'
+  'Node pointing to parent in different subject is rejected with LW004'
 );
 
 -- Test 12: Subject node cannot have parent_id
 select throws_ok(
   $$ insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
-     select 'pilot-v0.1', 'subject', 'other', 'pilot-v0.1:other:test_sub', 'Test Sub', id
-     from public.learning_nodes where catalog_version = 'pilot-v0.1' and canonical_key = 'pilot-v0.1:subject:math' $$,
-  '23514',
+     values ('draft-test-v1', 'subject', 'other', 'draft-test-v1:other:test_sub', 'Test Sub', 'b0000001-0000-0000-0000-000000000001'::uuid) $$,
+  'LW004',
   NULL,
-  'Subject node with non-null parent_id is rejected by check constraint'
+  'Subject node with non-null parent_id is rejected with LW004'
 );
 
 -- Test 13: Non-subject node must have parent_id
 select throws_ok(
   $$ insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
-     values ('pilot-v0.1', 'domain', 'math', 'pilot-v0.1:math:orphan_domain', 'Orphan Domain', null) $$,
-  '23514',
+     values ('draft-test-v1', 'domain', 'math', 'draft-test-v1:math:orphan_domain', 'Orphan Domain', null) $$,
+  'LW004',
   NULL,
-  'Non-subject node without parent_id is rejected by check constraint'
+  'Non-subject node without parent_id is rejected with LW004'
 );
 
--- Test 14: Prerequisite edge enforces composite foreign key (same catalog and subject)
+-- Test 14: Prerequisite edge enforces composite foreign key (cross-subject skill rejected with 23503)
 select throws_ok(
   $$ insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
-     values ('pilot-v0.1', 'english',
+     values ('pilot-v0.1', 'math',
              'b0000003-0000-0000-0000-000000000001'::uuid, -- Math skill
-             'b0000003-0000-0000-0000-000000000002'::uuid) $$, -- Math skill
+             'b0000003-0000-0000-0000-000000000003'::uuid) $$, -- English skill
   '23503',
   NULL,
-  'Prerequisite edge with mismatched subject_key is rejected by composite foreign key'
+  'Prerequisite edge linking cross-subject nodes is rejected by composite foreign key (23503)'
 );
 
--- Test 15: Prerequisite self-loop rejected
+-- Test 15: Prerequisite self-loop rejected by check constraint
 select throws_ok(
   $$ insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
      values ('pilot-v0.1', 'math',
@@ -174,17 +178,17 @@ select throws_ok(
              'b0000003-0000-0000-0000-000000000001'::uuid) $$,
   '23514',
   NULL,
-  'Prerequisite self-loop is rejected by check constraint'
+  'Prerequisite self-loop is rejected by check constraint (23514)'
 );
 
--- Test 16: Published catalog node mutation rejected (immutability LW505)
+-- Test 16: Published catalog node mutation rejected (immutability LW102)
 select throws_ok(
   $$ update public.learning_nodes
      set title = 'Mutated Title'
      where catalog_version = 'pilot-v0.1' and canonical_key = 'pilot-v0.1:subject:math' $$,
-  'LW505',
+  'LW102',
   NULL,
-  'Mutating nodes in active catalog is rejected with LW505 (immutability)'
+  'Mutating nodes in active catalog is rejected with LW102 (immutability)'
 );
 
 -- ===========================================================================
@@ -223,24 +227,24 @@ select throws_ok(
 -- Reset to service_role / superuser context
 reset role;
 
--- Test 20: Promote non-existent version fails with LW501
+-- Test 20: Promote non-existent version fails with P0002
 select throws_ok(
   $$ select public.promote_learning_catalog_version('non-existent-v1.0') $$,
-  'LW501',
+  'P0002',
   NULL,
-  'Promote non-existent draft version fails with LW501'
+  'Promote non-existent draft version fails with P0002'
 );
 
--- Test 21: Setup draft catalog pilot-v0.2 with incomplete roots and attempt promote (should fail LW503)
+-- Test 21: Setup draft catalog with incomplete roots and attempt promote (should fail LW004)
 insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2-bad', 'draft');
 insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
 values ('pilot-v0.2-bad', 'subject', 'math', 'pilot-v0.2-bad:subject:math', 'Math', null);
 
 select throws_ok(
   $$ select public.promote_learning_catalog_version('pilot-v0.2-bad') $$,
-  'LW503',
+  'LW004',
   NULL,
-  'Promoting draft catalog missing required 5 Subject roots fails with LW503'
+  'Promoting draft catalog missing required 5 Subject roots fails with LW004'
 );
 
 -- Test 22: Setup complete valid draft catalog pilot-v0.2 and promote successfully
@@ -291,14 +295,14 @@ select is(
 
 -- Test 26: Creating an assessment snapshots authoritative active catalog version ignoring caller input
 insert into public.assessments (
-  id, family_id, child_id, created_by_user_id, status, subject_key, title,
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
   occurred_at, raw_score, max_score, learning_catalog_version
 ) values (
   'a5000000-0000-0000-0000-000000000001'::uuid,
   'f5000000-0000-0000-0000-000000000001'::uuid,
   'c5000000-0000-0000-0000-000000000001'::uuid,
   '50000000-0000-0000-0000-000000000001'::uuid,
-  'draft', 'math', 'Math Quiz 1',
+  'draft', 'math', 'Mathematics', 'quiz', 'Math Quiz 1',
   now(), 85, 100, 'obsolete-v0.0'
 );
 
@@ -311,16 +315,31 @@ select is(
 -- Test 27: Updating verified assessment is rejected by frozen LW103
 update public.assessments set status = 'pending_review' where id = 'a5000000-0000-0000-0000-000000000001'::uuid;
 
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000001'::uuid,
+  '70000000-0000-0000-0000-000000000001'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000001'::uuid,
+  'verified',
+  'pending_review',
+  'verified',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
 insert into public.verified_learning_events (
-  id, assessment_id, family_id, child_id, verified_by_user_id, verified_at,
-  occurred_at, subject_key, raw_score, max_score, percentage_score, grade_level_snapshot
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id,
+  review_event_id, grade_level_snapshot
 ) values (
   'v5000000-0000-0000-0000-000000000001'::uuid,
   'a5000000-0000-0000-0000-000000000001'::uuid,
   'f5000000-0000-0000-0000-000000000001'::uuid,
   'c5000000-0000-0000-0000-000000000001'::uuid,
-  '50000000-0000-0000-0000-000000000001'::uuid,
-  now(), now(), 'math', 85, 100, 85.00, 4
+  'math', 'Mathematics', 'Math Quiz 1', 'quiz', 'normal',
+  85, 100, 8.50, now(), now(), '50000000-0000-0000-0000-000000000001'::uuid,
+  'e5000000-0000-0000-0000-000000000001'::uuid, 4
 );
 
 update public.assessments set status = 'verified' where id = 'a5000000-0000-0000-0000-000000000001'::uuid;
@@ -345,14 +364,14 @@ select is(
 
 -- Create a second assessment in draft state for mapping lifecycle tests
 insert into public.assessments (
-  id, family_id, child_id, created_by_user_id, status, subject_key, title,
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
   occurred_at, raw_score, max_score
 ) values (
   'a5000000-0000-0000-0000-000000000002'::uuid,
   'f5000000-0000-0000-0000-000000000001'::uuid,
   'c5000000-0000-0000-0000-000000000001'::uuid,
   '50000000-0000-0000-0000-000000000001'::uuid,
-  'draft', 'math', 'Math Quiz 2',
+  'draft', 'math', 'Mathematics', 'quiz', 'Math Quiz 2',
   now(), 90, 100
 );
 
@@ -412,7 +431,7 @@ select throws_ok(
   'Cross-family adult cannot set assessment mappings'
 );
 
--- Test 33: Mapping to node in different subject is rejected (LW502)
+-- Test 33: Mapping to node in different subject is rejected (LW004)
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
@@ -421,9 +440,9 @@ select throws_ok(
        'a5000000-0000-0000-0000-000000000002'::uuid,
        '[{"learning_node_id": "b0000003-0000-0000-0000-000000000003", "score_source": "assessment_total"}]'::jsonb
      ) $$,
-  'LW502',
+  'LW004',
   NULL,
-  'Mapping Math assessment to English node is rejected with LW502'
+  'Mapping Math assessment to English node is rejected with LW004'
 );
 
 -- Test 34: Duplicate component_key on same assessment is rejected
@@ -440,7 +459,7 @@ select throws_ok(
   'Duplicate component_key on same assessment is rejected'
 );
 
--- Test 35: Multiple assessment_total mappings rejected
+-- Test 35: Multiple assessment_total mappings rejected (LW004)
 select throws_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
@@ -449,12 +468,12 @@ select throws_ok(
          {"learning_node_id": "b0000003-0000-0000-0000-000000000002", "score_source": "assessment_total"}
         ]'::jsonb
      ) $$,
-  'LW507',
+  'LW004',
   NULL,
-  'Multiple assessment_total mappings rejected with LW507'
+  'Multiple assessment_total mappings rejected with LW004'
 );
 
--- Test 36: Mixed score sources on the same node rejected (component_score + item_group)
+-- Test 36: Mixed score sources on the same node rejected (LW004)
 select throws_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
@@ -463,9 +482,9 @@ select throws_ok(
          {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "item_group", "component_key": "c2", "item_count": 5, "correct_count": 4}
         ]'::jsonb
      ) $$,
-  'LW507',
+  'LW004',
   NULL,
-  'Mixed score sources on the same node rejected with LW507'
+  'Mixed score sources on the same node rejected with LW004'
 );
 
 -- Test 37: Active adult sets valid assessment mappings successfully
@@ -504,16 +523,31 @@ select throws_ok(
 
 -- Test 40: Cannot map verified assessment
 reset role;
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000002'::uuid,
+  '70000000-0000-0000-0000-000000000002'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000002'::uuid,
+  'verified',
+  'pending_review',
+  'verified',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
 insert into public.verified_learning_events (
-  id, assessment_id, family_id, child_id, verified_by_user_id, verified_at,
-  occurred_at, subject_key, raw_score, max_score, percentage_score, grade_level_snapshot
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id,
+  review_event_id, grade_level_snapshot
 ) values (
   'v5000000-0000-0000-0000-000000000002'::uuid,
   'a5000000-0000-0000-0000-000000000002'::uuid,
   'f5000000-0000-0000-0000-000000000001'::uuid,
   'c5000000-0000-0000-0000-000000000001'::uuid,
-  '50000000-0000-0000-0000-000000000001'::uuid,
-  now(), now(), 'math', 90, 100, 90.00, 4
+  'math', 'Mathematics', 'Math Quiz 2', 'quiz', 'normal',
+  90, 100, 9.00, now(), now(), '50000000-0000-0000-0000-000000000001'::uuid,
+  'e5000000-0000-0000-0000-000000000002'::uuid, 4
 );
 update public.assessments set status = 'verified' where id = 'a5000000-0000-0000-0000-000000000002'::uuid;
 
@@ -637,15 +671,15 @@ select is(
   'New command ID on processed VLE binds receipt and returns completed result'
 );
 
--- Test 52: Reused command ID with different VLE fails with LW101
+-- Test 52: Reused command ID with different VLE fails with 42501
 select throws_ok(
   $$ select public.process_learning_event(
        '00000000-0000-0000-0000-000000000001'::uuid,
        'v5000000-0000-0000-0000-000000000001'::uuid
      ) $$,
-  'LW101',
+  '42501',
   NULL,
-  'Reused command ID with different VLE fails with LW101'
+  'Reused command ID with different VLE fails with 42501'
 );
 
 -- ===========================================================================
@@ -856,29 +890,29 @@ select throws_ok(
   'Direct client write to learning_processing_events is denied'
 );
 
--- Test 72: learning_evidence_events is strictly append-only (UPDATE denied)
+-- Test 72: learning_evidence_events is strictly append-only (UPDATE denied with LW102)
 reset role;
 select throws_ok(
   $$ update public.learning_evidence_events set performance_pct = 99 $$,
-  'LW505',
+  'LW102',
   NULL,
-  'learning_evidence_events is append-only: UPDATE rejected with LW505'
+  'learning_evidence_events is append-only: UPDATE rejected with LW102'
 );
 
--- Test 73: mastery_state_revisions is strictly append-only (DELETE denied)
+-- Test 73: mastery_state_revisions is strictly append-only (DELETE denied with LW102)
 select throws_ok(
   $$ delete from public.mastery_state_revisions $$,
-  'LW505',
+  'LW102',
   NULL,
-  'mastery_state_revisions is append-only: DELETE rejected with LW505'
+  'mastery_state_revisions is append-only: DELETE rejected with LW102'
 );
 
--- Test 74: learning_processing_events is strictly append-only (UPDATE denied)
+-- Test 74: learning_processing_events is strictly append-only (UPDATE denied with LW102)
 select throws_ok(
   $$ update public.learning_processing_events set status = 'failed' $$,
-  'LW505',
+  'LW102',
   NULL,
-  'learning_processing_events is append-only: UPDATE rejected with LW505'
+  'learning_processing_events is append-only: UPDATE rejected with LW102'
 );
 
 -- Test 75: Reward / economy independence (mutating balances produces zero change in child_mastery_states)

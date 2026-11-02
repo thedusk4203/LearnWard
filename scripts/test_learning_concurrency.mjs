@@ -96,25 +96,35 @@ async function main() {
   const vleId2 = crypto.randomUUID();
   const cmd1 = crypto.randomUUID();
   const cmd2 = crypto.randomUUID();
+  const revId1 = crypto.randomUUID();
+  const revId2 = crypto.randomUUID();
+  const revCmd1 = crypto.randomUUID();
+  const revCmd2 = crypto.randomUUID();
 
   // Create two assessments and verify them (one at t1, one at t2)
   const createAssessSql = `
-    insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, title, occurred_at, raw_score, max_score)
+    insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title, occurred_at, raw_score, max_score)
     values
-      ('${assessId1}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Quiz 1', now() - interval '2 days', 80, 100),
-      ('${assessId2}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Quiz 2', now() - interval '1 day', 100, 100);
+      ('${assessId1}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', 'Quiz 1', now() - interval '2 days', 80, 100),
+      ('${assessId2}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', 'Quiz 2', now() - interval '1 day', 100, 100);
 
     -- Map both assessments to Single Digit Addition
-    insert into public.assessment_learning_mappings (family_id, assessment_id, learning_node_id, score_source, component_key, raw_score, max_score)
+    insert into public.assessment_learning_mappings (family_id, assessment_id, learning_node_id, score_source, component_key, component_raw_score, component_max_score)
     values
       ('${familyId}', '${assessId1}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 80, 100),
       ('${familyId}', '${assessId2}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 100, 100);
 
-    -- Insert verified learning events
-    insert into public.verified_learning_events (id, assessment_id, family_id, child_id, verified_by_user_id, verified_at, occurred_at, subject_key, raw_score, max_score, percentage_score, grade_level_snapshot)
+    -- Insert assessment review events
+    insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
     values
-      ('${vleId1}', '${assessId1}', '${familyId}', '${childId}', '${ownerId}', now() - interval '2 days', now() - interval '2 days', 'math', 80, 100, 80.00, 4),
-      ('${vleId2}', '${assessId2}', '${familyId}', '${childId}', '${ownerId}', now() - interval '1 day', now() - interval '1 day', 'math', 100, 100, 100.00, 4);
+      ('${revId1}', '${revCmd1}', '${familyId}', '${assessId1}', 'verified', 'pending_review', 'verified', '${ownerId}'),
+      ('${revId2}', '${revCmd2}', '${familyId}', '${assessId2}', 'verified', 'pending_review', 'verified', '${ownerId}');
+
+    -- Insert verified learning events
+    insert into public.verified_learning_events (id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot)
+    values
+      ('${vleId1}', '${assessId1}', '${familyId}', '${childId}', 'math', 'Mathematics', 'Quiz 1', 'quiz', 'normal', 80, 100, 8.00, now() - interval '2 days', now() - interval '2 days', '${ownerId}', '${revId1}', 4),
+      ('${vleId2}', '${assessId2}', '${familyId}', '${childId}', 'math', 'Mathematics', 'Quiz 2', 'quiz', 'normal', 100, 100, 10.00, now() - interval '1 day', now() - interval '1 day', '${ownerId}', '${revId2}', 4);
 
     update public.assessments set status = 'verified' where id in ('${assessId1}', '${assessId2}');
   `;
@@ -230,15 +240,24 @@ async function main() {
   const assessId3 = crypto.randomUUID();
   const vleId3 = crypto.randomUUID();
   const manualCmd = crypto.randomUUID();
+  const revId3 = crypto.randomUUID();
+  const revCmd3 = crypto.randomUUID();
 
   const addVle3Sql = `
-    insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, title, occurred_at, raw_score, max_score)
-    values ('${assessId3}', '${familyId}', '${childId}', '${ownerId}', 'verified', 'math', 'Quiz 3', now(), 95, 100);
+    insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title, occurred_at, raw_score, max_score)
+    values ('${assessId3}', '${familyId}', '${childId}', '${ownerId}', 'verified', 'math', 'Mathematics', 'quiz', 'Quiz 3', now(), 95, 100);
 
-    insert into public.verified_learning_events (id, assessment_id, family_id, child_id, verified_by_user_id, verified_at, occurred_at, subject_key, raw_score, max_score, percentage_score, grade_level_snapshot)
-    values ('${vleId3}', '${assessId3}', '${familyId}', '${childId}', '${ownerId}', now(), now(), 'math', 95, 100, 95.00, 4);
+    insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
+    values ('${revId3}', '${revCmd3}', '${familyId}', '${assessId3}', 'verified', 'pending_review', 'verified', '${ownerId}');
+
+    insert into public.verified_learning_events (id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot)
+    values ('${vleId3}', '${assessId3}', '${familyId}', '${childId}', 'math', 'Mathematics', 'Quiz 3', 'quiz', 'normal', 95, 100, 9.50, now(), now(), '${ownerId}', '${revId3}', 4);
   `;
-  await runPsql(addVle3Sql);
+  const addVle3Res = await runPsql(addVle3Sql);
+  if (addVle3Res.code !== 0) {
+    console.error('Failed to create VLE 3:', addVle3Res.stderr);
+    process.exit(1);
+  }
 
   const catchUpSql = `
     set local role authenticated;

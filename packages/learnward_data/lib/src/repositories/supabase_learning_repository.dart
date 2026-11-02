@@ -66,8 +66,10 @@ final class SupabaseLearningRepository implements LearningRepository {
         learningNodeId: LearningNodeId(map['learning_node_id'] as String),
         scoreSource: ScoreSource.fromValue(map['score_source'] as String),
         componentKey: map['component_key'] as String?,
-        rawScore: (map['raw_score'] as num?)?.toDouble(),
-        maxScore: (map['max_score'] as num?)?.toDouble(),
+        rawScore: ((map['raw_score'] ?? map['component_raw_score']) as num?)
+            ?.toDouble(),
+        maxScore: ((map['max_score'] ?? map['component_max_score']) as num?)
+            ?.toDouble(),
         itemCount: (map['item_count'] as num?)?.toInt(),
         correctCount: (map['correct_count'] as num?)?.toInt(),
       );
@@ -96,8 +98,10 @@ final class SupabaseLearningRepository implements LearningRepository {
         learningNodeId: LearningNodeId(map['learning_node_id'] as String),
         scoreSource: ScoreSource.fromValue(map['score_source'] as String),
         componentKey: map['component_key'] as String?,
-        rawScore: (map['raw_score'] as num?)?.toDouble(),
-        maxScore: (map['max_score'] as num?)?.toDouble(),
+        rawScore: ((map['raw_score'] ?? map['component_raw_score']) as num?)
+            ?.toDouble(),
+        maxScore: ((map['max_score'] ?? map['component_max_score']) as num?)
+            ?.toDouble(),
         itemCount: (map['item_count'] as num?)?.toInt(),
         correctCount: (map['correct_count'] as num?)?.toInt(),
       );

@@ -124,18 +124,25 @@ async function main() {
       const assessId = crypto.randomUUID();
       const vleId = crypto.randomUUID();
       const cmdId = crypto.randomUUID();
-      const diff = obs.difficulty_override || fixture.difficulty_level || 'standard';
+      const revId = crypto.randomUUID();
+      const revCmd = crypto.randomUUID();
+      const rawDiff = obs.difficulty_override || fixture.difficulty_level || 'standard';
+      const dbDifficulty = rawDiff === 'below_level' ? 'below_level' : 'normal';
       const offsetDays = obs.occurred_offset_days || (10 - obsIdx);
+      const normScore = ((obs.performance_pct / 100.0) * 10.0).toFixed(2);
 
       const obsSql = `
-        insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, title, occurred_at, raw_score, max_score, learning_catalog_version)
-        values ('${assessId}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Quiz ${obsIdx}', now() - interval '${offsetDays} days', ${obs.performance_pct}, 100, 'pilot-v0.1');
+        insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, difficulty, title, occurred_at, raw_score, max_score, learning_catalog_version)
+        values ('${assessId}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', '${dbDifficulty}', 'Quiz ${obsIdx}', now() - interval '${offsetDays} days', ${obs.performance_pct}, 100, 'pilot-v0.1');
 
-        insert into public.assessment_learning_mappings (family_id, assessment_id, learning_node_id, score_source, component_key, raw_score, max_score)
+        insert into public.assessment_learning_mappings (family_id, assessment_id, learning_node_id, score_source, component_key, component_raw_score, component_max_score)
         values ('${familyId}', '${assessId}', '${nodeId}', 'component_score', 'comp_1', ${obs.performance_pct}, 100);
 
-        insert into public.verified_learning_events (id, assessment_id, family_id, child_id, verified_by_user_id, verified_at, occurred_at, subject_key, raw_score, max_score, percentage_score, grade_level_snapshot)
-        values ('${vleId}', '${assessId}', '${familyId}', '${childId}', '${ownerId}', now() - interval '${offsetDays} days', now() - interval '${offsetDays} days', 'math', ${obs.performance_pct}, 100, ${obs.performance_pct}, 4);
+        insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
+        values ('${revId}', '${revCmd}', '${familyId}', '${assessId}', 'verified', 'pending_review', 'verified', '${ownerId}');
+
+        insert into public.verified_learning_events (id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot)
+        values ('${vleId}', '${assessId}', '${familyId}', '${childId}', 'math', 'Mathematics', 'Quiz ${obsIdx}', 'quiz', '${dbDifficulty}', ${obs.performance_pct}, 100, ${normScore}, now() - interval '${offsetDays} days', now() - interval '${offsetDays} days', '${ownerId}', '${revId}', 4);
 
         update public.assessments set status = 'verified' where id = '${assessId}';
 

@@ -685,8 +685,8 @@ begin
 
       -- Parse component fields
       v_comp_key := v_mapping ->> 'component_key';
-      v_raw := (v_mapping ->> 'component_raw_score')::numeric;
-      v_max := (v_mapping ->> 'component_max_score')::numeric;
+      v_raw := coalesce((v_mapping ->> 'component_raw_score')::numeric, (v_mapping ->> 'raw_score')::numeric);
+      v_max := coalesce((v_mapping ->> 'component_max_score')::numeric, (v_mapping ->> 'max_score')::numeric);
       v_items := (v_mapping ->> 'item_count')::integer;
       v_correct := (v_mapping ->> 'correct_count')::integer;
 
@@ -730,7 +730,9 @@ begin
     'score_source', m.score_source,
     'component_key', m.component_key,
     'component_raw_score', m.component_raw_score,
+    'raw_score', m.component_raw_score,
     'component_max_score', m.component_max_score,
+    'max_score', m.component_max_score,
     'item_count', m.item_count,
     'correct_count', m.correct_count
   )) into v_result
@@ -784,7 +786,9 @@ begin
     'score_source', m.score_source,
     'component_key', m.component_key,
     'component_raw_score', m.component_raw_score,
+    'raw_score', m.component_raw_score,
     'component_max_score', m.component_max_score,
+    'max_score', m.component_max_score,
     'item_count', m.item_count,
     'correct_count', m.correct_count,
     'created_at', m.created_at
@@ -1034,7 +1038,8 @@ declare
   v_processing_id uuid;
 begin
   -- 1. Load VLE
-  select id, assessment_id, family_id, child_id, subject_key, score, difficulty, type,
+  select id, assessment_id, family_id, child_id, subject_key,
+         normalized_score as score, difficulty, assessment_type as type,
          occurred_at, verified_at, learning_catalog_version, grade_level_snapshot
   into v_vle
   from public.verified_learning_events

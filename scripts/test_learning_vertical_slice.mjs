@@ -73,8 +73,8 @@ async function main() {
 
   console.log('2. Creating assessment draft...');
   const createDraftSql = `
-    insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, title, occurred_at, raw_score, max_score, learning_catalog_version)
-    values ('${assessId}', '${familyId}', '${childId}', '${ownerId}', 'draft', 'math', 'Addition Mastery Quiz', now(), 18, 20, 'obsolete-v0.0');
+    insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title, occurred_at, raw_score, max_score, learning_catalog_version)
+    values ('${assessId}', '${familyId}', '${childId}', '${ownerId}', 'draft', 'math', 'Mathematics', 'quiz', 'Addition Mastery Quiz', now(), 18, 20, 'obsolete-v0.0');
 
     select learning_catalog_version from public.assessments where id = '${assessId}';
   `;
@@ -111,9 +111,14 @@ async function main() {
   console.log('  -> PASS: Successfully mapped 2 components to Single Digit Addition.');
 
   console.log('5. Parent verifies assessment...');
+  const revId = crypto.randomUUID();
+  const revCmd = crypto.randomUUID();
   const verifySql = `
-    insert into public.verified_learning_events (id, assessment_id, family_id, child_id, verified_by_user_id, verified_at, occurred_at, subject_key, raw_score, max_score, percentage_score, grade_level_snapshot)
-    values ('${vleId}', '${assessId}', '${familyId}', '${childId}', '${ownerId}', now(), now(), 'math', 18, 20, 90.00, 3);
+    insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
+    values ('${revId}', '${revCmd}', '${familyId}', '${assessId}', 'verified', 'pending_review', 'verified', '${ownerId}');
+
+    insert into public.verified_learning_events (id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot)
+    values ('${vleId}', '${assessId}', '${familyId}', '${childId}', 'math', 'Mathematics', 'Addition Mastery Quiz', 'quiz', 'normal', 18, 20, 9.00, now(), now(), '${ownerId}', '${revId}', 3);
 
     update public.assessments set status = 'verified' where id = '${assessId}';
 
@@ -189,8 +194,8 @@ async function main() {
     select public.promote_learning_catalog_version('pilot-v0.2');
 
     -- Create new assessment under new active catalog
-    insert into public.assessments (family_id, child_id, created_by_user_id, status, subject_key, title, occurred_at, raw_score, max_score)
-    values ('${familyId}', '${childId}', '${ownerId}', 'draft', 'math', 'New Era Quiz', now(), 10, 10)
+    insert into public.assessments (family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title, occurred_at, raw_score, max_score)
+    values ('${familyId}', '${childId}', '${ownerId}', 'draft', 'math', 'Mathematics', 'quiz', 'New Era Quiz', now(), 10, 10)
     returning learning_catalog_version;
   `;
   const promoteRes = await runPsql(promoteSql);
