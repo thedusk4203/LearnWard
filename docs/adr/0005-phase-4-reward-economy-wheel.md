@@ -21,7 +21,21 @@ The reward economy maintains **exactly one spendable reward currency**: **Reward
 
 The mobile client is treated as an untrusted presentation layer:
 1. The client issues an RPC request (`spin_reward_wheel`) containing a client-generated UUID command ID.
-2. The server acquires a row-level lock on `child_balances`, validates balance $\ge \text{spin\_cost}$, checks the daily spin cap (family-local calendar day), snapshots the active reward pool ($\ge 3$ distinct items required), evaluates selection weights, generates server-authoritative pseudorandomness (PostgreSQL `random()`), selects the winner, writes the debit and redemption records, and commits atomically.
+2. The server executes a strict, fail-closed ordering:
+   - Input validation (`p_command_id`, `p_child_id` non-null)
+   - Authenticate (`auth.uid() is not null`)
+   - Child lookup & authoritative family derivation
+   - Authorize caller (active family adult or paired child device) evaluated strictly before inspecting configuration or timezone to prevent oracle side channels
+   - Inspect `command_receipts`: if valid replay, return committed historical outcome immediately (survives subsequent timezone corruption)
+   - NEW command only: validate family timezone fail-closed (`LW004`)
+   - Lock `family_wheel_settings FOR SHARE` (fails with `LW206` if disabled)
+   - Acquire `LOCK TABLE public.rewards IN SHARE MODE` to stabilize catalog mutations and prevent statement-snapshot skew
+   - Materialize one authoritative child-eligible pool; validate pool count $\ge 3$ (`LW203` if fewer)
+   - Lock `child_balances FOR UPDATE`; validate sufficient balance $\ge \text{spin\_cost\_minor}$ (`LW201` if insufficient)
+   - Evaluate family-local calendar day spin cap (`LW202` if reached)
+   - Server-authoritative pseudorandom draw (PostgreSQL `random()`)
+   - Atomic writes (`reward_redemptions`, `wheel_spins`, `rp_ledger` debit, `child_balances` decrement, `command_receipts`)
+   - Return committed result
 3. The server persists a complete `selection_snapshot` in `wheel_spins`, capturing:
    - Config version (`wheel-v0.1`)
    - Spin cost
@@ -48,8 +62,17 @@ Rather than forcing parents to calculate percentages that must sum to 100%, pare
 
 The server calculates probability dynamically as:
 $$P(\text{reward}_i) = \frac{w_i}{\sum_{j=1}^{N} w_j}$$
-- The parent UI displays tier labels and the computed probability for the current active pool. It **does not** display static fake percentages attached to tier definitions.
-- The mobile UI maps these weights directly to visual wedge widths on the wheel without deceptive visuals.
+- **Parent Wheel Settings:** The family-level screen displays configured rewards and relative tier weights:
+  ```text
+  Configured Wheel Rewards
+  N active Wheel rewards configured
+
+  Common — weight 60 — N configured items
+  Special — weight 30 — N configured items
+  Rare — weight 10 — N configured items
+  ```
+  It explains: *"Actual probability depends on which rewards are eligible for each child."* and adds: *"Each child needs at least 3 active rewards that are eligible for them before they can spin. Child-targeted rewards count only for that child."* It does **not** display one family-wide computed percentage because `target_child_id` makes eligible pools child-specific.
+- **Child Wheel Presentation:** The child's actual Wheel wedges and probabilities are derived from that child's current eligible pool / server-committed `selection_snapshot`. The mobile UI maps these weights directly to visual wedge widths on the wheel without deceptive visuals.
 
 **Consequences:** Parents can add or remove rewards without broken percentage mathematics. Children see honest visual wedges that accurately reflect underlying mathematical odds without deception.
 
@@ -114,11 +137,18 @@ To defend against cross-family foreign key contamination and data mismatch:
    v_today_start := (v_local_date::timestamp at time zone v_family_tz);
    v_today_end := ((v_local_date + 1)::timestamp at time zone v_family_tz);
    ```
-2. **DST Invariant:** Both boundaries are derived directly from local calendar dates. The daily cap window is strictly `[local midnight today, local midnight tomorrow)`, correctly accommodating 23-hour spring-forward and 25-hour fall-back days without boundary drift. If timezone is unrecognized, the RPC fails closed (`LW206: Invalid family timezone`) before any debit.
-3. **Aligned Configuration Ranges:**
+2. **DST Invariant:** Both boundaries are derived directly from local calendar dates. The daily cap window is strictly `[local midnight today, local midnight tomorrow)`, correctly accommodating 23-hour spring-forward and 25-hour fall-back days without boundary drift. If timezone is missing or unrecognized, the RPC fails closed (`LW004: Invalid family timezone`) before any debit.
+3. **Aligned Configuration Ranges & Canonical Error Codes:**
    - Wheel spin cost: Default = 10 RP (1,000 minor units). Parent range = 5–50 RP ($500 \le \text{cost} \le 5000$).
    - Daily spin cap: Default = 3 spins/day. Parent range = 1–5 spins/day.
    - Minimum active eligible Wheel pool: Exactly 3 distinct items required before spinning is allowed (`LW203`).
+   - Canonical Error Code Mapping:
+     - `LW004`: Missing or invalid family timezone
+     - `LW201`: Insufficient spendable RP balance
+     - `LW202`: Daily spin cap reached for child's local calendar day
+     - `LW203`: Active eligible Wheel pool has fewer than 3 items
+     - `LW204`: Invalid redemption state transition (already terminal)
+     - `LW206`: Celebration Wheel is disabled for family
 
 ---
 
@@ -134,15 +164,19 @@ With permissions:
 REVOKE ALL FROM PUBLIC, anon;
 GRANT EXECUTE TO authenticated;
 ```
-And an immutable 8-step internal order:
-1. `auth.uid() is not null` (fail closed if unauthenticated).
-2. Authoritative resource load and family resolution from database state.
-3. Verify caller authorization against resolved family (adult or linked child).
-4. ONLY AFTER authorization succeeds: inspect `command_receipts` for replay.
-5. Precondition & row-lock verification (`FOR UPDATE`).
-6. State mutation (ledgers, redemptions, projections).
-7. Record command receipt.
-8. Commit and return.
+And an immutable fail-closed execution order:
+1. Input validation (`p_command_id`, `p_child_id` non-null -> `22000`).
+2. Authentication check: `auth.uid() is not null` (fail closed `42501` if unauthenticated).
+3. Authoritative child lookup and family derivation from database state (`P0002`).
+4. Authorize caller against resolved family (adult or paired child device -> `42501`) strictly BEFORE any timezone or configuration inspection to prevent oracle side channels.
+5. ONLY AFTER authorization succeeds: inspect `command_receipts` for replay. Valid replays return committed historical results immediately (surviving subsequent timezone corruption).
+6. NEW commands only: validate family timezone fail-closed (`LW004`).
+7. Lock settings (`family_wheel_settings FOR SHARE` -> `LW206` if disabled) and stabilize catalog (`LOCK TABLE public.rewards IN SHARE MODE`).
+8. Materialize authoritative child-eligible pool ($\ge 3$ items required -> `LW203`).
+9. Precondition verification: lock `child_balances FOR UPDATE` and validate sufficient balance $\ge \text{cost}$ (`LW201`).
+10. Check family-local calendar day cap (`LW202`).
+11. State mutation: pseudorandom selection, write redemption, spin snapshot, negative ledger debit, balance decrement, and command receipt.
+12. Commit and return.
 
 **Consequences:** Callers from Family B can never probe receipts or view another family's replay data. Replays are authorized prior to data return.
 

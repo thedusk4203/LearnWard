@@ -62,8 +62,10 @@ Phase 4 establishes the consumption half of LearnWard's reward economy: empoweri
 ### A. Currency Model (Model C)
 - **Permanent Progression:** Study XP is permanent and strictly non-spendable. It accumulates indefinitely to reflect longitudinal learning effort.
 - **Unified Spendable Currency:** Reward Points (RP) is the **only** spendable family reward currency.
-- **Integer Representation:** RP is stored as non-negative integer minor units (`amount_minor` in `rp_ledger`, `rp_balance_minor` in `child_balances`), where:
-  $$100\text{ minor units} = 1.00\text{ RP}$$
+- **Integer Representation & Ledger Signedness:**
+  - `rp_ledger.amount_minor`: A **signed** integer economic delta representing changes to the child's balance. Positive amounts represent credits (e.g. Growth awards, cancellation refunds), while negative amounts represent debits (e.g. Store redemptions, Wheel spins).
+  - `child_balances.rp_balance_minor`: The cached spendable balance projection, strictly constrained to non-negative integers ($\ge 0$).
+  - Minor unit ratio: $100\text{ minor units} = 1.00\text{ RP}$.
 - **Zero Real-Money Value:** RP has no cash value, cannot be purchased with real currency, cannot be cashed out, and is never displayed with real-world currency symbols (`$`, `USD`) in child prompts.
 - **No Direct Mutation:** Neither children nor parents can directly mutate balance tables. Balances change exclusively via audited ledger events.
 
@@ -238,7 +240,8 @@ To guarantee client-side idempotency across network drops, timeouts, and app pro
   - `SpinRewardWheel` and `RedeemStoreReward` use cases record pending command intents to local SQLite (`pending_reward_commands` table) **before** network dispatch.
   - Pending records store `operation`, `command_id`, `family_id`, `child_id`, `reward_id`, and `created_at`.
 - **Process Restart Persistence:**
-  - Proved with real file-backed SQLite restart tests: unconfirmed commands survive application process death, database connection close/reopen, and device reboot.
+  - **Verified Automated Evidence:** Automated tests prove file-backed persistence across database close/reopen and reconstruction of application/data-layer instances on a real SQLite file, modeling process-restart recovery.
+  - **Architectural Expectation:** Because the journal is stored in persistent SQLite on the filesystem, it is designed to survive normal device restarts, but an actual hardware/device reboot was not part of the automated Phase 4 CI evidence.
   - On retry, the application reuses the exact same journaled `command_id`, preventing duplicate debits or multi-spin balance corruption.
 - **Neutral Recovery UX:**
   - In `ChildWheelScreen`, if an uncertain failure occurs and a pending journaled command remains, definite error wording (`Could not spin`, `Spin failed`) is suppressed.
@@ -256,9 +259,9 @@ The canonical ledger provenance for all Phase 4 economic operations:
 |:---|:---|:---|:---|:---|:---|
 | Store Redemption Debit | `reward_redemption` | `redemption_id` | `store_redemption` | `-cost_minor` | `{ "reward_id": "..." }` |
 | Celebration Wheel Debit | `reward_redemption` | `redemption_id` | `wheel_spin` | `-spin_cost_minor` | `{ "spin_id": "...", "reward_id": "..." }` |
-| Redemption Cancellation Refund | `reward_redemption` | `redemption_id` | `redemption_cancellation_refund` | `+cost_minor` | `{ "redemption_id": "...", "cancelled_reason": "..." }` |
+| Redemption Cancellation Refund | `reward_redemption` | `redemption_id` | `redemption_refund` | `+rp_cost_minor` | `{ "cancellation_reason": "...", "reward_id": "..." }` |
 
-- **Architectural Rationale:** Anchoring debits and cancellation refunds to `reward_redemption` ensures that the financial entity identity is preserved identically across debits and refunds. `wheel_spins` provides the immutable draw audit snapshot, linked via composite foreign key.
+- **Architectural Rationale:** Anchoring debits and cancellation refunds to `reward_redemption` ensures that the financial entity identity is preserved identically across debits and refunds. Cancellation refunds use natural idempotency key `idempotency_key = 'rp:refund:' || redemption_id`. `wheel_spins` provides the immutable draw audit snapshot, linked via composite foreign key.
 - **Reconciliation Invariant:**
   $$\text{child\_balances.rp\_balance\_minor} == \sum \text{rp\_ledger.amount\_minor}$$
   Verified via single-MVCC-snapshot `public.reconcile_child_balance(child_id)` across all integration scenarios.
