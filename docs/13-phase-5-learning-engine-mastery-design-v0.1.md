@@ -139,6 +139,7 @@ Deliver:
 - catalog version registry (`learning_catalog_versions`),
 - deterministic legacy catalog migration (`pilot-v0.1`),
 - versioned learning hierarchy (`learning_nodes`),
+- prerequisite skill graph schema & catalog publication validation (`learning_prerequisites` with composite version+subject FKs, Skill-only and DAG promotion gate; empty prerequisite graph is valid in 5.1),
 - assessment learning mappings (`pending_review` only),
 - immutable learning evidence atoms with diagnostic facts (`item_count`, `correct_count`),
 - deterministic Mastery Engine v0.1 (EWMA, Option A initialization),
@@ -154,7 +155,7 @@ Deliver:
 
 Deliver:
 
-- explicit prerequisite skill graph (`learning_prerequisites`),
+- prerequisite graph traversal for Unlock/Explore candidate selection,
 - dynamic Freshness (14d/45d boundaries relative to `as_of`),
 - deterministic Recovery signal (`review_suggested` with 30-day recency/expiry window),
 - next-challenge candidate engine (up to three candidates),
@@ -200,8 +201,9 @@ Atomic promotion contract & lifecycle metadata:
   REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM PUBLIC;
   REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM anon;
   REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM authenticated;
+  GRANT EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) TO service_role;
   ```
-  Only trusted platform/service-role execution or release migrations may invoke it.
+  Only trusted platform/service-role execution or release migrations may invoke it. Execution is explicitly granted to `service_role` while revoked from `PUBLIC`, `anon`, and `authenticated`.
   When executed, the trusted promotion routine:
   1. Serializes promotion attempts via coordination locking (e.g. advisory or table lock on `learning_catalog_versions`);
   2. Locks and validates that `p_new_version` exists and has `status = 'draft'` before retiring the current active catalog;
@@ -328,6 +330,9 @@ Integrity and traversal rules:
 7. **Direct client mutation revoked:** direct client writes (`INSERT`, `UPDATE`, `DELETE`) are denied via RLS.
 
 Because clients cannot mutate this graph in v0.1, DAG validation may run as migration/content validation rather than an expensive public runtime mutation path.
+
+### Delivery alignment across Phase 5 slices
+The schema for `learning_prerequisites`, its composite foreign keys, and the promotion gate validating Skill-only endpoints and acyclic DAG invariants belong to **Phase 5.1**. This ensures that `promote_learning_catalog_version` and the published catalog immutability contract are fully grounded from Day 1. The initial `pilot-v0.1` catalog may contain an empty prerequisite graph; an empty graph is explicitly valid and DAG validation treats empty as valid. Prerequisite graph traversal for Unlock/Explore candidate selection is consumed in **Phase 5.2**.
 
 ---
 
@@ -1268,8 +1273,12 @@ Client-facing functions (`set_assessment_learning_mappings`, `process_learning_e
 ### Platform-Only Administration
 Global curriculum administration functions (such as catalog publication, content releases, and `promote_learning_catalog_version`) are strictly platform deployment/administration concerns:
 - `EXECUTE` is revoked from `PUBLIC`, `anon`, and `authenticated`,
+- `EXECUTE` is explicitly granted to `service_role`:
+  ```sql
+  GRANT EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) TO service_role;
+  ```
 - active family adults and children have zero curriculum administration privileges,
-- callable exclusively by release migrations and trusted service-role execution.
+- callable exclusively by release migrations and trusted platform/service-role execution.
 
 Shared Child Mode under an adult session remains UX containment, not a cryptographic sibling boundary.
 
@@ -1405,7 +1414,7 @@ At minimum implementation must prove:
 5. **Old `pilot-v0.1` assessment verified after rollout:** An assessment created under `pilot-v0.1` verified after `pilot-v0.2` promotion copies `pilot-v0.1` into the VLE.
 6. **Pilot catalog completeness:** `pilot-v0.1` contains exactly one Subject root node for every canonical subject key (`math`, `english`, `literature`, `science`, `other`).
 7. **Catalog registry promotion procedure:** Trusted promotion locks, validates `draft` target exists, validates publishability (all 5 roots, valid hierarchy, Skill-only acyclic DAG), atomically retires previous active and activates candidate, and asserts exactly one active row exists before commit; failure rolls back and raises SQLSTATE `LW501` ('No active learning catalog'). Rejects invalid target, already-active target, retired target, incomplete draft catalog, and concurrent promotions. None leaves zero active catalogs.
-8. **Prerequisite composite schema & validation:** `learning_prerequisites` carries `subject_key` with composite FKs to `learning_nodes(catalog_version, subject_key, id)`, enforcing same version and same subject at schema level. Edge linking nodes across subjects or versions is rejected at INSERT. Promotion to active rejects draft catalog if edges link non-Skill nodes or form a cycle.
+8. **Prerequisite composite schema & validation:** `learning_prerequisites` carries `subject_key` with composite FKs to `learning_nodes(catalog_version, subject_key, id)`, enforcing same version and same subject at schema level. Edge linking nodes across subjects or versions is rejected at INSERT. Promotion to active rejects draft catalog if edges link non-Skill nodes or form a cycle; an empty prerequisite graph is explicitly valid.
 9. **Processing events identity & sorted order:** `learning_processing_events` enforces composite FK to `child_profiles(id, family_id)` and stores `affected_node_ids` in canonical sorted order (`ASC`).
 10. **Published version immutability:** Published catalog versions (`active` or `retired`) are strictly immutable; client writes and in-place deactivations (`is_active = false`) are denied.
 11. **Pending-review mapping with older catalog version:** A `pending_review` assessment created under `pilot-v0.1` remains map-able and verifiable against `pilot-v0.1` even after `pilot-v0.2` is promoted to active.
@@ -1482,7 +1491,7 @@ At minimum implementation must prove:
 68. **Paired child catalog promotion denied:** Paired child calling `promote_learning_catalog_version` is denied (`EXECUTE` permission denied).
 69. **Anonymous catalog promotion denied:** Anon calling `promote_learning_catalog_version` is denied (`EXECUTE` permission denied).
 70. **Normal authenticated user draft mutation denied:** Normal authenticated user cannot `INSERT`, `UPDATE`, or `DELETE` draft catalog versions or draft nodes/prerequisites.
-71. **Platform-controlled promotion succeeds:** Privileged service-role execution successfully promotes a valid publishable draft catalog to active.
+71. **Platform service-role promotion succeeds:** Trusted service_role execution with explicit GRANT EXECUTE successfully promotes a valid publishable draft catalog (with valid 5 roots, hierarchy, and acyclic Skill-only DAG; empty DAG valid) to active, while normal authenticated users cannot invoke it.
 72. **Invalid platform promotion rolls back:** Candidate draft missing canonical roots, containing cycles, or lacking draft status fails validation and rolls back atomically, preserving existing active catalog.
 73. **Audit tables append-only:** UPDATE and DELETE are rejected on `learning_evidence_events`, `mastery_state_revisions`, and `learning_processing_events`.
 74. **Grade snapshot provenance:** Historical evidence retains immutable `grade_level_snapshot` after profile grade changes; missing current profile grade fails closed for grade-scoped Unlock/Explore.
@@ -1568,6 +1577,7 @@ ALTER command_receipts
 
 CREATE learning_catalog_versions
 CREATE learning_nodes
+CREATE learning_prerequisites
 CREATE assessment_learning_mappings
 CREATE learning_evidence_events
 CREATE mastery_state_revisions
@@ -1579,8 +1589,7 @@ Phase 5.1 functions / triggers / RLS / grants / indexes
 Phase 5.2 includes:
 
 ```text
-CREATE learning_prerequisites
-Freshness / Recovery / recommendation functions and read models
+Freshness / Recovery / recommendation functions and read models (including prerequisite graph traversal for Unlock/Explore)
 ```
 
 Exact physical migration files and names may be refined during implementation review without changing these frozen semantic boundaries.
@@ -1610,11 +1619,11 @@ Deferred beyond Phase 5 v0.1:
 
 ### Phase 5.1
 
-> The same committed verified evidence set always produces the same current mastery projection regardless of request arrival order; first-write concurrency is safe; subject-level progress works without detailed mappings; detailed claims never exceed evidence granularity; Confidence v0.1 supports valid evaluation of the Mastered band.
+> The same committed verified evidence set always produces the same current mastery projection regardless of request arrival order; first-write concurrency is safe; catalog promotion enforces publishability (all 5 Subject roots, valid hierarchy, and Skill-only acyclic prerequisite DAG; empty graph treated as valid) and platform-only authorization; subject-level progress works without detailed mappings; detailed claims never exceed evidence granularity; Confidence v0.1 supports valid evaluation of the Mastered band.
 
 ### Phase 5.2
 
-> Freshness and recovery interpretations (with 30-day recency window) are explainable/deterministic, prerequisite DAG constraints are enforced, and the child receives at most three useful next-challenge candidates without reward/economy signals affecting academic ranking.
+> Freshness and recovery interpretations (with 30-day recency window) are explainable/deterministic, prerequisite traversal generates valid next-challenge candidates without reward/economy signals affecting academic ranking, and the child receives at most three useful choices.
 
 ### Overall Phase 5 freeze
 

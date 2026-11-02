@@ -160,8 +160,9 @@ Furthermore, catalog-version provenance and lifecycle must be fully defined:
   REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM PUBLIC;
   REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM anon;
   REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM authenticated;
+  GRANT EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) TO service_role;
   ```
-  Only trusted platform/service-role execution or release migrations may invoke it.
+  Only trusted platform/service-role execution or release migrations may invoke it. Execution is explicitly granted to `service_role` while revoked from `PUBLIC`, `anon`, and `authenticated`.
   When executed, the trusted promotion routine:
   1. Serializes promotion attempts via coordination locking;
   2. Locks and validates that `p_new_version` exists and is strictly `draft` before retiring current active catalog;
@@ -174,7 +175,7 @@ Furthermore, catalog-version provenance and lifecycle must be fully defined:
 - Exactly one Subject root node must exist per `(catalog_version, subject_key)`.
 - Parent/child edges must maintain strict same-subject and same-version integrity.
 - Detailed mappings must never cross subjects.
-- **Prerequisite graph schema & enforcement:** `learning_prerequisites` carries `(catalog_version, subject_key)` with composite foreign keys linking both `prerequisite_node_id` and `dependent_node_id` to `learning_nodes(catalog_version, subject_key, id)`. This enforces same-catalog-version and same-subject at schema level. Endpoint `node_type = 'skill'` and acyclic DAG constraints are validated during catalog authoring and enforced by the promotion gate before a draft catalog can become active. Traversal in recommendations filters strictly by `catalog_version = current_active_catalog_version`.
+- **Prerequisite graph schema, validation & delivery split:** `learning_prerequisites` carries `(catalog_version, subject_key)` with composite foreign keys linking both `prerequisite_node_id` and `dependent_node_id` to `learning_nodes(catalog_version, subject_key, id)`. This enforces same-catalog-version and same-subject at schema level. To guarantee that catalog promotion gates and published content immutability are fully grounded on Day 1, the `learning_prerequisites` schema, composite FKs, and publication validation gate (verifying Skill-only endpoints and acyclic DAG; empty prerequisite graph is explicitly valid) are delivered in **Phase 5.1**. Prerequisite graph traversal for Unlock/Explore candidate selection is consumed in **Phase 5.2** (filtering strictly by `catalog_version = current_active_catalog_version`).
 
 ### Gap B — No evidence-to-node mapping contract, mutable drafts & risk of overweighting
 
@@ -313,7 +314,7 @@ The relationship between public RPC idempotency (`command_receipts`), logical pr
 The accompanying detailed design resolves these as follows:
 
 1. **Verified-only authoritative inputs.** Phase 5 v0.1 processes `verified_learning_events`; pre-verification photos/self-reports do not alter authoritative mastery.
-2. **Platform-owned versioned taxonomy, immutable catalog provenance & platform-only promotion.** The server snapshots the active catalog version at assessment creation into `assessments.learning_catalog_version` via `BEFORE INSERT` trigger, copied into `verified_learning_events.learning_catalog_version` upon verification via `BEFORE INSERT` trigger. A dedicated catalog version registry (`learning_catalog_versions`) ensures exactly one server-controlled active authoring catalog version exists at any time via a trusted promotion procedure that validates publishability and asserts exactly one active catalog before commit (failing closed with SQLSTATE `LW501`). Catalog authoring and promotion is strictly a platform-level deployment concern; family adults are tenant administrators, not curriculum administrators, and execution of promotion routines is revoked from `PUBLIC`, `anon`, and `authenticated`. Draft catalogs are authored solely via platform migrations or service-role tooling. Legacy records are migrated to `pilot-v0.1` via additive DDL (`DEFAULT 'pilot-v0.1' NOT NULL` then `DROP DEFAULT`) without row updates or disabling frozen Phase 2 immutability triggers (`LW102`, `LW103`). `pilot-v0.1` contains exactly one Subject root for every canonical subject key (`math`, `english`, `literature`, `science`, `other`). Published catalog content is completely immutable; registry lifecycle metadata transitions strictly `draft -> active -> retired`. `pending_review` assessments remain map-able to their authored catalog version even after a newer version is activated. Prerequisite edges enforce matching catalog version and same subject key via composite FKs to `learning_nodes(catalog_version, subject_key, id)`, with Skill-only endpoints and DAG acyclicity enforced by the promotion gate.
+2. **Platform-owned versioned taxonomy, immutable catalog provenance & platform-only promotion.** The server snapshots the active catalog version at assessment creation into `assessments.learning_catalog_version` via `BEFORE INSERT` trigger, copied into `verified_learning_events.learning_catalog_version` upon verification via `BEFORE INSERT` trigger. A dedicated catalog version registry (`learning_catalog_versions`) ensures exactly one server-controlled active authoring catalog version exists at any time via a trusted promotion procedure that validates publishability and asserts exactly one active catalog before commit (failing closed with SQLSTATE `LW501`). Catalog authoring and promotion is strictly a platform-level deployment concern; family adults are tenant administrators, not curriculum administrators, and execution of promotion routines is revoked from `PUBLIC`, `anon`, and `authenticated`. Draft catalogs are authored solely via platform migrations or service-role tooling. Legacy records are migrated to `pilot-v0.1` via additive DDL (`DEFAULT 'pilot-v0.1' NOT NULL` then `DROP DEFAULT`) without row updates or disabling frozen Phase 2 immutability triggers (`LW102`, `LW103`). `pilot-v0.1` contains exactly one Subject root for every canonical subject key (`math`, `english`, `literature`, `science`, `other`). Published catalog content is completely immutable; registry lifecycle metadata transitions strictly `draft -> active -> retired`. `pending_review` assessments remain map-able to their authored catalog version even after a newer version is activated. Prerequisite edges enforce matching catalog version and same subject key via composite FKs to `learning_nodes(catalog_version, subject_key, id)`, with the table and Skill-only acyclic DAG promotion gate delivered in Phase 5.1 (empty prerequisite graph is explicitly valid); prerequisite edge traversal for recommendations is consumed in Phase 5.2.
 3. **One effective observation per VLE/node with deterministic aggregation.** At most one effective mastery observation exists per `(verified_learning_event_id, learning_node_id)`. Multiple mappings for the same node aggregate deterministically (by score mass for component scores: `sum(raw) / sum(max)`, or by counts for item groups: `sum(correct) / sum(items)`). Within one assessment/node, duplicate component identities (`component_key`) are rejected, and mixing score source types is disallowed. Confidence counts the single effective observation once.
 4. **No automatic descendant propagation.** Evidence updates only the node whose granularity is actually supported. Subject fallback is automatic; detailed mappings are optional.
 5. **Pending-review-only mapping lifecycle & granularity.** Authoritative detailed mappings may be set or replaced ONLY while `assessment.status = 'pending_review'`. Draft editing never leaves dangling mappings. Direct table mutations are revoked; mappings mutate strictly via trusted adult RPC serialized against assessment verification/rejection. A whole-test score cannot be relabeled as one specific skill score.
@@ -376,8 +377,9 @@ Implement Phase 5 in two bounded slices after design approval.
   - `ALTER command_receipts` (replace `command_receipts_operation_check` to accept `process_learning` alongside all 9 frozen Phase 1–4 operations),
 - catalog version registry (`learning_catalog_versions`),
 - deterministic legacy catalog migration (`pilot-v0.1`),
-- platform-only draft catalog authoring and trusted promotion routine (`EXECUTE` revoked from `PUBLIC`, `anon`, `authenticated`),
-- versioned learning-node hierarchy,
+- platform-only draft catalog authoring and trusted promotion routine (`EXECUTE` revoked from `PUBLIC`, `anon`, `authenticated`; granted to `service_role`),
+- versioned learning-node hierarchy (`learning_nodes`),
+- prerequisite skill graph schema & catalog publication validation (`learning_prerequisites` with composite version+subject FKs, Skill-only and DAG promotion gate; empty prerequisite graph is valid in 5.1),
 - assessment-to-node mappings (`pending_review` only),
 - immutable learning evidence atoms with diagnostic facts,
 - pure Dart Mastery Engine v0.1 (EWMA, Option A initialization),
@@ -391,7 +393,7 @@ Implement Phase 5 in two bounded slices after design approval.
 
 ### Phase 5.2 — Skill Graph + Interpretation + Recommendation
 
-- prerequisite skill graph (`learning_prerequisites`),
+- prerequisite graph traversal for Unlock/Explore candidate selection,
 - dynamic Freshness (14d/45d boundaries relative to `as_of`),
 - deterministic Recovery signal (`review_suggested` with 30-day recency/expiry window),
 - read-only next-challenge candidate engine (up to three candidates),

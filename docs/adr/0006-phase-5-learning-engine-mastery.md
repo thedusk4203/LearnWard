@@ -92,8 +92,9 @@ To guarantee deterministic processing across time and platform updates:
   REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM PUBLIC;
   REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM anon;
   REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM authenticated;
+  GRANT EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) TO service_role;
   ```
-  Only trusted platform/service-role execution or release migrations may invoke it.
+  Only trusted platform/service-role execution or release migrations may invoke it. Execution is explicitly granted to `service_role` while revoked from `PUBLIC`, `anon`, and `authenticated`.
   When executed, the trusted promotion routine:
   1. Serializes promotion attempts via coordination locking;
   2. Locks and validates that `p_new_version` exists and is strictly `draft` before retiring current active catalog;
@@ -107,7 +108,7 @@ To guarantee deterministic processing across time and platform updates:
 ### Graph & mapping integrity
 - **Subject root uniqueness:** Exactly one Subject root exists per `(catalog_version, subject_key)`, with `node_type = 'subject'` and `parent_id IS NULL`. Enforced via unique constraint/index: `unique (catalog_version, subject_key) where parent_id is null`.
 - **Hierarchy subject integrity:** For every parent/child edge (`Domain -> Subject`, `Topic -> Domain`, `Skill -> Topic`), child and parent must have identical `catalog_version` AND `subject_key`. Cross-subject or cross-version edges are rejected.
-- **Prerequisite graph schema & enforcement:** `learning_prerequisites` carries `(catalog_version, subject_key)` with composite foreign keys linking both `prerequisite_node_id` and `dependent_node_id` to `learning_nodes(catalog_version, subject_key, id)`. This enforces same-catalog-version and same-subject at schema level. Endpoint `node_type = 'skill'` and acyclic DAG constraints are validated during catalog authoring and enforced by the promotion gate before a draft catalog can become active. Traversal in recommendations filters strictly by `catalog_version = current_active_catalog_version`.
+- **Prerequisite graph schema, validation & delivery split:** `learning_prerequisites` carries `(catalog_version, subject_key)` with composite foreign keys linking both `prerequisite_node_id` and `dependent_node_id` to `learning_nodes(catalog_version, subject_key, id)`. This enforces same-catalog-version and same-subject at schema level. To ensure that catalog promotion gates and published content immutability are fully grounded on Day 1, the `learning_prerequisites` schema, composite FKs, and publication validation gate (verifying Skill-only endpoints and acyclic DAG; empty prerequisite graph is explicitly valid) are delivered in **Phase 5.1**. Prerequisite graph traversal for Unlock/Explore candidate selection is consumed in **Phase 5.2** (filtering strictly by `catalog_version = current_active_catalog_version`).
 - **Mapping integrity:** `assessment_learning_mappings.learning_node_id` must point to a node whose `catalog_version == assessment.learning_catalog_version` and `subject_key == assessment.subject_key`. Mappings must never cross subjects.
 
 **Consequence:** Curriculum scope is bounded, evidence references stable learning identities, and delayed catch-up resolves to the exact catalog version under which the assessment was authored.
@@ -582,8 +583,12 @@ Functions such as `set_assessment_learning_mappings`, `process_learning_event`, 
 ### Platform-Only Administration
 Global curriculum administration functions (such as catalog publication, content updates, and `promote_learning_catalog_version`) are strictly platform deployment/administration concerns:
 - `EXECUTE` is revoked from `PUBLIC`, `anon`, and `authenticated`,
+- `EXECUTE` is explicitly granted to `service_role`:
+  ```sql
+  GRANT EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) TO service_role;
+  ```
 - active family adults and children have zero curriculum administration privileges,
-- reserved exclusively for release migrations and trusted service-role execution.
+- callable exclusively by release migrations and trusted platform/service-role execution.
 
 ---
 
@@ -593,10 +598,11 @@ Phase 5 implementation adds new migrations and may replace function definitions 
 
 Frozen Phase 1–4 migration files are immutable history.
 
-Phase 5 includes explicit additive modifications to existing tables:
+Phase 5 includes explicit additive modifications to existing tables and core schemas:
 - `ALTER assessments` (+ `learning_catalog_version` provenance, triggers),
 - `ALTER verified_learning_events` (+ `learning_catalog_version` provenance, triggers),
-- `ALTER command_receipts` (replace `command_receipts_operation_check` to accept `process_learning` alongside all 9 frozen Phase 1–4 operations).
+- `ALTER command_receipts` (replace `command_receipts_operation_check` to accept `process_learning` alongside all 9 frozen Phase 1–4 operations),
+- `CREATE learning_prerequisites` (delivered in Phase 5.1 to enable catalog promotion validation and content immutability).
 
 The design PR itself contains no Phase 5 migration or runtime implementation.
 
@@ -637,15 +643,15 @@ This ADR may move from **PROPOSED** to **ACCEPTED** only when the final implemen
    - steady-state VLE creation copies assessment snapshot via `BEFORE INSERT` trigger;
    - `pilot-v0.1` contains exactly one Subject root node for every canonical subject key (`math`, `english`, `literature`, `science`, `other`);
    - catalog version registry enforces exactly one active catalog version at a time via a trusted promotion procedure that validates publishability and asserts exactly one active row before commit (raising SQLSTATE `LW501` with message 'No active learning catalog' if missing);
-   - catalog authoring and promotion is platform-only; `EXECUTE` on promotion is revoked from `PUBLIC`, `anon`, and `authenticated`; family adults and children cannot promote catalogs or mutate draft content;
+   - catalog authoring and promotion is platform-only; `EXECUTE` on promotion is revoked from `PUBLIC`, `anon`, and `authenticated`, and explicitly granted to `service_role`; family adults and children cannot promote catalogs or mutate draft content;
    - published catalog content is completely immutable (no in-place deactivations or mutations) and client writes are denied;
    - `pending_review` assessments remain map-able to their authored catalog version even after a newer version is activated;
    - delayed catch-up after catalog rollout preserves original VLE catalog version;
    - exactly one Subject root exists per `(catalog_version, subject_key)`;
    - duplicate Subject root is rejected;
    - cross-subject or cross-version hierarchy parent edges are rejected;
-   - `learning_prerequisites` carries `subject_key` with composite FKs to `learning_nodes(catalog_version, subject_key, id)` (cross-subject and cross-version edges rejected at schema level);
-   - prerequisite Skill-only and DAG acyclicity are verified at catalog promotion;
+   - `learning_prerequisites` table, composite foreign keys to `learning_nodes(catalog_version, subject_key, id)`, and promotion gate validation (Skill-only endpoints, acyclic DAG; empty DAG valid) are delivered in Phase 5.1;
+   - prerequisite edges cross-subject or cross-version are rejected at schema level;
    - mapping to a node with mismatched subject or catalog version is rejected;
    - recommendations evaluate against active catalog without silent cross-version mastery transfer.
 2. **Mapping lifecycle & direct-mutation security:**
