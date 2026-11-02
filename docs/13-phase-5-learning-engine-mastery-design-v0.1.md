@@ -1,7 +1,7 @@
 # Phase 5 Detailed Design — Learning Engine, Mastery & Recommendation v0.1
 
 **Status:** PROPOSED — DESIGN ONLY  
-**Document Version:** `v0.1.0`  
+**Document Version:** `v0.1.1`  
 **Date:** 2026-11-02  
 **Target Milestone:** Phase 5 — Mastery Engine, Skill Trees & Recommendation Foundation  
 **Design Base:** `5a3c7c75fd0f7c691ee8cd974b51b9cb165a4c2c`  
@@ -11,15 +11,13 @@
 
 ## 1. Product Objective
 
-Phase 5 turns verified academic evidence into an explainable, persistent learning state that helps a child understand:
+Phase 5 turns verified academic evidence into an explainable learning state that helps a child understand:
 
 1. what they are getting better at,
 2. what is still developing,
 3. what may need a refresh,
 4. where recent mistakes suggest recovery work,
 5. what useful challenge they could choose next.
-
-The learning loop becomes:
 
 ```text
 Verified Learning Event
@@ -42,7 +40,7 @@ Next Challenge Candidates
 Child chooses what to tackle next
 ```
 
-The Learning Engine is deliberately independent from the Reward Economy.
+The Growth Engine and Learning Engine may consume the same immutable verified academic source, but their outputs are structurally independent:
 
 ```text
 Verified academic evidence
@@ -53,7 +51,7 @@ Verified academic evidence
     XP / RP          Mastery / Next Challenge
 ```
 
-RP, XP, reward pricing, Wheel tier, redemption history, and reward balance are not valid Learning Engine inputs.
+XP, RP, reward configuration, Wheel outcomes, Store redemptions and reward balances are not valid Learning Engine inputs.
 
 ---
 
@@ -61,19 +59,18 @@ RP, XP, reward pricing, Wheel tier, redemption history, and reward balance are n
 
 Phase 5 does **not** build:
 
-- a full Vietnamese national curriculum database,
-- an AI teacher or AI tutor,
-- auto-generated lessons,
-- automatic OCR skill diagnosis,
-- a homework marketplace,
-- teacher/school multi-tenant administration,
+- a complete Vietnamese national curriculum database,
+- an AI teacher/tutor,
+- automatic lesson generation,
+- automatic authoritative OCR/LLM skill diagnosis,
+- teacher/school organization tenancy,
 - social or sibling academic leaderboards,
 - reward-driven recommendation ranking,
-- a punitive remediation system,
-- high-stakes educational placement decisions,
-- a black-box predictive model.
+- high-stakes educational placement,
+- a black-box predictive model,
+- a full Recovery Quest execution lifecycle.
 
-The pilot must work with a small curated knowledge graph and partial classification.
+The pilot must work with a small curated graph and partial classification.
 
 ---
 
@@ -81,68 +78,31 @@ The pilot must work with a small curated knowledge graph and partial classificat
 
 ### 3.1 Verified academic evidence is authoritative
 
-Authoritative mastery updates originate only from immutable `verified_learning_events` plus explicitly supported, verified learning mappings.
+Authoritative mastery updates originate only from immutable `verified_learning_events` plus supported detailed mappings that were adult-confirmed before verification.
 
-The following must not directly update mastery:
-
-- local assessment drafts,
-- pending-review assessments,
-- photos that have not been verified,
-- self-reported claims that never become verified learning events,
-- XP/RP ledger rows,
-- reward redemptions,
-- Wheel spins,
-- app engagement events.
+Local drafts, pending assessments, unverified photos, reward activity, XP/RP rows and engagement events do not update mastery.
 
 ### 3.2 Evidence granularity limits claims
 
-A whole-assessment score can support broad learning-state claims, but must not be silently interpreted as detailed skill mastery.
+A whole-assessment score may support broad learning-state claims, but it must not silently become detailed skill evidence.
 
-Example:
+A verified Math exam score may automatically support the Math subject root and, if explicitly mapped, a Domain/Topic. It must not automatically assign the same score to Fractions, Linear Equations, Geometry, or every descendant skill.
 
-```text
-Math exam: 8/10
-```
+### 3.3 Missing metadata never blocks result capture
 
-may support:
-
-```text
-Mathematics — recent verified performance evidence
-```
-
-and, if explicitly classified by an adult:
-
-```text
-Mathematics -> Algebra
-```
-
-but must not automatically claim:
-
-```text
-Fractions = 80
-Linear Equations = 80
-Geometry = 80
-```
-
-### 3.3 Missing metadata never blocks verified-result capture
-
-Phase 2 verification remains valid even when no domain/topic/skill mapping exists.
-
-Every verified learning event can still contribute at the canonical subject root.
+Assessment verification remains valid when no Domain/Topic/Skill mapping exists. Every VLE still contributes subject-root evidence.
 
 ### 3.4 Mastery, confidence and freshness remain separate
 
-A single high score can produce a high early estimate with Low confidence.
-
-Time passing may make evidence stale, but time alone does not erase historical achievement.
+A high score can coexist with Low confidence. Time can make evidence stale without silently reducing historic mastery.
 
 ### 3.5 No sibling comparison
 
-Mastery state, evidence and recommendations are scoped to one child. The engine never ranks siblings or uses sibling performance as a baseline.
+Mastery and recommendations are scoped to one child. Sibling performance is never an input or baseline.
 
 ### 3.6 Learner autonomy
 
-The recommendation layer returns up to three candidate choices. It does not issue mandatory commands.
+The recommendation layer returns at most three candidate choices. It does not issue mandatory assignments.
 
 ---
 
@@ -152,15 +112,15 @@ The recommendation layer returns up to three candidate choices. It does not issu
 
 Deliver:
 
-- versioned knowledge hierarchy,
+- versioned learning hierarchy,
 - optional assessment learning mappings,
 - immutable learning evidence atoms,
 - deterministic Mastery Engine v0.1,
-- append-only mastery projection revisions,
+- append-only mastery revisions,
 - current mastery projection,
-- recoverable VLE processing,
-- broad subject fallback,
-- basic mastery/progress UI.
+- exactly-once/recoverable VLE processing,
+- automatic subject fallback,
+- basic parent/child mastery presentation.
 
 ### Phase 5.2 — Skill Graph + Recommendation Foundation
 
@@ -170,11 +130,11 @@ Deliver:
 - dynamic confidence,
 - dynamic freshness,
 - deterministic recovery signal,
-- next-challenge candidate generation,
-- explanation/coverage UI,
-- child choice surface.
+- next-challenge candidates,
+- explanation/coverage presentation,
+- child choice UI.
 
-Phase 5 is frozen only after both slices pass independent review and post-merge CI.
+Phase 5 is frozen only after both slices pass independent implementation review and green post-merge CI.
 
 ---
 
@@ -183,15 +143,10 @@ Phase 5 is frozen only after both slices pass independent review and post-merge 
 The hierarchy is:
 
 ```text
-Subject
-  -> Domain
-      -> Topic
-          -> Skill
+Subject -> Domain -> Topic -> Skill
 ```
 
 ### 5.1 Platform-owned reference nodes
-
-Phase 5 v0.1 uses a **platform-owned curated reference catalog**, not family-authored curriculum structure.
 
 Conceptual table:
 
@@ -214,46 +169,28 @@ Proposed fields:
 - `is_active boolean not null default true`
 - `created_at timestamptz not null`
 
-Recommended constraints:
+Required invariants:
 
 - stable unique `(catalog_version, canonical_key)`,
-- parent and child must share the same `catalog_version`,
-- parent/child hierarchy types must be valid:
-  - subject -> domain,
-  - domain -> topic,
-  - topic -> skill,
-- a subject node has no parent,
+- parent/child share one catalog version,
+- valid type edges only: Subject→Domain, Domain→Topic, Topic→Skill,
+- Subject has no parent,
 - `grade_min <= grade_max` when both exist,
-- `subject_key` remains aligned with the frozen canonical values.
+- `subject_key` matches the frozen canonical subject values.
 
 ### 5.2 Catalog versioning
 
-Pilot graph version begins as a small explicit version such as:
+Pilot catalog begins with an explicit small version such as `pilot-v0.1`.
 
-```text
-pilot-v0.1
-```
-
-Do not mutate the meaning of an existing node ID after evidence has referenced it.
-
-If curriculum semantics change materially, create a new catalog version or new node IDs with an explicit migration/mapping policy.
+Once evidence references a node ID, its semantic meaning must not be changed in place. Material curriculum changes require new node IDs and/or a new catalog version with an explicit migration policy.
 
 ### 5.3 Client permissions
 
-Learning reference tables contain no child/family private data.
-
-They are:
-
-- readable by authenticated clients,
-- not directly writable by clients,
-- maintained through migrations/content releases,
-- protected by explicit grants/RLS consistent with repository policy.
+Reference nodes contain no child/family private data. Authenticated clients may read active catalog data; direct client writes are revoked. Catalog changes occur through migrations/content releases.
 
 ### 5.4 `subject_key = other`
 
-The `other` subject root may receive broad verified evidence.
-
-Phase 5 v0.1 does not attempt to create arbitrary family-authored skill graphs beneath `other`.
+`other` may receive broad subject evidence. Phase 5 v0.1 does not create arbitrary family-authored authoritative skill graphs beneath it.
 
 ---
 
@@ -274,14 +211,14 @@ Fields:
 
 Rules:
 
-1. Both endpoints must be `skill` nodes.
-2. Edges are explicit and curated.
-3. Self-edges are forbidden.
-4. Duplicate edges are forbidden.
-5. The graph must be acyclic.
-6. No ML/LLM-generated prerequisite edge becomes authoritative automatically.
+1. both endpoints are Skill nodes,
+2. edges are curated and explicit,
+3. self-edges forbidden,
+4. duplicates forbidden,
+5. graph must be acyclic,
+6. no ML/LLM suggestion becomes authoritative automatically.
 
-Because clients cannot mutate the graph in v0.1, cycle validation can be enforced through content validation tests/scripts during migration/content review rather than expensive runtime graph mutation logic.
+Because clients cannot mutate this graph in v0.1, DAG validation may run as migration/content validation rather than an expensive public runtime mutation path.
 
 ---
 
@@ -289,11 +226,9 @@ Because clients cannot mutate the graph in v0.1, cycle validation can be enforce
 
 ### 7.1 Mapping is optional
 
-An assessment without detailed mappings still verifies normally and contributes subject-level evidence.
+An assessment without detailed mappings still verifies and contributes subject-root evidence.
 
-### 7.2 Mapping is confirmed before verification
-
-Detailed authoritative mappings are attached to the assessment while it is still mutable and are frozen when the assessment becomes terminal.
+### 7.2 Detailed mappings
 
 Conceptual table:
 
@@ -325,35 +260,36 @@ component_score
 item_group
 ```
 
+Detailed mapping targets are **Domain, Topic, or Skill only**. Explicit Subject mappings are disallowed because every processed VLE already creates exactly one automatic subject-root evidence atom.
+
 ### 7.3 Score-source rules
 
 #### `assessment_total`
 
-Uses the verified assessment total performance.
+Uses the verified whole-assessment score.
 
-Allowed for:
+Allowed targets:
 
-- Subject
 - Domain
 - Topic
 
-Not allowed for Skill.
-
-This prevents a whole-test score from being relabeled as one precise skill measurement.
+Not allowed for Skill. Not used for explicit Subject mappings because Subject fallback is automatic.
 
 #### `component_score`
 
-Uses an explicitly scored subcomponent:
+Uses:
 
 ```text
 component_raw_score / component_max_score
 ```
 
-May support Domain, Topic or Skill if the parent confirms that the component measures that node.
+May support Domain, Topic or Skill when the active family adult confirms that the component measures that node.
+
+Validation requires `component_max_score > 0` and `0 <= component_raw_score <= component_max_score`.
 
 #### `item_group`
 
-Uses a mapped group of assessment items:
+Uses:
 
 ```text
 correct_count / item_count
@@ -368,27 +304,27 @@ item_count > 0
 0 <= correct_count <= item_count
 ```
 
-### 7.4 Mapping authority in v0.1
+### 7.4 Mapping authority
 
-Only an active family adult may create/replace authoritative detailed mappings.
+Only an active family adult may create/replace authoritative detailed mappings in v0.1. Child suggestions, if added later, remain non-authoritative until adult confirmation.
 
-A child may eventually suggest tags, but child suggestions are not authoritative mastery inputs until an adult confirms them.
+### 7.5 Mapping mutation window and verification race
 
-### 7.5 Mapping mutation window
+Mappings may be changed only while the assessment is non-terminal.
 
-Mappings may be edited while the assessment remains non-terminal.
+The trusted mapping mutation path must lock the target assessment row `FOR UPDATE` (or an equivalently strong serialization point), re-check that it is non-terminal, then change the mapping set in the same transaction.
 
-Once the assessment is `verified` or `rejected`, its authoritative mapping set is immutable.
+Assessment verification/rejection already serializes on the assessment row. Therefore mapping mutation and terminal transition cannot race into a state where verification observes a partially changed mapping set.
 
-A later correction workflow is intentionally deferred until there is evidence that post-verification mapping correction is common enough to justify an append-only revision model.
+Once the assessment becomes `verified` or `rejected`, mappings are immutable.
+
+Post-verification mapping correction is deferred until there is evidence that it needs a dedicated append-only correction workflow.
 
 ---
 
 ## 8. Immutable Learning Evidence Atoms
 
-Mastery should not repeatedly reinterpret mutable assessment rows.
-
-When a verified learning event is processed, Phase 5 materializes immutable evidence atoms.
+When a VLE is processed, Phase 5 materializes immutable evidence atoms rather than repeatedly interpreting mutable UI/draft state.
 
 Conceptual table:
 
@@ -419,65 +355,55 @@ Proposed fields:
 - `mapping_id uuid null`
 - `created_at timestamptz not null`
 
-Recommended uniqueness:
+A uniqueness contract must prevent retry from duplicating one logical evidence atom, for example an appropriate equivalent of:
 
 ```text
 unique (verified_learning_event_id, learning_node_id, score_source, mapping_id)
 ```
 
-or an equivalent key that guarantees one logical evidence atom is not duplicated by retry.
+with the automatic Subject fallback represented by a stable non-null logical source discriminator or equivalent uniqueness design.
 
 ### 8.1 Automatic subject evidence
 
-Every processed VLE creates one subject-root evidence atom using the VLE's verified total score:
+Every processed VLE creates exactly one subject-root evidence atom:
 
 ```text
 performance_pct = normalized_score * 10
 ```
 
-This requires no detailed mapping.
-
 ### 8.2 Optional richer evidence
 
-Each frozen detailed mapping creates an additional evidence atom at the mapped node using the supported score source.
+Each frozen detailed mapping creates one additional evidence atom at the mapped Domain/Topic/Skill using its supported score source.
 
-### 8.3 No automatic ancestor/descendant propagation
+### 8.3 No automatic propagation
 
-A skill evidence atom updates that skill's direct state only.
+Evidence updates only the node whose granularity is supported. It does not automatically copy itself to ancestors, descendants or sibling skills.
 
-It does **not** automatically apply the same observation to:
+Roll-up summaries are separate coverage-aware read models.
 
-- every ancestor,
-- sibling skills,
-- descendant skills.
+### 8.4 Verification weight
 
-Subject/topic summaries use explicit broad evidence plus coverage-aware aggregation/read models rather than duplicating one observation across the graph.
-
-### 8.4 Verification weight in Phase 5 v0.1
-
-The existing conceptual Learning Engine document lists lower weights for self-report/photo/unconfirmed evidence.
-
-Phase 5 v0.1 deliberately narrows authoritative processing to verified learning events. Therefore:
+Phase 5 v0.1 authoritative evidence is verified-only, therefore:
 
 ```text
 verification_weight = 1.00
 ```
 
-for every authoritative Phase 5 mastery evidence atom.
+Lower-trust pre-verification weighting remains a future hypothesis and must not create a parallel authoritative mastery state.
 
-Lower-trust pre-verification weighting is deferred; it must not create a second unofficial mastery state.
+### 8.5 Grade provenance
+
+Every evidence atom preserves the immutable `grade_level_snapshot` captured at assessment/VLE creation. Historical evidence grade is never rewritten from the child's current profile grade.
 
 ---
 
 ## 9. Mastery Engine v0.1
 
-### 9.1 Scale
+### 9.1 Scale and initialization
 
 Mastery is represented internally on `0..100`.
 
-### 9.2 First credible observation
-
-The first evidence atom for a node initializes mastery to observed performance:
+First credible observation:
 
 ```text
 M_1 = P_1
@@ -485,9 +411,7 @@ M_1 = P_1
 
 The learner does not start from zero merely because LearnWard has no prior data.
 
-### 9.3 Subsequent observations
-
-For every later canonical observation:
+### 9.2 Subsequent observations
 
 ```text
 M_new = M_old + alpha_effective * (P - M_old)
@@ -499,22 +423,18 @@ with:
 alpha_base = 0.35
 ```
 
-### 9.4 Specificity weight
+### 9.3 Specificity weights
 
-Frozen v0.1 starting values:
-
-| Node type | Specificity weight |
+| Node type | Weight |
 |---|---:|
 | Subject | 0.35 |
 | Domain | 0.50 |
 | Topic | 0.75 |
 | Skill | 1.00 |
 
-### 9.5 Difficulty / level diagnostic weight
+### 9.4 Level weights
 
 Difficulty is not a mastery bonus.
-
-For v0.1:
 
 ```text
 normal      -> 1.00
@@ -523,24 +443,20 @@ challenge   -> 1.00
 below_level -> 0.50
 ```
 
-This prevents below-level work from dominating the estimate of current learning state while still preserving useful evidence.
+Hard/challenge work receives no arbitrary mastery multiplier. Below-level evidence remains useful but has less influence on later updates.
 
-Hard/challenge work does not receive an arbitrary mastery multiplier.
-
-### 9.6 Effective alpha
-
-Because Phase 5 authoritative evidence is verified-only:
+### 9.5 Effective alpha
 
 ```text
 alpha_effective
-= alpha_base
+= 0.35
 * specificity_weight
 * level_weight
 ```
 
-The calculation components must be captured in the mastery audit revision.
+The calculation components are included in the audit revision snapshot.
 
-### 9.7 Mastery bands
+### 9.6 Bands
 
 | State | Rule |
 |---|---|
@@ -548,31 +464,18 @@ The calculation components must be captured in the mastery audit revision.
 | Emerging | score < 50 |
 | Developing | 50 <= score < 70 |
 | Secure | 70 <= score < 85 |
-| Mastery candidate | score >= 85 but mastery declaration conditions not met |
+| Mastery candidate | score >= 85 but declaration conditions not met |
 | Mastered | score >= 85 AND High confidence AND at least two recent distinct verified assessments |
 
-The child-facing UI should favor bands and explanation over false precision.
+Child-facing UI should favor bands and explanation over false precision.
 
 ---
 
 ## 10. Canonical Evidence Ordering & Late Evidence
 
-### 10.1 Why request order is invalid
+EWMA is order-sensitive, so network/request arrival order is not an academic chronology.
 
-EWMA is order-sensitive.
-
-Example:
-
-```text
-Assessment A occurred Monday but verified Friday.
-Assessment B occurred Thursday and verified Thursday.
-```
-
-If processing simply follows network arrival, the final mastery estimate depends on operational timing rather than academic chronology.
-
-### 10.2 Canonical order
-
-For one child + learning node, effective evidence is ordered by:
+For one child + node, evidence is ordered by:
 
 ```text
 occurred_at ASC,
@@ -580,35 +483,25 @@ verified_at ASC,
 learning_evidence_event.id ASC
 ```
 
-The immutable UUID tie-breaker guarantees a total order when timestamps are identical.
+The immutable evidence UUID is the final tie-breaker for exact timestamp equality.
 
-### 10.3 Projection rebuild rule
-
-When a new effective evidence atom is inserted for a node, the server recomputes that node's current mastery projection from the complete canonical evidence sequence.
-
-It does **not** assume the new atom is chronologically last.
-
-Therefore:
+Whenever new effective evidence is committed for a node, the server rebuilds that node's current mastery projection from the **complete immutable evidence set in canonical order**.
 
 ```text
 same immutable evidence set
-=> same ordered sequence
+=> same canonical order
 => same mastery projection
 ```
 
-regardless of request arrival order, retry timing, or delayed verification.
+This remains true when an older school result is logged/verified after a newer one.
 
-### 10.4 Pilot performance trade-off
-
-Full per-node rebuild is chosen deliberately for v0.1 because evidence volume per child/node is small and correctness/explainability are more important than incremental optimization.
-
-If production volume later justifies snapshots/checkpoints, optimization must preserve canonical equivalence.
+Full per-node rebuild is intentionally correctness-first for pilot volume. Future checkpoint optimization must prove canonical equivalence.
 
 ---
 
 ## 11. Mastery Audit & Current Projection
 
-### 11.1 Append-only mastery revisions
+### 11.1 Append-only revisions
 
 Conceptual table:
 
@@ -631,9 +524,9 @@ Proposed fields:
 - `calculation_snapshot jsonb not null`
 - `created_at timestamptz not null`
 
-The snapshot should contain enough deterministic inputs to explain the result, including canonical evidence IDs/order and alpha components, without copying sensitive evidence media.
+The snapshot contains deterministic calculation inputs/order and alpha components without copying evidence media.
 
-Revisions are append-only and immutable.
+Revisions are immutable and append-only.
 
 ### 11.2 Current projection
 
@@ -643,15 +536,15 @@ Conceptual table:
 public.child_mastery_states
 ```
 
-Proposed primary key:
+Suggested primary key:
 
 ```text
 (child_id, learning_node_id)
 ```
 
-with composite family integrity.
+plus composite family integrity.
 
-Fields:
+Fields include:
 
 - `family_id`
 - `child_id`
@@ -666,61 +559,41 @@ Fields:
 - `latest_revision_id`
 - `updated_at`
 
-This table is a cache/projection, not the historical source of truth.
-
-Direct client mutation is revoked.
+This is a server-controlled cache/projection, not historical source truth. Direct client mutation is revoked.
 
 ---
 
 ## 12. Confidence v0.1
 
-Confidence answers:
+Confidence answers: *How much recent, sufficiently specific verified evidence supports this estimate?*
 
-> How much recent, sufficiently specific verified evidence supports this estimate?
-
-It is derived from immutable evidence at read time rather than blindly accumulated forever.
-
-### 12.1 Confidence window
-
-Use evidence with:
+It is derived at read time from evidence with:
 
 ```text
 occurred_at >= now() - interval '60 days'
 ```
 
-### 12.2 Evidence units
-
-For Phase 5 verified-only evidence:
+For verified-only v0.1 evidence:
 
 ```text
 confidence_units = specificity_weight * level_weight
 ```
 
-### 12.3 Bands
-
 | Units | Confidence |
 |---:|---|
 | < 1.5 | Low |
 | 1.5 through 3.5 | Medium |
-| > 3.5 | High, subject to distinct-event rule |
-
-High confidence additionally requires at least **two distinct verified learning events** in the confidence window.
+| > 3.5 | High, only if >=2 distinct recent VLEs |
 
 If units exceed 3.5 but only one VLE contributed, confidence remains Medium.
 
-### 12.4 Conflicting evidence
-
-Phase 5 v0.1 does not invent a statistical variance confidence model.
-
-The read model may expose a `recent_results_vary` explanation flag when recent observations differ materially, but must not silently fabricate mathematical certainty.
-
-Calibration is deferred to pilot evidence.
+Phase 5 v0.1 does not invent a statistical variance model. A read model may expose a qualitative `recent_results_vary` explanation flag when recent observations materially disagree.
 
 ---
 
 ## 13. Freshness v0.1
 
-Freshness is derived from the latest credible evidence `occurred_at` timestamp.
+Freshness is derived from latest credible academic `occurred_at`:
 
 | Elapsed time | Freshness |
 |---:|---|
@@ -728,20 +601,12 @@ Freshness is derived from the latest credible evidence `occurred_at` timestamp.
 | >14 and <=45 days | Aging |
 | >45 days | Needs refresh |
 
-Important:
+Time passing does not mutate the mastery score.
 
 ```text
 Mastered + time passes
-!= mastery score silently decays
+=> Mastered · Needs refresh
 ```
-
-Instead:
-
-```text
-Mastered · Needs refresh
-```
-
-The stored mastery estimate remains unchanged until new evidence arrives.
 
 No scheduled freshness mutation job is required.
 
@@ -749,18 +614,14 @@ No scheduled freshness mutation job is required.
 
 ## 14. Recovery Signal v0.1
 
-A full Recovery Quest lifecycle is not yet part of Phase 5 foundation.
-
-Phase 5 implements a deterministic **recovery signal**:
+Phase 5 v0.1 supports only:
 
 ```text
 none
 review_suggested
 ```
 
-### 14.1 Trigger rule
-
-For a Topic/Skill node, `review_suggested` when the latest credible component/item-group evidence meets both:
+For Topic/Skill, `review_suggested` is triggered by the latest credible component/item-group evidence when:
 
 ```text
 performance_pct < 70
@@ -772,61 +633,34 @@ and either:
 item_count >= 3 AND incorrect_count >= 2
 ```
 
-or, when item counts are unavailable but a component score is present:
+or, when item counts are unavailable but a component score exists:
 
 ```text
 performance_pct <= 50
 ```
 
-Subject-total evidence alone does not create a skill recovery signal.
+Subject-total evidence alone does not create a Skill recovery signal.
 
-### 14.2 Clearing rule
+A later credible observation for the same node clears the signal when `performance_pct >= 70`.
 
-A later credible evidence event for the same node clears the signal when:
-
-```text
-performance_pct >= 70
-```
-
-The historical low-performance evidence remains immutable.
-
-### 14.3 Future lifecycle
-
-The following states remain reserved for a later challenge-execution feature:
-
-```text
-recovery_active
-recovery_verified
-```
-
-Phase 5 v0.1 must not pretend they exist operationally before there is a real persisted recovery activity lifecycle.
+Reserved future states such as `recovery_active` and `recovery_verified` are not implemented until LearnWard has a real persisted challenge-execution lifecycle.
 
 ---
 
-## 15. Topic & Subject Presentation
+## 15. Subject & Topic Presentation
 
-### 15.1 Subject view
-
-Do not show a universal naive average such as:
-
-```text
-Math mastery = 73.42%
-```
+Do not present a universal naive subject average such as `Math mastery = 73.42%`.
 
 Subject presentation should combine:
 
-- recent verified assessment trend,
-- direct subject evidence state,
-- tracked topic counts,
-- child-owned topic distribution,
+- recent verified trend,
+- direct subject-root state,
+- tracked Topic counts,
+- distribution of observed Topic states,
 - needs-refresh count,
 - evidence coverage.
 
-### 15.2 Topic summary
-
-A topic may summarize only observed descendant skills and must show coverage.
-
-Example:
+A Topic may summarize observed descendant Skills only when coverage is shown, for example:
 
 ```text
 Linear Equations
@@ -836,22 +670,13 @@ Evidence coverage: 3 of 4 tracked skills
 
 Missing skills are unknown, not zero.
 
-### 15.3 Direct evidence vs aggregate summary
-
-The UI must distinguish:
-
-- direct evidence at a node,
-- roll-up summary from observed descendants.
-
-A roll-up must not overwrite the direct mastery projection for that node.
+Direct node evidence and descendant roll-up summaries remain distinct and one never overwrites the other.
 
 ---
 
 ## 16. Read Models / Query Functions
 
-Phase 5 should provide server-authoritative read functions rather than forcing the mobile client to reproduce learning logic independently.
-
-Suggested functions:
+Suggested server-authoritative read functions:
 
 ```text
 get_child_learning_overview(child_id)
@@ -861,19 +686,20 @@ get_next_challenge_candidates(child_id, subject_key?, limit default 3)
 
 Read functions:
 
+- validate IDs,
 - authenticate,
-- derive family from the child,
+- load child and derive family from database state,
 - authorize active adult or exact paired child device,
-- read current mastery projections and immutable evidence,
+- read current projections/immutable evidence,
 - derive confidence/freshness/recovery interpretation,
-- return explanations/coverage,
+- return explanation/coverage,
 - perform no economy mutation.
 
-They do not accept caller-supplied family IDs as authority.
+Caller-supplied family IDs are never authoritative.
 
 ---
 
-## 17. Server Processing Contract
+## 17. Trusted Server Processing Contract
 
 Suggested trusted command:
 
@@ -889,24 +715,31 @@ process_learning_event(
 ```text
 validate IDs
 -> authenticate
--> load verified_learning_event and derive family/child
+-> load VLE and derive authoritative family/child
 -> authorize active family adult
--> inspect command receipt replay
--> lock source VLE or equivalent processing serialization point
--> check whether VLE already has a completed learning processing event
+-> inspect and validate command receipt replay
+-> serialize logical processing for this VLE
+-> if already completed, return committed result
 -> load frozen assessment mappings
 -> materialize subject fallback + supported detailed evidence atoms
--> identify affected learning nodes
--> for each affected node in deterministic node-id order:
-     lock/create current projection row
-     load complete effective evidence in canonical chronology
-     run Mastery Engine v0.1
-     append mastery_state_revision
-     upsert child_mastery_states projection
+-> determine affected learning_node IDs
+-> sort affected node IDs ASC
+-> for each node in sorted order:
+     acquire a transaction-scoped child+node serialization lock that works even when no projection row exists
+-> after all required child+node locks are acquired:
+     for each affected node in sorted order:
+       read the complete immutable evidence set in canonical chronology
+       run Mastery Engine v0.1
+       append mastery_state_revision
+       upsert child_mastery_states projection
 -> append immutable learning_processing_event
 -> insert command_receipt
 -> return processing result
 ```
+
+The per `(child_id, learning_node_id)` lock may be implemented with a transaction-scoped PostgreSQL advisory lock derived collision-safely from the pair, or an equivalently safe create-then-row-lock protocol. The implementation must prove that **the first-ever concurrent write to a node is serialized**, not merely later updates after a projection row already exists.
+
+The rebuild evidence SELECT occurs **after** acquiring the child+node serialization lock. Under PostgreSQL READ COMMITTED, a transaction that waited for the lock then sees the prior transaction's committed evidence on its subsequent SELECT, allowing deterministic convergence.
 
 ### 17.2 Exactly-once logical processing
 
@@ -916,36 +749,24 @@ Conceptual table:
 public.learning_processing_events
 ```
 
-with unique:
+with unique logical processing by `verified_learning_event_id`.
 
-```text
-verified_learning_event_id
-```
-
-Retrying the same VLE must not duplicate evidence atoms or audit revisions.
+Retrying a VLE must not duplicate evidence atoms or economic-independent mastery effects.
 
 ### 17.3 Command receipt operation
 
-Phase 5 implementation may extend the command operation constraint with an operation such as:
-
-```text
-process_learning
-```
-
-Exact naming is frozen during implementation review, but it must remain explicit and backward-compatible with existing operations.
+Implementation may extend command receipt operation constraints with an explicit operation such as `process_learning`. Exact naming is frozen during implementation review and must remain backward-compatible with existing operations.
 
 ### 17.4 Delivery recovery
 
-Provide the Phase 3-equivalent recovery path:
+Provide the Phase-3-equivalent recovery mechanism, for example:
 
 ```text
 get_unprocessed_learning_events(family_id)
 catch_up_unprocessed_learning(family_id)
 ```
 
-or an equivalent server-authoritative mechanism.
-
-Network interruption after assessment verification must not permanently leave mastery unprocessed.
+or an equivalent server-authoritative path. A lost client response after assessment verification must not permanently leave mastery unprocessed.
 
 ---
 
@@ -953,31 +774,64 @@ Network interruption after assessment verification must not permanently leave ma
 
 ### 18.1 Same VLE processed twice
 
-Two concurrent calls for the same VLE must produce:
+Two concurrent calls for the same VLE produce one logical processing event and one logical evidence set. Retry/replay returns the committed result.
+
+### 18.2 Different VLEs affecting the same child/node
+
+This is the critical convergence case.
+
+Implementation must acquire a transaction-scoped serialization lock for `(child_id, learning_node_id)` **before** reading the evidence set used for rebuild. The lock mechanism must work even if `child_mastery_states` has no row yet.
+
+Affected node locks are acquired in deterministic `learning_node_id ASC` order to reduce deadlock risk.
+
+After a waiter obtains the lock, its canonical evidence SELECT occurs in a new READ COMMITTED statement snapshot and therefore includes evidence committed by the previous holder.
+
+Final state requirement:
 
 ```text
-1 logical learning_processing_event
-1 set of evidence atoms
-1 current projection outcome per affected node
+same committed evidence set
+=> same canonical mastery projection
 ```
 
-The losing/retry transaction returns the committed logical result.
-
-### 18.2 Different VLEs affecting the same node
-
-Transactions must lock affected mastery projection rows in deterministic `learning_node_id ASC` order to reduce deadlock risk.
-
-Because each transaction rebuilds from the complete immutable evidence set under serialization, the final projection must converge to the canonical result regardless of which request entered first.
+regardless of which VLE request entered first.
 
 ### 18.3 Different children
 
-Different child projections should proceed independently without a global mastery table lock.
+Different children proceed independently. No global mastery-table lock is justified.
+
+### 18.4 Mapping vs verification
+
+Mapping mutation and assessment terminal transition serialize on the assessment row. Exactly one stable mapping set is observed by verification and later learning processing.
 
 ---
 
-## 19. Next Challenge Engine v0.1
+## 19. Grade Semantics
 
-The recommendation engine generates candidates, not assignments.
+Phase 5 uses **two deliberately different grade concepts**.
+
+### 19.1 Evidence grade provenance
+
+`learning_evidence_events.grade_level_snapshot` comes from the immutable assessment/VLE grade snapshot. It answers:
+
+> At what known grade context did this historical evidence occur?
+
+It never changes when the child's profile grade later changes.
+
+### 19.2 Recommendation grade context
+
+Unlock/Explore recommendations concern what is appropriate **now**, so grade-scoped candidate filtering uses current:
+
+```text
+child_profiles.school_grade
+```
+
+If current grade is `NULL`, grade-specific Unlock/Explore fails closed. The engine does not infer current grade from old evidence.
+
+Broad mastery display and non-grade-specific Recovery/Developing/Refresh logic may still function when current grade is unknown.
+
+---
+
+## 20. Next Challenge Engine v0.1
 
 Maximum child-facing candidates:
 
@@ -985,23 +839,21 @@ Maximum child-facing candidates:
 3
 ```
 
-### 19.1 Priority order
+Priority:
 
 ```text
 A. Recovery
 B. Developing
 C. Refresh
-D. Unlock next skill
+D. Unlock
 E. Exploration
 ```
 
-### 19.2 Candidate type A — Recovery
+### Recovery
 
-Eligible when a Topic/Skill has `review_suggested`.
+Eligible when a Topic/Skill has `review_suggested`. Prefer the most recent meaningful recovery signal.
 
-Prefer the most recent meaningful recovery signal.
-
-### 19.3 Candidate type B — Developing
+### Developing
 
 Eligible when:
 
@@ -1009,9 +861,9 @@ Eligible when:
 50 <= mastery_score < 85
 ```
 
-with no higher-priority recovery signal.
+with no higher-priority Recovery candidate.
 
-### 19.4 Candidate type C — Refresh
+### Refresh
 
 Eligible when:
 
@@ -1020,29 +872,19 @@ mastery_score >= 70
 AND freshness = Needs refresh
 ```
 
-### 19.5 Candidate type D — Unlock
+### Unlock
 
-A dependent skill may be recommended when all explicit prerequisite skills are:
+A dependent Skill may be recommended only when all explicit prerequisite Skills are `Mastered` and current grade is compatible when the node is grade-scoped.
 
-```text
-Mastered
-```
+Unknown current grade fails closed for grade-specific Unlock.
 
-For grade-scoped nodes, the child's immutable/relevant grade context must be known and compatible.
+### Exploration
 
-Unknown grade fails closed for grade-specific Unlock/Explore logic rather than guessing.
+May offer an unseen nearby Skill when no urgent recovery exists, prerequisite conditions are satisfied, and current grade is compatible for grade-scoped nodes.
 
-### 19.6 Candidate type E — Exploration
+Unknown current grade fails closed for grade-specific Explore.
 
-May offer an unseen nearby skill when:
-
-- there is no urgent recovery candidate,
-- prerequisite requirements are satisfied,
-- grade filtering is compatible when the node is grade-scoped.
-
-### 19.7 Recommended difficulty heuristic
-
-Use the latest relevant performance, not reward configuration:
+### Recommended difficulty heuristic
 
 ```text
 < 50        -> corrective / easier
@@ -1051,42 +893,29 @@ Use the latest relevant performance, not reward configuration:
 >= 90       -> harder / next-skill when confidence supports it
 ```
 
-This remains a product heuristic, not a validated pedagogical law.
+This is a product heuristic, not a validated pedagogical law.
 
-### 19.8 Deterministic ranking tie-breaks
+### Deterministic tie-breaks
 
-Within the same priority class, order by explicit deterministic fields, for example:
+Within one priority class use explicit stable ordering such as:
 
-1. recovery urgency / freshness class,
-2. most recent evidence time where applicable,
+1. recovery urgency/freshness class,
+2. relevant evidence recency,
 3. lower mastery for Developing,
-4. configured graph `sort_order`,
-5. node ID as final stable tie-breaker.
+4. graph `sort_order`,
+5. node ID final tie-breaker.
 
-The exact comparator must be implemented identically in domain/database parity tests.
-
----
-
-## 20. Recommendation Persistence Policy
-
-Phase 5 v0.1 does **not** persist every recommendation result as authoritative state.
-
-Candidates are read-time projections because:
-
-- freshness changes with time,
-- new evidence may arrive,
-- graph/catalog availability may change,
-- the child should receive current choices.
-
-If future analytics need recommendation exposure/click events, record lightweight product analytics separately without making those events mastery inputs.
+Dart and database/read-model implementations must share canonical fixtures for this comparator.
 
 ---
 
-## 21. Recommendation Explanation Contract
+## 21. Recommendation Persistence & Explanation
 
-Every candidate includes an explanation reason code and child-safe text source.
+Recommendation results are read-time projections, not authoritative persisted learning state, because freshness, evidence and graph eligibility change over time.
 
-Suggested reason codes:
+If product analytics later records recommendation exposure/selection, those analytics remain separate and never feed mastery.
+
+Every candidate includes a reason code, for example:
 
 ```text
 recovery_recent_errors
@@ -1096,81 +925,55 @@ unlock_prerequisites_mastered
 explore_available_skill
 ```
 
-The UI should be able to answer:
-
-> Why is LearnWard suggesting this?
-
-without exposing opaque model scores.
+The UI must be able to answer *Why is LearnWard suggesting this?* without opaque model scores.
 
 ---
 
 ## 22. Security & RLS Contract
 
-### 22.1 Private child learning data
-
-The following are family/child-private:
+Private child learning data includes:
 
 - assessment mappings,
 - learning evidence events,
 - mastery revisions,
-- mastery current state,
-- processing events.
+- current mastery state,
+- learning processing events.
 
-RLS rules:
+Authorization:
 
-- active family adult may read child learning state in the family,
-- paired child may read only their exact child state,
-- sibling paired devices cannot read one another,
-- direct client mutation of authoritative evidence/mastery tables is revoked.
+- active family adult may read learning state for children in that family,
+- paired child device may read only its exact child,
+- sibling paired devices are denied,
+- direct client mutation of authoritative evidence/mastery history/projection tables is revoked.
 
-### 22.2 Platform reference data
+Global taxonomy/prerequisite data contains no child PII and is client read-only.
 
-Learning nodes/prerequisites are global reference data with no family PII.
-
-Clients receive read-only access to active catalog content.
-
-### 22.3 Trusted functions
-
-Public Phase 5 trusted functions must follow existing repository hardening:
+Trusted public Phase 5 functions follow repository hardening:
 
 - `SECURITY DEFINER`,
 - `SET search_path = ''`,
+- fully qualified objects,
 - exact signature grants,
-- revoke execution from `PUBLIC`/`anon`,
-- fully qualified object names,
-- authorize before returning private replay/result data.
+- execution revoked from `PUBLIC`/`anon`,
+- explicit authorization before private replay/result data is returned.
+
+Shared Child Mode under an adult session remains UX containment, not a cryptographic sibling boundary.
 
 ---
 
 ## 23. Offline & Client Behavior
 
-### 23.1 Verification remains the authority boundary
-
-Offline draft capture can continue as today.
+Offline assessment draft capture remains unchanged.
 
 The client must not display locally predicted mastery as authoritative before server processing.
 
-### 23.2 Optional mapping drafts
+Optional local mapping drafts, if later needed, are non-authoritative until accepted server-side and frozen with verification.
 
-If mapping editing requires offline support later, mappings may be stored locally as non-authoritative draft UI data.
-
-Only server-accepted mappings that are frozen with the verified assessment influence mastery.
-
-### 23.3 Processing delay UI
-
-After verification, a temporary state such as:
-
-```text
-Updating learning progress...
-```
-
-is acceptable.
-
-Do not fabricate a mastery update locally while the authoritative server processing is unresolved.
+A temporary post-verification state such as `Updating learning progress...` is acceptable.
 
 ---
 
-## 24. Domain/API Types
+## 24. Domain / Application Types
 
 Suggested pure Dart domain types:
 
@@ -1202,15 +1005,13 @@ GetNextChallengeCandidates
 CatchUpUnprocessedLearning
 ```
 
-Domain types must not import Flutter, Supabase, Drift or reward-economy repositories.
+Domain code imports neither Flutter, Supabase, Drift nor reward repositories.
 
 ---
 
 ## 25. UI Contract
 
-### Child learning overview
-
-Should emphasize understandable progress:
+Child view emphasizes understandable state and choice:
 
 ```text
 Mathematics
@@ -1225,11 +1026,7 @@ What do you want to tackle next?
 [Refresh geometry]
 ```
 
-Avoid fake precision and coercive copy.
-
-### Parent view
-
-Should expose enough explanation to trust the system:
+Parent view may expose more diagnostic detail:
 
 ```text
 Fractions
@@ -1240,113 +1037,94 @@ Evidence: 3 verified results
 Latest signal: Review suggested
 ```
 
-The parent view may show internal numeric mastery, but the child-facing default should emphasize bands/progress.
+Avoid fake precision, punitive language and sibling comparison.
 
 ---
 
 ## 26. Determinism & Parity Requirements
 
-Phase 5 is not complete if the Dart engine and PostgreSQL processing can disagree.
+Create canonical fixtures for:
 
-Create canonical fixtures that cover:
-
-- first evidence initialization,
-- subject/domain/topic/skill specificity weights,
-- below-level diagnostic weight,
-- multiple chronological updates,
+- first observation initialization,
+- Subject/Domain/Topic/Skill specificity,
+- below-level weighting,
+- chronological updates,
 - exact timestamp tie-breaks,
 - delayed older evidence arriving after newer evidence,
-- confidence thresholds,
-- two-distinct-VLE High-confidence requirement,
+- two concurrent first-ever updates to the same child/node,
+- confidence thresholds and distinct-VLE rule,
 - freshness boundaries,
 - recovery signal/clear,
-- mastery declaration,
-- recommendation priority/tie-breaks.
+- Mastered declaration,
+- recommendation priority/tie-breaks,
+- unknown current grade filtering,
+- reward/economy invariance.
 
-Expected result:
+Required invariant:
 
 ```text
-Pure Dart engine output == PostgreSQL integration output
+Pure Dart canonical result == PostgreSQL integration/read-model canonical result
 ```
 
-for canonical scenarios.
+for the same academic inputs.
 
 ---
 
-## 27. Required Database Tests
+## 27. Required Database / Integration Tests
 
-At minimum Phase 5 implementation must test:
+At minimum implementation must prove:
 
-1. cross-family mastery read denied,
-2. paired child A cannot read child B mastery,
-3. child cannot directly insert/update/delete learning evidence,
-4. child cannot directly mutate mastery projection/revisions,
-5. global taxonomy cannot be client-mutated,
-6. whole-assessment score cannot produce skill evidence,
-7. subject fallback is created without detailed mappings,
-8. duplicate processing command is idempotent,
-9. concurrent same-VLE processing produces one logical result,
-10. late older evidence rebuilds to canonical result,
-11. exact timestamp tie uses immutable ID tie-breaker,
-12. missing grade does not fabricate grade-specific unlock,
-13. reward/economy changes do not change mastery output,
-14. catch-up processes interrupted/unprocessed VLEs,
-15. append-only audit/history triggers reject mutation.
+1. cross-family learning-state read denied,
+2. paired child A cannot read child B,
+3. direct client writes to evidence/revisions/projections denied,
+4. taxonomy/prerequisites cannot be client-mutated,
+5. explicit Subject mapping is rejected/unsupported because Subject fallback is automatic,
+6. whole-assessment score cannot create Skill evidence,
+7. subject fallback exists without detailed mapping,
+8. mapping mutation cannot race verification into partial state,
+9. duplicate VLE processing is idempotent,
+10. concurrent same-VLE processing produces one logical result,
+11. concurrent different VLEs on a previously unseen same child/node converge correctly,
+12. late older evidence rebuilds to canonical result,
+13. exact timestamp ties use immutable evidence ID,
+14. missing current grade blocks grade-scoped Unlock/Explore without fabricating grade,
+15. historic evidence retains immutable grade snapshot after profile grade changes,
+16. reward/economy changes do not change mastery/recommendation output,
+17. catch-up processes interrupted/unprocessed VLEs,
+18. append-only audit/history mutation is rejected.
 
 ---
 
-## 28. Required Domain/Application Tests
+## 28. Domain / Application / Flutter Tests
 
 ### Domain
 
-Table-driven tests for:
-
-- EWMA calculation,
-- initialization,
-- specificity weights,
-- below-level weighting,
-- mastery bands,
-- confidence units,
-- freshness,
-- recovery signal,
-- recommendation ranking,
-- deterministic canonical sorting.
+Table-driven tests for EWMA, initialization, specificity, level weighting, bands, confidence, freshness, recovery, canonical sorting and recommendation ranking.
 
 ### Application
 
-Use-case tests for:
+Test mapping validation, retry, missing-mapping subject fallback, catch-up, repository boundaries, and absence of reward-repository dependency.
 
-- mapping validation,
-- processing/retry,
-- missing mapping subject fallback,
-- recovery/catch-up,
-- read model authorization assumptions at port boundaries,
-- no dependency on reward repository.
+### Flutter
 
----
+At minimum cover:
 
-## 29. Required Flutter Tests
-
-At minimum:
-
-- Unseen / Low-confidence state,
-- Developing / Secure / Mastered presentation,
-- Needs-refresh label without mastery-score decay,
+- Unseen/Low confidence,
+- Developing/Secure/Mastered,
+- Needs refresh without score decay,
 - recovery suggestion copy,
-- up to three recommendation choices,
-- no recommendation available state,
+- up to three choices,
+- no-candidate state,
 - processing-pending state,
 - coverage display,
-- child cannot see sibling state through paired-child navigation,
-- accessibility semantics/font scaling for mastery indicators.
+- paired-child sibling isolation through navigation,
+- accessibility semantics/font scaling.
 
 ---
 
-## 30. Observability / Metrics Alignment
+## 29. Observability / Metrics
 
-Phase 5 enables the intended North Star definition because a verified academic event can now contribute to progress/mastery state.
-
-Authoritative/product events may include:
+Potential events:
 
 ```text
 learning_event_processed
@@ -1357,24 +1135,19 @@ next_challenge_viewed
 next_challenge_selected
 ```
 
-Do not put raw assessment evidence, image content, or sensitive child academic details into generic analytics payloads.
+Generic analytics payloads must not include raw evidence media or unnecessary child academic detail.
 
-Relevant product metrics:
-
-- VLPE / active child / week,
-- recovery completion later when real recovery lifecycle exists,
-- self-chosen challenge rate,
-- interest in progress after reward novelty declines.
+Relevant product metrics include VLPE/active child/week and self-chosen challenge rate. Recovery-completion metrics wait until a real recovery execution lifecycle exists.
 
 ---
 
-## 31. Migration Plan for Implementation Phase
+## 30. Migration Plan for Implementation Phase
 
 This design PR creates **no migration**.
 
-After approval, Phase 5.1 implementation should add a new migration rather than edit frozen Phase 1–4 files.
+After approval, Phase 5 implementation is additive. Frozen Phase 1–4 migration files are never rewritten.
 
-Expected additive database areas:
+Expected semantic database areas:
 
 ```text
 learning_nodes
@@ -1387,49 +1160,50 @@ learning_processing_events
 Phase 5 RPCs / RLS / grants / triggers / indexes
 ```
 
-Exact names may be refined during implementation review, but the semantic boundaries above are design invariants.
+Exact physical names may be refined during implementation review without changing the frozen semantic boundaries.
 
 ---
 
-## 32. Explicit Deferred Scope
+## 31. Explicit Deferred Scope
 
 Deferred beyond Phase 5 v0.1:
 
-- full national curriculum coverage,
-- family-created custom skill graphs,
+- full curriculum coverage,
+- family-authored authoritative skill graphs,
 - automatic AI/OCR authoritative classification,
-- probabilistic/Bayesian mastery modeling,
-- calibrated item difficulty / IRT,
-- source-diversity confidence weighting,
-- forgetting-curve mastery decay,
-- teacher organization accounts,
-- full Recovery Quest execution lifecycle,
-- in-app lesson/content generation,
+- Bayesian/IRT mastery models,
+- forgetting-curve score decay,
+- calibrated source-diversity confidence,
+- post-verification mapping correction workflow,
+- teacher/school organizations,
+- full Recovery Quest execution,
+- in-app learning content generation,
 - recommendation reinforcement learning,
 - sibling/peer benchmarks.
 
 ---
 
-## 33. Phase 5 Exit Gates
+## 32. Exit Gates
 
-### Phase 5.1 Exit Gate
+### Phase 5.1
 
-> The same set of verified learning evidence always produces the same current mastery state regardless of request arrival order; subject-level progress works without detailed mappings; detailed skill claims never exceed evidence granularity.
+> The same committed verified evidence set always produces the same current mastery projection regardless of request arrival order; first-write concurrency is safe; subject-level progress works without detailed mappings; detailed claims never exceed evidence granularity.
 
-### Phase 5.2 Exit Gate
+### Phase 5.2
 
-> Confidence, freshness and recovery interpretations are explainable and deterministic, and the child can receive up to three useful next-challenge candidates without any reward/economy signal affecting academic recommendation ranking.
+> Confidence, freshness and recovery interpretations are explainable/deterministic, and the child receives at most three useful next-challenge candidates without reward/economy signals affecting academic ranking.
 
-### Overall Phase 5 Freeze Gate
+### Overall Phase 5 freeze
 
 Phase 5 may be frozen only after:
 
-- design/ADR approved,
-- all additive migrations reviewed,
+- design/ADR approval,
+- additive migration review,
 - domain/database parity green,
 - RLS/adversarial tests green,
-- concurrency/late-evidence tests green,
+- late-evidence and first-write concurrency tests green,
+- reward-independence tests green,
 - Android/iOS CI green,
 - independent implementation review passes,
 - post-merge CI succeeds,
-- freeze receipt accurately reflects actual code.
+- freeze receipt matches actual code.
