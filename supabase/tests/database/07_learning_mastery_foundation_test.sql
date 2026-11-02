@@ -113,10 +113,15 @@ select is(
   'pilot-v0.1 contains all canonical subject keys'
 );
 
+-- Seed a test draft catalog for hierarchy & uniqueness mutation validation
+insert into public.learning_catalog_versions (version, status) values ('draft-test-v1', 'draft');
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values ('draft-test-v1', 'subject', 'math', 'draft-test-v1:subject:math', 'Math', null);
+
 -- Test 10: Subject root uniqueness per catalog
 select throws_ok(
   $$ insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
-     values ('pilot-v0.1', 'subject', 'math', 'pilot-v0.1:subject:math:dup', 'Duplicate Math', null) $$,
+     values ('draft-test-v1', 'subject', 'math', 'draft-test-v1:subject:math:dup', 'Duplicate Math', null) $$,
   '23505',
   NULL,
   'Duplicate Subject root node for same subject and catalog is rejected by unique index'
@@ -125,11 +130,6 @@ select throws_ok(
 -- ===========================================================================
 -- SECTION 3: HIERARCHY & PREREQUISITE INTEGRITY (Tests 11-16)
 -- ===========================================================================
-
--- Seed a test draft catalog for hierarchy mutation validation
-insert into public.learning_catalog_versions (version, status) values ('draft-test-v1', 'draft');
-insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
-values ('draft-test-v1', 'subject', 'math', 'draft-test-v1:subject:math', 'Math', null);
 
 -- Test 11: Cross-subject parent rejected with LW004
 select throws_ok(
@@ -159,12 +159,40 @@ select throws_ok(
   'Non-subject node without parent_id is rejected with LW004'
 );
 
+-- Seed nodes in draft-test-v1 for prerequisite integrity tests
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values ('draft-test-v1', 'subject', 'english', 'draft-test-v1:subject:english', 'English', null);
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values ('draft-test-v1', 'domain', 'math', 'draft-test-v1:domain:math1', 'Math Domain',
+        (select id from public.learning_nodes where catalog_version = 'draft-test-v1' and canonical_key = 'draft-test-v1:subject:math'));
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values ('draft-test-v1', 'domain', 'english', 'draft-test-v1:domain:eng1', 'English Domain',
+        (select id from public.learning_nodes where catalog_version = 'draft-test-v1' and canonical_key = 'draft-test-v1:subject:english'));
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values ('draft-test-v1', 'topic', 'math', 'draft-test-v1:topic:math1', 'Math Topic',
+        (select id from public.learning_nodes where catalog_version = 'draft-test-v1' and canonical_key = 'draft-test-v1:domain:math1'));
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values ('draft-test-v1', 'topic', 'english', 'draft-test-v1:topic:eng1', 'English Topic',
+        (select id from public.learning_nodes where catalog_version = 'draft-test-v1' and canonical_key = 'draft-test-v1:domain:eng1'));
+
+insert into public.learning_nodes (id, catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values ('d0000001-0000-0000-0000-000000000001'::uuid, 'draft-test-v1', 'skill', 'math', 'draft-test-v1:skill:math1', 'Math Skill 1',
+        (select id from public.learning_nodes where catalog_version = 'draft-test-v1' and canonical_key = 'draft-test-v1:topic:math1'));
+
+insert into public.learning_nodes (id, catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values ('d0000001-0000-0000-0000-000000000002'::uuid, 'draft-test-v1', 'skill', 'english', 'draft-test-v1:skill:eng1', 'English Skill 1',
+        (select id from public.learning_nodes where catalog_version = 'draft-test-v1' and canonical_key = 'draft-test-v1:topic:eng1'));
+
 -- Test 14: Prerequisite edge enforces composite foreign key (cross-subject skill rejected with 23503)
 select throws_ok(
   $$ insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
-     values ('pilot-v0.1', 'math',
-             'b0000003-0000-0000-0000-000000000001'::uuid, -- Math skill
-             'b0000003-0000-0000-0000-000000000003'::uuid) $$, -- English skill
+     values ('draft-test-v1', 'math',
+             'd0000001-0000-0000-0000-000000000001'::uuid, -- Math skill
+             'd0000001-0000-0000-0000-000000000002'::uuid) $$, -- English skill
   '23503',
   NULL,
   'Prerequisite edge linking cross-subject nodes is rejected by composite foreign key (23503)'
@@ -173,9 +201,9 @@ select throws_ok(
 -- Test 15: Prerequisite self-loop rejected by check constraint
 select throws_ok(
   $$ insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
-     values ('pilot-v0.1', 'math',
-             'b0000003-0000-0000-0000-000000000001'::uuid,
-             'b0000003-0000-0000-0000-000000000001'::uuid) $$,
+     values ('draft-test-v1', 'math',
+             'd0000001-0000-0000-0000-000000000001'::uuid,
+             'd0000001-0000-0000-0000-000000000001'::uuid) $$,
   '23514',
   NULL,
   'Prerequisite self-loop is rejected by check constraint (23514)'
@@ -1559,12 +1587,12 @@ select throws_ok(
   'Reactivating retired catalog version rejected with LW102 (retired is terminal)'
 );
 
--- Test 108: Promoting a retired catalog version is rejected with LW102
+-- Test 108: Promoting a retired catalog version is rejected with LW004
 select throws_ok(
   $$ select public.promote_learning_catalog_version('pilot-v0.1') $$,
-  'LW102',
+  'LW004',
   NULL,
-  'Promoting a retired catalog version is rejected with LW102'
+  'Promoting a retired catalog version is rejected with LW004'
 );
 
 -- Test 109: Direct DELETE of draft catalog version by superuser succeeds
@@ -1606,6 +1634,25 @@ insert into public.assessment_learning_mappings (
   '50000000-0000-0000-0000-000000000001'::uuid
 );
 
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000011'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000011'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid
+) on conflict do nothing;
+
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000011'::uuid,
+  '70000000-0000-0000-0000-000000000011'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000011'::uuid,
+  'verified', 'pending_review', 'verified',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
 insert into public.verified_learning_events (
   id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
   raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
@@ -1616,7 +1663,7 @@ insert into public.verified_learning_events (
   'c5000000-0000-0000-0000-000000000002'::uuid,
   'math', 'Mathematics', 'Sticky Quiz 1', 'quiz', 'normal',
   95, 100, 9.50, now() - interval '10 days', now() - interval '10 days', '50000000-0000-0000-0000-000000000001'::uuid,
-  gen_random_uuid(), 2, 'pilot-v0.1'
+  'e5000000-0000-0000-0000-000000000011'::uuid, 2, 'pilot-v0.1'
 );
 
 -- Assessment 2: 90/100, occurred 8 days ago
@@ -1644,6 +1691,25 @@ insert into public.assessment_learning_mappings (
   '50000000-0000-0000-0000-000000000001'::uuid
 );
 
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000012'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000012'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid
+) on conflict do nothing;
+
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000012'::uuid,
+  '70000000-0000-0000-0000-000000000012'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000012'::uuid,
+  'verified', 'pending_review', 'verified',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
 insert into public.verified_learning_events (
   id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
   raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
@@ -1654,7 +1720,7 @@ insert into public.verified_learning_events (
   'c5000000-0000-0000-0000-000000000002'::uuid,
   'math', 'Mathematics', 'Sticky Quiz 2', 'quiz', 'normal',
   90, 100, 9.00, now() - interval '8 days', now() - interval '8 days', '50000000-0000-0000-0000-000000000001'::uuid,
-  gen_random_uuid(), 2, 'pilot-v0.1'
+  'e5000000-0000-0000-0000-000000000012'::uuid, 2, 'pilot-v0.1'
 );
 
 -- Assessment 3: 92/100, occurred 5 days ago
@@ -1682,6 +1748,25 @@ insert into public.assessment_learning_mappings (
   '50000000-0000-0000-0000-000000000001'::uuid
 );
 
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000013'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000013'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid
+) on conflict do nothing;
+
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000013'::uuid,
+  '70000000-0000-0000-0000-000000000013'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000013'::uuid,
+  'verified', 'pending_review', 'verified',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
 insert into public.verified_learning_events (
   id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
   raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
@@ -1692,7 +1777,7 @@ insert into public.verified_learning_events (
   'c5000000-0000-0000-0000-000000000002'::uuid,
   'math', 'Mathematics', 'Sticky Quiz 3', 'quiz', 'normal',
   92, 100, 9.20, now() - interval '5 days', now() - interval '5 days', '50000000-0000-0000-0000-000000000001'::uuid,
-  gen_random_uuid(), 2, 'pilot-v0.1'
+  'e5000000-0000-0000-0000-000000000013'::uuid, 2, 'pilot-v0.1'
 );
 
 -- Assessment 4: 96/100, occurred 2 days ago
@@ -1720,6 +1805,25 @@ insert into public.assessment_learning_mappings (
   '50000000-0000-0000-0000-000000000001'::uuid
 );
 
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000014'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000014'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid
+) on conflict do nothing;
+
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000014'::uuid,
+  '70000000-0000-0000-0000-000000000014'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000014'::uuid,
+  'verified', 'pending_review', 'verified',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
 insert into public.verified_learning_events (
   id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
   raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
@@ -1730,7 +1834,7 @@ insert into public.verified_learning_events (
   'c5000000-0000-0000-0000-000000000002'::uuid,
   'math', 'Mathematics', 'Sticky Quiz 4', 'quiz', 'normal',
   96, 100, 9.60, now() - interval '2 days', now() - interval '2 days', '50000000-0000-0000-0000-000000000001'::uuid,
-  gen_random_uuid(), 2, 'pilot-v0.1'
+  'e5000000-0000-0000-0000-000000000014'::uuid, 2, 'pilot-v0.1'
 );
 
 -- Process all 4 events sequentially to build up evidence and reach High confidence
@@ -1832,6 +1936,25 @@ insert into public.assessment_learning_mappings (
   '50000000-0000-0000-0000-000000000001'::uuid
 );
 
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000015'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000015'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid
+) on conflict do nothing;
+
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000015'::uuid,
+  '70000000-0000-0000-0000-000000000015'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000015'::uuid,
+  'verified', 'pending_review', 'verified',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
 insert into public.verified_learning_events (
   id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
   raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
@@ -1842,7 +1965,7 @@ insert into public.verified_learning_events (
   'c5000000-0000-0000-0000-000000000002'::uuid,
   'math', 'Mathematics', 'Lower Score Quiz 5', 'quiz', 'normal',
   60, 100, 6.00, now() - interval '1 day', now() - interval '1 day', '50000000-0000-0000-0000-000000000001'::uuid,
-  gen_random_uuid(), 2, 'pilot-v0.1'
+  'e5000000-0000-0000-0000-000000000015'::uuid, 2, 'pilot-v0.1'
 );
 
 do $$
