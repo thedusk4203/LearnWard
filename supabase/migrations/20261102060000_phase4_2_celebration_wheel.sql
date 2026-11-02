@@ -277,22 +277,7 @@ begin
     raise exception 'Child profile not found or inactive' using errcode = 'P0002';
   end if;
 
-  -- Validate family timezone immediately (FAIL CLOSED on missing/corrupt timezone)
-  select timezone into v_family_tz
-  from public.families
-  where id = v_family_id;
-
-  if v_family_tz is null or trim(v_family_tz) = '' then
-    raise exception 'Family timezone is missing or invalid' using errcode = 'LW004';
-  end if;
-
-  begin
-    v_test_tz := now() at time zone v_family_tz;
-  exception when others then
-    raise exception 'Invalid family timezone: %', v_family_tz using errcode = 'LW004';
-  end;
-
-  -- 3. Authorize caller against resolved family
+  -- 3. Authorize caller against resolved family (BEFORE any timezone or config checks)
   v_is_adult := private.is_active_family_adult(v_family_id);
   v_is_child := private.is_active_child_device(v_family_id, p_child_id);
 
@@ -358,8 +343,23 @@ begin
     );
   end if;
 
-  -- 5. Lock ordering:
-  -- Step 1: Lock/read family_wheel_settings FOR SHARE
+  -- 5. ONLY FOR A NEW SPIN:
+  -- Step 1: Validate family timezone (FAIL CLOSED on missing/corrupt timezone)
+  select timezone into v_family_tz
+  from public.families
+  where id = v_family_id;
+
+  if v_family_tz is null or trim(v_family_tz) = '' then
+    raise exception 'Family timezone is missing or invalid' using errcode = 'LW004';
+  end if;
+
+  begin
+    v_test_tz := now() at time zone v_family_tz;
+  exception when others then
+    raise exception 'Invalid family timezone: %', v_family_tz using errcode = 'LW004';
+  end;
+
+  -- Step 2: Lock/read family_wheel_settings FOR SHARE
   select spin_cost_minor, daily_spin_cap, is_enabled
   into v_spin_cost_minor, v_daily_spin_cap, v_is_enabled
   from public.family_wheel_settings
@@ -376,7 +376,13 @@ begin
     raise exception 'Wheel is currently disabled for this family' using errcode = 'LW206';
   end if;
 
-  -- Step 2: Lock and materialize eligible Wheel reward rows in ONE authoritative stabilized snapshot
+  -- Step 3: Catalog stabilization table lock
+  -- Tradeoff: Table-level SHARE lock serializes concurrent reward catalog writes (INSERT/UPDATE/DELETE)
+  -- while taking the snapshot, avoiding hybrid states. Correctness now -> family-scoped optimization
+  -- later if real multi-tenant contention appears.
+  lock table public.rewards in share mode;
+
+  -- Materialize eligible Wheel reward rows in ONE authoritative stabilized snapshot
   -- Captured in deterministic order: id ASC FOR SHARE
   for v_reward in
     select
@@ -419,7 +425,7 @@ begin
     raise exception 'Wheel requires at least 3 active eligible rewards (found %)', v_candidate_count using errcode = 'LW203';
   end if;
 
-  -- Step 3: Lock child_balances FOR UPDATE
+  -- Step 4: Lock child_balances FOR UPDATE
   select * into v_balance
   from public.child_balances
   where child_id = p_child_id and family_id = v_family_id
@@ -433,7 +439,7 @@ begin
     raise exception 'Insufficient RP balance' using errcode = 'LW201';
   end if;
 
-  -- Step 4: Evaluate family timezone and daily spin cap
+  -- Step 5: Evaluate family timezone and daily spin cap
   v_local_date := (now() at time zone v_family_tz)::date;
   v_today_start := v_local_date::timestamp at time zone v_family_tz;
   v_today_end := (v_local_date + 1)::timestamp at time zone v_family_tz;

@@ -1,5 +1,5 @@
 begin;
-select plan(64);
+select plan(67);
 
 -- ---------------------------------------------------------------------------
 -- 0. FIXTURES SETUP (superuser context)
@@ -699,15 +699,27 @@ on conflict (family_id, auth_user_id) do nothing;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
--- Test 59: Corrupt timezone fails closed with LW004
+-- Test 59: Authorized caller with corrupt timezone fails closed with LW004
 select throws_ok(
   $$ select public.spin_reward_wheel('ca420000-0000-0000-0000-000000000555'::uuid, 'ca420000-0000-0000-0000-000000000005'::uuid) $$,
   'LW004',
   NULL,
-  'Corrupt family timezone fails closed with LW004 before economic mutation'
+  'Authorized caller on corrupt family timezone fails closed with LW004'
 );
 
--- Test 60: get_wheel_status also fails closed with LW004 on corrupt timezone
+-- Test 60: Unauthorized caller probing child with corrupt timezone is denied with 42501 (NO side channel)
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.spin_reward_wheel('ca420000-0000-0000-0000-000000000556'::uuid, 'ca420000-0000-0000-0000-000000000005'::uuid) $$,
+  '42501',
+  NULL,
+  'Unauthorized probe on child with corrupt timezone denied with 42501 without leaking LW004'
+);
+
+-- Test 61: get_wheel_status fails closed with LW004 for authorized caller on corrupt timezone
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 select throws_ok(
   $$ select public.get_wheel_status('ca420000-0000-0000-0000-000000000005'::uuid) $$,
   'LW004',
@@ -716,21 +728,59 @@ select throws_ok(
 );
 
 -- ---------------------------------------------------------------------------
--- 11. GET_WHEEL_STATUS RPC TESTS (Tests 61-64)
+-- 11. REPLAY SURVIVES LATER TIMEZONE CORRUPTION (Tests 62-63)
+-- ---------------------------------------------------------------------------
+
+-- Switch to Paired Child A1 who already has successful spins
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
+
+-- Temporarily corrupt Family A's timezone
+reset role;
+update public.families
+set timezone = 'Corrupted/Timezone_Name'
+where id = 'fa420000-0000-0000-0000-000000000001'::uuid;
+
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
+
+-- Test 62: Replay of existing committed spin succeeds despite subsequent timezone corruption
+select is(
+  (select (public.spin_reward_wheel('ca420000-0000-0000-0000-000000000104'::uuid, 'ca420000-0000-0000-0000-000000000001'::uuid) ->> 'spin_id')),
+  (select id::text from public.wheel_spins where child_id = 'ca420000-0000-0000-0000-000000000001'::uuid limit 1),
+  'Replay returns historical spin even if family timezone was corrupted after initial commit'
+);
+
+-- Test 63: A NEW spin command after timezone corruption fails with LW004
+select throws_ok(
+  $$ select public.spin_reward_wheel(gen_random_uuid(), 'ca420000-0000-0000-0000-000000000001'::uuid) $$,
+  'LW004',
+  NULL,
+  'New spin command on corrupted timezone correctly fails closed with LW004'
+);
+
+-- Restore Family A's valid timezone
+reset role;
+update public.families
+set timezone = 'America/New_York'
+where id = 'fa420000-0000-0000-0000-000000000001'::uuid;
+
+-- ---------------------------------------------------------------------------
+-- 12. GET_WHEEL_STATUS RPC TESTS (Tests 64-67)
 -- ---------------------------------------------------------------------------
 
 -- Switch to Paired Child A1
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
 
--- Test 61: Paired Child A1 calls get_wheel_status
+-- Test 64: Paired Child A1 calls get_wheel_status
 select is(
   (select (public.get_wheel_status('ca420000-0000-0000-0000-000000000001'::uuid) ->> 'spins_today')::integer),
   3,
   'get_wheel_status returns correct server-authoritative spins_today (3)'
 );
 
--- Test 62: Parent Owner A calls get_wheel_status
+-- Test 65: Parent Owner A calls get_wheel_status
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 select is(
@@ -739,7 +789,7 @@ select is(
   'get_wheel_status returns correct spin_cost_minor for parent caller'
 );
 
--- Test 63: Other family user calling get_wheel_status is denied
+-- Test 66: Other family user calling get_wheel_status is denied
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
 select throws_ok(
@@ -749,7 +799,7 @@ select throws_ok(
   'get_wheel_status denied for user from another family'
 );
 
--- Test 64: Unauthenticated caller denied
+-- Test 67: Unauthenticated caller denied
 reset role;
 set local role anon;
 select throws_ok(

@@ -229,7 +229,11 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
         setState(() {
           _isSpinning = false;
           _pendingCommand = remainingPending;
-          _errorMessage = _friendlyErrorMessage(e.toString());
+          // If pending command remains, outcome is uncertain: do NOT display definite-failure wording.
+          // The recovery banner carries the state.
+          _errorMessage = remainingPending != null
+              ? null
+              : _friendlyErrorMessage(e.toString());
         });
       }
     }
@@ -277,7 +281,10 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
         setState(() {
           _isRetryingPending = false;
           _pendingCommand = remainingPending;
-          _errorMessage = _friendlyErrorMessage(e.toString());
+          // If pending command remains, outcome is uncertain: do NOT display definite-failure wording.
+          _errorMessage = remainingPending != null
+              ? null
+              : _friendlyErrorMessage(e.toString());
         });
       }
     }

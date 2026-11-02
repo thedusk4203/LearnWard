@@ -58,7 +58,8 @@ $$P(\text{reward}_i) = \frac{w_i}{\sum_{j=1}^{N} w_j}$$
 ## Decision 4 — Append-Only Ledger Spending, Compensating Refunds, and No Rerolls
 
 In accordance with Phase 3 immutability invariant `LW102`:
-1. **Spending:** Store redemptions and Wheel spins insert a negative `amount_minor` row into `public.rp_ledger` with reason codes `'store_redemption'` and `'wheel_spin'`.
+1. **Spending:** Store redemptions and Wheel spins insert a negative `amount_minor` row into `public.rp_ledger` with reason codes `'store_redemption'` and `'wheel_spin'`. For both Store and Wheel operations, `source_type` is `'reward_redemption'` and `source_id` is the `redemption_id`, with `metadata` capturing `spin_id` for Wheel spins.
+   - *Rationale:* The RP economic transaction is anchored to the immutable `reward_redemption`, while `wheel_spins` remains the selection/audit object linked through metadata and composite foreign key (`fk_wheel_spins_redemption_composite`). This ensures all reward debits and their corresponding cancellation refunds share the exact same source entity identity (`reward_redemption`).
 2. **Immutability:** Existing ledger rows are never edited or deleted.
 3. **Refunds:** If a parent cancels an unfulfilled redemption, the original debit row remains intact. A new compensating positive row (`amount_minor = +cost`) is appended to `public.rp_ledger` with `reason_code = 'redemption_refund'`.
 4. **Reconciliation Invariant:** The invariant $\text{rp\_balance\_minor} = \sum \text{rp\_ledger.amount\_minor}$ continues to hold across all spending and refund operations.

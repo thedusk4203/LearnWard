@@ -395,11 +395,6 @@ class _ParentWheelSettingsScreenState
       );
     }
 
-    final totalWeight = _wheelRewards.fold<int>(
-      0,
-      (sum, r) => sum + (r.wheelTier?.relativeWeight ?? 60),
-    );
-
     final commonCount = _wheelRewards
         .where((r) => r.wheelTier == WheelTier.common)
         .length;
@@ -411,46 +406,27 @@ class _ParentWheelSettingsScreenState
         .length;
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildTierRow(
-          'Common (weight 60)',
-          commonCount,
-          60,
-          totalWeight,
-          Colors.blue,
-        ),
+        _buildTierRow('Common', 60, commonCount, Colors.blue),
         const SizedBox(height: AppSpacing.xs),
-        _buildTierRow(
-          'Special (weight 30)',
-          specialCount,
-          30,
-          totalWeight,
-          Colors.purple,
-        ),
+        _buildTierRow('Special', 30, specialCount, Colors.purple),
         const SizedBox(height: AppSpacing.xs),
-        _buildTierRow(
-          'Rare (weight 10)',
-          rareCount,
-          10,
-          totalWeight,
-          Colors.amber,
+        _buildTierRow('Rare', 10, rareCount, Colors.amber),
+        const SizedBox(height: AppSpacing.sm),
+        Text(
+          'Actual probability depends on which rewards are eligible for each child.',
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade600,
+            fontStyle: FontStyle.italic,
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildTierRow(
-    String label,
-    int count,
-    int weightPerItem,
-    int totalWeight,
-    Color color,
-  ) {
-    final tierTotalWeight = count * weightPerItem;
-    final pct = totalWeight > 0
-        ? ((tierTotalWeight / totalWeight) * 100.0).toStringAsFixed(1)
-        : '0.0';
-
+  Widget _buildTierRow(String tierName, int weight, int count, Color color) {
     return Row(
       children: [
         Container(
@@ -461,13 +437,9 @@ class _ParentWheelSettingsScreenState
         const SizedBox(width: AppSpacing.xs),
         Expanded(
           child: Text(
-            '$label: $count items',
+            '$tierName — weight $weight — $count configured items',
             style: const TextStyle(fontSize: 13),
           ),
-        ),
-        Text(
-          '$pct% chance',
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
         ),
       ],
     );
