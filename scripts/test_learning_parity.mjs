@@ -149,8 +149,8 @@ async function main() {
 
         update public.assessments set status = 'verified' where id = '${assessId}';
 
-        set local role authenticated;
-        select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+        set role authenticated;
+        select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
         select public.process_learning_event('${cmdId}'::uuid, '${vleId}'::uuid);
       `;
 
@@ -164,8 +164,8 @@ async function main() {
 
     // Query get_child_mastery for this child
     const querySql = `
-      set local role authenticated;
-      select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+      set role authenticated;
+      select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
       select public.get_child_mastery('${childId}'::uuid);
     `;
 

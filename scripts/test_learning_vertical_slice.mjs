@@ -93,8 +93,8 @@ async function main() {
 
   console.log('4. Parent sets learning mappings for components...');
   const setMappingsSql = `
-    set local role authenticated;
-    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.set_assessment_learning_mappings(
       '${assessId}'::uuid,
       '[
@@ -136,8 +136,8 @@ async function main() {
 
   console.log('6. Processing learning event...');
   const procSql = `
-    set local role authenticated;
-    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.process_learning_event('${cmdId}'::uuid, '${vleId}'::uuid);
   `;
   const procRes = await runPsql(procSql);
@@ -149,8 +149,8 @@ async function main() {
 
   console.log('7. Querying child mastery read model...');
   const getMasterySql = `
-    set local role authenticated;
-    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.get_child_mastery('${childId}'::uuid);
   `;
   const getMasteryRes = await runPsql(getMasterySql);

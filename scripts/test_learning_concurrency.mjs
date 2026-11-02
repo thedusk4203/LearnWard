@@ -143,14 +143,14 @@ async function main() {
 
   // Fire process_learning_event for vleId1 and vleId2 concurrently
   const procSql1 = `
-    set local role authenticated;
-    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.process_learning_event('${cmd1}'::uuid, '${vleId1}'::uuid);
   `;
 
   const procSql2 = `
-    set local role authenticated;
-    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.process_learning_event('${cmd2}'::uuid, '${vleId2}'::uuid);
   `;
 
@@ -185,8 +185,8 @@ async function main() {
 
   const replayCmd = crypto.randomUUID();
   const replaySql = `
-    set local role authenticated;
-    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.process_learning_event('${replayCmd}'::uuid, '${vleId1}'::uuid);
   `;
 
@@ -213,8 +213,8 @@ async function main() {
 
   const newCmd = crypto.randomUUID();
   const newCmdSql = `
-    set local role authenticated;
-    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.process_learning_event('${newCmd}'::uuid, '${vleId1}'::uuid);
   `;
 
@@ -269,14 +269,14 @@ async function main() {
   }
 
   const catchUpSql = `
-    set local role authenticated;
-    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.catch_up_unprocessed_learning('${familyId}'::uuid);
   `;
 
   const manualSql = `
-    set local role authenticated;
-    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
     select public.process_learning_event('${manualCmd}'::uuid, '${vleId3}'::uuid);
   `;
 
