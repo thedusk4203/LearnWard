@@ -164,21 +164,52 @@ With permissions:
 REVOKE ALL FROM PUBLIC, anon;
 GRANT EXECUTE TO authenticated;
 ```
-And an immutable fail-closed execution order:
-1. Input validation (`p_command_id`, `p_child_id` non-null -> `22000`).
-2. Authentication check: `auth.uid() is not null` (fail closed `42501` if unauthenticated).
-3. Authoritative child lookup and family derivation from database state (`P0002`).
-4. Authorize caller against resolved family (adult or paired child device -> `42501`) strictly BEFORE any timezone or configuration inspection to prevent oracle side channels.
-5. ONLY AFTER authorization succeeds: inspect `command_receipts` for replay. Valid replays return committed historical results immediately (surviving subsequent timezone corruption).
-6. NEW commands only: validate family timezone fail-closed (`LW004`).
-7. Lock settings (`family_wheel_settings FOR SHARE` -> `LW206` if disabled) and stabilize catalog (`LOCK TABLE public.rewards IN SHARE MODE`).
-8. Materialize authoritative child-eligible pool ($\ge 3$ items required -> `LW203`).
-9. Precondition verification: lock `child_balances FOR UPDATE` and validate sufficient balance $\ge \text{cost}$ (`LW201`).
-10. Check family-local calendar day cap (`LW202`).
-11. State mutation: pseudorandom selection, write redemption, spin snapshot, negative ledger debit, balance decrement, and command receipt.
-12. Commit and return.
 
-**Consequences:** Callers from Family B can never probe receipts or view another family's replay data. Replays are authorized prior to data return.
+Phase 4 separates execution contracts into two clearly defined models: **Trusted Economic Mutations** (which consume client command IDs and record command receipts) and **Read-Only Status RPCs**.
+
+### A. Common Trusted Economic Mutation Invariant
+
+For command-based economic mutations (`redeem_store_reward`, `fulfill_reward_redemption`, `cancel_reward_redemption`, `spin_reward_wheel`), the frozen common invariant sequence is:
+1. **Validate Required Arguments:** Validate non-null UUIDs and required parameters (`22000`).
+2. **Authenticate Caller:** Verify `auth.uid() is not null` (fail-closed `42501` if unauthenticated).
+3. **Load Authoritative Target Resource:** Fetch target child, reward, or redemption from database state.
+4. **Derive Authoritative Family ID:** Derive `v_family_id` from authoritative database state (`P0002` if missing).
+5. **Authorize Caller:** Verify caller is active family adult (`private.is_active_family_adult`) or exact paired child device (`private.is_active_child_device`). Evaluated strictly before configuration inspection to eliminate oracle side channels (`42501`).
+6. **Inspect Command Receipts for Replay:** ONLY AFTER authorization succeeds, query `command_receipts` for `command_id = p_command_id`.
+7. **Handle Replay:** If existing receipt found:
+   - Validate `operation`, `actor_id == auth.uid()`, `family_id == v_family_id`, and `resource_id` binding.
+   - Return committed logical outcome immediately (replay survives subsequent configuration/timezone corruption).
+8. **Acquire Operation-Specific Locks & Validate Preconditions:** Otherwise (for new command), acquire operation-specific locks and validate operation-specific preconditions.
+9. **Mutate Atomically:** Insert/update redemptions, spins, append ledger entries, decrement/restore balance.
+10. **Insert Command Receipt:** Record immutable `command_receipts` row binding `(command_id, family_id, actor_id, operation, resource_id, payload)`.
+11. **Return Committed Result:** Return result payload to caller.
+
+#### Operation-Specific Locks & Preconditions:
+- **Store Redemption (`redeem_store_reward`):**
+  - Child lookup & family derivation $\to$ child/adult authorization $\to$ receipt replay check $\to$ lock `rewards FOR SHARE` $\to$ lock `child_balances FOR UPDATE` $\to$ check `store_enabled`, active status, and `rp_balance_minor >= store_cost_minor` (`LW201`) $\to$ insert redemption (`origin = 'store'`) + append negative ledger debit (`store_redemption`) + decrement balance $\to$ insert receipt $\to$ return redemption.
+- **Redemption Fulfillment (`fulfill_reward_redemption`):**
+  - Lock `reward_redemptions FOR UPDATE` $\to$ derive family $\to$ active adult authorization $\to$ receipt replay check $\to$ validate `status == 'pending_fulfillment'` (`LW204` if already terminal) $\to$ update status to `'fulfilled'` $\to$ insert receipt $\to$ return updated redemption.
+- **Redemption Cancellation (`cancel_reward_redemption`):**
+  - Lock `reward_redemptions FOR UPDATE` $\to$ derive family $\to$ active adult authorization $\to$ receipt replay check $\to$ validate `status == 'pending_fulfillment'` (`LW204` if already terminal) $\to$ update status to `'cancelled'` $\to$ append positive compensating refund ledger row (`reason_code = 'redemption_refund'`) $\to$ restore `child_balances` projection $\to$ insert receipt $\to$ return updated redemption.
+- **Celebration Wheel Spin (`spin_reward_wheel`):**
+  - Child lookup & family derivation $\to$ child/adult authorization $\to$ receipt replay check $\to$ validate family timezone (`LW004`) $\to$ lock `family_wheel_settings FOR SHARE` (`LW206` if disabled) $\to$ `LOCK TABLE public.rewards IN SHARE MODE` to stabilize catalog mutations $\to$ materialize child-eligible pool ($\ge 3$ items required $\to$ `LW203`) $\to$ lock `child_balances FOR UPDATE` $\to$ validate sufficient balance $\ge \text{spin\_cost\_minor}$ (`LW201`) $\to$ check family-local calendar day spin cap (`LW202`) $\to$ server-authoritative pseudorandom draw (PostgreSQL `random()`) $\to$ atomic writes (redemption + spin + negative ledger debit + balance decrement) $\to$ insert receipt $\to$ return spin result.
+
+### B. Read-Only Status Contract (`get_wheel_status`)
+
+`get_wheel_status` is a read-only query function. It does **not** consume a command ID, does **not** create command receipts, does **not** debit RP, does **not** insert spin records, and does **not** mutate economy state.
+
+Its frozen execution sequence:
+1. **Authenticate Caller:** `auth.uid() is not null` (`42501`).
+2. **Authoritative Child Lookup & Family Derivation:** Load child record and derive `family_id` (`P0002`).
+3. **Authorize Caller:** Verify caller is active family adult or exact paired child device (`42501`).
+4. **Validate Family Timezone:** Load and validate `families.timezone` fail-closed (`LW004`).
+5. **Read Settings:** Load `family_wheel_settings` (returns defaults if not yet configured).
+6. **Calculate Day Boundaries:** Calculate family-local calendar day boundaries $[00:00, 24:00)$ across DST transitions.
+7. **Count Spins Today:** Query count of wheel redemptions created within local calendar day bounds.
+8. **Count Eligible Rewards:** Count active rewards eligible for target child with `wheel_enabled = true`.
+9. **Return Wheel Status:** Return child-specific status record (`spins_today`, `spins_remaining`, `spin_cost_minor`, `daily_spin_cap`, `is_enabled`, `local_day_start`, `local_day_end`, `eligible_reward_count`).
+
+**Consequences:** Callers from Family B can never probe receipts or view another family's replay data. Replays are authorized prior to data return. Read-only status inspection is decoupled from command receipt and mutation semantics.
 
 ---
 
