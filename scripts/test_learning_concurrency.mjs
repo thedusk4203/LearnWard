@@ -57,6 +57,15 @@ function runPsql(sql) {
   });
 }
 
+function parseProcessingOutput(stdout) {
+  const lines = stdout.split('\n');
+  const line = lines.find((l) => l.trim().startsWith('{') && l.includes('"processing_id"'));
+  if (!line) {
+    throw new Error(`Could not find processing JSON in stdout: ${stdout}`);
+  }
+  return JSON.parse(line.trim());
+}
+
 async function main() {
   console.log('=== LearnWard Concurrency Test: Learning Mastery Engine Serialization ===\n');
 
@@ -178,7 +187,7 @@ async function main() {
   }
   console.log('  -> PASS: Serialized first-write converged to canonical score (87.00) across 2 revisions.');
 
-  const initOutput = JSON.parse(res1.stdout);
+  const initOutput = parseProcessingOutput(res1.stdout);
 
   // -------------------------------------------------------------------------
   // Scenario 2: Concurrent Same-Command Replay Race
@@ -219,7 +228,7 @@ async function main() {
     console.error('Same-command replay failed:', sameCmdRes.stderr);
     process.exit(1);
   }
-  const sameCmdOutput = JSON.parse(sameCmdRes.stdout);
+  const sameCmdOutput = parseProcessingOutput(sameCmdRes.stdout);
 
   // -------------------------------------------------------------------------
   // Scenario 3: New Command on Already-Processed VLE
@@ -253,7 +262,7 @@ async function main() {
   }
   console.log('  -> PASS: New command bound receipt without duplicate revisions.');
 
-  const newCmdOutput = JSON.parse(newCmdRes.stdout);
+  const newCmdOutput = parseProcessingOutput(newCmdRes.stdout);
 
   // Strict 9-field equality comparison between initial execution, same-command replay, and new-command replay
   const fields9 = [

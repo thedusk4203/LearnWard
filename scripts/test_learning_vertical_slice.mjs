@@ -41,6 +41,15 @@ function runPsql(sql) {
   });
 }
 
+function parseProcessingOutput(stdout) {
+  const lines = stdout.split('\n');
+  const line = lines.find((l) => l.trim().startsWith('{') && l.includes('"processing_id"'));
+  if (!line) {
+    throw new Error(`Could not find processing JSON in stdout: ${stdout}`);
+  }
+  return JSON.parse(line.trim());
+}
+
 async function main() {
   console.log('=== LearnWard Integration Test: Learning Mastery Vertical Slice ===\n');
 
@@ -147,7 +156,7 @@ async function main() {
   }
   console.log('  -> PASS: Learning event processed successfully.');
 
-  const initOutput = JSON.parse(procRes.stdout);
+  const initOutput = parseProcessingOutput(procRes.stdout);
 
   // Same-command replay
   const sameCmdRes = await runPsql(procSql);
@@ -155,7 +164,7 @@ async function main() {
     console.error('Same-command replay failed:', sameCmdRes.stderr);
     process.exit(1);
   }
-  const sameCmdOutput = JSON.parse(sameCmdRes.stdout);
+  const sameCmdOutput = parseProcessingOutput(sameCmdRes.stdout);
 
   // New-command replay on processed VLE
   const newCmdId = crypto.randomUUID();
@@ -169,7 +178,7 @@ async function main() {
     console.error('New command on processed VLE failed:', newCmdRes.stderr);
     process.exit(1);
   }
-  const newCmdOutput = JSON.parse(newCmdRes.stdout);
+  const newCmdOutput = parseProcessingOutput(newCmdRes.stdout);
 
   const fields9 = [
     'processing_id',
