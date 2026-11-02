@@ -341,7 +341,7 @@ insert into public.verified_learning_events (
   raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id,
   review_event_id, grade_level_snapshot
 ) values (
-  'v5000000-0000-0000-0000-000000000001'::uuid,
+  '15000000-0000-0000-0000-000000000001'::uuid,
   'a5000000-0000-0000-0000-000000000001'::uuid,
   'f5000000-0000-0000-0000-000000000001'::uuid,
   'c5000000-0000-0000-0000-000000000001'::uuid,
@@ -361,7 +361,7 @@ select throws_ok(
 
 -- Test 28: VLE copied assessment catalog snapshot
 select is(
-  (select learning_catalog_version from public.verified_learning_events where id = 'v5000000-0000-0000-0000-000000000001'::uuid),
+  (select learning_catalog_version from public.verified_learning_events where id = '15000000-0000-0000-0000-000000000001'::uuid),
   'pilot-v0.1',
   'VLE accurately copied assessment catalog snapshot'
 );
@@ -557,7 +557,7 @@ insert into public.verified_learning_events (
   raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id,
   review_event_id, grade_level_snapshot
 ) values (
-  'v5000000-0000-0000-0000-000000000002'::uuid,
+  '15000000-0000-0000-0000-000000000002'::uuid,
   'a5000000-0000-0000-0000-000000000002'::uuid,
   'f5000000-0000-0000-0000-000000000001'::uuid,
   'c5000000-0000-0000-0000-000000000001'::uuid,
@@ -586,7 +586,7 @@ select throws_ok(
 -- Test 41: Anonymous caller cannot execute process_learning_event
 set local role anon;
 select throws_ok(
-  $$ select public.process_learning_event(gen_random_uuid(), 'v5000000-0000-0000-0000-000000000002'::uuid) $$,
+  $$ select public.process_learning_event(gen_random_uuid(), '15000000-0000-0000-0000-000000000002'::uuid) $$,
   '42501',
   NULL,
   'Anonymous caller cannot execute process_learning_event'
@@ -596,7 +596,7 @@ select throws_ok(
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
 select throws_ok(
-  $$ select public.process_learning_event(gen_random_uuid(), 'v5000000-0000-0000-0000-000000000002'::uuid) $$,
+  $$ select public.process_learning_event(gen_random_uuid(), '15000000-0000-0000-0000-000000000002'::uuid) $$,
   '42501',
   NULL,
   'Paired child cannot execute process_learning_event'
@@ -606,7 +606,7 @@ select throws_ok(
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
 select throws_ok(
-  $$ select public.process_learning_event(gen_random_uuid(), 'v5000000-0000-0000-0000-000000000002'::uuid) $$,
+  $$ select public.process_learning_event(gen_random_uuid(), '15000000-0000-0000-0000-000000000002'::uuid) $$,
   '42501',
   NULL,
   'Cross-family adult cannot execute process_learning_event'
@@ -619,7 +619,7 @@ select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000
 select lives_ok(
   $$ select public.process_learning_event(
        '00000000-0000-0000-0000-000000000001'::uuid,
-       'v5000000-0000-0000-0000-000000000002'::uuid
+       '15000000-0000-0000-0000-000000000002'::uuid
      ) $$,
   'Active adult executes process_learning_event for VLE 2'
 );
@@ -627,7 +627,7 @@ select lives_ok(
 -- Test 45: Evidence aggregated properly: 2 components (9/10 + 9/10 = 18/20 = 90%)
 select is(
   (select performance_pct from public.learning_evidence_events
-   where verified_learning_event_id = 'v5000000-0000-0000-0000-000000000002'::uuid
+   where verified_learning_event_id = '15000000-0000-0000-0000-000000000002'::uuid
      and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid),
   90.00,
   'Component scores aggregated accurately by score mass: 18/20 = 90.00%'
@@ -636,7 +636,7 @@ select is(
 -- Test 46: Subject fallback atom created for Math Subject root
 select is(
   (select count(*)::integer from public.learning_evidence_events
-   where verified_learning_event_id = 'v5000000-0000-0000-0000-000000000002'::uuid
+   where verified_learning_event_id = '15000000-0000-0000-0000-000000000002'::uuid
      and learning_node_id = (select id from public.learning_nodes where catalog_version = 'pilot-v0.1' and canonical_key = 'pilot-v0.1:subject:math')),
   1,
   'Automatic subject fallback created exactly one Subject root evidence atom'
@@ -654,7 +654,7 @@ select is(
 -- Test 48: Learning processing event snapshot recorded
 select is(
   (select count(*)::integer from public.learning_processing_events
-   where verified_learning_event_id = 'v5000000-0000-0000-0000-000000000002'::uuid),
+   where verified_learning_event_id = '15000000-0000-0000-0000-000000000002'::uuid),
   1,
   'Learning processing event snapshot recorded'
 );
@@ -663,7 +663,7 @@ select is(
 select is(
   (select public.process_learning_event(
      '00000000-0000-0000-0000-000000000001'::uuid,
-     'v5000000-0000-0000-0000-000000000002'::uuid
+     '15000000-0000-0000-0000-000000000002'::uuid
    ) ->> 'status'),
   'completed',
   'Same-command replay returns clean completed status'
@@ -672,7 +672,7 @@ select is(
 -- Test 50: Evidence count is still exactly 2 (mapped skill + subject fallback)
 select is(
   (select count(*)::integer from public.learning_evidence_events
-   where verified_learning_event_id = 'v5000000-0000-0000-0000-000000000002'::uuid),
+   where verified_learning_event_id = '15000000-0000-0000-0000-000000000002'::uuid),
   2,
   'No duplicate evidence created on replay'
 );
@@ -681,7 +681,7 @@ select is(
 select is(
   (select public.process_learning_event(
      '00000000-0000-0000-0000-000000000002'::uuid,
-     'v5000000-0000-0000-0000-000000000002'::uuid
+     '15000000-0000-0000-0000-000000000002'::uuid
    ) ->> 'status'),
   'completed',
   'New command ID on processed VLE binds receipt and returns completed result'
@@ -691,7 +691,7 @@ select is(
 select throws_ok(
   $$ select public.process_learning_event(
        '00000000-0000-0000-0000-000000000001'::uuid,
-       'v5000000-0000-0000-0000-000000000001'::uuid
+       '15000000-0000-0000-0000-000000000001'::uuid
      ) $$,
   '42501',
   NULL,
@@ -856,7 +856,7 @@ select throws_ok(
      ) values (
        'f5000000-0000-0000-0000-000000000001'::uuid,
        'c5000000-0000-0000-0000-000000000001'::uuid,
-       'v5000000-0000-0000-0000-000000000001'::uuid,
+       '15000000-0000-0000-0000-000000000001'::uuid,
        'b0000003-0000-0000-0000-000000000001'::uuid,
        'skill', 'math', 'assessment_total', 100, 1.0, 1.0, now(), now(), 4
      ) $$,
@@ -874,7 +874,7 @@ select throws_ok(
        'f5000000-0000-0000-0000-000000000001'::uuid,
        'c5000000-0000-0000-0000-000000000001'::uuid,
        'b0000003-0000-0000-0000-000000000001'::uuid,
-       'v5000000-0000-0000-0000-000000000001'::uuid,
+       '15000000-0000-0000-0000-000000000001'::uuid,
        'mastery-v0.1', 99, 1, now(), '{}'::jsonb
      ) $$,
   '42501',
@@ -896,7 +896,7 @@ select throws_ok(
   $$ insert into public.learning_processing_events (
        verified_learning_event_id, family_id, child_id, result_snapshot
      ) values (
-       'v5000000-0000-0000-0000-000000000001'::uuid,
+       '15000000-0000-0000-0000-000000000001'::uuid,
        'f5000000-0000-0000-0000-000000000001'::uuid,
        'c5000000-0000-0000-0000-000000000001'::uuid,
        '{}'::jsonb
