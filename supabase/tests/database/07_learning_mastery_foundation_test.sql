@@ -275,10 +275,20 @@ values
   ('pilot-v0.2-cycle', 'subject', 'science', 'pilot-v0.2-cycle:subject:science', 'Science', null),
   ('pilot-v0.2-cycle', 'subject', 'other', 'pilot-v0.2-cycle:subject:other', 'Other', null);
 
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2-cycle', 'domain', 'math', 'pilot-v0.2-cycle:math:domain1', 'Domain 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:subject:math'));
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2-cycle', 'topic', 'math', 'pilot-v0.2-cycle:math:topic1', 'Topic 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:math:domain1'));
+
 insert into public.learning_nodes (id, catalog_version, node_type, subject_key, canonical_key, title, parent_id)
 values
-  ('c0000001-0000-0000-0000-000000000001'::uuid, 'pilot-v0.2-cycle', 'skill', 'math', 'pilot-v0.2-cycle:math:skill1', 'Skill 1', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:subject:math')),
-  ('c0000001-0000-0000-0000-000000000002'::uuid, 'pilot-v0.2-cycle', 'skill', 'math', 'pilot-v0.2-cycle:math:skill2', 'Skill 2', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:subject:math'));
+  ('c0000001-0000-0000-0000-000000000001'::uuid, 'pilot-v0.2-cycle', 'skill', 'math', 'pilot-v0.2-cycle:math:skill1', 'Skill 1', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:math:topic1')),
+  ('c0000001-0000-0000-0000-000000000002'::uuid, 'pilot-v0.2-cycle', 'skill', 'math', 'pilot-v0.2-cycle:math:skill2', 'Skill 2', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:math:topic1'));
 
 insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
 values
