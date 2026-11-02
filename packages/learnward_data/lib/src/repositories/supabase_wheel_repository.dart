@@ -102,32 +102,24 @@ final class SupabaseWheelRepository implements WheelRepository {
   }
 
   @override
+  Future<WheelStatus> getWheelStatus({
+    required FamilyId familyId,
+    required ChildId childId,
+  }) async {
+    final response = await _client.rpc<Map<String, dynamic>>(
+      'get_wheel_status',
+      params: {'p_child_id': childId.value},
+    );
+    return WheelStatus.fromJson(response);
+  }
+
+  @override
   Future<int> getTodaySpinCount({
     required FamilyId familyId,
     required ChildId childId,
   }) async {
-    final rows = await _client
-        .from('wheel_spins')
-        .select('id, created_at')
-        .eq('family_id', familyId.value)
-        .eq('child_id', childId.value);
-
-    final spins = rows as List<dynamic>;
-    if (spins.isEmpty) return 0;
-
-    // Filter in UTC / local representation
-    final now = DateTime.now().toUtc();
-    final todayUtcDate = DateTime.utc(now.year, now.month, now.day);
-    final tomorrowUtcDate = todayUtcDate.add(const Duration(days: 1));
-
-    return spins.where((s) {
-      final map = s as Map<String, dynamic>;
-      final createdAt = DateTime.parse(map['created_at'] as String);
-      return createdAt.isAfter(
-            todayUtcDate.subtract(const Duration(milliseconds: 1)),
-          ) &&
-          createdAt.isBefore(tomorrowUtcDate);
-    }).length;
+    final status = await getWheelStatus(familyId: familyId, childId: childId);
+    return status.spinsToday;
   }
 
   Reward _mapReward(Map<String, dynamic> row) {

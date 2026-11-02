@@ -6,6 +6,7 @@ import 'package:learnward/app/bootstrap/in_memory_repositories.dart';
 import 'package:learnward/features/rewards/presentation/child_wheel_screen.dart';
 import 'package:learnward/features/rewards/presentation/parent_reward_form_screen.dart';
 import 'package:learnward/features/rewards/presentation/parent_wheel_settings_screen.dart';
+import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 
 class _PresetChildModeNotifier extends ActiveChildModeNotifier {
@@ -452,5 +453,590 @@ void main() {
       expect(tester.widget<FilledButton>(spinButtonFinder).enabled, isFalse);
       expect(find.text('Need 10 RP to Spin'), findsOneWidget);
     });
+
+    testWidgets(
+      'animates using server-committed snapshot pool and lands on winner even if pool differed from local preview',
+      (tester) async {
+        final inMemoryGrowth = InMemoryGrowthRepository();
+        inMemoryGrowth.balancesByChild[testChild.id.value] = ChildBalance(
+          familyId: testFamily.id,
+          childId: testChild.id,
+          xpTotal: const XpAmount(100),
+          rpBalanceMinor: const RpMinor(5000), // 50.00 RP
+          updatedAt: now,
+        );
+
+        final inMemoryRewards = InMemoryRewardRepository(
+          growthRepository: inMemoryGrowth,
+        );
+
+        // Seed initial 3 rewards (A, B, C) that client initially sees in preview
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward1.title,
+          category: poolReward1.category,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: poolReward1.wheelTier,
+        );
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward2.title,
+          category: poolReward2.category,
+          storeCostMinor: 1500,
+          wheelEnabled: true,
+          wheelTier: poolReward2.wheelTier,
+        );
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward3.title,
+          category: poolReward3.category,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: poolReward3.wheelTier,
+        );
+
+        // Server has concurrently changed the pool: reward 2 disabled, reward 4 added, winner is 4
+        final rewardD = Reward(
+          id: RewardId('rw-4'),
+          familyId: testFamily.id,
+          title: 'Bonus Book Pick',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.special,
+          createdAt: now,
+          updatedAt: now,
+        );
+
+        final serverCommittedSnapshot = WheelSelectionSnapshot(
+          wheelConfigVersion: 'wheel-v0.1',
+          spinCostMinor: 1000,
+          deterministicOrdering: 'reward_id_asc',
+          totalWeight: 150,
+          randomDraw: 120,
+          winningRewardId: rewardD.id,
+          orderedPool: [
+            WheelPoolItem(
+              rewardId: poolReward1.id,
+              title: poolReward1.title,
+              category: poolReward1.category,
+              iconKey: poolReward1.iconKey,
+              tier: WheelTier.common,
+              weight: 60,
+              intervalStart: 0,
+              intervalEnd: 60,
+              probabilityPct: 40.0,
+            ),
+            WheelPoolItem(
+              rewardId: poolReward3.id,
+              title: poolReward3.title,
+              category: poolReward3.category,
+              iconKey: poolReward3.iconKey,
+              tier: WheelTier.rare,
+              weight: 30,
+              intervalStart: 60,
+              intervalEnd: 90,
+              probabilityPct: 20.0,
+            ),
+            WheelPoolItem(
+              rewardId: rewardD.id,
+              title: rewardD.title,
+              category: rewardD.category,
+              iconKey: rewardD.iconKey,
+              tier: WheelTier.special,
+              weight: 60,
+              intervalStart: 90,
+              intervalEnd: 150,
+              probabilityPct: 40.0,
+            ),
+          ],
+        );
+
+        final serverResult = WheelSpinResult(
+          spinId: WheelSpinId('spin-committed-d'),
+          redemptionId: RewardRedemptionId('red-committed-d'),
+          familyId: testFamily.id,
+          childId: testChild.id,
+          rewardId: rewardD.id,
+          rewardTitle: rewardD.title,
+          rewardCategory: rewardD.category,
+          rewardIconKey: rewardD.iconKey,
+          wheelTier: WheelTier.special,
+          spinCostMinor: 1000,
+          newBalanceMinor: 4000,
+          selectionSnapshot: serverCommittedSnapshot,
+          createdAt: now,
+        );
+
+        final baseRepo = InMemoryWheelRepository(
+          rewardRepository: inMemoryRewards,
+          growthRepository: inMemoryGrowth,
+        );
+        final changingRepo = _ChangingPoolWheelRepository(
+          delegate: baseRepo,
+          committedResult: serverResult,
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              activeFamilyProvider.overrideWith(
+                () => _PresetActiveFamilyNotifier(testFamily),
+              ),
+              activeChildModeProvider.overrideWith(
+                () => _PresetChildModeNotifier(testChild),
+              ),
+              wheelRepositoryProvider.overrideWithValue(changingRepo),
+              rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+              growthRepositoryProvider.overrideWithValue(inMemoryGrowth),
+            ],
+            child: const MaterialApp(home: ChildWheelScreen()),
+          ),
+        );
+
+        await tester.pumpAndSettle();
+
+        // Spin
+        await tester.tap(find.byKey(const Key('spin_wheel_button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('confirm_spin_button')));
+        await tester.pump();
+        await tester.pump();
+
+        // Advance animation
+        await tester.pump(const Duration(milliseconds: 3600));
+        await tester.pumpAndSettle();
+
+        // Verify winner dialog shows rewardD ('Bonus Book Pick')
+        expect(find.text('Bonus Book Pick'), findsOneWidget);
+        expect(find.text('Special Prize'), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('claim_dialog_close_button')));
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'durable pending-spin recovery: recovers interrupted spin without double-debit or losing intent',
+      (tester) async {
+        final inMemoryGrowth = InMemoryGrowthRepository();
+        inMemoryGrowth.balancesByChild[testChild.id.value] = ChildBalance(
+          familyId: testFamily.id,
+          childId: testChild.id,
+          xpTotal: const XpAmount(100),
+          rpBalanceMinor: const RpMinor(5000), // 50.00 RP
+          updatedAt: now,
+        );
+
+        final inMemoryRewards = InMemoryRewardRepository(
+          growthRepository: inMemoryGrowth,
+        );
+        final inMemoryWheel = InMemoryWheelRepository(
+          rewardRepository: inMemoryRewards,
+          growthRepository: inMemoryGrowth,
+        );
+        final commandStore = InMemoryPendingRewardCommandStore();
+
+        // Seed 3 rewards
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward1.title,
+          category: poolReward1.category,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: poolReward1.wheelTier,
+        );
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward2.title,
+          category: poolReward2.category,
+          storeCostMinor: 1500,
+          wheelEnabled: true,
+          wheelTier: poolReward2.wheelTier,
+        );
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward3.title,
+          category: poolReward3.category,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: poolReward3.wheelTier,
+        );
+
+        // Pre-seed an interrupted pending spin in the local durable journal
+        const interruptedCommandId = 'interrupted-spin-uuid-1';
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: interruptedCommandId,
+            familyId: testFamily.id.value,
+            childId: testChild.id.value,
+            createdAt: now,
+          ),
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              activeFamilyProvider.overrideWith(
+                () => _PresetActiveFamilyNotifier(testFamily),
+              ),
+              activeChildModeProvider.overrideWith(
+                () => _PresetChildModeNotifier(testChild),
+              ),
+              wheelRepositoryProvider.overrideWithValue(inMemoryWheel),
+              rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+              growthRepositoryProvider.overrideWithValue(inMemoryGrowth),
+              pendingRewardCommandStoreProvider.overrideWithValue(commandStore),
+            ],
+            child: const MaterialApp(home: ChildWheelScreen()),
+          ),
+        );
+
+        await tester.pumpAndSettle();
+
+        // Verify recovery banner is prominently shown
+        expect(
+          find.byKey(const Key('pending_spin_recovery_card')),
+          findsOneWidget,
+        );
+        expect(
+          find.text("We're checking whether your spin was completed."),
+          findsOneWidget,
+        );
+
+        // Verify normal spin button is blocked while pending command exists
+        final spinButtonFinder = find.byKey(const Key('spin_wheel_button'));
+        expect(tester.widget<FilledButton>(spinButtonFinder).enabled, isFalse);
+        expect(find.text('Resolve Interrupted Spin First'), findsOneWidget);
+
+        // Tap Check / Retry Spin
+        final retryButtonFinder = find.byKey(
+          const Key('retry_pending_spin_button'),
+        );
+        expect(retryButtonFinder, findsOneWidget);
+        await tester.tap(retryButtonFinder);
+        await tester.pump();
+        await tester.pump();
+
+        // Advance animation
+        await tester.pump(const Duration(milliseconds: 3600));
+        await tester.pumpAndSettle();
+
+        // Prize dialog should be presented
+        expect(find.text('You Won a Prize!'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('claim_dialog_close_button')));
+        await tester.pumpAndSettle();
+
+        // Verify journal cleared the resolved pending command
+        final pendingAfter = await commandStore.findPendingSpinCommand(
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+        );
+        expect(pendingAfter, isNull);
+
+        // Verify recovery card is dismissed
+        expect(
+          find.byKey(const Key('pending_spin_recovery_card')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'pure RP confirmation dialog: shows cost in RP, balance delta, and zero dollar/currency signs',
+      (tester) async {
+        final inMemoryGrowth = InMemoryGrowthRepository();
+        inMemoryGrowth.balancesByChild[testChild.id.value] = ChildBalance(
+          familyId: testFamily.id,
+          childId: testChild.id,
+          xpTotal: const XpAmount(100),
+          rpBalanceMinor: const RpMinor(5000), // 50 RP
+          updatedAt: now,
+        );
+
+        final inMemoryRewards = InMemoryRewardRepository(
+          growthRepository: inMemoryGrowth,
+        );
+        final inMemoryWheel = InMemoryWheelRepository(
+          rewardRepository: inMemoryRewards,
+          growthRepository: inMemoryGrowth,
+        );
+
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward1.title,
+          category: poolReward1.category,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: poolReward1.wheelTier,
+        );
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward2.title,
+          category: poolReward2.category,
+          storeCostMinor: 1500,
+          wheelEnabled: true,
+          wheelTier: poolReward2.wheelTier,
+        );
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward3.title,
+          category: poolReward3.category,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: poolReward3.wheelTier,
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              activeFamilyProvider.overrideWith(
+                () => _PresetActiveFamilyNotifier(testFamily),
+              ),
+              activeChildModeProvider.overrideWith(
+                () => _PresetChildModeNotifier(testChild),
+              ),
+              wheelRepositoryProvider.overrideWithValue(inMemoryWheel),
+              rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+              growthRepositoryProvider.overrideWithValue(inMemoryGrowth),
+            ],
+            child: const MaterialApp(home: ChildWheelScreen()),
+          ),
+        );
+
+        await tester.pumpAndSettle();
+
+        // Open confirmation dialog
+        await tester.tap(find.byKey(const Key('spin_wheel_button')));
+        await tester.pumpAndSettle();
+
+        // Verify Pure RP text
+        expect(find.text('Spin the Celebration Wheel?'), findsOneWidget);
+        expect(find.text('Cost: 10 RP'), findsOneWidget);
+        expect(find.text('50 RP → 40 RP'), findsOneWidget);
+        expect(
+          find.text('Every spin gives one family-approved reward.'),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('cancel_spin_button')), findsOneWidget);
+        expect(find.byKey(const Key('confirm_spin_button')), findsOneWidget);
+
+        // Invariant check: ZERO dollar signs or USD notation in child-facing prompt
+        expect(find.textContaining(r'$'), findsNothing);
+        expect(find.textContaining('USD'), findsNothing);
+
+        // Dismiss dialog via Cancel
+        await tester.tap(find.byKey(const Key('cancel_spin_button')));
+        await tester.pumpAndSettle();
+
+        // Verify dialog closed and balance remained 50 RP
+        expect(find.text('Spin the Celebration Wheel?'), findsNothing);
+        expect(find.text('50 RP'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'server-authoritative status: displays server-bounded daily cap and blocks spin when daily limit reached',
+      (tester) async {
+        final inMemoryGrowth = InMemoryGrowthRepository();
+        inMemoryGrowth.balancesByChild[testChild.id.value] = ChildBalance(
+          familyId: testFamily.id,
+          childId: testChild.id,
+          xpTotal: const XpAmount(100),
+          rpBalanceMinor: const RpMinor(5000), // 50 RP
+          updatedAt: now,
+        );
+
+        final inMemoryRewards = InMemoryRewardRepository(
+          growthRepository: inMemoryGrowth,
+        );
+
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward1.title,
+          category: poolReward1.category,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: poolReward1.wheelTier,
+        );
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward2.title,
+          category: poolReward2.category,
+          storeCostMinor: 1500,
+          wheelEnabled: true,
+          wheelTier: poolReward2.wheelTier,
+        );
+        await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: poolReward3.title,
+          category: poolReward3.category,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: poolReward3.wheelTier,
+        );
+
+        final fixedStatus = WheelStatus(
+          familyId: testFamily.id,
+          childId: testChild.id,
+          spinCostMinor: 1000,
+          dailySpinCap: 3,
+          isEnabled: true,
+          spinsToday: 3,
+          spinsRemaining: 0,
+          eligibleRewardCount: 3,
+          localDayStart: DateTime.utc(2026, 11, 2),
+          localDayEnd: DateTime.utc(2026, 11, 3),
+        );
+
+        final baseRepo = InMemoryWheelRepository(
+          rewardRepository: inMemoryRewards,
+          growthRepository: inMemoryGrowth,
+        );
+        final fixedRepo = _FixedStatusWheelRepository(
+          delegate: baseRepo,
+          statusToReturn: fixedStatus,
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              activeFamilyProvider.overrideWith(
+                () => _PresetActiveFamilyNotifier(testFamily),
+              ),
+              activeChildModeProvider.overrideWith(
+                () => _PresetChildModeNotifier(testChild),
+              ),
+              wheelRepositoryProvider.overrideWithValue(fixedRepo),
+              rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+              growthRepositoryProvider.overrideWithValue(inMemoryGrowth),
+            ],
+            child: const MaterialApp(home: ChildWheelScreen()),
+          ),
+        );
+
+        await tester.pumpAndSettle();
+
+        // Authoritative cap display
+        expect(find.text('3 / 3 spins'), findsOneWidget);
+
+        // Spin button should reflect limit reached and be disabled
+        final spinButtonFinder = find.byKey(const Key('spin_wheel_button'));
+        expect(tester.widget<FilledButton>(spinButtonFinder).enabled, isFalse);
+        expect(find.text('Daily Limit Reached (3/3)'), findsOneWidget);
+      },
+    );
   });
+}
+
+class _ChangingPoolWheelRepository implements WheelRepository {
+  _ChangingPoolWheelRepository({
+    required this.delegate,
+    required this.committedResult,
+  });
+
+  final InMemoryWheelRepository delegate;
+  final WheelSpinResult committedResult;
+
+  @override
+  Future<WheelSettings> getWheelSettings({required FamilyId familyId}) =>
+      delegate.getWheelSettings(familyId: familyId);
+
+  @override
+  Future<WheelSettings> updateWheelSettings(WheelSettings settings) =>
+      delegate.updateWheelSettings(settings);
+
+  @override
+  Future<List<Reward>> listWheelRewards({
+    required FamilyId familyId,
+    ChildId? childId,
+  }) => delegate.listWheelRewards(familyId: familyId, childId: childId);
+
+  @override
+  Future<int> getTodaySpinCount({
+    required FamilyId familyId,
+    required ChildId childId,
+  }) => delegate.getTodaySpinCount(familyId: familyId, childId: childId);
+
+  @override
+  Future<WheelStatus> getWheelStatus({
+    required FamilyId familyId,
+    required ChildId childId,
+  }) => delegate.getWheelStatus(familyId: familyId, childId: childId);
+
+  @override
+  Future<List<WheelSpin>> listWheelSpins({
+    required FamilyId familyId,
+    ChildId? childId,
+    int? limit,
+  }) => delegate.listWheelSpins(
+    familyId: familyId,
+    childId: childId,
+    limit: limit,
+  );
+
+  @override
+  Future<WheelSpinResult> spinRewardWheel({
+    required String commandId,
+    required ChildId childId,
+  }) async {
+    return committedResult;
+  }
+}
+
+class _FixedStatusWheelRepository implements WheelRepository {
+  _FixedStatusWheelRepository({
+    required this.delegate,
+    required this.statusToReturn,
+  });
+
+  final InMemoryWheelRepository delegate;
+  final WheelStatus statusToReturn;
+
+  @override
+  Future<WheelSettings> getWheelSettings({required FamilyId familyId}) =>
+      delegate.getWheelSettings(familyId: familyId);
+
+  @override
+  Future<WheelSettings> updateWheelSettings(WheelSettings settings) =>
+      delegate.updateWheelSettings(settings);
+
+  @override
+  Future<List<Reward>> listWheelRewards({
+    required FamilyId familyId,
+    ChildId? childId,
+  }) => delegate.listWheelRewards(familyId: familyId, childId: childId);
+
+  @override
+  Future<int> getTodaySpinCount({
+    required FamilyId familyId,
+    required ChildId childId,
+  }) => delegate.getTodaySpinCount(familyId: familyId, childId: childId);
+
+  @override
+  Future<WheelStatus> getWheelStatus({
+    required FamilyId familyId,
+    required ChildId childId,
+  }) async {
+    return statusToReturn;
+  }
+
+  @override
+  Future<List<WheelSpin>> listWheelSpins({
+    required FamilyId familyId,
+    ChildId? childId,
+    int? limit,
+  }) => delegate.listWheelSpins(
+    familyId: familyId,
+    childId: childId,
+    limit: limit,
+  );
+
+  @override
+  Future<WheelSpinResult> spinRewardWheel({
+    required String commandId,
+    required ChildId childId,
+  }) => delegate.spinRewardWheel(commandId: commandId, childId: childId);
 }

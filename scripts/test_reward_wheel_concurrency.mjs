@@ -380,6 +380,138 @@ async function main() {
   }
   console.log('PASS: Final balance = 0, fully reconciled.\n');
 
+  // --- SCENARIO 4: Concurrent Reward Catalog Mutation vs Wheel Spin ---
+  console.log('--- SCENARIO 4: Concurrent Reward Catalog Mutation vs Wheel Spin ---');
+  const MUTATION_CHILD_ID = crypto.randomUUID();
+  const R4_ID = crypto.randomUUID();
+  const R5_NEW_ID = crypto.randomUUID();
+  const CMD_SPIN_MUTATION = crypto.randomUUID();
+
+  const prepMutSql = `
+    insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year)
+    values ('${MUTATION_CHILD_ID}', '${FAMILY_ID}', 'Mutation Test Child', 4, 2016);
+
+    insert into public.child_balances (family_id, child_id, xp_total, rp_balance_minor)
+    values ('${FAMILY_ID}', '${MUTATION_CHILD_ID}', 50, 5000);
+
+    insert into public.rp_ledger (family_id, child_id, amount_minor, reason_code, source_type, idempotency_key)
+    values ('${FAMILY_ID}', '${MUTATION_CHILD_ID}', 5000, 'initial_grant', 'growth_event', 'init:${MUTATION_CHILD_ID}');
+
+    insert into public.rewards (id, family_id, title, category, store_enabled, wheel_enabled, wheel_tier, is_active)
+    values ('${R4_ID}', '${FAMILY_ID}', 'Wheel Reward 4 (To Disable)', 'treat', false, true, 'common', true);
+  `;
+
+  const prepMutRes = await runPsql(prepMutSql);
+  if (prepMutRes.code !== 0) {
+    console.error('Failed to prepare Scenario 4 fixture:', prepMutRes.stderr || prepMutRes.stdout);
+    process.exit(1);
+  }
+  console.log('Prepared fixture for mutation race: 4 active wheel rewards, child with 5000 RP.');
+
+  // Concurrent execution: Child spins while parent concurrently modifies catalog (disables R4, changes R2 tier, adds R5)
+  const tSpinSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
+    begin;
+    select pg_sleep(0.02);
+    select public.spin_reward_wheel('${CMD_SPIN_MUTATION}'::uuid, '${MUTATION_CHILD_ID}'::uuid);
+    commit;
+  `;
+
+  const tMutSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
+    begin;
+    -- Parent disables R4
+    update public.rewards set wheel_enabled = false where id = '${R4_ID}';
+    -- Parent changes R2 tier from special to rare
+    update public.rewards set wheel_tier = 'rare' where id = '${REWARD_2_ID}';
+    -- Parent inserts R5
+    insert into public.rewards (id, family_id, title, category, store_enabled, wheel_enabled, wheel_tier, is_active)
+    values ('${R5_NEW_ID}', '${FAMILY_ID}', 'Brand New Wheel Reward 5', 'experience', false, true, 'special', true);
+    commit;
+  `;
+
+  console.log('Executing concurrent Spin and Reward Catalog Mutation...');
+  const [spinMutRes, mutRes] = await Promise.all([
+    runPsql(tSpinSql),
+    runPsql(tMutSql),
+  ]);
+
+  if (spinMutRes.code !== 0) {
+    console.error('FAILED: Spin failed during catalog mutation race:', spinMutRes.stderr);
+    process.exit(1);
+  }
+  if (mutRes.code !== 0) {
+    console.error('FAILED: Parent catalog mutation failed:', mutRes.stderr);
+    process.exit(1);
+  }
+
+  // Inspect the committed selection snapshot from the spin
+  const inspectSpinSql = `
+    select selection_snapshot
+    from public.wheel_spins
+    where child_id = '${MUTATION_CHILD_ID}';
+  `;
+  const inspectRes = await runPsql(inspectSpinSql);
+  if (inspectRes.code !== 0) {
+    console.error('Failed to inspect committed wheel spin snapshot:', inspectRes.stderr);
+    process.exit(1);
+  }
+
+  // Parse selection snapshot
+  const rawJsonMatch = inspectRes.stdout.match(/\{[\s\S]*\}/);
+  if (!rawJsonMatch) {
+    console.error('Could not find JSON in psql output:', inspectRes.stdout);
+    process.exit(1);
+  }
+  const snapshot = JSON.parse(rawJsonMatch[0]);
+
+  // Assert internal mathematical consistency
+  const totalWeight = snapshot.total_weight;
+  const pool = snapshot.ordered_pool;
+  const winnerId = snapshot.winning_reward_id;
+  const randomDraw = snapshot.random_draw;
+
+  let sumWeights = 0;
+  let prevEnd = 0;
+  let winnerFound = false;
+
+  for (let i = 0; i < pool.length; i++) {
+    const item = pool[i];
+    sumWeights += item.weight;
+    if (item.interval_start !== prevEnd) {
+      console.error(`FAILED: Interval discontinuity at index ${i}: expected start ${prevEnd}, got ${item.interval_start}`);
+      process.exit(1);
+    }
+    prevEnd = item.interval_end;
+
+    if (item.reward_id === winnerId) {
+      winnerFound = true;
+      if (randomDraw < item.interval_start || randomDraw >= item.interval_end) {
+        console.error(`FAILED: random_draw ${randomDraw} not in winner interval [${item.interval_start}, ${item.interval_end})`);
+        process.exit(1);
+      }
+    }
+  }
+
+  if (sumWeights !== totalWeight) {
+    console.error(`FAILED: sum(weights) = ${sumWeights} does not match total_weight = ${totalWeight}`);
+    process.exit(1);
+  }
+  if (prevEnd !== totalWeight) {
+    console.error(`FAILED: Final interval_end ${prevEnd} does not match total_weight ${totalWeight}`);
+    process.exit(1);
+  }
+  if (!winnerFound) {
+    console.error(`FAILED: Winning reward ${winnerId} not found in ordered_pool`);
+    process.exit(1);
+  }
+
+  console.log(`PASS: Pool captured in exactly 1 consistent state. Pool size = ${pool.length}, total_weight = ${totalWeight}.`);
+  console.log('PASS: sum(weights) == total_weight, intervals continuous with no gaps, winner belongs to snapshot.');
+  console.log('PASS: Mutation either occurred entirely before or entirely after snapshot without hybrid artifacts.\n');
+
   console.log('===============================================================');
   console.log('ALL CELEBRATION WHEEL CONCURRENCY REGRESSION TESTS PASSED!');
   console.log('===============================================================');

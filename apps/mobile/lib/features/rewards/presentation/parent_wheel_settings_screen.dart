@@ -233,14 +233,6 @@ class _ParentWheelSettingsScreenState
                                     ),
                                   ],
                                 ),
-                                Text(
-                                  '\$${(_spinCostMinor / 100.0).toStringAsFixed(2)}',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: theme.colorScheme.primary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
                               ],
                             ),
                           ],

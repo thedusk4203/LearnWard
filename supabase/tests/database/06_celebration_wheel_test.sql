@@ -1,5 +1,5 @@
 begin;
-select plan(38);
+select plan(64);
 
 -- ---------------------------------------------------------------------------
 -- 0. FIXTURES SETUP (superuser context)
@@ -409,6 +409,354 @@ select is(
   (select is_reconciled from public.reconcile_child_balance('ca420000-0000-0000-0000-000000000001'::uuid)),
   true,
   'Balance is 100% reconciled with rp_ledger sum after wheel spins and refund'
+);
+
+-- ---------------------------------------------------------------------------
+-- 6. SELECTION SNAPSHOT MATHEMATICAL INTEGRITY (Tests 39-43)
+-- ---------------------------------------------------------------------------
+
+-- Test 39: sum(item.weight) == total_weight
+select is(
+  (
+    select sum((item ->> 'weight')::integer) = (ws.selection_snapshot ->> 'total_weight')::bigint
+    from public.wheel_spins ws,
+    lateral jsonb_array_elements(ws.selection_snapshot -> 'ordered_pool') item
+    where ws.child_id = 'ca420000-0000-0000-0000-000000000001'::uuid
+    group by ws.id, ws.selection_snapshot
+    limit 1
+  ),
+  true,
+  'Snapshot mathematical integrity: sum(item.weight) equals total_weight'
+);
+
+-- Test 40: first.interval_start == 0
+select is(
+  (
+    select (ws.selection_snapshot -> 'ordered_pool' -> 0 ->> 'interval_start')::integer
+    from public.wheel_spins ws
+    where ws.child_id = 'ca420000-0000-0000-0000-000000000001'::uuid
+    limit 1
+  ),
+  0,
+  'Snapshot mathematical integrity: first item interval_start equals 0'
+);
+
+-- Test 41: last.interval_end == total_weight
+select is(
+  (
+    select (ws.selection_snapshot -> 'ordered_pool' -> -1 ->> 'interval_end')::integer = (ws.selection_snapshot ->> 'total_weight')::integer
+    from public.wheel_spins ws
+    where ws.child_id = 'ca420000-0000-0000-0000-000000000001'::uuid
+    limit 1
+  ),
+  true,
+  'Snapshot mathematical integrity: last item interval_end equals total_weight'
+);
+
+-- Test 42: Adjacent interval continuity: no gaps, no overlaps
+select is(
+  (
+    with elements as (
+      select
+        ws.id as spin_id,
+        (arr.ord - 1)::integer as idx,
+        (arr.elem ->> 'interval_start')::integer as interval_start,
+        (arr.elem ->> 'interval_end')::integer as interval_end
+      from public.wheel_spins ws,
+      lateral jsonb_array_elements(ws.selection_snapshot -> 'ordered_pool') with ordinality as arr(elem, ord)
+      where ws.child_id = 'ca420000-0000-0000-0000-000000000001'::uuid
+      limit 10
+    ),
+    pairs as (
+      select
+        e1.interval_end as prev_end,
+        e2.interval_start as curr_start
+      from elements e1
+      join elements e2 on e1.spin_id = e2.spin_id and e1.idx + 1 = e2.idx
+    )
+    select coalesce(bool_and(prev_end = curr_start), true) from pairs
+  ),
+  true,
+  'Snapshot mathematical integrity: all adjacent intervals are continuous (prev_end = curr_start)'
+);
+
+-- Test 43: random_draw strictly inside winning reward interval
+select is(
+  (
+    select bool_and(
+      (ws.selection_snapshot ->> 'random_draw')::integer >= (winner.item ->> 'interval_start')::integer
+      and (ws.selection_snapshot ->> 'random_draw')::integer < (winner.item ->> 'interval_end')::integer
+    )
+    from public.wheel_spins ws,
+    lateral (
+      select item from jsonb_array_elements(ws.selection_snapshot -> 'ordered_pool') item
+      where (item ->> 'reward_id')::uuid = ws.reward_id
+    ) winner
+  ),
+  true,
+  'Snapshot mathematical integrity: random_draw strictly inside winning reward interval across all spins'
+);
+
+-- ---------------------------------------------------------------------------
+-- 7. COMMAND REPLAY ADVERSARIAL SECURITY (Tests 44-47)
+-- ---------------------------------------------------------------------------
+
+-- Test 44: Same command ID, wrong actor (Child A2 trying to replay Child A1's spin command)
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000004", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.spin_reward_wheel('ca420000-0000-0000-0000-000000000104'::uuid, 'ca420000-0000-0000-0000-000000000002'::uuid) $$,
+  '42501',
+  NULL,
+  'Replay blocked when actor does not match original command receipt'
+);
+
+-- Test 45: Same command ID, different child (Child A1 attempting to replay with Child A2)
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.spin_reward_wheel('ca420000-0000-0000-0000-000000000104'::uuid, 'ca420000-0000-0000-0000-000000000002'::uuid) $$,
+  '42501',
+  NULL,
+  'Replay blocked when child does not match original command receipt'
+);
+
+-- Test 46: Same command ID, wrong operation (insert dummy command receipt with non-spin operation)
+reset role;
+insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id)
+values ('ca420000-0000-0000-0000-000000000777'::uuid, 'fa420000-0000-0000-0000-000000000001'::uuid, '60000000-0000-0000-0000-000000000003'::uuid, 'redeem_reward', gen_random_uuid());
+
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.spin_reward_wheel('ca420000-0000-0000-0000-000000000777'::uuid, 'ca420000-0000-0000-0000-000000000001'::uuid) $$,
+  '42501',
+  NULL,
+  'Replay blocked when receipt operation is not spin_wheel'
+);
+
+-- Test 47: Cross-family replay attempt (User B trying to replay Child A1's command)
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.spin_reward_wheel('ca420000-0000-0000-0000-000000000104'::uuid, 'ca420000-0000-0000-0000-000000000001'::uuid) $$,
+  '42501',
+  NULL,
+  'Replay blocked when caller is from a different family'
+);
+
+-- ---------------------------------------------------------------------------
+-- 8. WHEEL HISTORY RLS & DIRECT MUTATION RESTRICTIONS (Tests 48-53)
+-- ---------------------------------------------------------------------------
+
+-- Switch to Paired Child A1
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
+
+-- Test 48: Paired Child A1 can select own wheel spins
+select cmp_ok(
+  (select count(*) from public.wheel_spins where child_id = 'ca420000-0000-0000-0000-000000000001'::uuid),
+  '>=',
+  1::bigint,
+  'Paired Child A1 can query own wheel_spins history'
+);
+
+-- Test 49: Paired Child A1 cannot select sibling A2 spins
+select is(
+  (select count(*) from public.wheel_spins where child_id = 'ca420000-0000-0000-0000-000000000002'::uuid),
+  0::bigint,
+  'Paired Child A1 cannot view sibling wheel_spins history'
+);
+
+-- Test 50: Paired Child A1 cannot select Family B spins
+select is(
+  (select count(*) from public.wheel_spins where family_id = 'fa420000-0000-0000-0000-000000000002'::uuid),
+  0::bigint,
+  'Paired Child A1 cannot view another family wheel_spins history'
+);
+
+-- Test 51: Direct INSERT into wheel_spins by authenticated user denied
+select throws_ok(
+  $$ insert into public.wheel_spins (id, family_id, child_id, reward_id, redemption_id, spin_cost_minor, selection_snapshot)
+     values (gen_random_uuid(), 'fa420000-0000-0000-0000-000000000001'::uuid, 'ca420000-0000-0000-0000-000000000001'::uuid, 'ea420000-0000-0000-0000-000000000001'::uuid, gen_random_uuid(), 1000, '{}'::jsonb) $$,
+  '42501',
+  NULL,
+  'Direct INSERT into wheel_spins denied for authenticated user'
+);
+
+-- Test 52: Direct UPDATE on wheel_spins by authenticated user denied
+select throws_ok(
+  $$ update public.wheel_spins set spin_cost_minor = 500 where child_id = 'ca420000-0000-0000-0000-000000000001'::uuid $$,
+  '42501',
+  NULL,
+  'Direct UPDATE on wheel_spins denied for authenticated user'
+);
+
+-- Test 53: Direct DELETE on wheel_spins by authenticated user denied
+select throws_ok(
+  $$ delete from public.wheel_spins where child_id = 'ca420000-0000-0000-0000-000000000001'::uuid $$,
+  '42501',
+  NULL,
+  'Direct DELETE on wheel_spins denied for authenticated user'
+);
+
+-- ---------------------------------------------------------------------------
+-- 9. WHEEL <-> REDEMPTION RELATIONAL INVARIANT / COMPOSITE FK (Tests 54-58)
+-- ---------------------------------------------------------------------------
+
+reset role;
+
+-- Setup valid dummy redemption for composite testing
+insert into public.reward_redemptions (
+  id, family_id, child_id, reward_id, rp_cost_minor, origin, status, reward_snapshot
+) values (
+  'ca420000-0000-0000-0000-000000000888'::uuid,
+  'fa420000-0000-0000-0000-000000000001'::uuid,
+  'ca420000-0000-0000-0000-000000000001'::uuid,
+  'ea420000-0000-0000-0000-000000000001'::uuid,
+  1000,
+  'store', -- Store origin!
+  'pending_fulfillment',
+  '{"title": "Store item"}'::jsonb
+);
+
+-- Test 54: Composite FK rejects wheel_spin referencing store-origin redemption
+select throws_ok(
+  $$ insert into public.wheel_spins (id, family_id, child_id, reward_id, redemption_id, origin, spin_cost_minor, selection_snapshot)
+     values (gen_random_uuid(), 'fa420000-0000-0000-0000-000000000001'::uuid, 'ca420000-0000-0000-0000-000000000001'::uuid, 'ea420000-0000-0000-0000-000000000001'::uuid, 'ca420000-0000-0000-0000-000000000888'::uuid, 'wheel', 1000, '{}'::jsonb) $$,
+  '23503',
+  NULL,
+  'Composite FK rejects wheel_spins referencing store-origin redemption'
+);
+
+-- Setup valid dummy wheel redemption
+insert into public.reward_redemptions (
+  id, family_id, child_id, reward_id, rp_cost_minor, origin, status, reward_snapshot
+) values (
+  'ca420000-0000-0000-0000-000000000889'::uuid,
+  'fa420000-0000-0000-0000-000000000001'::uuid,
+  'ca420000-0000-0000-0000-000000000001'::uuid,
+  'ea420000-0000-0000-0000-000000000001'::uuid,
+  1000,
+  'wheel',
+  'pending_fulfillment',
+  '{"title": "Wheel item"}'::jsonb
+);
+
+-- Test 55: Composite FK rejects mismatching reward_id
+select throws_ok(
+  $$ insert into public.wheel_spins (id, family_id, child_id, reward_id, redemption_id, origin, spin_cost_minor, selection_snapshot)
+     values (gen_random_uuid(), 'fa420000-0000-0000-0000-000000000001'::uuid, 'ca420000-0000-0000-0000-000000000001'::uuid, 'ea420000-0000-0000-0000-000000000002'::uuid, 'ca420000-0000-0000-0000-000000000889'::uuid, 'wheel', 1000, '{}'::jsonb) $$,
+  '23503',
+  NULL,
+  'Composite FK rejects wheel_spins with mismatching reward_id'
+);
+
+-- Test 56: Composite FK rejects mismatching spin_cost_minor
+select throws_ok(
+  $$ insert into public.wheel_spins (id, family_id, child_id, reward_id, redemption_id, origin, spin_cost_minor, selection_snapshot)
+     values (gen_random_uuid(), 'fa420000-0000-0000-0000-000000000001'::uuid, 'ca420000-0000-0000-0000-000000000001'::uuid, 'ea420000-0000-0000-0000-000000000001'::uuid, 'ca420000-0000-0000-0000-000000000889'::uuid, 'wheel', 2000, '{}'::jsonb) $$,
+  '23503',
+  NULL,
+  'Composite FK rejects wheel_spins with mismatching spin_cost_minor'
+);
+
+-- Test 57: Composite FK rejects mismatching child_id
+select throws_ok(
+  $$ insert into public.wheel_spins (id, family_id, child_id, reward_id, redemption_id, origin, spin_cost_minor, selection_snapshot)
+     values (gen_random_uuid(), 'fa420000-0000-0000-0000-000000000001'::uuid, 'ca420000-0000-0000-0000-000000000002'::uuid, 'ea420000-0000-0000-0000-000000000001'::uuid, 'ca420000-0000-0000-0000-000000000889'::uuid, 'wheel', 1000, '{}'::jsonb) $$,
+  '23503',
+  NULL,
+  'Composite FK rejects wheel_spins with mismatching child_id'
+);
+
+-- Test 58: Composite FK rejects mismatching family_id
+select throws_ok(
+  $$ insert into public.wheel_spins (id, family_id, child_id, reward_id, redemption_id, origin, spin_cost_minor, selection_snapshot)
+     values (gen_random_uuid(), 'fa420000-0000-0000-0000-000000000002'::uuid, 'ca420000-0000-0000-0000-000000000001'::uuid, 'ea420000-0000-0000-0000-000000000001'::uuid, 'ca420000-0000-0000-0000-000000000889'::uuid, 'wheel', 1000, '{}'::jsonb) $$,
+  '23503',
+  NULL,
+  'Composite FK rejects wheel_spins with mismatching family_id'
+);
+
+-- ---------------------------------------------------------------------------
+-- 10. FAIL-CLOSED TIMEZONE BEHAVIOR (Tests 59-60)
+-- ---------------------------------------------------------------------------
+
+-- Setup family with corrupt timezone
+insert into public.families (id, name, timezone, locale, created_by_user_id) values
+  ('fa420000-0000-0000-0000-000000000005'::uuid, 'Corrupt TZ Family', 'Invalid/Timezone_Name', 'en_US', '60000000-0000-0000-0000-000000000001'::uuid)
+on conflict (id) do update set timezone = 'Invalid/Timezone_Name';
+
+insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year) values
+  ('ca420000-0000-0000-0000-000000000005'::uuid, 'fa420000-0000-0000-0000-000000000005'::uuid, 'Corrupt TZ Child', 5, 2015)
+on conflict (id) do nothing;
+
+insert into public.family_memberships (family_id, auth_user_id, role, status) values
+  ('fa420000-0000-0000-0000-000000000005'::uuid, '60000000-0000-0000-0000-000000000001'::uuid, 'owner', 'active')
+on conflict (family_id, auth_user_id) do nothing;
+
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+
+-- Test 59: Corrupt timezone fails closed with LW004
+select throws_ok(
+  $$ select public.spin_reward_wheel('ca420000-0000-0000-0000-000000000555'::uuid, 'ca420000-0000-0000-0000-000000000005'::uuid) $$,
+  'LW004',
+  NULL,
+  'Corrupt family timezone fails closed with LW004 before economic mutation'
+);
+
+-- Test 60: get_wheel_status also fails closed with LW004 on corrupt timezone
+select throws_ok(
+  $$ select public.get_wheel_status('ca420000-0000-0000-0000-000000000005'::uuid) $$,
+  'LW004',
+  NULL,
+  'get_wheel_status fails closed with LW004 on corrupt timezone'
+);
+
+-- ---------------------------------------------------------------------------
+-- 11. GET_WHEEL_STATUS RPC TESTS (Tests 61-64)
+-- ---------------------------------------------------------------------------
+
+-- Switch to Paired Child A1
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
+
+-- Test 61: Paired Child A1 calls get_wheel_status
+select is(
+  (select (public.get_wheel_status('ca420000-0000-0000-0000-000000000001'::uuid) ->> 'spins_today')::integer),
+  3,
+  'get_wheel_status returns correct server-authoritative spins_today (3)'
+);
+
+-- Test 62: Parent Owner A calls get_wheel_status
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+select is(
+  (select (public.get_wheel_status('ca420000-0000-0000-0000-000000000001'::uuid) ->> 'spin_cost_minor')::bigint),
+  1000::bigint,
+  'get_wheel_status returns correct spin_cost_minor for parent caller'
+);
+
+-- Test 63: Other family user calling get_wheel_status is denied
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "60000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.get_wheel_status('ca420000-0000-0000-0000-000000000001'::uuid) $$,
+  '42501',
+  NULL,
+  'get_wheel_status denied for user from another family'
+);
+
+-- Test 64: Unauthenticated caller denied
+reset role;
+set local role anon;
+select throws_ok(
+  $$ select public.get_wheel_status('ca420000-0000-0000-0000-000000000001'::uuid) $$,
+  '42501',
+  NULL,
+  'get_wheel_status denied for unauthenticated caller'
 );
 
 select * from finish();

@@ -230,6 +230,113 @@ async function main() {
   }
   console.log('PASS: VN child spins cleanly under independent Asia/Ho_Chi_Minh local calendar calculations.\n');
 
+  // -------------------------------------------------------------------------
+  // SCENARIO 4: Spring-Forward DST Transition (23-Hour Calendar Day)
+  // -------------------------------------------------------------------------
+  console.log('--- SCENARIO 4: Spring-Forward DST (2026-03-08 America/New_York) ---');
+  const dstSpringSql = `
+    select
+      extract(epoch from (
+        (('2026-03-08'::date + 1)::timestamp at time zone 'America/New_York') -
+        ('2026-03-08'::date::timestamp at time zone 'America/New_York')
+      )) / 3600.0 as spring_hours;
+  `;
+  const springRes = await runPsql(dstSpringSql);
+  const springMatch = springRes.stdout.match(/(\d+(\.\d+)?)/);
+  if (!springMatch || parseFloat(springMatch[1]) !== 23.0) {
+    console.error('FAILED: Expected 2026-03-08 in America/New_York to span 23.0 absolute hours, got:', springRes.stdout);
+    process.exit(1);
+  }
+  console.log('PASS: Spring forward 2026-03-08 in America/New_York spans exactly 23.0 absolute hours.');
+
+  // Verify midnight boundary at spring forward: 2026-03-07 23:59:59 vs 2026-03-08 00:00:01
+  const boundaryCheckSql = `
+    select
+      ('2026-03-07 23:59:59'::timestamp at time zone 'America/New_York') < ('2026-03-08 00:00:00'::timestamp at time zone 'America/New_York') as day_before,
+      ('2026-03-08 00:00:01'::timestamp at time zone 'America/New_York') >= ('2026-03-08 00:00:00'::timestamp at time zone 'America/New_York')
+        and ('2026-03-08 00:00:01'::timestamp at time zone 'America/New_York') < ('2026-03-09 00:00:00'::timestamp at time zone 'America/New_York') as day_of,
+      ('2026-03-09 00:00:01'::timestamp at time zone 'America/New_York') >= ('2026-03-09 00:00:00'::timestamp at time zone 'America/New_York') as day_after;
+  `;
+  const boundaryRes = await runPsql(boundaryCheckSql);
+  if (!/t\s+\|\s+t\s+\|\s+t/.test(boundaryRes.stdout)) {
+    console.error('FAILED: Spring forward midnight boundary failed:', boundaryRes.stdout);
+    process.exit(1);
+  }
+  console.log('PASS: 23:59:59 is Day N; 00:00:01 is Day N+1 around spring forward.\n');
+
+  // -------------------------------------------------------------------------
+  // SCENARIO 5: Fall-Back DST Transition (25-Hour Calendar Day)
+  // -------------------------------------------------------------------------
+  console.log('--- SCENARIO 5: Fall-Back DST (2026-11-01 America/New_York) ---');
+  const dstFallSql = `
+    select
+      extract(epoch from (
+        (('2026-11-01'::date + 1)::timestamp at time zone 'America/New_York') -
+        ('2026-11-01'::date::timestamp at time zone 'America/New_York')
+      )) / 3600.0 as fall_hours;
+  `;
+  const fallRes = await runPsql(dstFallSql);
+  const fallMatch = fallRes.stdout.match(/(\d+(\.\d+)?)/);
+  if (!fallMatch || parseFloat(fallMatch[1]) !== 25.0) {
+    console.error('FAILED: Expected 2026-11-01 in America/New_York to span 25.0 absolute hours, got:', fallRes.stdout);
+    process.exit(1);
+  }
+  console.log('PASS: Fall back 2026-11-01 in America/New_York spans exactly 25.0 absolute hours.\n');
+
+  // -------------------------------------------------------------------------
+  // SCENARIO 6: Non-DST Timezone Ordinary 24-Hour Calendar Day
+  // -------------------------------------------------------------------------
+  console.log('--- SCENARIO 6: Non-DST Timezone (Asia/Ho_Chi_Minh) ---');
+  const nonDstSql = `
+    select
+      extract(epoch from (
+        (('2026-03-08'::date + 1)::timestamp at time zone 'Asia/Ho_Chi_Minh') -
+        ('2026-03-08'::date::timestamp at time zone 'Asia/Ho_Chi_Minh')
+      )) / 3600.0 as vn_spring_hours,
+      extract(epoch from (
+        (('2026-11-01'::date + 1)::timestamp at time zone 'Asia/Ho_Chi_Minh') -
+        ('2026-11-01'::date::timestamp at time zone 'Asia/Ho_Chi_Minh')
+      )) / 3600.0 as vn_fall_hours;
+  `;
+  const nonDstRes = await runPsql(nonDstSql);
+  if (!/24(\.0+)?\s+\|\s+24(\.0+)?/.test(nonDstRes.stdout)) {
+    console.error('FAILED: Expected Asia/Ho_Chi_Minh to span 24 hours on both dates, got:', nonDstRes.stdout);
+    process.exit(1);
+  }
+  console.log('PASS: Asia/Ho_Chi_Minh spans exactly 24.0 hours across DST transition dates.\n');
+
+  // -------------------------------------------------------------------------
+  // SCENARIO 7: Fail-Closed Behavior for Invalid / Corrupt Timezone
+  // -------------------------------------------------------------------------
+  console.log('--- SCENARIO 7: Fail-Closed on Corrupt / Missing Timezone ---');
+  const CORRUPT_FAM_ID = crypto.randomUUID();
+  const CORRUPT_CHILD_ID = crypto.randomUUID();
+  const corruptSetupSql = `
+    insert into public.families (id, name, timezone, locale, created_by_user_id)
+    values ('${CORRUPT_FAM_ID}', 'Corrupt TZ Family', 'Invalid/Timezone_Name', 'en-US', '${OWNER_NY_ID}')
+    on conflict (id) do update set timezone = 'Invalid/Timezone_Name';
+
+    insert into public.family_memberships (family_id, auth_user_id, role, status)
+    values ('${CORRUPT_FAM_ID}', '${OWNER_NY_ID}', 'owner', 'active')
+    on conflict (family_id, auth_user_id) do nothing;
+
+    insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year)
+    values ('${CORRUPT_CHILD_ID}', '${CORRUPT_FAM_ID}', 'Corrupt Child', 4, 2016);
+  `;
+  await runPsql(corruptSetupSql);
+
+  const corruptSpinSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${OWNER_NY_ID}", "role": "authenticated"}', false);
+    select public.spin_reward_wheel('${crypto.randomUUID()}'::uuid, '${CORRUPT_CHILD_ID}'::uuid);
+  `;
+  const corruptSpinRes = await runPsql(corruptSpinSql);
+  if (!corruptSpinRes.stderr.includes('LW004') && !corruptSpinRes.stderr.includes('Invalid family timezone')) {
+    console.error('FAILED: Expected corrupt timezone to fail with LW004, got:', corruptSpinRes.stderr || corruptSpinRes.stdout);
+    process.exit(1);
+  }
+  console.log('PASS: Corrupt family timezone fails closed with LW004 before any economic mutation.\n');
+
   console.log('===============================================================');
   console.log('ALL TIMEZONE & CALENDAR BOUNDARY TESTS PASSED!');
   console.log('===============================================================');

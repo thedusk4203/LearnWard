@@ -87,6 +87,38 @@ final class FakeWheelRepository implements WheelRepository {
   }
 
   @override
+  Future<WheelStatus> getWheelStatus({
+    required FamilyId familyId,
+    required ChildId childId,
+  }) async {
+    final settings = await getWheelSettings(familyId: familyId);
+    final spinsToday = await getTodaySpinCount(
+      familyId: familyId,
+      childId: childId,
+    );
+    final eligibleRewards = await listWheelRewards(
+      familyId: familyId,
+      childId: childId,
+    );
+    final now = DateTime.now().toUtc();
+    final todayStart = DateTime.utc(now.year, now.month, now.day);
+    final todayEnd = todayStart.add(const Duration(days: 1));
+
+    return WheelStatus(
+      familyId: familyId,
+      childId: childId,
+      spinCostMinor: settings.spinCostMinor,
+      dailySpinCap: settings.dailySpinCap,
+      isEnabled: settings.isEnabled,
+      spinsToday: spinsToday,
+      spinsRemaining: max(0, settings.dailySpinCap - spinsToday),
+      eligibleRewardCount: eligibleRewards.length,
+      localDayStart: todayStart,
+      localDayEnd: todayEnd,
+    );
+  }
+
+  @override
   Future<List<WheelSpin>> listWheelSpins({
     required FamilyId familyId,
     ChildId? childId,

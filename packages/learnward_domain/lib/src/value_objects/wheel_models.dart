@@ -179,3 +179,65 @@ final class WheelSpinResult {
     };
   }
 }
+
+/// Server-authoritative status of the Wheel for a specific child, derived from
+/// family wheel settings and timezone-bounded daily calendar calculations.
+final class WheelStatus {
+  WheelStatus({
+    required this.familyId,
+    required this.childId,
+    required this.spinCostMinor,
+    required this.dailySpinCap,
+    required this.isEnabled,
+    required this.spinsToday,
+    required this.spinsRemaining,
+    required this.eligibleRewardCount,
+    required this.localDayStart,
+    required this.localDayEnd,
+  });
+
+  final FamilyId familyId;
+  final ChildId childId;
+  final int spinCostMinor;
+  final int dailySpinCap;
+  final bool isEnabled;
+  final int spinsToday;
+  final int spinsRemaining;
+  final int eligibleRewardCount;
+  final DateTime localDayStart;
+  final DateTime localDayEnd;
+
+  double get spinCostRp => spinCostMinor / 100.0;
+  bool get canSpin =>
+      isEnabled && spinsRemaining > 0 && eligibleRewardCount >= 3;
+
+  factory WheelStatus.fromJson(Map<String, dynamic> json) {
+    return WheelStatus(
+      familyId: FamilyId(json['family_id'] as String),
+      childId: ChildId(json['child_id'] as String),
+      spinCostMinor: json['spin_cost_minor'] as int? ?? 1000,
+      dailySpinCap: json['daily_spin_cap'] as int? ?? 3,
+      isEnabled: json['is_enabled'] as bool? ?? true,
+      spinsToday: json['spins_today'] as int? ?? 0,
+      spinsRemaining: json['spins_remaining'] as int? ?? 0,
+      eligibleRewardCount: json['eligible_reward_count'] as int? ?? 0,
+      localDayStart: DateTime.parse(json['local_day_start'] as String),
+      localDayEnd: DateTime.parse(json['local_day_end'] as String),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'family_id': familyId.value,
+      'child_id': childId.value,
+      'spin_cost_minor': spinCostMinor,
+      'daily_spin_cap': dailySpinCap,
+      'is_enabled': isEnabled,
+      'spins_today': spinsToday,
+      'spins_remaining': spinsRemaining,
+      'eligible_reward_count': eligibleRewardCount,
+      'local_day_start': localDayStart.toIso8601String(),
+      'local_day_end': localDayEnd.toIso8601String(),
+    };
+  }
+}

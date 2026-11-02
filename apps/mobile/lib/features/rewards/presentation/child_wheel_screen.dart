@@ -24,15 +24,19 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
     with SingleTickerProviderStateMixin {
   bool _isLoading = false;
   bool _isSpinning = false;
+  bool _isRetryingPending = false;
   String? _errorMessage;
 
   WheelSettings? _settings;
+  WheelStatus? _wheelStatus;
   List<Reward> _eligibleRewards = [];
   ChildBalance? _childBalance;
   int _todaySpinCount = 0;
   List<WheelSpin> _spinHistory = [];
 
   WheelSpinResult? _lastSpinResult;
+  WheelSelectionSnapshot? _committedSnapshot;
+  PendingRewardCommand? _pendingCommand;
 
   late AnimationController _animController;
   double _currentRotation = 0.0;
@@ -84,6 +88,7 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
     try {
       final wheelRepo = ref.read(wheelRepositoryProvider);
       final growthRepo = ref.read(growthRepositoryProvider);
+      final commandStore = ref.read(pendingRewardCommandStoreProvider);
 
       final getSettings = GetWheelSettings(wheelRepo);
       final listRewards = ListWheelRewards(wheelRepo);
@@ -91,6 +96,10 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
       final getBalance = GetChildBalance(growthRepo);
 
       final settings = await getSettings(familyId: activeChild.familyId);
+      final status = await wheelRepo.getWheelStatus(
+        familyId: activeChild.familyId,
+        childId: activeChild.id,
+      );
       final rewards = await listRewards(
         familyId: activeChild.familyId,
         childId: activeChild.id,
@@ -101,18 +110,20 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
         limit: 10,
       );
       final balance = await getBalance(activeChild.id);
-      final todayCount = await wheelRepo.getTodaySpinCount(
-        familyId: activeChild.familyId,
-        childId: activeChild.id,
+      final pending = await commandStore.findPendingSpinCommand(
+        familyId: activeChild.familyId.value,
+        childId: activeChild.id.value,
       );
 
       if (mounted) {
         setState(() {
           _settings = settings;
+          _wheelStatus = status;
           _eligibleRewards = rewards;
           _spinHistory = spins;
           _childBalance = balance;
-          _todaySpinCount = todayCount;
+          _todaySpinCount = status.spinsToday;
+          _pendingCommand = pending;
           _isLoading = false;
         });
       }
@@ -128,18 +139,40 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
 
   Future<void> _confirmAndSpin() async {
     final activeChild = ref.read(activeChildModeProvider);
-    if (activeChild == null || _settings == null) return;
+    if (activeChild == null) return;
 
-    final costRp = _settings!.spinCostRp;
+    final costMinor =
+        _wheelStatus?.spinCostMinor ?? (_settings?.spinCostMinor ?? 1000);
+    final costRp = costMinor / 100.0;
+    final balanceMinor = _childBalance?.rpBalanceMinor.value ?? 0;
+    final balanceRp = balanceMinor / 100.0;
+    final newBalanceRp = (balanceMinor - costMinor) / 100.0;
 
-    // 1. Mandatory Confirmation Dialog before spending RP
+    // 1. Mandatory Pure RP Confirmation Dialog (zero dollar signs / real currency)
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Spin the Celebration Wheel?'),
-        content: Text(
-          'Spinning costs ${costRp.toStringAsFixed(0)} RP (\$${costRp.toStringAsFixed(2)}). '
-          'Are you sure you want to spin?',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Cost: ${costRp.toStringAsFixed(0)} RP',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            const Text('Balance:'),
+            Text(
+              '${balanceRp.toStringAsFixed(0)} RP → ${newBalanceRp.toStringAsFixed(0)} RP',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            const Text('Every spin gives one family-approved reward.'),
+          ],
         ),
         actions: [
           TextButton(
@@ -150,7 +183,7 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
           FilledButton(
             key: const Key('confirm_spin_button'),
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text('Confirm & Spin (${costRp.toStringAsFixed(0)} RP)'),
+            child: const Text('Spin'),
           ),
         ],
       ),
@@ -175,52 +208,95 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
       );
 
       _lastSpinResult = result;
+      _committedSnapshot = result.selectionSnapshot;
+      _pendingCommand = null;
 
-      // 3. Compute target rotation so the wheel lands on the server-decided winner
-      _calculateTargetRotation(result.rewardId);
+      // 3. Compute target rotation using the COMMITTED snapshot
+      _calculateTargetRotation(result.selectionSnapshot);
 
       _animController.reset();
       _animController.forward();
 
-      // Refresh balance and history in background
+      // Refresh balance, status and history in background
       unawaited(_loadDataSilently());
     } catch (e) {
       if (mounted) {
+        final commandStore = ref.read(pendingRewardCommandStoreProvider);
+        final remainingPending = await commandStore.findPendingSpinCommand(
+          familyId: activeChild.familyId.value,
+          childId: activeChild.id.value,
+        );
         setState(() {
           _isSpinning = false;
+          _pendingCommand = remainingPending;
           _errorMessage = _friendlyErrorMessage(e.toString());
         });
       }
     }
   }
 
-  void _calculateTargetRotation(RewardId winningRewardId) {
-    if (_eligibleRewards.isEmpty) return;
+  Future<void> _retryPendingSpin() async {
+    final activeChild = ref.read(activeChildModeProvider);
+    if (activeChild == null || _pendingCommand == null) return;
 
-    // Sort rewards deterministically (matches server reward_id_asc)
-    final sorted = List<Reward>.from(_eligibleRewards)
-      ..sort((a, b) => a.id.value.compareTo(b.id.value));
+    setState(() {
+      _isRetryingPending = true;
+      _errorMessage = null;
+    });
 
-    final totalWeight = sorted.fold<int>(
-      0,
-      (sum, r) => sum + (r.wheelTier?.relativeWeight ?? 60),
+    try {
+      final wheelRepo = ref.read(wheelRepositoryProvider);
+      final commandStore = ref.read(pendingRewardCommandStoreProvider);
+      final spinUseCase = SpinRewardWheel(wheelRepo, commandStore);
+
+      final result = await spinUseCase(
+        familyId: activeChild.familyId,
+        childId: activeChild.id,
+        commandId: _pendingCommand!.commandId,
+      );
+
+      setState(() {
+        _isRetryingPending = false;
+        _lastSpinResult = result;
+        _committedSnapshot = result.selectionSnapshot;
+        _pendingCommand = null;
+      });
+
+      _calculateTargetRotation(result.selectionSnapshot);
+      _animController.reset();
+      _animController.forward();
+
+      unawaited(_loadDataSilently());
+    } catch (e) {
+      if (mounted) {
+        final commandStore = ref.read(pendingRewardCommandStoreProvider);
+        final remainingPending = await commandStore.findPendingSpinCommand(
+          familyId: activeChild.familyId.value,
+          childId: activeChild.id.value,
+        );
+        setState(() {
+          _isRetryingPending = false;
+          _pendingCommand = remainingPending;
+          _errorMessage = _friendlyErrorMessage(e.toString());
+        });
+      }
+    }
+  }
+
+  void _calculateTargetRotation(WheelSelectionSnapshot snapshot) {
+    if (snapshot.orderedPool.isEmpty || snapshot.totalWeight <= 0) return;
+
+    final winningItem = snapshot.orderedPool.firstWhere(
+      (item) => item.rewardId == snapshot.winningRewardId,
+      orElse: () => snapshot.orderedPool.first,
     );
 
-    int cumulative = 0;
-    double winningCenterAngle = 0.0;
+    // Center of winning interval normalized to [0, 2*pi]
+    final centerInterval =
+        (winningItem.intervalStart + winningItem.intervalEnd) / 2.0;
+    final winningCenterAngle = (centerInterval / snapshot.totalWeight) * 2 * pi;
 
-    for (final r in sorted) {
-      final weight = r.wheelTier?.relativeWeight ?? 60;
-      final startAngle = (cumulative / totalWeight) * 2 * pi;
-      final endAngle = ((cumulative + weight) / totalWeight) * 2 * pi;
-      if (r.id == winningRewardId) {
-        winningCenterAngle = (startAngle + endAngle) / 2.0;
-        break;
-      }
-      cumulative += weight;
-    }
-
-    // Pointer is at the top (3*pi/2 or -pi/2). Spin 5 full turns + offset to winner
+    // Pointer is at the top (1.5 * pi or -pi/2). Spin 5 full turns + offset to winner
     const fullTurns = 5 * 2 * pi;
     final landingAngle = (1.5 * pi) - winningCenterAngle;
     _targetRotation = fullTurns + landingAngle;
@@ -232,22 +308,30 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
     try {
       final wheelRepo = ref.read(wheelRepositoryProvider);
       final growthRepo = ref.read(growthRepositoryProvider);
+      final commandStore = ref.read(pendingRewardCommandStoreProvider);
+
       final balance = await GetChildBalance(growthRepo)(activeChild.id);
       final spins = await ListWheelSpins(wheelRepo)(
         familyId: activeChild.familyId,
         childId: activeChild.id,
         limit: 10,
       );
-      final todayCount = await wheelRepo.getTodaySpinCount(
+      final status = await wheelRepo.getWheelStatus(
         familyId: activeChild.familyId,
         childId: activeChild.id,
+      );
+      final pending = await commandStore.findPendingSpinCommand(
+        familyId: activeChild.familyId.value,
+        childId: activeChild.id.value,
       );
 
       if (mounted) {
         setState(() {
           _childBalance = balance;
           _spinHistory = spins;
-          _todaySpinCount = todayCount;
+          _wheelStatus = status;
+          _todaySpinCount = status.spinsToday;
+          _pendingCommand = pending;
         });
       }
     } catch (_) {}
@@ -367,21 +451,29 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
     final theme = Theme.of(context);
     final balanceMinor = _childBalance?.rpBalanceMinor.value ?? 0;
     final balanceRp = balanceMinor / 100.0;
-    final costMinor = _settings?.spinCostMinor ?? 1000;
+    final costMinor =
+        _wheelStatus?.spinCostMinor ?? (_settings?.spinCostMinor ?? 1000);
     final costRp = costMinor / 100.0;
-    final dailyCap = _settings?.dailySpinCap ?? 3;
-    final isEnabled = _settings?.isEnabled ?? true;
+    final dailyCap =
+        _wheelStatus?.dailySpinCap ?? (_settings?.dailySpinCap ?? 3);
+    final isEnabled = _wheelStatus?.isEnabled ?? (_settings?.isEnabled ?? true);
+    final spinsRemaining =
+        _wheelStatus?.spinsRemaining ?? (dailyCap - _todaySpinCount);
+    final eligibleCount =
+        _wheelStatus?.eligibleRewardCount ?? _eligibleRewards.length;
 
     final hasEnoughBalance = balanceMinor >= costMinor;
-    final hasSpinsRemaining = _todaySpinCount < dailyCap;
-    final hasEnoughPrizes = _eligibleRewards.length >= 3;
+    final hasSpinsRemaining = spinsRemaining > 0;
+    final hasEnoughPrizes = eligibleCount >= 3;
 
     final canSpin =
         isEnabled &&
         hasEnoughBalance &&
         hasSpinsRemaining &&
         hasEnoughPrizes &&
-        !_isSpinning;
+        !_isSpinning &&
+        !_isRetryingPending &&
+        _pendingCommand == null;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Celebration Wheel')),
@@ -452,6 +544,81 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
                     ),
                     const SizedBox(height: AppSpacing.md),
 
+                    // Pending Spin Recovery Banner (if prior spin was interrupted)
+                    if (_pendingCommand != null) ...[
+                      Card(
+                        key: const Key('pending_spin_recovery_card'),
+                        color: Colors.amber.shade50,
+                        shape: RoundedRectangleBorder(
+                          side: BorderSide(
+                            color: Colors.amber.shade700,
+                            width: 1.5,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(AppSpacing.md),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.sync_problem,
+                                    color: Colors.amber.shade900,
+                                  ),
+                                  const SizedBox(width: AppSpacing.xs),
+                                  Expanded(
+                                    child: Text(
+                                      "We're checking whether your spin was completed.",
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.amber.shade900,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: AppSpacing.xs),
+                              Text(
+                                'A previous spin was interrupted by a network issue. Check now to see your reward without spending extra RP.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.brown.shade800,
+                                ),
+                              ),
+                              const SizedBox(height: AppSpacing.sm),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: FilledButton.icon(
+                                  key: const Key('retry_pending_spin_button'),
+                                  icon: _isRetryingPending
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Icon(Icons.refresh, size: 18),
+                                  label: Text(
+                                    _isRetryingPending
+                                        ? 'Checking...'
+                                        : 'Check / Retry Spin',
+                                  ),
+                                  onPressed: _isRetryingPending
+                                      ? null
+                                      : _retryPendingSpin,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                    ],
+
                     if (_errorMessage != null) ...[
                       Card(
                         color: theme.colorScheme.errorContainer,
@@ -491,7 +658,10 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
                             angle: _currentRotation,
                             child: CustomPaint(
                               size: const Size(260, 260),
-                              painter: _WheelPainter(rewards: _eligibleRewards),
+                              painter: _WheelPainter(
+                                rewards: _eligibleRewards,
+                                snapshot: _committedSnapshot,
+                              ),
                             ),
                           ),
                           // Pointer at the top
@@ -547,6 +717,8 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
                         label: Text(
                           _isSpinning
                               ? 'Spinning...'
+                              : _pendingCommand != null
+                              ? 'Resolve Interrupted Spin First'
                               : !isEnabled
                               ? 'Wheel is Resting'
                               : !hasEnoughPrizes
@@ -636,28 +808,23 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
 }
 
 /// Custom painter rendering proportional wheel wedges according to relative weights.
+/// If a committed snapshot is provided, paints the exact snapshot pool and intervals
+/// drawn by the server. Otherwise falls back to eligible rewards preview.
 class _WheelPainter extends CustomPainter {
-  _WheelPainter({required this.rewards});
+  _WheelPainter({required this.rewards, this.snapshot});
 
   final List<Reward> rewards;
+  final WheelSelectionSnapshot? snapshot;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (rewards.isEmpty) return;
-
     final center = Offset(size.width / 2, size.height / 2);
     final radius = size.width / 2;
-
-    final sorted = List<Reward>.from(rewards)
-      ..sort((a, b) => a.id.value.compareTo(b.id.value));
-
-    final totalWeight = sorted.fold<int>(
-      0,
-      (sum, r) => sum + (r.wheelTier?.relativeWeight ?? 60),
-    );
-
-    double currentAngle = 0.0;
     final paint = Paint()..style = PaintingStyle.fill;
+    final linePaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
 
     final colors = [
       Colors.teal.shade400,
@@ -668,6 +835,49 @@ class _WheelPainter extends CustomPainter {
       Colors.deepOrange.shade400,
     ];
 
+    if (snapshot != null && snapshot!.orderedPool.isNotEmpty) {
+      final pool = snapshot!.orderedPool;
+      final totalWeight = snapshot!.totalWeight > 0 ? snapshot!.totalWeight : 1;
+
+      for (int i = 0; i < pool.length; i++) {
+        final item = pool[i];
+        final startAngle = (item.intervalStart / totalWeight) * 2 * pi;
+        final sweepAngle =
+            ((item.intervalEnd - item.intervalStart) / totalWeight) * 2 * pi;
+
+        paint.color = colors[i % colors.length];
+
+        canvas.drawArc(
+          Rect.fromCircle(center: center, radius: radius),
+          startAngle,
+          sweepAngle,
+          true,
+          paint,
+        );
+
+        canvas.drawArc(
+          Rect.fromCircle(center: center, radius: radius),
+          startAngle,
+          sweepAngle,
+          true,
+          linePaint,
+        );
+      }
+      return;
+    }
+
+    if (rewards.isEmpty) return;
+
+    final sorted = List<Reward>.from(rewards)
+      ..sort((a, b) => a.id.value.compareTo(b.id.value));
+
+    final totalWeight = sorted.fold<int>(
+      0,
+      (sum, r) => sum + (r.wheelTier?.relativeWeight ?? 60),
+    );
+    if (totalWeight <= 0) return;
+
+    double currentAngle = 0.0;
     for (int i = 0; i < sorted.length; i++) {
       final reward = sorted[i];
       final weight = reward.wheelTier?.relativeWeight ?? 60;
@@ -683,11 +893,6 @@ class _WheelPainter extends CustomPainter {
         paint,
       );
 
-      // Wedge boundary line
-      final linePaint = Paint()
-        ..color = Colors.white
-        ..strokeWidth = 2
-        ..style = PaintingStyle.stroke;
       canvas.drawArc(
         Rect.fromCircle(center: center, radius: radius),
         currentAngle,

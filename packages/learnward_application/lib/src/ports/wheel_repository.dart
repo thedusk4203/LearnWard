@@ -32,4 +32,11 @@ abstract interface class WheelRepository {
     required FamilyId familyId,
     required ChildId childId,
   });
+
+  /// Returns server-authoritative Wheel status (daily cap, spins today, spins remaining, is_enabled)
+  /// calculated based on the family's authoritative timezone.
+  Future<WheelStatus> getWheelStatus({
+    required FamilyId familyId,
+    required ChildId childId,
+  });
 }

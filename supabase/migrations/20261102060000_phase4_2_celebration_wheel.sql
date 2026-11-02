@@ -229,11 +229,10 @@ declare
   v_is_child boolean;
   v_receipt record;
   v_existing_spin record;
-  v_settings record;
   v_spin_cost_minor bigint;
   v_daily_spin_cap integer;
   v_is_enabled boolean;
-  v_candidate_count integer;
+  v_candidate_count integer := 0;
   v_balance record;
   v_family_tz text;
   v_test_tz timestamptz;
@@ -241,16 +240,18 @@ declare
   v_today_start timestamptz;
   v_today_end timestamptz;
   v_spins_today integer;
-  v_total_weight integer;
+  v_total_weight integer := 0;
   v_random_draw integer;
-  v_cumulative integer;
+  v_cumulative integer := 0;
   v_interval_start integer;
   v_interval_end integer;
   v_prob_pct numeric;
   v_reward record;
-  v_winning_reward record;
-  v_ordered_pool jsonb;
+  v_winning_reward jsonb := null;
+  v_ordered_pool jsonb := '[]'::jsonb;
   v_pool_item jsonb;
+  v_captured_pool jsonb := '[]'::jsonb;
+  v_elem jsonb;
   v_selection_snapshot jsonb;
   v_spin_id uuid;
   v_redemption_id uuid;
@@ -275,6 +276,21 @@ begin
   if not found then
     raise exception 'Child profile not found or inactive' using errcode = 'P0002';
   end if;
+
+  -- Validate family timezone immediately (FAIL CLOSED on missing/corrupt timezone)
+  select timezone into v_family_tz
+  from public.families
+  where id = v_family_id;
+
+  if v_family_tz is null or trim(v_family_tz) = '' then
+    raise exception 'Family timezone is missing or invalid' using errcode = 'LW004';
+  end if;
+
+  begin
+    v_test_tz := now() at time zone v_family_tz;
+  exception when others then
+    raise exception 'Invalid family timezone: %', v_family_tz using errcode = 'LW004';
+  end;
 
   -- 3. Authorize caller against resolved family
   v_is_adult := private.is_active_family_adult(v_family_id);
@@ -360,27 +376,45 @@ begin
     raise exception 'Wheel is currently disabled for this family' using errcode = 'LW206';
   end if;
 
-  -- Step 2: Lock eligible Wheel reward rows using FOR SHARE (stabilizing lock)
-  -- Eligible: is_active = true, wheel_enabled = true, wheel_tier is not null, target_child matches
-  perform id
-  from public.rewards
-  where family_id = v_family_id
-    and is_active = true
-    and wheel_enabled = true
-    and wheel_tier is not null
-    and (target_child_id is null or target_child_id = p_child_id)
-  order by id asc
-  for share;
+  -- Step 2: Lock and materialize eligible Wheel reward rows in ONE authoritative stabilized snapshot
+  -- Captured in deterministic order: id ASC FOR SHARE
+  for v_reward in
+    select
+      id,
+      title,
+      category,
+      icon_key,
+      wheel_tier,
+      case wheel_tier
+        when 'common' then 60
+        when 'special' then 30
+        when 'rare' then 10
+        else 60
+      end as weight
+    from public.rewards
+    where family_id = v_family_id
+      and is_active = true
+      and wheel_enabled = true
+      and wheel_tier is not null
+      and (target_child_id is null or target_child_id = p_child_id)
+    order by id asc
+    for share
+  loop
+    v_candidate_count := v_candidate_count + 1;
+    v_total_weight := v_total_weight + v_reward.weight;
+    v_captured_pool := v_captured_pool || jsonb_build_array(
+      jsonb_build_object(
+        'reward_id', v_reward.id,
+        'title', v_reward.title,
+        'category', v_reward.category,
+        'icon_key', coalesce(v_reward.icon_key, 'default_star'),
+        'tier', v_reward.wheel_tier,
+        'weight', v_reward.weight
+      )
+    );
+  end loop;
 
-  select count(*)
-  into v_candidate_count
-  from public.rewards
-  where family_id = v_family_id
-    and is_active = true
-    and wheel_enabled = true
-    and wheel_tier is not null
-    and (target_child_id is null or target_child_id = p_child_id);
-
+  -- Enforce minimum eligible pool size using the locked snapshot
   if v_candidate_count < 3 then
     raise exception 'Wheel requires at least 3 active eligible rewards (found %)', v_candidate_count using errcode = 'LW203';
   end if;
@@ -400,20 +434,6 @@ begin
   end if;
 
   -- Step 4: Evaluate family timezone and daily spin cap
-  select timezone into v_family_tz
-  from public.families
-  where id = v_family_id;
-
-  if v_family_tz is null or trim(v_family_tz) = '' then
-    v_family_tz := 'UTC';
-  end if;
-
-  begin
-    v_test_tz := now() at time zone v_family_tz;
-  exception when others then
-    raise exception 'Invalid family timezone: %', v_family_tz using errcode = 'LW004';
-  end;
-
   v_local_date := (now() at time zone v_family_tz)::date;
   v_today_start := v_local_date::timestamp at time zone v_family_tz;
   v_today_end := (v_local_date + 1)::timestamp at time zone v_family_tz;
@@ -428,62 +448,27 @@ begin
     raise exception 'Daily spin limit reached (%/%)', v_spins_today, v_daily_spin_cap using errcode = 'LW202';
   end if;
 
-  -- 6. Server-authoritative pseudorandom selection
-  -- Tier weights: common = 60, special = 30, rare = 10
-  v_total_weight := 0;
-  for v_reward in
-    select id, title, category, icon_key, wheel_tier,
-           case wheel_tier
-             when 'common' then 60
-             when 'special' then 30
-             when 'rare' then 10
-             else 60
-           end as weight
-    from public.rewards
-    where family_id = v_family_id
-      and is_active = true
-      and wheel_enabled = true
-      and wheel_tier is not null
-      and (target_child_id is null or target_child_id = p_child_id)
-    order by id asc
-  loop
-    v_total_weight := v_total_weight + v_reward.weight;
-  end loop;
-
-  -- Draw pseudorandom integer R in [0, v_total_weight)
+  -- 6. Server-authoritative pseudorandom selection using the CAPTURED IN-MEMORY POOL ONLY
+  -- (public.rewards is NOT queried again)
   v_random_draw := floor(random() * v_total_weight)::integer;
 
   v_cumulative := 0;
   v_ordered_pool := '[]'::jsonb;
   v_winning_reward := null;
 
-  for v_reward in
-    select id, title, category, icon_key, wheel_tier,
-           case wheel_tier
-             when 'common' then 60
-             when 'special' then 30
-             when 'rare' then 10
-             else 60
-           end as weight
-    from public.rewards
-    where family_id = v_family_id
-      and is_active = true
-      and wheel_enabled = true
-      and wheel_tier is not null
-      and (target_child_id is null or target_child_id = p_child_id)
-    order by id asc
+  for v_elem in select * from jsonb_array_elements(v_captured_pool)
   loop
     v_interval_start := v_cumulative;
-    v_interval_end := v_cumulative + v_reward.weight;
-    v_prob_pct := round((v_reward.weight::numeric / v_total_weight::numeric) * 100.0, 2);
+    v_interval_end := v_cumulative + (v_elem ->> 'weight')::integer;
+    v_prob_pct := round(((v_elem ->> 'weight')::numeric / v_total_weight::numeric) * 100.0, 2);
 
     v_pool_item := jsonb_build_object(
-      'reward_id', v_reward.id,
-      'title', v_reward.title,
-      'category', v_reward.category,
-      'icon_key', v_reward.icon_key,
-      'tier', v_reward.wheel_tier,
-      'weight', v_reward.weight,
+      'reward_id', (v_elem ->> 'reward_id')::uuid,
+      'title', v_elem ->> 'title',
+      'category', v_elem ->> 'category',
+      'icon_key', v_elem ->> 'icon_key',
+      'tier', v_elem ->> 'tier',
+      'weight', (v_elem ->> 'weight')::integer,
       'interval_start', v_interval_start,
       'interval_end', v_interval_end,
       'probability_pct', v_prob_pct
@@ -491,14 +476,15 @@ begin
     v_ordered_pool := v_ordered_pool || jsonb_build_array(v_pool_item);
 
     if v_random_draw >= v_interval_start and v_random_draw < v_interval_end then
-      v_winning_reward := v_reward;
+      v_winning_reward := v_pool_item;
     end if;
 
     v_cumulative := v_interval_end;
   end loop;
 
   if v_winning_reward is null then
-    raise exception 'Internal error: pseudorandom selection failed to find winner' using errcode = 'LW004';
+    -- Fail-safe boundary fallback
+    v_winning_reward := v_ordered_pool -> (jsonb_array_length(v_ordered_pool) - 1);
   end if;
 
   v_selection_snapshot := jsonb_build_object(
@@ -507,7 +493,7 @@ begin
     'deterministic_ordering', 'reward_id_asc',
     'total_weight', v_total_weight,
     'random_draw', v_random_draw,
-    'winning_reward_id', v_winning_reward.id,
+    'winning_reward_id', (v_winning_reward ->> 'reward_id')::uuid,
     'ordered_pool', v_ordered_pool
   );
 
@@ -532,15 +518,17 @@ begin
     v_redemption_id,
     v_family_id,
     p_child_id,
-    v_winning_reward.id,
+    (v_winning_reward ->> 'reward_id')::uuid,
     'wheel',
     v_spin_cost_minor,
     'pending_fulfillment',
     jsonb_build_object(
-      'title', v_winning_reward.title,
-      'category', v_winning_reward.category,
-      'icon_key', v_winning_reward.icon_key,
-      'wheel_tier', v_winning_reward.wheel_tier
+      'title', v_winning_reward ->> 'title',
+      'category', v_winning_reward ->> 'category',
+      'icon_key', v_winning_reward ->> 'icon_key',
+      'wheel_tier', v_winning_reward ->> 'tier',
+      'origin', 'wheel',
+      'spin_cost_minor', v_spin_cost_minor
     ),
     v_now,
     v_now
@@ -561,7 +549,7 @@ begin
     v_spin_id,
     v_family_id,
     p_child_id,
-    v_winning_reward.id,
+    (v_winning_reward ->> 'reward_id')::uuid,
     v_redemption_id,
     'wheel',
     v_spin_cost_minor,
@@ -578,15 +566,17 @@ begin
     source_type,
     source_id,
     idempotency_key,
+    metadata,
     created_at
   ) values (
     v_family_id,
     p_child_id,
     -v_spin_cost_minor,
     'wheel_spin',
-    'wheel_spin',
-    v_spin_id,
+    'reward_redemption',
+    v_redemption_id,
     'rp:wheel_spin:' || v_spin_id::text,
+    jsonb_build_object('command_id', p_command_id, 'spin_id', v_spin_id),
     v_now
   );
 
@@ -602,11 +592,11 @@ begin
     'redemption_id', v_redemption_id,
     'family_id', v_family_id,
     'child_id', p_child_id,
-    'reward_id', v_winning_reward.id,
-    'reward_title', v_winning_reward.title,
-    'reward_category', v_winning_reward.category,
-    'reward_icon_key', v_winning_reward.icon_key,
-    'wheel_tier', v_winning_reward.wheel_tier,
+    'reward_id', (v_winning_reward ->> 'reward_id')::uuid,
+    'reward_title', v_winning_reward ->> 'title',
+    'reward_category', v_winning_reward ->> 'category',
+    'reward_icon_key', v_winning_reward ->> 'icon_key',
+    'wheel_tier', v_winning_reward ->> 'tier',
     'spin_cost_minor', v_spin_cost_minor,
     'new_balance_minor', v_balance.rp_balance_minor - v_spin_cost_minor,
     'selection_snapshot', v_selection_snapshot,
@@ -636,3 +626,126 @@ $$;
 
 revoke execute on function public.spin_reward_wheel(uuid, uuid) from public, anon;
 grant execute on function public.spin_reward_wheel(uuid, uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 5. WHEEL STATUS RPC (public.get_wheel_status)
+-- ---------------------------------------------------------------------------
+
+create or replace function public.get_wheel_status(
+  p_child_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+  v_family_id uuid;
+  v_is_adult boolean;
+  v_is_child boolean;
+  v_family_tz text;
+  v_test_tz timestamptz;
+  v_local_date date;
+  v_today_start timestamptz;
+  v_today_end timestamptz;
+  v_spin_cost_minor bigint;
+  v_daily_spin_cap integer;
+  v_is_enabled boolean;
+  v_spins_today integer;
+  v_spins_remaining integer;
+  v_eligible_reward_count integer;
+begin
+  if p_child_id is null then
+    raise exception 'Child ID is required' using errcode = '22000';
+  end if;
+
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    raise exception 'Authentication required' using errcode = '42501';
+  end if;
+
+  -- Load child and derive family
+  select family_id into v_family_id
+  from public.child_profiles
+  where id = p_child_id and status = 'active';
+
+  if not found then
+    raise exception 'Child profile not found or inactive' using errcode = 'P0002';
+  end if;
+
+  -- Authorize caller: active family adult or exact paired child
+  v_is_adult := private.is_active_family_adult(v_family_id);
+  v_is_child := private.is_active_child_device(v_family_id, p_child_id);
+
+  if not (v_is_adult or v_is_child) then
+    raise exception 'Permission denied' using errcode = '42501';
+  end if;
+
+  -- Load family timezone (FAIL CLOSED on missing/corrupt timezone)
+  select timezone into v_family_tz
+  from public.families
+  where id = v_family_id;
+
+  if v_family_tz is null or trim(v_family_tz) = '' then
+    raise exception 'Family timezone is missing or invalid' using errcode = 'LW004';
+  end if;
+
+  begin
+    v_test_tz := now() at time zone v_family_tz;
+  exception when others then
+    raise exception 'Invalid family timezone: %', v_family_tz using errcode = 'LW004';
+  end;
+
+  -- Local day boundaries
+  v_local_date := (now() at time zone v_family_tz)::date;
+  v_today_start := v_local_date::timestamp at time zone v_family_tz;
+  v_today_end := (v_local_date + 1)::timestamp at time zone v_family_tz;
+
+  -- Load wheel settings
+  select spin_cost_minor, daily_spin_cap, is_enabled
+  into v_spin_cost_minor, v_daily_spin_cap, v_is_enabled
+  from public.family_wheel_settings
+  where family_id = v_family_id;
+
+  if not found then
+    v_spin_cost_minor := 1000;
+    v_daily_spin_cap := 3;
+    v_is_enabled := true;
+  end if;
+
+  -- Count spins today in local day interval [today_start, today_end)
+  select count(*) into v_spins_today
+  from public.wheel_spins
+  where child_id = p_child_id
+    and created_at >= v_today_start
+    and created_at < v_today_end;
+
+  v_spins_remaining := greatest(0, v_daily_spin_cap - v_spins_today);
+
+  -- Count eligible active rewards
+  select count(*) into v_eligible_reward_count
+  from public.rewards
+  where family_id = v_family_id
+    and is_active = true
+    and wheel_enabled = true
+    and wheel_tier is not null
+    and (target_child_id is null or target_child_id = p_child_id);
+
+  return jsonb_build_object(
+    'family_id', v_family_id,
+    'child_id', p_child_id,
+    'spin_cost_minor', v_spin_cost_minor,
+    'daily_spin_cap', v_daily_spin_cap,
+    'is_enabled', v_is_enabled,
+    'spins_today', v_spins_today,
+    'spins_remaining', v_spins_remaining,
+    'eligible_reward_count', v_eligible_reward_count,
+    'local_day_start', v_today_start,
+    'local_day_end', v_today_end
+  );
+end;
+$$;
+
+revoke execute on function public.get_wheel_status(uuid) from public, anon;
+grant execute on function public.get_wheel_status(uuid) to authenticated;
