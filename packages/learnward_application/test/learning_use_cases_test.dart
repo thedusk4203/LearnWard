@@ -21,12 +21,13 @@ void main() {
 
       final mapping = AssessmentLearningMapping(
         familyId: familyId,
+        childId: childId,
         assessmentId: assessmentId,
         learningNodeId: nodeId,
         scoreSource: ScoreSource.componentScore,
         componentKey: 'q1',
-        rawScore: 9,
-        maxScore: 10,
+        componentRawScore: 9,
+        componentMaxScore: 10,
       );
 
       final result = await setMappings(
@@ -93,7 +94,7 @@ void main() {
           ),
         );
 
-        final projections = await getMastery(childId: childId, asOf: now);
+        final projections = await getMastery(childId: childId);
         expect(projections.length, equals(1));
         expect(projections.first.masteryScore, equals(90.0));
         expect(projections.first.confidenceBand, equals(ConfidenceBand.low));
@@ -101,15 +102,6 @@ void main() {
           projections.first.masteryBand,
           equals(MasteryBand.masteryCandidate),
         );
-      },
-    );
-
-    test(
-      'PromoteLearningCatalogVersion updates active catalog version',
-      () async {
-        final promote = PromoteLearningCatalogVersion(repository);
-        final res = await promote('pilot-v0.2');
-        expect(res, equals('pilot-v0.2'));
       },
     );
   });

@@ -174,6 +174,11 @@ async function main() {
     process.exit(1);
   }
 
+  if (!skillItem.as_of) {
+    console.error('Skill item missing as_of timestamp:', skillItem);
+    process.exit(1);
+  }
+
   if (parseFloat(skillItem.mastery_score) !== 90.00 || skillItem.confidence_band !== 'low' || skillItem.mastery_band !== 'mastery_candidate') {
     console.error('Skill item unexpected projection:', skillItem);
     process.exit(1);

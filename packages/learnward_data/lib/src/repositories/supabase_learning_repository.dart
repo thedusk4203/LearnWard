@@ -57,23 +57,13 @@ final class SupabaseLearningRepository implements LearningRepository {
     );
 
     final list = response as List<dynamic>;
-    return list.map((item) {
-      final map = item as Map<String, dynamic>;
-      return AssessmentLearningMapping(
-        id: map['id'] as String?,
-        familyId: FamilyId(map['family_id'] as String? ?? ''),
-        assessmentId: assessmentId,
-        learningNodeId: LearningNodeId(map['learning_node_id'] as String),
-        scoreSource: ScoreSource.fromValue(map['score_source'] as String),
-        componentKey: map['component_key'] as String?,
-        rawScore: ((map['raw_score'] ?? map['component_raw_score']) as num?)
-            ?.toDouble(),
-        maxScore: ((map['max_score'] ?? map['component_max_score']) as num?)
-            ?.toDouble(),
-        itemCount: (map['item_count'] as num?)?.toInt(),
-        correctCount: (map['correct_count'] as num?)?.toInt(),
-      );
-    }).toList();
+    return list
+        .map(
+          (item) => AssessmentLearningMapping.fromJson(
+            Map<String, dynamic>.from(item as Map),
+          ),
+        )
+        .toList();
   }
 
   @override
@@ -89,23 +79,13 @@ final class SupabaseLearningRepository implements LearningRepository {
     );
 
     final list = response as List<dynamic>;
-    return list.map((item) {
-      final map = item as Map<String, dynamic>;
-      return AssessmentLearningMapping(
-        id: map['id'] as String?,
-        familyId: FamilyId(map['family_id'] as String? ?? ''),
-        assessmentId: assessmentId,
-        learningNodeId: LearningNodeId(map['learning_node_id'] as String),
-        scoreSource: ScoreSource.fromValue(map['score_source'] as String),
-        componentKey: map['component_key'] as String?,
-        rawScore: ((map['raw_score'] ?? map['component_raw_score']) as num?)
-            ?.toDouble(),
-        maxScore: ((map['max_score'] ?? map['component_max_score']) as num?)
-            ?.toDouble(),
-        itemCount: (map['item_count'] as num?)?.toInt(),
-        correctCount: (map['correct_count'] as num?)?.toInt(),
-      );
-    }).toList();
+    return list
+        .map(
+          (item) => AssessmentLearningMapping.fromJson(
+            Map<String, dynamic>.from(item as Map),
+          ),
+        )
+        .toList();
   }
 
   @override
@@ -139,14 +119,10 @@ final class SupabaseLearningRepository implements LearningRepository {
   @override
   Future<List<ChildMasteryProjection>> getChildMastery({
     required ChildId childId,
-    DateTime? asOf,
   }) async {
     final response = await _client.rpc<dynamic>(
       'get_child_mastery',
-      params: {
-        'p_child_id': childId.value,
-        if (asOf != null) 'p_as_of': asOf.toIso8601String(),
-      },
+      params: {'p_child_id': childId.value},
     );
 
     final list = response as List<dynamic>;
@@ -157,15 +133,5 @@ final class SupabaseLearningRepository implements LearningRepository {
           ),
         )
         .toList();
-  }
-
-  @override
-  Future<String> promoteLearningCatalogVersion(String targetVersion) async {
-    final response = await _client.rpc<String>(
-      'promote_learning_catalog_version',
-      params: {'p_target_version': targetVersion},
-    );
-
-    return response;
   }
 }

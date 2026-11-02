@@ -15,7 +15,7 @@ final class FakeLearningRepository implements LearningRepository {
   final Map<String, List<AssessmentLearningMapping>> _mappings = {};
   final List<LearningEvidenceEvent> _evidence = [];
   final Map<String, Map<String, dynamic>> _receipts = {};
-  String _activeCatalogVersion = 'pilot-v0.1';
+  final String _activeCatalogVersion = 'pilot-v0.1';
 
   void _seedPilotCatalog() {
     for (final s in ['math', 'english', 'literature', 'science', 'other']) {
@@ -109,9 +109,8 @@ final class FakeLearningRepository implements LearningRepository {
   @override
   Future<List<ChildMasteryProjection>> getChildMastery({
     required ChildId childId,
-    DateTime? asOf,
   }) async {
-    final effectiveAsOf = asOf ?? DateTime.now().toUtc();
+    final effectiveAsOf = DateTime.now().toUtc();
     final childEvidence = _evidence.where((e) => e.childId == childId).toList();
     final nodeIds = childEvidence.map((e) => e.learningNodeId).toSet();
 
@@ -156,17 +155,12 @@ final class FakeLearningRepository implements LearningRepository {
           confidenceBand: conf.confidenceBand,
           confidenceUnits: conf.confidenceUnits,
           masteryBand: conf.masteryBand,
+          asOf: effectiveAsOf,
           updatedAt: effectiveAsOf,
         ),
       );
     }
 
     return projections;
-  }
-
-  @override
-  Future<String> promoteLearningCatalogVersion(String targetVersion) async {
-    _activeCatalogVersion = targetVersion;
-    return targetVersion;
   }
 }

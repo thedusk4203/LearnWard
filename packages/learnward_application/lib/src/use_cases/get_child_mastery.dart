@@ -8,10 +8,7 @@ final class GetChildMastery {
 
   final LearningRepository _repository;
 
-  Future<List<ChildMasteryProjection>> call({
-    required ChildId childId,
-    DateTime? asOf,
-  }) {
-    return _repository.getChildMastery(childId: childId, asOf: asOf);
+  Future<List<ChildMasteryProjection>> call({required ChildId childId}) {
+    return _repository.getChildMastery(childId: childId);
   }
 }

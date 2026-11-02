@@ -43,7 +43,6 @@ export 'src/use_cases/list_wheel_spins.dart';
 export 'src/use_cases/normalize_assessment_score.dart';
 export 'src/use_cases/process_learning_event.dart';
 export 'src/use_cases/process_verified_learning_event.dart';
-export 'src/use_cases/promote_learning_catalog_version.dart';
 export 'src/use_cases/redeem_store_reward.dart';
 export 'src/use_cases/reject_assessment.dart';
 export 'src/use_cases/set_assessment_learning_mappings.dart';

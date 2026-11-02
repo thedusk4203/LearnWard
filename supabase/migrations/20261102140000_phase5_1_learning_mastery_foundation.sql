@@ -32,16 +32,61 @@ create unique index if not exists uq_learning_catalog_versions_single_active
 
 alter table public.learning_catalog_versions enable row level security;
 
--- Client permissions: authenticated and anon can select/read active or retired versions
+-- Client permissions: authenticated can read active or retired versions; anon denied; draft hidden
 drop policy if exists learning_catalog_versions_select on public.learning_catalog_versions;
 create policy learning_catalog_versions_select on public.learning_catalog_versions
   for select
-  to authenticated, anon
-  using (true);
+  to authenticated
+  using (status in ('active', 'retired'));
 
 -- Direct client writes are revoked; platform administration only
-grant select on public.learning_catalog_versions to authenticated, anon;
+revoke all on public.learning_catalog_versions from public;
+revoke all on public.learning_catalog_versions from anon;
+grant select on public.learning_catalog_versions to authenticated;
 grant all on public.learning_catalog_versions to service_role;
+
+create or replace function private.validate_learning_catalog_version_mutation()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'UPDATE' then
+    if new.version != old.version then
+      raise exception 'Catalog version name is immutable' using errcode = 'LW102';
+    end if;
+
+    if session_user not in ('postgres', 'supabase_admin') then
+      if old.status = 'retired' and new.status != 'retired' then
+        raise exception 'Retired catalog cannot be modified or reactivated' using errcode = 'LW102';
+      end if;
+
+      if old.status = 'active' and new.status not in ('active', 'retired') then
+        raise exception 'Active catalog cannot revert to draft' using errcode = 'LW102';
+      end if;
+    end if;
+
+    return new;
+  end if;
+
+  if tg_op = 'DELETE' then
+    if old.status in ('active', 'retired') then
+      raise exception 'Published catalog versions cannot be deleted' using errcode = 'LW102';
+    end if;
+
+    return old;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_learning_catalog_versions_mutation on public.learning_catalog_versions;
+create trigger trg_learning_catalog_versions_mutation
+  before update or delete on public.learning_catalog_versions
+  for each row
+  execute function private.validate_learning_catalog_version_mutation();
 
 -- ---------------------------------------------------------------------------
 -- 2. REFERENCE NODES (public.learning_nodes)
@@ -90,6 +135,10 @@ begin
     if v_cat_status in ('active', 'retired') then
       raise exception 'Published catalog content is immutable' using errcode = 'LW102';
     end if;
+
+    if tg_op = 'UPDATE' and new.catalog_version != old.catalog_version then
+      raise exception 'Node catalog_version is immutable' using errcode = 'LW102';
+    end if;
   end if;
 
   if tg_op in ('INSERT', 'UPDATE') then
@@ -100,8 +149,10 @@ begin
     if v_cat_status is null then
       raise exception 'Catalog version does not exist' using errcode = 'LW004';
     end if;
-    if tg_op = 'INSERT' and v_cat_status in ('active', 'retired') and current_setting('learnward.bootstrap', true) != 'true' then
-      raise exception 'Cannot add nodes to published catalog' using errcode = 'LW102';
+    if v_cat_status != 'draft' then
+      if current_setting('learnward.bootstrap', true) != 'true' or session_user not in ('postgres', 'supabase_admin') then
+        raise exception 'Cannot add or update nodes in published catalog' using errcode = 'LW102';
+      end if;
     end if;
 
     -- Validate hierarchy parent integrity
@@ -152,10 +203,18 @@ alter table public.learning_nodes enable row level security;
 drop policy if exists learning_nodes_select on public.learning_nodes;
 create policy learning_nodes_select on public.learning_nodes
   for select
-  to authenticated, anon
-  using (true);
+  to authenticated
+  using (
+    exists (
+      select 1 from public.learning_catalog_versions cv
+      where cv.version = learning_nodes.catalog_version
+        and cv.status in ('active', 'retired')
+    )
+  );
 
-grant select on public.learning_nodes to authenticated, anon;
+revoke all on public.learning_nodes from public;
+revoke all on public.learning_nodes from anon;
+grant select on public.learning_nodes to authenticated;
 grant all on public.learning_nodes to service_role;
 
 -- ---------------------------------------------------------------------------
@@ -196,6 +255,10 @@ begin
     if v_cat_status in ('active', 'retired') then
       raise exception 'Published catalog prerequisites are immutable' using errcode = 'LW102';
     end if;
+
+    if tg_op = 'UPDATE' and new.catalog_version != old.catalog_version then
+      raise exception 'Prerequisite catalog_version is immutable' using errcode = 'LW102';
+    end if;
   end if;
 
   if tg_op in ('INSERT', 'UPDATE') then
@@ -205,8 +268,10 @@ begin
     if v_cat_status is null then
       raise exception 'Catalog version does not exist' using errcode = 'LW004';
     end if;
-    if tg_op = 'INSERT' and v_cat_status in ('active', 'retired') and current_setting('learnward.bootstrap', true) != 'true' then
-      raise exception 'Cannot add prerequisites to published catalog' using errcode = 'LW102';
+    if v_cat_status != 'draft' then
+      if current_setting('learnward.bootstrap', true) != 'true' or session_user not in ('postgres', 'supabase_admin') then
+        raise exception 'Cannot add or update prerequisites in published catalog' using errcode = 'LW102';
+      end if;
     end if;
 
     -- Validate endpoints are Skills
@@ -240,10 +305,18 @@ alter table public.learning_prerequisites enable row level security;
 drop policy if exists learning_prerequisites_select on public.learning_prerequisites;
 create policy learning_prerequisites_select on public.learning_prerequisites
   for select
-  to authenticated, anon
-  using (true);
+  to authenticated
+  using (
+    exists (
+      select 1 from public.learning_catalog_versions cv
+      where cv.version = learning_prerequisites.catalog_version
+        and cv.status in ('active', 'retired')
+    )
+  );
 
-grant select on public.learning_prerequisites to authenticated, anon;
+revoke all on public.learning_prerequisites from public;
+revoke all on public.learning_prerequisites from anon;
+grant select on public.learning_prerequisites to authenticated;
 grant all on public.learning_prerequisites to service_role;
 
 -- ---------------------------------------------------------------------------
@@ -311,19 +384,28 @@ begin
     raise exception 'Candidate catalog contains prerequisite edges linking non-Skill nodes' using errcode = 'LW004';
   end if;
 
-  -- Cycle check using recursive CTE
-  with recursive reach as (
-    select prerequisite_node_id as root, dependent_node_id as current_node, 1 as depth
-    from public.learning_prerequisites
-    where catalog_version = p_new_version
+  -- Cycle-safe DAG validation using path tracking / visited array (no arbitrary depth cap)
+  with recursive traverse as (
+    select
+      p.prerequisite_node_id as start_node,
+      p.dependent_node_id as current_node,
+      array[p.prerequisite_node_id, p.dependent_node_id] as path,
+      false as is_cycle
+    from public.learning_prerequisites p
+    where p.catalog_version = p_new_version
     union all
-    select r.root, p.dependent_node_id, r.depth + 1
-    from reach r
-    join public.learning_prerequisites p on p.prerequisite_node_id = r.current_node
-    where p.catalog_version = p_new_version and r.depth < 100
+    select
+      t.start_node,
+      p.dependent_node_id as current_node,
+      t.path || p.dependent_node_id as path,
+      p.dependent_node_id = any(t.path) as is_cycle
+    from traverse t
+    join public.learning_prerequisites p on p.prerequisite_node_id = t.current_node
+    where p.catalog_version = p_new_version
+      and not t.is_cycle
   )
   select exists (
-    select 1 from reach where root = current_node
+    select 1 from traverse where is_cycle
   ) into v_cycle_detected;
 
   if v_cycle_detected then
@@ -527,29 +609,33 @@ create trigger trg_vle_catalog_snapshot
 
 create table if not exists public.assessment_learning_mappings (
   id uuid primary key default gen_random_uuid(),
+  family_id uuid not null references public.families(id),
+  child_id uuid not null,
   assessment_id uuid not null references public.assessments(id) on delete cascade,
   learning_node_id uuid not null references public.learning_nodes(id),
-  family_id uuid not null references public.families(id),
+  component_key text not null,
   score_source text not null check (score_source in ('assessment_total', 'component_score', 'item_group')),
-  component_key text null,
   component_raw_score numeric(6,2) null,
   component_max_score numeric(6,2) null,
   item_count integer null check (item_count is null or item_count > 0),
   correct_count integer null check (correct_count is null or (correct_count >= 0 and correct_count <= item_count)),
+  confirmed_by_user_id uuid not null references auth.users(id),
   created_at timestamptz not null default clock_timestamp(),
+  updated_at timestamptz not null default clock_timestamp(),
+  foreign key (child_id, family_id) references public.child_profiles(id, family_id),
+  constraint uq_assessment_learning_mappings unique (assessment_id, learning_node_id, component_key),
   constraint chk_mapping_component check (
     score_source != 'component_score' or
-    (component_key is null or trim(component_key) != '') and (component_raw_score is not null and component_raw_score >= 0 and component_max_score is not null and component_max_score > 0 and component_raw_score <= component_max_score)
+    (trim(component_key) != '' and component_raw_score is not null and component_raw_score >= 0 and component_max_score is not null and component_max_score > 0 and component_raw_score <= component_max_score)
   ),
   constraint chk_mapping_item_group check (
     score_source != 'item_group' or
-    (item_count is not null and correct_count is not null and correct_count <= item_count)
+    (trim(component_key) != '' and item_count is not null and correct_count is not null and correct_count <= item_count)
+  ),
+  constraint chk_mapping_assessment_total check (
+    score_source != 'assessment_total' or component_key = 'assessment_total'
   )
 );
-
-create unique index if not exists uq_assessment_learning_mappings_node_comp
-  on public.assessment_learning_mappings (assessment_id, learning_node_id, component_key)
-  where component_key is not null;
 
 alter table public.assessment_learning_mappings enable row level security;
 
@@ -694,8 +780,14 @@ begin
       v_items := (v_mapping ->> 'item_count')::integer;
       v_correct := (v_mapping ->> 'correct_count')::integer;
 
-      if v_score_source = 'component_score' then
-        if v_comp_key is null or trim(v_comp_key) = '' then
+      if v_score_source = 'assessment_total' then
+        if v_comp_key is not null and trim(v_comp_key) != '' and trim(v_comp_key) != 'assessment_total' then
+          raise exception 'assessment_total component_key must be assessment_total' using errcode = 'LW004';
+        end if;
+        v_comp_key := 'assessment_total';
+      elsif v_score_source = 'component_score' then
+        v_comp_key := trim(coalesce(v_comp_key, ''));
+        if v_comp_key = '' then
           raise exception 'component_key is required for component_score' using errcode = 'LW004';
         end if;
         -- Check component_key uniqueness per assessment/node
@@ -708,43 +800,59 @@ begin
           raise exception 'Invalid component score values: raw=%, max=%', v_raw, v_max using errcode = 'LW004';
         end if;
       elsif v_score_source = 'item_group' then
+        v_comp_key := trim(coalesce(v_comp_key, ''));
+        if v_comp_key = '' then
+          raise exception 'component_key is required for item_group' using errcode = 'LW004';
+        end if;
+        -- Check component_key uniqueness per assessment/node
+        if v_comp_keys ? (v_node.id::text || ':' || v_comp_key) then
+          raise exception 'Duplicate component_key % for node %', v_comp_key, v_node.id using errcode = 'LW004';
+        end if;
+        v_comp_keys := jsonb_set(v_comp_keys, array[v_node.id::text || ':' || v_comp_key], 'true'::jsonb);
+
         if v_items is null or v_items <= 0 or v_correct is null or v_correct < 0 or v_correct > v_items then
           raise exception 'Invalid item group values: items=%, correct=%', v_items, v_correct using errcode = 'LW004';
         end if;
       end if;
 
       insert into public.assessment_learning_mappings (
-        assessment_id, learning_node_id, family_id, score_source,
-        component_key, component_raw_score, component_max_score,
-        item_count, correct_count
+        family_id, child_id, assessment_id, learning_node_id,
+        component_key, score_source,
+        component_raw_score, component_max_score, item_count, correct_count,
+        confirmed_by_user_id, created_at, updated_at
       ) values (
-        p_assessment_id, v_node.id, v_assessment.family_id, v_score_source,
-        v_comp_key, v_raw, v_max,
-        v_items, v_correct
+        v_assessment.family_id, v_assessment.child_id, p_assessment_id, v_node.id,
+        v_comp_key, v_score_source,
+        v_raw, v_max, v_items, v_correct,
+        v_user_id, clock_timestamp(), clock_timestamp()
       );
     end loop;
   end if;
 
-  -- Return updated mappings
-  select jsonb_agg(jsonb_build_object(
+  -- Return updated mappings in exact 16-field shape
+  select coalesce(jsonb_agg(jsonb_build_object(
     'id', m.id,
+    'family_id', m.family_id,
+    'child_id', m.child_id,
+    'assessment_id', m.assessment_id,
     'learning_node_id', m.learning_node_id,
     'node_title', n.title,
     'node_type', n.node_type,
     'score_source', m.score_source,
     'component_key', m.component_key,
     'component_raw_score', m.component_raw_score,
-    'raw_score', m.component_raw_score,
     'component_max_score', m.component_max_score,
-    'max_score', m.component_max_score,
     'item_count', m.item_count,
-    'correct_count', m.correct_count
-  )) into v_result
+    'correct_count', m.correct_count,
+    'confirmed_by_user_id', m.confirmed_by_user_id,
+    'created_at', m.created_at,
+    'updated_at', m.updated_at
+  ) order by m.created_at asc, m.id asc), '[]'::jsonb) into v_result
   from public.assessment_learning_mappings m
   join public.learning_nodes n on n.id = m.learning_node_id
   where m.assessment_id = p_assessment_id;
 
-  return coalesce(v_result, '[]'::jsonb);
+  return v_result;
 end;
 $$;
 
@@ -781,29 +889,36 @@ begin
     raise exception 'Permission denied' using errcode = '42501';
   end if;
 
-  select jsonb_agg(jsonb_build_object(
+  select coalesce(jsonb_agg(jsonb_build_object(
     'id', m.id,
+    'family_id', m.family_id,
+    'child_id', m.child_id,
+    'assessment_id', m.assessment_id,
     'learning_node_id', m.learning_node_id,
     'node_title', n.title,
     'node_type', n.node_type,
-    'canonical_key', n.canonical_key,
     'score_source', m.score_source,
     'component_key', m.component_key,
     'component_raw_score', m.component_raw_score,
-    'raw_score', m.component_raw_score,
     'component_max_score', m.component_max_score,
-    'max_score', m.component_max_score,
     'item_count', m.item_count,
     'correct_count', m.correct_count,
-    'created_at', m.created_at
-  )) into v_result
+    'confirmed_by_user_id', m.confirmed_by_user_id,
+    'created_at', m.created_at,
+    'updated_at', m.updated_at
+  ) order by m.created_at asc, m.id asc), '[]'::jsonb) into v_result
   from public.assessment_learning_mappings m
   join public.learning_nodes n on n.id = m.learning_node_id
   where m.assessment_id = p_assessment_id;
 
-  return coalesce(v_result, '[]'::jsonb);
+  return v_result;
 end;
 $$;
+
+revoke execute on function public.get_assessment_learning_mappings(uuid) from public;
+revoke execute on function public.get_assessment_learning_mappings(uuid) from anon;
+grant execute on function public.get_assessment_learning_mappings(uuid) to authenticated;
+grant execute on function public.get_assessment_learning_mappings(uuid) to service_role;
 
 grant execute on function public.get_assessment_learning_mappings(uuid) to authenticated;
 grant execute on function public.get_assessment_learning_mappings(uuid) to service_role;
@@ -1039,7 +1154,7 @@ declare
   v_revision_id uuid;
   v_last_ev record;
   v_distinct_assessments integer;
-  v_processing_id uuid;
+  v_proc record;
 begin
   -- 1. Load VLE
   select id, assessment_id, family_id, child_id, subject_key,
@@ -1248,18 +1363,18 @@ begin
     v_vle.id, v_vle.assessment_id, v_vle.family_id, v_vle.child_id,
     clock_timestamp(), array_length(v_affected_node_ids, 1), v_affected_node_ids, 'processed'
   )
-  returning id into v_processing_id;
+  returning * into v_proc;
 
   return jsonb_build_object(
-    'processing_id', v_processing_id,
-    'verified_learning_event_id', v_vle.id,
-    'assessment_id', v_vle.assessment_id,
-    'family_id', v_vle.family_id,
-    'child_id', v_vle.child_id,
-    'evidence_count', array_length(v_affected_node_ids, 1),
-    'affected_node_ids', to_jsonb(v_affected_node_ids),
-    'status', 'processed',
-    'processed_at', clock_timestamp()
+    'processing_id', v_proc.id,
+    'verified_learning_event_id', v_proc.verified_learning_event_id,
+    'assessment_id', v_proc.assessment_id,
+    'family_id', v_proc.family_id,
+    'child_id', v_proc.child_id,
+    'evidence_count', v_proc.evidence_count,
+    'affected_node_ids', to_jsonb(v_proc.affected_node_ids),
+    'status', v_proc.status,
+    'processed_at', v_proc.processed_at
   );
 end;
 $$;
@@ -1353,9 +1468,20 @@ begin
   where command_id = p_command_id;
 
   if found then
+    if v_receipt.operation != 'process_learning'
+       or v_receipt.actor_user_id != v_user_id
+       or v_receipt.family_id != v_vle.family_id
+       or v_receipt.resource_id != p_verified_event_id then
+      raise exception 'Invalid command replay' using errcode = '42501';
+    end if;
+
     select * into v_proc
     from public.learning_processing_events
     where verified_learning_event_id = p_verified_event_id;
+
+    if not found then
+      raise exception 'Invalid command replay: processing event missing' using errcode = '42501';
+    end if;
 
     return jsonb_build_object(
       'processing_id', v_proc.id,
@@ -1482,12 +1608,12 @@ grant execute on function public.catch_up_unprocessed_learning(uuid) to authenti
 grant execute on function public.catch_up_unprocessed_learning(uuid) to service_role;
 
 -- ---------------------------------------------------------------------------
--- 14. READ QUERY RPC: get_child_mastery
+-- 14. READ QUERY RPC: get_child_mastery & private.get_child_mastery_at
 -- ---------------------------------------------------------------------------
 
-create or replace function public.get_child_mastery(
+create or replace function private.get_child_mastery_at(
   p_child_id uuid,
-  p_as_of timestamptz default null
+  p_as_of timestamptz
 )
 returns jsonb
 language plpgsql
@@ -1495,35 +1621,9 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_user_id uuid;
-  v_child record;
   v_as_of timestamptz;
   v_result jsonb := '[]'::jsonb;
 begin
-  if p_child_id is null then
-    raise exception 'Child ID is required' using errcode = '22000';
-  end if;
-
-  v_user_id := auth.uid();
-  if v_user_id is null then
-    raise exception 'Authentication required' using errcode = '42501';
-  end if;
-
-  select id, family_id into v_child
-  from public.child_profiles
-  where id = p_child_id and status = 'active';
-
-  if not found then
-    raise exception 'Child profile not found' using errcode = 'P0002';
-  end if;
-
-  if not (
-    private.is_active_family_adult(v_child.family_id) or
-    private.is_active_child_device(v_child.family_id, p_child_id)
-  ) then
-    raise exception 'Permission denied' using errcode = '42501';
-  end if;
-
   v_as_of := coalesce(p_as_of, transaction_timestamp());
 
   -- Query child mastery joined with learning nodes and evaluate confidence/bands
@@ -1550,6 +1650,7 @@ begin
       when cms.mastery_score >= 50 then 'developing'
       else 'emerging'
     end,
+    'as_of', v_as_of,
     'updated_at', cms.updated_at
   )) into v_result
   from public.child_mastery_states cms
@@ -1576,5 +1677,51 @@ begin
 end;
 $$;
 
-grant execute on function public.get_child_mastery(uuid, timestamptz) to authenticated;
-grant execute on function public.get_child_mastery(uuid, timestamptz) to service_role;
+drop function if exists public.get_child_mastery(uuid, timestamptz);
+
+create or replace function public.get_child_mastery(
+  p_child_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+  v_child record;
+  v_as_of timestamptz;
+begin
+  if p_child_id is null then
+    raise exception 'Child ID is required' using errcode = '22000';
+  end if;
+
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    raise exception 'Authentication required' using errcode = '42501';
+  end if;
+
+  select id, family_id into v_child
+  from public.child_profiles
+  where id = p_child_id and status = 'active';
+
+  if not found then
+    raise exception 'Child profile not found' using errcode = 'P0002';
+  end if;
+
+  if not (
+    private.is_active_family_adult(v_child.family_id) or
+    private.is_active_child_device(v_child.family_id, p_child_id)
+  ) then
+    raise exception 'Permission denied' using errcode = '42501';
+  end if;
+
+  v_as_of := transaction_timestamp();
+  return private.get_child_mastery_at(p_child_id, v_as_of);
+end;
+$$;
+
+revoke execute on function public.get_child_mastery(uuid) from public;
+revoke execute on function public.get_child_mastery(uuid) from anon;
+grant execute on function public.get_child_mastery(uuid) to authenticated;
+grant execute on function public.get_child_mastery(uuid) to service_role;

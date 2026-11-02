@@ -31,9 +31,5 @@ abstract interface class LearningRepository {
   /// Retrieves current mastery and confidence projections for a child.
   Future<List<ChildMasteryProjection>> getChildMastery({
     required ChildId childId,
-    DateTime? asOf,
   });
-
-  /// Promotes a draft catalog to active (platform administration).
-  Future<String> promoteLearningCatalogVersion(String targetVersion);
 }

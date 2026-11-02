@@ -52,33 +52,80 @@ final class AssessmentLearningMapping {
   const AssessmentLearningMapping({
     this.id,
     required this.familyId,
+    required this.childId,
     required this.assessmentId,
     required this.learningNodeId,
+    this.nodeTitle,
+    this.nodeType,
     required this.scoreSource,
-    this.componentKey,
-    this.rawScore,
-    this.maxScore,
+    required this.componentKey,
+    this.componentRawScore,
+    this.componentMaxScore,
     this.itemCount,
     this.correctCount,
+    this.confirmedByUserId,
+    this.createdAt,
+    this.updatedAt,
   });
 
   final String? id;
   final FamilyId familyId;
+  final ChildId childId;
   final AssessmentId assessmentId;
   final LearningNodeId learningNodeId;
+  final String? nodeTitle;
+  final LearningNodeType? nodeType;
   final ScoreSource scoreSource;
-  final String? componentKey;
-  final double? rawScore;
-  final double? maxScore;
+  final String componentKey;
+  final double? componentRawScore;
+  final double? componentMaxScore;
   final int? itemCount;
   final int? correctCount;
+  final String? confirmedByUserId;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  // Backwards compatibility getters
+  double? get rawScore => componentRawScore;
+  double? get maxScore => componentMaxScore;
+
+  factory AssessmentLearningMapping.fromJson(Map<String, dynamic> json) {
+    return AssessmentLearningMapping(
+      id: json['id'] as String?,
+      familyId: FamilyId(json['family_id'] as String),
+      childId: ChildId(json['child_id'] as String),
+      assessmentId: AssessmentId(json['assessment_id'] as String),
+      learningNodeId: LearningNodeId(json['learning_node_id'] as String),
+      nodeTitle: json['node_title'] as String?,
+      nodeType: json['node_type'] != null
+          ? LearningNodeType.fromValue(json['node_type'] as String)
+          : null,
+      scoreSource: ScoreSource.fromValue(json['score_source'] as String),
+      componentKey: json['component_key'] as String,
+      componentRawScore:
+          ((json['component_raw_score'] ?? json['raw_score']) as num?)
+              ?.toDouble(),
+      componentMaxScore:
+          ((json['component_max_score'] ?? json['max_score']) as num?)
+              ?.toDouble(),
+      itemCount: (json['item_count'] as num?)?.toInt(),
+      correctCount: (json['correct_count'] as num?)?.toInt(),
+      confirmedByUserId: json['confirmed_by_user_id'] as String?,
+      createdAt: json['created_at'] != null
+          ? DateTime.parse(json['created_at'] as String)
+          : null,
+      updatedAt: json['updated_at'] != null
+          ? DateTime.parse(json['updated_at'] as String)
+          : null,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     'learning_node_id': learningNodeId.value,
     'score_source': scoreSource.value,
-    if (componentKey != null) 'component_key': componentKey,
-    if (rawScore != null) 'raw_score': rawScore,
-    if (maxScore != null) 'max_score': maxScore,
+    'component_key': componentKey,
+    if (componentRawScore != null) 'component_raw_score': componentRawScore,
+    if (componentMaxScore != null) 'component_max_score': componentMaxScore,
     if (itemCount != null) 'item_count': itemCount,
     if (correctCount != null) 'correct_count': correctCount,
   };
@@ -202,6 +249,7 @@ final class ChildMasteryProjection {
     required this.confidenceBand,
     required this.confidenceUnits,
     required this.masteryBand,
+    required this.asOf,
     required this.updatedAt,
   });
 
@@ -217,11 +265,12 @@ final class ChildMasteryProjection {
   final ConfidenceBand confidenceBand;
   final double confidenceUnits;
   final MasteryBand masteryBand;
+  final DateTime asOf;
   final DateTime updatedAt;
 
   factory ChildMasteryProjection.fromJson(Map<String, dynamic> json) {
     return ChildMasteryProjection(
-      childId: ChildId((json['child_id'] ?? '') as String),
+      childId: ChildId(json['child_id'] as String),
       learningNodeId: LearningNodeId(json['learning_node_id'] as String),
       nodeCanonicalKey:
           (json['node_canonical_key'] ?? json['canonical_key']) as String,
@@ -239,6 +288,7 @@ final class ChildMasteryProjection {
       ),
       confidenceUnits: (json['confidence_units'] as num).toDouble(),
       masteryBand: MasteryBand.fromValue(json['mastery_band'] as String),
+      asOf: DateTime.parse((json['as_of'] ?? json['updated_at']) as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
     );
   }

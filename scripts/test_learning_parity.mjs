@@ -135,8 +135,8 @@ async function main() {
         insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, difficulty, title, occurred_at, raw_score, max_score, learning_catalog_version)
         values ('${assessId}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', '${dbDifficulty}', 'Quiz ${obsIdx}', now() - interval '${offsetDays} days', ${obs.performance_pct}, 100, 'pilot-v0.1');
 
-        insert into public.assessment_learning_mappings (family_id, assessment_id, learning_node_id, score_source, component_key, component_raw_score, component_max_score)
-        values ('${familyId}', '${assessId}', '${nodeId}', 'component_score', 'comp_1', ${obs.performance_pct}, 100);
+        insert into public.assessment_learning_mappings (family_id, child_id, assessment_id, learning_node_id, score_source, component_key, component_raw_score, component_max_score, confirmed_by_user_id)
+        values ('${familyId}', '${childId}', '${assessId}', '${nodeId}', 'component_score', 'comp_1', ${obs.performance_pct}, 100, '${ownerId}');
 
         insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
         values ('${revCmd}', 'verify', '${ownerId}', '${assessId}', '${familyId}');

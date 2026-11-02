@@ -1,5 +1,5 @@
 begin;
-select plan(75);
+select plan(89);
 
 -- ===========================================================================
 -- FIXTURES SETUP (Superuser context)
@@ -191,11 +191,29 @@ select throws_ok(
   'Mutating nodes in active catalog is rejected with LW102 (immutability)'
 );
 
+-- Test 17: Mutating learning_nodes.catalog_version is rejected with LW102
+select throws_ok(
+  $$ update public.learning_nodes set catalog_version = 'draft-test-v1'
+     where catalog_version = 'pilot-v0.1' and canonical_key = 'pilot-v0.1:subject:math' $$,
+  'LW102',
+  NULL,
+  'Mutating learning_nodes.catalog_version is rejected with LW102'
+);
+
+-- Test 18: Mutating learning_prerequisites.catalog_version is rejected with LW102
+select throws_ok(
+  $$ update public.learning_prerequisites set catalog_version = 'draft-test-v1'
+     where catalog_version = 'pilot-v0.1' $$,
+  'LW102',
+  NULL,
+  'Mutating learning_prerequisites.catalog_version is rejected with LW102'
+);
+
 -- ===========================================================================
--- SECTION 4: CATALOG PROMOTION & AUTHORIZATION (Tests 17-23)
+-- SECTION 4: CATALOG PROMOTION & AUTHORIZATION (Tests 19-26)
 -- ===========================================================================
 
--- Test 17: Anonymous caller cannot invoke promote_learning_catalog_version
+-- Test 19: Anonymous caller cannot invoke promote_learning_catalog_version
 set local role anon;
 select throws_ok(
   $$ select public.promote_learning_catalog_version('pilot-v0.2') $$,
@@ -204,7 +222,7 @@ select throws_ok(
   'Anonymous caller cannot execute promote_learning_catalog_version'
 );
 
--- Test 18: Paired child caller cannot invoke promote_learning_catalog_version
+-- Test 20: Paired child caller cannot invoke promote_learning_catalog_version
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
 select throws_ok(
@@ -214,7 +232,7 @@ select throws_ok(
   'Paired child caller cannot execute promote_learning_catalog_version'
 );
 
--- Test 19: Active family adult caller cannot invoke promote_learning_catalog_version
+-- Test 21: Active family adult caller cannot invoke promote_learning_catalog_version
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 select throws_ok(
@@ -227,7 +245,7 @@ select throws_ok(
 -- Reset to service_role / superuser context
 reset role;
 
--- Test 20: Promote non-existent version fails with P0002
+-- Test 22: Promote non-existent version fails with P0002
 select throws_ok(
   $$ select public.promote_learning_catalog_version('non-existent-v1.0') $$,
   'P0002',
@@ -235,7 +253,7 @@ select throws_ok(
   'Promote non-existent draft version fails with P0002'
 );
 
--- Test 21: Setup draft catalog with incomplete roots and attempt promote (should fail LW004)
+-- Test 23: Setup draft catalog with incomplete roots and attempt promote (should fail LW004)
 insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2-bad', 'draft');
 insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
 values ('pilot-v0.2-bad', 'subject', 'math', 'pilot-v0.2-bad:subject:math', 'Math', null);
@@ -247,7 +265,34 @@ select throws_ok(
   'Promoting draft catalog missing required 5 Subject roots fails with LW004'
 );
 
--- Test 22: Setup complete valid draft catalog pilot-v0.2 and promote successfully
+-- Test 24: Candidate catalog with prerequisite cycle is rejected with LW004
+insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2-cycle', 'draft');
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2-cycle', 'subject', 'math', 'pilot-v0.2-cycle:subject:math', 'Mathematics', null),
+  ('pilot-v0.2-cycle', 'subject', 'english', 'pilot-v0.2-cycle:subject:english', 'English', null),
+  ('pilot-v0.2-cycle', 'subject', 'literature', 'pilot-v0.2-cycle:subject:literature', 'Literature', null),
+  ('pilot-v0.2-cycle', 'subject', 'science', 'pilot-v0.2-cycle:subject:science', 'Science', null),
+  ('pilot-v0.2-cycle', 'subject', 'other', 'pilot-v0.2-cycle:subject:other', 'Other', null);
+
+insert into public.learning_nodes (id, catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('c0000001-0000-0000-0000-000000000001'::uuid, 'pilot-v0.2-cycle', 'skill', 'math', 'pilot-v0.2-cycle:math:skill1', 'Skill 1', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:subject:math')),
+  ('c0000001-0000-0000-0000-000000000002'::uuid, 'pilot-v0.2-cycle', 'skill', 'math', 'pilot-v0.2-cycle:math:skill2', 'Skill 2', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:subject:math'));
+
+insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
+values
+  ('pilot-v0.2-cycle', 'math', 'c0000001-0000-0000-0000-000000000001'::uuid, 'c0000001-0000-0000-0000-000000000002'::uuid),
+  ('pilot-v0.2-cycle', 'math', 'c0000001-0000-0000-0000-000000000002'::uuid, 'c0000001-0000-0000-0000-000000000001'::uuid);
+
+select throws_ok(
+  $$ select public.promote_learning_catalog_version('pilot-v0.2-cycle') $$,
+  'LW004',
+  NULL,
+  'Promoting draft catalog with cyclic prerequisites is rejected with LW004'
+);
+
+-- Test 25: Setup complete valid draft catalog pilot-v0.2 and promote successfully
 insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2', 'draft');
 insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
 values
@@ -262,7 +307,7 @@ select lives_ok(
   'Service role promotes valid complete draft catalog pilot-v0.2'
 );
 
--- Test 23: After promotion, exactly one active version exists and previous was retired
+-- Test 26: After promotion, exactly one active version exists and previous was retired
 select is(
   (select version from public.learning_catalog_versions where status = 'active'),
   'pilot-v0.2',
@@ -274,10 +319,10 @@ update public.learning_catalog_versions set status = 'retired' where version = '
 update public.learning_catalog_versions set status = 'active' where version = 'pilot-v0.1';
 
 -- ===========================================================================
--- SECTION 5: PROVENANCE SNAPSHOTTING & LEGACY PROTECTION (Tests 24-28)
+-- SECTION 5: PROVENANCE SNAPSHOTTING & LEGACY PROTECTION (Tests 27-31)
 -- ===========================================================================
 
--- Test 24: Assessments table has learning_catalog_version column without default
+-- Test 27: Assessments table has learning_catalog_version column without default
 select is(
   (select column_default from information_schema.columns
    where table_name = 'assessments' and column_name = 'learning_catalog_version'),
@@ -285,7 +330,7 @@ select is(
   'assessments.learning_catalog_version has no default column constraint'
 );
 
--- Test 25: Verified_learning_events has learning_catalog_version column without default
+-- Test 28: Verified_learning_events has learning_catalog_version column without default
 select is(
   (select column_default from information_schema.columns
    where table_name = 'verified_learning_events' and column_name = 'learning_catalog_version'),
@@ -293,7 +338,7 @@ select is(
   'verified_learning_events.learning_catalog_version has no default column constraint'
 );
 
--- Test 26: Creating an assessment snapshots authoritative active catalog version ignoring caller input
+-- Test 29: Creating an assessment snapshots authoritative active catalog version ignoring caller input
 insert into public.assessments (
   id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
   occurred_at, raw_score, max_score, learning_catalog_version
@@ -312,7 +357,7 @@ select is(
   'Assessment creation stamped authoritative active catalog pilot-v0.1 ignoring caller input'
 );
 
--- Test 27: Updating verified assessment is rejected by frozen LW103
+-- Test 30: Updating verified assessment is rejected by frozen LW103
 update public.assessments set status = 'pending_review' where id = 'a5000000-0000-0000-0000-000000000001'::uuid;
 
 insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
@@ -359,7 +404,7 @@ select throws_ok(
   'Frozen LW103 guards verified assessment against mutation'
 );
 
--- Test 28: VLE copied assessment catalog snapshot
+-- Test 31: VLE copied assessment catalog snapshot
 select is(
   (select learning_catalog_version from public.verified_learning_events where id = '15000000-0000-0000-0000-000000000001'::uuid),
   'pilot-v0.1',
@@ -367,7 +412,8 @@ select is(
 );
 
 -- ===========================================================================
--- SECTION 6: ASSESSMENT LEARNING MAPPINGS RPC & SECURITY (Tests 29-40)
+-- ===========================================================================
+-- SECTION 6: ASSESSMENT LEARNING MAPPINGS RPC & SECURITY (Tests 32-47)
 -- ===========================================================================
 
 -- Create a second assessment in draft state for mapping lifecycle tests
@@ -383,7 +429,7 @@ insert into public.assessments (
   now(), 90, 100
 );
 
--- Test 29: Cannot map assessment in draft status
+-- Test 32: Cannot map assessment in draft status
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
@@ -401,7 +447,7 @@ select throws_ok(
 reset role;
 update public.assessments set status = 'pending_review' where id = 'a5000000-0000-0000-0000-000000000002'::uuid;
 
--- Test 30: Anonymous caller cannot set mappings
+-- Test 33: Anonymous caller cannot set mappings
 set local role anon;
 select throws_ok(
   $$ select public.set_assessment_learning_mappings(
@@ -413,7 +459,7 @@ select throws_ok(
   'Anonymous caller cannot set assessment mappings'
 );
 
--- Test 31: Paired child cannot set mappings
+-- Test 34: Paired child cannot set mappings
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
 select throws_ok(
@@ -426,7 +472,7 @@ select throws_ok(
   'Paired child cannot set assessment mappings'
 );
 
--- Test 32: Cross-family adult cannot set mappings
+-- Test 35: Cross-family adult cannot set mappings
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
 select throws_ok(
@@ -439,7 +485,7 @@ select throws_ok(
   'Cross-family adult cannot set assessment mappings'
 );
 
--- Test 33: Mapping to node in different subject is rejected (LW004)
+-- Test 36: Mapping to node in different subject is rejected (LW004)
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
@@ -453,7 +499,7 @@ select throws_ok(
   'Mapping Math assessment to English node is rejected with LW004'
 );
 
--- Test 34: Duplicate component_key on same assessment node is rejected (LW004)
+-- Test 37: Duplicate component_key on same assessment node is rejected (LW004)
 select throws_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
@@ -467,7 +513,34 @@ select throws_ok(
   'Duplicate component_key on same assessment node is rejected with LW004'
 );
 
--- Test 35: Multiple assessment_total mappings rejected (LW004)
+-- Test 38: Duplicate component_key for item_group on same assessment node is rejected (LW004)
+select throws_ok(
+  $$ select public.set_assessment_learning_mappings(
+       'a5000000-0000-0000-0000-000000000002'::uuid,
+       '[
+         {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "item_group", "component_key": "grp1", "item_count": 5, "correct_count": 4},
+         {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "item_group", "component_key": "grp1", "item_count": 5, "correct_count": 5}
+        ]'::jsonb
+     ) $$,
+  'LW004',
+  NULL,
+  'Duplicate component_key for item_group on same assessment node is rejected with LW004'
+);
+
+-- Test 39: assessment_total with custom component_key != assessment_total is rejected with LW004
+select throws_ok(
+  $$ select public.set_assessment_learning_mappings(
+       'a5000000-0000-0000-0000-000000000002'::uuid,
+       '[
+         {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "assessment_total", "component_key": "custom_key"}
+        ]'::jsonb
+     ) $$,
+  'LW004',
+  NULL,
+  'assessment_total with custom component_key != assessment_total is rejected with LW004'
+);
+
+-- Test 40: Multiple assessment_total mappings rejected (LW004)
 select throws_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
@@ -481,7 +554,7 @@ select throws_ok(
   'Multiple assessment_total mappings rejected with LW004'
 );
 
--- Test 36: Mixed score sources on the same node rejected (LW004)
+-- Test 41: Mixed score sources on the same node rejected (LW004)
 select throws_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
@@ -495,7 +568,7 @@ select throws_ok(
   'Mixed score sources on the same node rejected with LW004'
 );
 
--- Test 37: Active adult sets valid assessment mappings successfully
+-- Test 42: Active adult sets valid assessment mappings successfully
 select lives_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
@@ -507,29 +580,51 @@ select lives_ok(
   'Active adult sets valid component mappings for Single Digit Addition'
 );
 
--- Test 38: get_assessment_learning_mappings returns saved mappings
+-- Test 43: get_assessment_learning_mappings returns saved mappings
 select is(
   (select jsonb_array_length(public.get_assessment_learning_mappings('a5000000-0000-0000-0000-000000000002'::uuid))),
   2,
   'get_assessment_learning_mappings returns exactly 2 mapped components'
 );
 
--- Test 39: Direct client INSERT on assessment_learning_mappings is denied
+-- Test 44: get_assessment_learning_mappings returns exact 16 fields
+select is(
+  (select count(*)::integer from jsonb_object_keys(
+    (select public.get_assessment_learning_mappings('a5000000-0000-0000-0000-000000000002'::uuid)->0)
+  )),
+  16,
+  'get_assessment_learning_mappings returns exact 16 fields per mapping'
+);
+
+-- Test 45: assessment_learning_mappings stores authoritative child_id, family_id, confirmed_by_user_id
+select is(
+  (select count(*)::integer from public.assessment_learning_mappings
+   where assessment_id = 'a5000000-0000-0000-0000-000000000002'::uuid
+     and family_id = 'f5000000-0000-0000-0000-000000000001'::uuid
+     and child_id = 'c5000000-0000-0000-0000-000000000001'::uuid
+     and confirmed_by_user_id = '50000000-0000-0000-0000-000000000001'::uuid),
+  2,
+  'assessment_learning_mappings contains authoritative family_id, child_id, and confirmed_by_user_id'
+);
+
+-- Test 46: Direct client INSERT on assessment_learning_mappings is denied
 select throws_ok(
   $$ insert into public.assessment_learning_mappings (
-       family_id, assessment_id, learning_node_id, score_source, component_key
+       family_id, child_id, assessment_id, learning_node_id, score_source, component_key, confirmed_by_user_id
      ) values (
        'f5000000-0000-0000-0000-000000000001'::uuid,
+       'c5000000-0000-0000-0000-000000000001'::uuid,
        'a5000000-0000-0000-0000-000000000002'::uuid,
        'b0000003-0000-0000-0000-000000000001'::uuid,
-       'assessment_total', 'test_key'
+       'assessment_total', 'assessment_total',
+       '50000000-0000-0000-0000-000000000001'::uuid
      ) $$,
   '42501',
   NULL,
   'Direct client INSERT on assessment_learning_mappings is denied'
 );
 
--- Test 40: Cannot map verified assessment
+-- Test 47: Cannot map verified assessment
 reset role;
 insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
 values (
@@ -580,10 +675,10 @@ select throws_ok(
 );
 
 -- ===========================================================================
--- SECTION 7: LEARNING EVENT PROCESSING & EWMA ENGINE (Tests 41-52)
+-- SECTION 7: LEARNING EVENT PROCESSING & EWMA ENGINE (Tests 48-61)
 -- ===========================================================================
 
--- Test 41: Anonymous caller cannot execute process_learning_event
+-- Test 48: Anonymous caller cannot execute process_learning_event
 set local role anon;
 select throws_ok(
   $$ select public.process_learning_event(gen_random_uuid(), '15000000-0000-0000-0000-000000000002'::uuid) $$,
@@ -592,7 +687,7 @@ select throws_ok(
   'Anonymous caller cannot execute process_learning_event'
 );
 
--- Test 42: Paired child cannot execute process_learning_event
+-- Test 49: Paired child cannot execute process_learning_event
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
 select throws_ok(
@@ -602,7 +697,7 @@ select throws_ok(
   'Paired child cannot execute process_learning_event'
 );
 
--- Test 43: Cross-family adult cannot execute process_learning_event
+-- Test 50: Cross-family adult cannot execute process_learning_event
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
 select throws_ok(
@@ -612,7 +707,7 @@ select throws_ok(
   'Cross-family adult cannot execute process_learning_event'
 );
 
--- Test 44: Active adult executes process_learning_event for VLE 2
+-- Test 51: Active adult executes process_learning_event for VLE 2
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
@@ -624,7 +719,7 @@ select lives_ok(
   'Active adult executes process_learning_event for VLE 2'
 );
 
--- Test 45: Evidence aggregated properly: 2 components (9/10 + 9/10 = 18/20 = 90%)
+-- Test 52: Evidence aggregated properly: 2 components (9/10 + 9/10 = 18/20 = 90%)
 select is(
   (select performance_pct from public.learning_evidence_events
    where verified_learning_event_id = '15000000-0000-0000-0000-000000000002'::uuid
@@ -633,7 +728,7 @@ select is(
   'Component scores aggregated accurately by score mass: 18/20 = 90.00%'
 );
 
--- Test 46: Subject fallback atom created for Math Subject root
+-- Test 53: Subject fallback atom created for Math Subject root
 select is(
   (select count(*)::integer from public.learning_evidence_events
    where verified_learning_event_id = '15000000-0000-0000-0000-000000000002'::uuid
@@ -642,7 +737,7 @@ select is(
   'Automatic subject fallback created exactly one Subject root evidence atom'
 );
 
--- Test 47: Initial observation initializes mastery to observation score (Option A: M_1 = P_1)
+-- Test 54: Initial observation initializes mastery to observation score (Option A: M_1 = P_1)
 select is(
   (select mastery_score from public.child_mastery_states
    where child_id = 'c5000000-0000-0000-0000-000000000001'::uuid
@@ -651,7 +746,7 @@ select is(
   'First observation initialized mastery to P_1 = 90.00 (Option A)'
 );
 
--- Test 48: Learning processing event snapshot recorded
+-- Test 55: Learning processing event snapshot recorded
 select is(
   (select count(*)::integer from public.learning_processing_events
    where verified_learning_event_id = '15000000-0000-0000-0000-000000000002'::uuid),
@@ -659,7 +754,7 @@ select is(
   'Learning processing event snapshot recorded'
 );
 
--- Test 49: Same-command replay returns identical snapshot without creating duplicate evidence
+-- Test 56: Same-command replay returns identical snapshot without creating duplicate evidence
 select is(
   (select public.process_learning_event(
      '00000000-0000-0000-0000-000000000001'::uuid,
@@ -669,7 +764,17 @@ select is(
   'Same-command replay returns clean processed status'
 );
 
--- Test 50: Evidence count is still exactly 2 (mapped skill + subject fallback)
+-- Test 57: First process execution timestamp and processing_id exactly match replay snapshot
+select is(
+  (select public.process_learning_event(
+     '00000000-0000-0000-0000-000000000001'::uuid,
+     '15000000-0000-0000-0000-000000000002'::uuid
+   ) ->> 'processing_id'),
+  (select id::text from public.learning_processing_events where verified_learning_event_id = '15000000-0000-0000-0000-000000000002'::uuid),
+  'Replay snapshot processing_id matches persisted learning_processing_events id exactly'
+);
+
+-- Test 58: Evidence count is still exactly 2 (mapped skill + subject fallback)
 select is(
   (select count(*)::integer from public.learning_evidence_events
    where verified_learning_event_id = '15000000-0000-0000-0000-000000000002'::uuid),
@@ -677,7 +782,7 @@ select is(
   'No duplicate evidence created on replay'
 );
 
--- Test 51: New command ID on already-processed VLE binds command and returns result
+-- Test 59: New command ID on already-processed VLE binds command and returns result
 select is(
   (select public.process_learning_event(
      '00000000-0000-0000-0000-000000000002'::uuid,
@@ -687,7 +792,7 @@ select is(
   'New command ID on processed VLE binds receipt and returns processed result'
 );
 
--- Test 52: Reused command ID with different VLE fails with 42501
+-- Test 60: Reused command ID with different VLE fails with 42501
 select throws_ok(
   $$ select public.process_learning_event(
        '00000000-0000-0000-0000-000000000001'::uuid,
@@ -698,11 +803,33 @@ select throws_ok(
   'Reused command ID with different VLE fails with 42501'
 );
 
+-- Setup adult user 5 in family A to test mismatched actor replay
+reset role;
+insert into auth.users (id, aud, role, email) values
+  ('50000000-0000-0000-0000-000000000005'::uuid, 'authenticated', 'authenticated', 'p51_adult_a2@test.com')
+on conflict (id) do nothing;
+insert into public.family_memberships (family_id, auth_user_id, role, status) values
+  ('f5000000-0000-0000-0000-000000000001'::uuid, '50000000-0000-0000-0000-000000000005'::uuid, 'adult', 'active')
+on conflict (family_id, auth_user_id) do nothing;
+
+-- Test 61: Reused command ID with different actor fails 42501
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000005", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.process_learning_event(
+       '00000000-0000-0000-0000-000000000001'::uuid,
+       '15000000-0000-0000-0000-000000000002'::uuid
+     ) $$,
+  '42501',
+  NULL,
+  'Reused command ID with different actor fails with 42501'
+);
+
 -- ===========================================================================
--- SECTION 8: BULK CATCH-UP RPC & IDEMPOTENCY (Tests 53-57)
+-- SECTION 8: BULK CATCH-UP RPC & IDEMPOTENCY (Tests 62-66)
 -- ===========================================================================
 
--- Test 53: Anonymous caller cannot execute catch_up_unprocessed_learning
+-- Test 62: Anonymous caller cannot execute catch_up_unprocessed_learning
 set local role anon;
 select throws_ok(
   $$ select public.catch_up_unprocessed_learning('f5000000-0000-0000-0000-000000000001'::uuid) $$,
@@ -711,7 +838,7 @@ select throws_ok(
   'Anonymous caller cannot execute catch_up_unprocessed_learning'
 );
 
--- Test 54: Paired child cannot execute catch_up_unprocessed_learning
+-- Test 63: Paired child cannot execute catch_up_unprocessed_learning
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
 select throws_ok(
@@ -721,7 +848,7 @@ select throws_ok(
   'Paired child cannot execute catch_up_unprocessed_learning'
 );
 
--- Test 55: Cross-family adult cannot execute catch_up_unprocessed_learning
+-- Test 64: Cross-family adult cannot execute catch_up_unprocessed_learning
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
 select throws_ok(
@@ -731,7 +858,7 @@ select throws_ok(
   'Cross-family adult cannot execute catch_up_unprocessed_learning'
 );
 
--- Test 56: Active adult executes catch_up_unprocessed_learning (catches up VLE 1)
+-- Test 65: Active adult executes catch_up_unprocessed_learning (catches up VLE 1)
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
@@ -741,7 +868,7 @@ select is(
   'catch_up_unprocessed_learning caught up 1 pending VLE (VLE 1)'
 );
 
--- Test 57: Running catch_up again is a safe no-op (processed_count = 0)
+-- Test 66: Running catch_up again is a safe no-op (processed_count = 0)
 select is(
   (select (public.catch_up_unprocessed_learning('f5000000-0000-0000-0000-000000000001'::uuid) ->> 'processed_count')::integer),
   0,
@@ -749,10 +876,10 @@ select is(
 );
 
 -- ===========================================================================
--- SECTION 9: READ MODEL: GET_CHILD_MASTERY & CONFIDENCE (Tests 58-65)
+-- SECTION 9: READ MODEL: GET_CHILD_MASTERY & CONFIDENCE (Tests 67-76)
 -- ===========================================================================
 
--- Test 58: Cross-family adult cannot read child mastery
+-- Test 67: Cross-family adult cannot read child mastery
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000002", "role": "authenticated"}', true);
 select throws_ok(
@@ -762,7 +889,7 @@ select throws_ok(
   'Cross-family adult cannot read child mastery'
 );
 
--- Test 59: Paired child A1 cannot read sibling child A2 mastery
+-- Test 68: Paired child A1 cannot read sibling child A2 mastery
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000003", "role": "authenticated"}', true);
 select throws_ok(
@@ -772,13 +899,13 @@ select throws_ok(
   'Paired child A1 cannot read sibling child A2 mastery'
 );
 
--- Test 60: Paired child A1 can read own mastery
+-- Test 69: Paired child A1 can read own mastery
 select lives_ok(
   $$ select public.get_child_mastery('c5000000-0000-0000-0000-000000000001'::uuid) $$,
   'Paired child A1 can read own mastery'
 );
 
--- Test 61: Active adult reads child A1 mastery
+-- Test 70: Active adult reads child A1 mastery
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
@@ -788,7 +915,7 @@ select is(
   'get_child_mastery returns 2 nodes (Single Digit Addition + Math Subject root)'
 );
 
--- Test 62: Confidence evaluation: 1 Skill observation (weight 1.0) = 1.0 units => Low confidence (< 1.5)
+-- Test 71: Confidence evaluation: 1 Skill observation (weight 1.0) = 1.0 units => Low confidence (< 1.5)
 select is(
   (select elem ->> 'confidence_band'
    from jsonb_array_elements(public.get_child_mastery('c5000000-0000-0000-0000-000000000001'::uuid)) elem
@@ -797,7 +924,7 @@ select is(
   'Skill node with 1.0 confidence units has Low confidence band'
 );
 
--- Test 63: Mastery band evaluation: score >= 85 but Low confidence => mastery_candidate (not Mastered)
+-- Test 72: Mastery band evaluation: score >= 85 but Low confidence => mastery_candidate (not Mastered)
 select is(
   (select elem ->> 'mastery_band'
    from jsonb_array_elements(public.get_child_mastery('c5000000-0000-0000-0000-000000000001'::uuid)) elem
@@ -806,7 +933,7 @@ select is(
   'Score 90 with Low confidence is mastery_candidate, not Mastered'
 );
 
--- Test 64: Subject root mastery evaluated from 2 observations (VLE 1 + VLE 2)
+-- Test 73: Subject root mastery evaluated from 2 observations (VLE 1 + VLE 2)
 select is(
   (select (elem ->> 'distinct_assessment_count')::integer
    from jsonb_array_elements(public.get_child_mastery('c5000000-0000-0000-0000-000000000001'::uuid)) elem
@@ -815,21 +942,39 @@ select is(
   'Math Subject root distinct_assessment_count = 2'
 );
 
--- Test 65: Single as_of time determinism
+-- Test 74: Client calling get_child_mastery(uuid, timestamptz) fails with 42883 (overload removed)
+select throws_ok(
+  $$ select public.get_child_mastery('c5000000-0000-0000-0000-000000000001'::uuid, now()) $$,
+  '42883',
+  NULL,
+  'Client cannot pass as_of to public.get_child_mastery (overload removed)'
+);
+
+-- Test 75: Every element of public.get_child_mastery(uuid) includes as_of
+select is(
+  (select count(*)::integer
+   from jsonb_array_elements(public.get_child_mastery('c5000000-0000-0000-0000-000000000001'::uuid)) elem
+   where elem ? 'as_of'),
+  2,
+  'Every mastery projection element includes as_of timestamp'
+);
+
+-- Test 76: private.get_child_mastery_at(uuid, timestamptz) accepts explicit as_of
+reset role;
 select lives_ok(
-  $$ select public.get_child_mastery('c5000000-0000-0000-0000-000000000001'::uuid, now() - interval '90 days') $$,
-  'get_child_mastery accepts explicit as_of timestamp'
+  $$ select private.get_child_mastery_at('c5000000-0000-0000-0000-000000000001'::uuid, now() - interval '90 days') $$,
+  'private.get_child_mastery_at accepts explicit as_of timestamp'
 );
 
 -- ===========================================================================
--- SECTION 10: AUDIT IMMUTABILITY & SECURITY (Tests 66-75)
+-- SECTION 10: AUDIT IMMUTABILITY & SECURITY (Tests 77-89)
 -- ===========================================================================
 
 -- Reset to authenticated user context
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
--- Test 66: Direct client writes on learning_nodes denied
+-- Test 77: Direct client writes on learning_nodes denied
 select throws_ok(
   $$ insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title)
      values ('pilot-v0.1', 'skill', 'math', 'pilot-v0.1:math:hack', 'Hack') $$,
@@ -838,7 +983,7 @@ select throws_ok(
   'Direct client write to learning_nodes is denied'
 );
 
--- Test 67: Direct client writes on learning_prerequisites denied
+-- Test 78: Direct client writes on learning_prerequisites denied
 select throws_ok(
   $$ insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
      values ('pilot-v0.1', 'math', 'b0000003-0000-0000-0000-000000000001'::uuid, 'b0000003-0000-0000-0000-000000000002'::uuid) $$,
@@ -847,7 +992,7 @@ select throws_ok(
   'Direct client write to learning_prerequisites is denied'
 );
 
--- Test 68: Direct client writes on learning_evidence_events denied
+-- Test 79: Direct client writes on learning_evidence_events denied
 select throws_ok(
   $$ insert into public.learning_evidence_events (
        family_id, child_id, verified_learning_event_id, learning_node_id,
@@ -865,7 +1010,7 @@ select throws_ok(
   'Direct client write to learning_evidence_events is denied'
 );
 
--- Test 69: Direct client writes on mastery_state_revisions denied
+-- Test 80: Direct client writes on mastery_state_revisions denied
 select throws_ok(
   $$ insert into public.mastery_state_revisions (
        family_id, child_id, learning_node_id, trigger_verified_learning_event_id,
@@ -882,7 +1027,7 @@ select throws_ok(
   'Direct client write to mastery_state_revisions is denied'
 );
 
--- Test 70: Direct client writes on child_mastery_states denied
+-- Test 81: Direct client writes on child_mastery_states denied
 select throws_ok(
   $$ update public.child_mastery_states set mastery_score = 100
      where child_id = 'c5000000-0000-0000-0000-000000000001'::uuid $$,
@@ -891,7 +1036,7 @@ select throws_ok(
   'Direct client update to child_mastery_states is denied'
 );
 
--- Test 71: Direct client writes on learning_processing_events denied
+-- Test 82: Direct client writes on learning_processing_events denied
 select throws_ok(
   $$ insert into public.learning_processing_events (
        verified_learning_event_id, assessment_id, family_id, child_id, evidence_count, affected_node_ids, status
@@ -909,7 +1054,7 @@ select throws_ok(
   'Direct client write to learning_processing_events is denied'
 );
 
--- Test 72: learning_evidence_events is strictly append-only (UPDATE denied with LW102)
+-- Test 83: learning_evidence_events is strictly append-only (UPDATE denied with LW102)
 reset role;
 select throws_ok(
   $$ update public.learning_evidence_events set performance_pct = 99 $$,
@@ -918,7 +1063,7 @@ select throws_ok(
   'learning_evidence_events is append-only: UPDATE rejected with LW102'
 );
 
--- Test 73: mastery_state_revisions is strictly append-only (DELETE denied with LW102)
+-- Test 84: mastery_state_revisions is strictly append-only (DELETE denied with LW102)
 select throws_ok(
   $$ delete from public.mastery_state_revisions $$,
   'LW102',
@@ -926,7 +1071,7 @@ select throws_ok(
   'mastery_state_revisions is append-only: DELETE rejected with LW102'
 );
 
--- Test 74: learning_processing_events is strictly append-only (UPDATE denied with LW102)
+-- Test 85: learning_processing_events is strictly append-only (UPDATE denied with LW102)
 select throws_ok(
   $$ update public.learning_processing_events set status = 'failed' $$,
   'LW102',
@@ -934,7 +1079,7 @@ select throws_ok(
   'learning_processing_events is append-only: UPDATE rejected with LW102'
 );
 
--- Test 75: Reward / economy independence (mutating balances produces zero change in child_mastery_states)
+-- Test 86: Reward / economy independence (mutating balances produces zero change in child_mastery_states)
 insert into public.child_balances (family_id, child_id, xp_total, rp_balance_minor)
 values ('f5000000-0000-0000-0000-000000000001'::uuid, 'c5000000-0000-0000-0000-000000000001'::uuid, 9999, 999999)
 on conflict (child_id) do update set xp_total = 9999, rp_balance_minor = 999999;
@@ -947,5 +1092,30 @@ select is(
   'Mastery score is completely invariant to child XP and RP economy mutations'
 );
 
+-- Test 87: Anonymous role cannot read learning_catalog_versions
+set local role anon;
+select is(
+  (select count(*)::integer from public.learning_catalog_versions),
+  0,
+  'Anonymous role cannot read any learning catalog versions'
+);
+
+-- Test 88: Authenticated role cannot see draft catalog versions
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub": "50000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+select is(
+  (select count(*)::integer from public.learning_catalog_versions where status = 'draft'),
+  0,
+  'Authenticated role cannot see draft catalog versions'
+);
+
+-- Test 89: Authenticated role cannot see draft learning nodes
+select is(
+  (select count(*)::integer from public.learning_nodes where catalog_version = 'pilot-v0.2-bad'),
+  0,
+  'Authenticated role cannot see learning nodes from draft catalogs'
+);
+
+reset role;
 select * from finish();
 rollback;

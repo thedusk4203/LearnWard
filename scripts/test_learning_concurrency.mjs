@@ -109,10 +109,10 @@ async function main() {
       ('${assessId2}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', 'Quiz 2', now() - interval '1 day', 100, 100);
 
     -- Map both assessments to Single Digit Addition
-    insert into public.assessment_learning_mappings (family_id, assessment_id, learning_node_id, score_source, component_key, component_raw_score, component_max_score)
+    insert into public.assessment_learning_mappings (family_id, child_id, assessment_id, learning_node_id, score_source, component_key, component_raw_score, component_max_score, confirmed_by_user_id)
     values
-      ('${familyId}', '${assessId1}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 80, 100),
-      ('${familyId}', '${assessId2}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 100, 100);
+      ('${familyId}', '${childId}', '${assessId1}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 80, 100, '${ownerId}'),
+      ('${familyId}', '${childId}', '${assessId2}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 100, 100, '${ownerId}');
 
     -- Insert command receipts for review events
     insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
@@ -295,6 +295,35 @@ async function main() {
     process.exit(1);
   }
   console.log('  -> PASS: Concurrent catch-up and manual process converged to exactly 1 event.');
+
+  // -------------------------------------------------------------------------
+  // Scenario 5: Post-Lock Mismatched Receipt Rejection (42501)
+  // -------------------------------------------------------------------------
+  console.log('Scenario 5: Testing post-lock mismatched command receipt rejection...');
+
+  const mismatchCmd = crypto.randomUUID();
+  // Pre-bind mismatchCmd to a different resource / operation
+  const prebindSql = `
+    insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id)
+    values ('${mismatchCmd}', '${familyId}', '${ownerId}', 'verify', '${assessId1}');
+  `;
+  const prebindRes = await runPsql(prebindSql);
+  if (prebindRes.code !== 0) {
+    console.error('Failed to pre-bind mismatched command receipt:', prebindRes.stderr);
+    process.exit(1);
+  }
+
+  const mismatchSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${mismatchCmd}'::uuid, '${vleId1}'::uuid);
+  `;
+  const mismatchRes = await runPsql(mismatchSql);
+  if (mismatchRes.code === 0 || !mismatchRes.stderr.includes('42501')) {
+    console.error('Expected 42501 for mismatched command receipt, got:', mismatchRes);
+    process.exit(1);
+  }
+  console.log('  -> PASS: Mismatched command receipt rejected with 42501.');
 
   console.log('\nAll Learning Concurrency Regression Tests PASSED!');
 }
