@@ -1,8 +1,8 @@
 # ADR 0005 — Phase 4 Reward Economy and Wheel Experience Architectural Decisions
 
-- **Status:** PROPOSED  
-- **Date:** 2026-11-01  
-- **Context:** Phase 3 established immutable verified learning events, deterministic RP/XP generation via the Growth Engine (`growth-v0.1`), dual append-only authoritative ledgers (`xp_ledger` and `rp_ledger`), and cached balance projections (`child_balances`). Phase 4 provides the consumption half of the economy: empowering children to spend earned RP on parent-defined family rewards through either the **Reward Store** (certainty, delayed gratification) or the **Celebration Wheel** (surprise, celebration), while strictly preventing gambling mechanics, balance corruption, or child exploitation. This ADR reflects resolved product decisions and architectural hardening from review `6558754638`.
+- **Status:** ACCEPTED  
+- **Date:** 2026-11-01 (Accepted: 2026-11-02)  
+- **Context:** Phase 3 established immutable verified learning events, deterministic RP/XP generation via the Growth Engine (`growth-v0.1`), dual append-only authoritative ledgers (`xp_ledger` and `rp_ledger`), and cached balance projections (`child_balances`). Phase 4 provides the consumption half of the economy: empowering children to spend earned RP on parent-defined family rewards through either the **Reward Store** (certainty, delayed gratification) or the **Celebration Wheel** (surprise, celebration), while strictly preventing gambling mechanics, balance corruption, or child exploitation. This ADR was accepted following the successful implementation, independent review approval, and green post-merge CI verification of Phase 4.1 (merge SHA `8ca9bbc47aa45b96e8ae441671ec57d57ce95dea`) and Phase 4.2 (merge SHA `6f1057409942a564691fac41509c17d6b602a3af`, post-merge CI `41380026423`).
 
 ---
 
@@ -150,13 +150,15 @@ And an immutable 8-step internal order:
 
 ## Decision 10 — Phased Migration & Implementation Sequencing: Store Foundation (4.1) then Wheel (4.2)
 
-Phase 4 implementation is split into two sequential PR gates:
-- **PR 4.1 (Store Foundation):**
+Phase 4 implementation was split into two sequential PR gates:
+- **PR 4.1 (Store Foundation) — COMPLETE:**
+  - Merge SHA: `8ca9bbc47aa45b96e8ae441671ec57d57ce95dea` (Post-merge CI: `41332029263`)
   - Migration: `rewards`, `reward_redemptions`, composite FKs, RLS policies.
-  - Operation CHECK Migration: Extends `command_receipts_operation_check` to include: `'redeem_reward', 'fulfill_reward', 'cancel_reward'`.
+  - Operation CHECK Migration: Extended `command_receipts_operation_check` to include: `'redeem_reward', 'fulfill_reward', 'cancel_reward'`.
   - RPCs: `redeem_store_reward`, `fulfill_reward_redemption`, `cancel_reward_redemption`.
-- **PR 4.2 (Celebration Wheel):**
+- **PR 4.2 (Celebration Wheel) — COMPLETE:**
+  - Merge SHA: `6f1057409942a564691fac41509c17d6b602a3af` (Post-merge CI: `41380026423`)
   - Migration: `family_wheel_settings`, `wheel_spins`, composite consistency FK to `reward_redemptions`.
-  - Operation CHECK Migration: Extends `command_receipts_operation_check` to add: `'spin_wheel'`.
-  - RPC: `spin_reward_wheel`.
-- **Gating Rule:** PR 4.2 implementation will not begin until PR 4.1 passes independent review and merges into `main`.
+  - Operation CHECK Migration: Extended `command_receipts_operation_check` to add: `'spin_wheel'`.
+  - RPCs: `spin_reward_wheel`, `get_wheel_status`.
+- **Outcome:** Both PRs successfully implemented and verified their respective scopes against all database, concurrency, and client integration gates. Phase 4 is now FROZEN.

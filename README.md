@@ -72,7 +72,8 @@ Level    │    Wheel   Store
 | [Phase 3 Growth Engine & Ledger ADR](docs/adr/0004-phase-3-growth-engine-ledger.md) | Phase 3 Growth Engine v0.1 calculation, integer minor units, append-only ledgers, balance projections, and concurrency serialization |
 | [Phase 3 Freeze Receipt](docs/freezes/phase-3-growth-engine-ledger-freeze.md) | Frozen Phase 3 baseline, CI receipt, Growth engine rules, ledger invariants, test counts and deferred scope |
 | [Phase 4 Reward Economy Design](docs/11-phase-4-reward-economy-wheel-design-v0.1.md) | Phase 4 detailed design: Reward Store, Celebration Wheel, unified RP economy, lifecycle, and safety invariants |
-| [Phase 4 Reward Economy ADR](docs/adr/0005-phase-4-reward-economy-wheel.md) | Proposed architectural decisions for Phase 4 unified RP economy, server-authoritative spins, and concurrency |
+| [Phase 4 Reward Economy ADR](docs/adr/0005-phase-4-reward-economy-wheel.md) | Accepted architectural decisions for Phase 4 unified RP economy, server-authoritative spins, and concurrency |
+| [Phase 4 Freeze Receipt](docs/freezes/phase-4-reward-economy-wheel-freeze.md) | Frozen Phase 4 baseline, CI receipt, unified RP economy, Store and Wheel lifecycle, concurrency and anti-compulsion invariants |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
@@ -85,9 +86,9 @@ and the Parent PIN containment boundary. Phase 2 must consume this contract with
 
 **Phase 3 — Growth Engine + XP/RP Ledger Foundation is FROZEN.** It establishes the pure Dart Growth Engine v0.1, deterministic integer minor-unit RP awards, Study XP accumulation, immutable grade provenance with fail-closed missing grade handling, rolling 3-sample historical baseline calculation, below-level anti-farming protection, dual append-only authoritative ledgers (`xp_ledger`, `rp_ledger`), `child_balances` projections with single-MVCC-snapshot read-only balance reconciliation, and serialized `SELECT FOR UPDATE` on verified learning events for exactly-once event processing.
 
-**Phase 4 — Reward Economy & Wheel Experience is IN DEVELOPMENT.**
+**Phase 4 — Reward Economy & Wheel Experience is FROZEN.** It establishes the unified spendable RP currency (Model C), permanent non-spendable Study XP, parent-configured Reward Catalog, deterministic Store redemptions, server-authoritative pseudorandom Celebration Wheel draws (`PostgreSQL random()`) with immutable selection snapshots, local calendar day spin caps with DST resilience, parental controls, catalog stabilization via table-level share locking, durable SQLite client command journaling surviving process restarts, and complete child celebration presentation.
 - **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **COMPLETE** (Reward catalog management, Store redemption RPC with atomic negative ledger debits, fulfillment and cancellation lifecycles with compensating refunds, parent/child Store presentation, durable client command journaling, file-backed restart persistence).
-- **Phase 4.2 — Celebration Wheel & Parent Controls:** **IN DEVELOPMENT** (Server-authoritative wheel spins, daily caps, tiered probability selection, celebration animation, durable client journaling).
+- **Phase 4.2 — Celebration Wheel & Parent Controls:** **COMPLETE** (Server-authoritative wheel spins, daily caps, tiered probability selection, celebration animation, durable client journaling).
 
 ### Repository layout
 
@@ -262,16 +263,18 @@ Run `node scripts/test_last_owner_concurrency.mjs` to execute the multi-session 
 
 ## Product status
 
-**Current Phase:** Phase 4 — Reward Economy & Wheel Experience — **IN DEVELOPMENT**  
+**Current Phase:** Phase 4 — Reward Economy & Wheel Experience — **FROZEN**  
 - **Phase 3:** **FROZEN** (Baseline `c6721497bfbde7cb436467cccaad5b2234d23cc4`, Post-merge CI `41293964415`)  
-- **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **COMPLETE** (Merge `8ca9bbc47aa45b96e8ae441671ec57d57ce95dea`, Post-merge CI `41332029263`)  
-- **Phase 4.2 — Celebration Wheel & Parent Controls:** **IN DEVELOPMENT**  
-**Frozen code baseline:** `c6721497bfbde7cb436467cccaad5b2234d23cc4`  
-**Post-merge CI:** `41293964415` — **SUCCESS**  
-**Code:** Domain entities, pure Dart Growth Engine v0.1, integer minor unit representation, immutable append-only economic ledgers (`xp_ledger`, `rp_ledger`), cached balance projections (`child_balances`), single-snapshot read-only reconciliation (`reconcile_child_balance`), fail-closed immutable grade snapshots, recoverable Growth delivery (`catch_up_unprocessed_growth`), cross-language canonical parity fixtures, reward catalog, store redemption RPC, celebration wheel RPC with server-authoritative pseudorandom tier selection, parent wheel controls, and Flutter presentation  
+- **Phase 4:** **FROZEN** (Merge `6f1057409942a564691fac41509c17d6b602a3af`, Post-merge CI `41380026423`)  
+  - **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **COMPLETE** (Merge `8ca9bbc47aa45b96e8ae441671ec57d57ce95dea`, Post-merge CI `41332029263`)  
+  - **Phase 4.2 — Celebration Wheel & Parent Controls:** **COMPLETE** (Merge `6f1057409942a564691fac41509c17d6b602a3af`, Post-merge CI `41380026423`)  
+- **Phase 5 — Mastery Engine, Skill Trees & Recommendation Foundation:** **NOT STARTED**  
+**Frozen code baseline:** `6f1057409942a564691fac41509c17d6b602a3af`  
+**Post-merge CI:** `41380026423` — **SUCCESS**  
+**Code:** Domain entities, pure Dart Growth Engine v0.1, integer minor unit representation, immutable append-only economic ledgers (`xp_ledger`, `rp_ledger`), cached balance projections (`child_balances`), single-snapshot read-only reconciliation (`reconcile_child_balance`), fail-closed immutable grade snapshots, recoverable Growth delivery (`catch_up_unprocessed_growth`), cross-language canonical parity fixtures, reward catalog, store redemption RPC, celebration wheel RPC with server-authoritative pseudorandom tier selection, parent wheel controls, durable SQLite command journaling, and Flutter presentation  
 **Mobile target:** Flutter → Android + iOS  
 **Backend direction:** Supabase + Postgres + Storage  
-**Next gate:** Phase 4.2 independent review.
+**Next gate:** Phase 5 design and architectural alignment.
 
 ## Working rule
 
