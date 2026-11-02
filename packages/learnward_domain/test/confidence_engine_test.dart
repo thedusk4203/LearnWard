@@ -170,7 +170,106 @@ void main() {
 
       expect(eval.confidenceUnits, equals(0.0));
       expect(eval.distinctRecentVles, equals(0));
+      // Numeric score 95.0 exists with Low confidence and no attainment -> masteryCandidate
+      expect(eval.masteryBand, equals(MasteryBand.masteryCandidate));
+    });
+
+    test('noData when evidence is empty or masteryScore is null', () {
+      final eval = ConfidenceEngine.evaluate(
+        masteryScore: null,
+        evidence: [],
+        asOf: asOf,
+      );
+      expect(eval.confidenceUnits, equals(0.0));
       expect(eval.masteryBand, equals(MasteryBand.noData));
+    });
+
+    test(
+      'late verification of stale evidence (>60d) must NOT attain mastery',
+      () {
+        final staleEv1 = LearningEvidenceEvent(
+          id: 'ev-stale-1',
+          familyId: familyId,
+          childId: childId,
+          verifiedLearningEventId: 'vle-stale-1',
+          learningNodeId: nodeId,
+          nodeType: LearningNodeType.skill,
+          subjectKey: 'math',
+          scoreSource: ScoreSource.assessmentTotal,
+          performancePct: 95.0,
+          specificityWeight: 1.0,
+          levelWeight: 1.0,
+          effectiveOccurredAt: asOf.subtract(const Duration(days: 180)),
+          verifiedAt: asOf, // verified today
+        );
+        final staleEv2 = LearningEvidenceEvent(
+          id: 'ev-stale-2',
+          familyId: familyId,
+          childId: childId,
+          verifiedLearningEventId: 'vle-stale-2',
+          learningNodeId: nodeId,
+          nodeType: LearningNodeType.skill,
+          subjectKey: 'math',
+          scoreSource: ScoreSource.assessmentTotal,
+          performancePct: 95.0,
+          specificityWeight: 1.0,
+          levelWeight: 1.0,
+          effectiveOccurredAt: asOf.subtract(const Duration(days: 170)),
+          verifiedAt: asOf, // verified today
+        );
+
+        final eval = ConfidenceEngine.evaluate(
+          masteryScore: 95.0,
+          evidence: [staleEv1, staleEv2],
+          asOf: asOf,
+          masteryAttainedAt: null, // no declaration occurred
+        );
+
+        expect(eval.confidenceUnits, equals(0.0));
+        expect(eval.confidenceBand, equals(ConfidenceBand.low));
+        expect(eval.masteryBand, equals(MasteryBand.masteryCandidate));
+      },
+    );
+
+    test('historical read before attainment does NOT report Mastered', () {
+      final attainedAt = asOf;
+      final ev1 = LearningEvidenceEvent(
+        id: 'ev-1',
+        familyId: familyId,
+        childId: childId,
+        verifiedLearningEventId: 'vle-1',
+        learningNodeId: nodeId,
+        nodeType: LearningNodeType.skill,
+        subjectKey: 'math',
+        scoreSource: ScoreSource.assessmentTotal,
+        performancePct: 90.0,
+        specificityWeight: 1.0,
+        levelWeight: 1.0,
+        effectiveOccurredAt: asOf.subtract(const Duration(days: 5)),
+        verifiedAt: asOf.subtract(const Duration(days: 5)),
+      );
+
+      // Read at 1 second before attainment
+      final readBefore = attainedAt.subtract(const Duration(seconds: 1));
+      final evalBefore = ConfidenceEngine.evaluate(
+        masteryScore: 90.0,
+        evidence: [ev1],
+        asOf: readBefore,
+        masteryAttainedAt: attainedAt,
+      );
+
+      // asOf < masteryAttainedAt -> must NOT report Mastered
+      expect(evalBefore.masteryBand, isNot(equals(MasteryBand.mastered)));
+      expect(evalBefore.masteryBand, equals(MasteryBand.masteryCandidate));
+
+      // Read at attainment instant -> reports Mastered
+      final evalAt = ConfidenceEngine.evaluate(
+        masteryScore: 90.0,
+        evidence: [ev1],
+        asOf: attainedAt,
+        masteryAttainedAt: attainedAt,
+      );
+      expect(evalAt.masteryBand, equals(MasteryBand.mastered));
     });
 
     test('sticky mastery: once attained, aging past 60 days preserves Mastered band even when confidence drops to Low', () {

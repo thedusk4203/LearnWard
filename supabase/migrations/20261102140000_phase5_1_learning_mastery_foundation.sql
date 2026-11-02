@@ -1232,7 +1232,11 @@ declare
   v_mastery_attained_at timestamptz;
   v_conf_units numeric(5,2);
   v_distinct_recent_vles integer;
+  v_processing_as_of timestamptz;
 begin
+  -- Capture single server-authoritative processing timestamp for declaration decisions
+  v_processing_as_of := transaction_timestamp();
+
   -- 1. Load VLE
   select id, assessment_id, family_id, child_id, subject_key,
          normalized_score as score, difficulty, assessment_type as type,
@@ -1390,24 +1394,24 @@ begin
           'result_score', v_current_score
         );
       end if;
-
-      -- Check if mastery was first attained at this evidence step
-      if v_mastery_attained_at is null then
-        select
-          coalesce(sum(ev.specificity_weight * ev.level_weight), 0)::numeric(5,2),
-          count(distinct ev.verified_learning_event_id)
-        into v_conf_units, v_distinct_recent_vles
-        from public.learning_evidence_events ev
-        where ev.child_id = v_vle.child_id
-          and ev.learning_node_id = v_node_id
-          and ev.effective_occurred_at >= v_ev.effective_occurred_at - interval '60 days'
-          and ev.effective_occurred_at <= v_ev.effective_occurred_at;
-
-        if v_current_score >= 85.00 and v_conf_units > 3.5 and v_distinct_recent_vles >= 2 then
-          v_mastery_attained_at := v_ev.verified_at;
-        end if;
-      end if;
     end loop;
+
+    -- Evaluate first attainment at server-authoritative declaration instant v_processing_as_of
+    if v_mastery_attained_at is null then
+      select
+        coalesce(sum(ev.specificity_weight * ev.level_weight), 0)::numeric(5,2),
+        count(distinct ev.verified_learning_event_id)
+      into v_conf_units, v_distinct_recent_vles
+      from public.learning_evidence_events ev
+      where ev.child_id = v_vle.child_id
+        and ev.learning_node_id = v_node_id
+        and ev.effective_occurred_at >= v_processing_as_of - interval '60 days'
+        and ev.effective_occurred_at <= v_processing_as_of;
+
+      if v_current_score >= 85.00 and v_conf_units > 3.5 and v_distinct_recent_vles >= 2 then
+        v_mastery_attained_at := v_processing_as_of;
+      end if;
+    end if;
 
     -- Count distinct assessments
     select count(distinct assessment_id) into v_distinct_assessments
@@ -1745,8 +1749,7 @@ begin
     'confidence_band', conf.band,
     'confidence_units', conf.units,
     'mastery_band', case
-      when cms.mastery_attained_at is not null then 'mastered'
-      when cms.mastery_score >= 85 and conf.band = 'high' and conf.distinct_recent_vles >= 2 then 'mastered'
+      when cms.mastery_attained_at is not null and cms.mastery_attained_at <= v_as_of then 'mastered'
       when cms.mastery_score >= 85 then 'mastery_candidate'
       when cms.mastery_score >= 70 then 'secure'
       when cms.mastery_score >= 50 then 'developing'

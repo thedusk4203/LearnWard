@@ -76,11 +76,41 @@ void main() {
           reason: 'Mastery score mismatch',
         );
 
+        // Determine if attainment occurred at declaration time (processing)
+        DateTime? attainedAt;
+        for (var stepIdx = 0; stepIdx < evidenceEvents.length; stepIdx++) {
+          final subList = evidenceEvents.sublist(0, stepIdx + 1);
+          final stepScore = rebuild.steps[stepIdx].resultScore;
+          final stepAsOf = subList.last.verifiedAt;
+          final stepEval = ConfidenceEngine.evaluate(
+            masteryScore: stepScore,
+            evidence: subList,
+            asOf: stepAsOf,
+          );
+          if (attainedAt == null &&
+              stepScore >= 85.0 &&
+              stepEval.confidenceBand == ConfidenceBand.high &&
+              stepEval.distinctRecentVles >= 2) {
+            attainedAt = stepAsOf;
+          }
+        }
+
+        final readMode = fixture['read_mode'] as String?;
+        final DateTime readAsOf;
+        if (readMode == 'before_attainment') {
+          readAsOf = (attainedAt ?? asOf).subtract(const Duration(seconds: 1));
+        } else if (readMode == 'aged_61_days') {
+          readAsOf = asOf.add(const Duration(days: 61));
+        } else {
+          readAsOf = asOf;
+        }
+
         // Run ConfidenceEngine evaluation
         final confEval = ConfidenceEngine.evaluate(
           masteryScore: rebuild.masteryScore,
           evidence: evidenceEvents,
-          asOf: asOf,
+          asOf: readAsOf,
+          masteryAttainedAt: attainedAt,
         );
 
         expect(

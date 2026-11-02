@@ -1,5 +1,5 @@
 begin;
-select plan(128);
+select plan(135);
 
 -- ===========================================================================
 -- FIXTURES SETUP (Superuser context)
@@ -1873,6 +1873,42 @@ select is(
   'Initial attainment evaluates to High confidence band'
 );
 
+-- Test 112b: Historical read before attainment does not report Mastered (as_of = T - 1 second)
+select isnt(
+  (select elem ->> 'mastery_band'
+   from jsonb_array_elements(private.get_child_mastery_at(
+     'c5000000-0000-0000-0000-000000000002'::uuid,
+     (select mastery_attained_at from public.child_mastery_states where child_id = 'c5000000-0000-0000-0000-000000000002'::uuid and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid) - interval '1 second'
+   )) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'mastered',
+  'Historical read before attainment instant must NOT report Mastered'
+);
+
+-- Test 112c: Historical read before attainment reports mastery_candidate
+select is(
+  (select elem ->> 'mastery_band'
+   from jsonb_array_elements(private.get_child_mastery_at(
+     'c5000000-0000-0000-0000-000000000002'::uuid,
+     (select mastery_attained_at from public.child_mastery_states where child_id = 'c5000000-0000-0000-0000-000000000002'::uuid and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid) - interval '1 second'
+   )) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'mastery_candidate',
+  'Historical read before attainment instant reports mastery_candidate'
+);
+
+-- Test 112d: Read at exact attainment instant reports Mastered
+select is(
+  (select elem ->> 'mastery_band'
+   from jsonb_array_elements(private.get_child_mastery_at(
+     'c5000000-0000-0000-0000-000000000002'::uuid,
+     (select mastery_attained_at from public.child_mastery_states where child_id = 'c5000000-0000-0000-0000-000000000002'::uuid and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid)
+   )) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'mastered',
+  'Read at exact attainment instant reports Mastered'
+);
+
 -- Test 113: Time-only aging (61+ days): confidence band drops to Low
 select is(
   (select elem ->> 'confidence_band'
@@ -2010,6 +2046,164 @@ select is(
      and cms.mastery_attained_at is not null),
   1,
   'Prerequisite skill remains attained past confidence decay, preserving Phase 5.2 unlock eligibility'
+);
+
+-- ===========================================================================
+-- SECTION 13: STALE EVIDENCE VERIFICATION DOES NOT ATTAIN MASTERY (Tests 121-124)
+-- ===========================================================================
+
+-- Setup Child 51B1 stale assessments (occurred 180 and 170 days ago, verified today)
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
+  occurred_at, raw_score, max_score, learning_catalog_version
+) values (
+  'a5000000-0000-0000-0000-000000000021'::uuid,
+  'f5000000-0000-0000-0000-000000000002'::uuid,
+  'c5000000-0000-0000-0000-000000000003'::uuid,
+  '50000000-0000-0000-0000-000000000002'::uuid,
+  'verified', 'math', 'Mathematics', 'quiz', 'Stale Quiz 1',
+  now() - interval '180 days', 95, 100, 'pilot-v0.1'
+);
+
+insert into public.assessment_learning_mappings (
+  assessment_id, learning_node_id, component_key, family_id, child_id, score_source, confirmed_by_user_id
+) values (
+  'a5000000-0000-0000-0000-000000000021'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  'f5000000-0000-0000-0000-000000000002'::uuid,
+  'c5000000-0000-0000-0000-000000000003'::uuid,
+  'assessment_total',
+  '50000000-0000-0000-0000-000000000002'::uuid
+);
+
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000021'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000002'::uuid,
+  'a5000000-0000-0000-0000-000000000021'::uuid,
+  'f5000000-0000-0000-0000-000000000002'::uuid
+) on conflict do nothing;
+
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000021'::uuid,
+  '70000000-0000-0000-0000-000000000021'::uuid,
+  'f5000000-0000-0000-0000-000000000002'::uuid,
+  'a5000000-0000-0000-0000-000000000021'::uuid,
+  'verified', 'pending_review', 'verified',
+  '50000000-0000-0000-0000-000000000002'::uuid
+);
+
+insert into public.verified_learning_events (
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
+) values (
+  '15000000-0000-0000-0000-000000000021'::uuid,
+  'a5000000-0000-0000-0000-000000000021'::uuid,
+  'f5000000-0000-0000-0000-000000000002'::uuid,
+  'c5000000-0000-0000-0000-000000000003'::uuid,
+  'math', 'Mathematics', 'Stale Quiz 1', 'quiz', 'normal',
+  95, 100, 9.50, now() - interval '180 days', now(), '50000000-0000-0000-0000-000000000002'::uuid,
+  'e5000000-0000-0000-0000-000000000021'::uuid, 5, 'pilot-v0.1'
+);
+
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
+  occurred_at, raw_score, max_score, learning_catalog_version
+) values (
+  'a5000000-0000-0000-0000-000000000022'::uuid,
+  'f5000000-0000-0000-0000-000000000002'::uuid,
+  'c5000000-0000-0000-0000-000000000003'::uuid,
+  '50000000-0000-0000-0000-000000000002'::uuid,
+  'verified', 'math', 'Mathematics', 'quiz', 'Stale Quiz 2',
+  now() - interval '170 days', 95, 100, 'pilot-v0.1'
+);
+
+insert into public.assessment_learning_mappings (
+  assessment_id, learning_node_id, component_key, family_id, child_id, score_source, confirmed_by_user_id
+) values (
+  'a5000000-0000-0000-0000-000000000022'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  'f5000000-0000-0000-0000-000000000002'::uuid,
+  'c5000000-0000-0000-0000-000000000003'::uuid,
+  'assessment_total',
+  '50000000-0000-0000-0000-000000000002'::uuid
+);
+
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000022'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000002'::uuid,
+  'a5000000-0000-0000-0000-000000000022'::uuid,
+  'f5000000-0000-0000-0000-000000000002'::uuid
+) on conflict do nothing;
+
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000022'::uuid,
+  '70000000-0000-0000-0000-000000000022'::uuid,
+  'f5000000-0000-0000-0000-000000000002'::uuid,
+  'a5000000-0000-0000-0000-000000000022'::uuid,
+  'verified', 'pending_review', 'verified',
+  '50000000-0000-0000-0000-000000000002'::uuid
+);
+
+insert into public.verified_learning_events (
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
+) values (
+  '15000000-0000-0000-0000-000000000022'::uuid,
+  'a5000000-0000-0000-0000-000000000022'::uuid,
+  'f5000000-0000-0000-0000-000000000002'::uuid,
+  'c5000000-0000-0000-0000-000000000003'::uuid,
+  'math', 'Mathematics', 'Stale Quiz 2', 'quiz', 'normal',
+  95, 100, 9.50, now() - interval '170 days', now(), '50000000-0000-0000-0000-000000000002'::uuid,
+  'e5000000-0000-0000-0000-000000000022'::uuid, 5, 'pilot-v0.1'
+);
+
+do $$
+begin
+  perform private.execute_learning_event_processing('15000000-0000-0000-0000-000000000021'::uuid);
+  perform private.execute_learning_event_processing('15000000-0000-0000-0000-000000000022'::uuid);
+end;
+$$;
+
+-- Test 121: Late verification of stale evidence preserves numeric mastery >= 85
+select ok(
+  (select mastery_score from public.child_mastery_states
+   where child_id = 'c5000000-0000-0000-0000-000000000003'::uuid
+     and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid) >= 85.00,
+  'Stale evidence updates numeric mastery score via canonical EWMA (score >= 85)'
+);
+
+-- Test 122: Late verification of stale evidence yields Low confidence today
+select is(
+  (select elem ->> 'confidence_band'
+   from jsonb_array_elements(private.get_child_mastery_at('c5000000-0000-0000-0000-000000000003'::uuid, now())) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'low',
+  'Confidence band today is Low because evidence occurred >60 days ago'
+);
+
+-- Test 123: Late verification of stale evidence must NOT set mastery_attained_at
+select ok(
+  (select mastery_attained_at from public.child_mastery_states
+   where child_id = 'c5000000-0000-0000-0000-000000000003'::uuid
+     and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid) is null,
+  'mastery_attained_at remains NULL when high-scoring evidence is stale at declaration time'
+);
+
+-- Test 124: Late verification of stale evidence must NOT report Mastered band
+select is(
+  (select elem ->> 'mastery_band'
+   from jsonb_array_elements(private.get_child_mastery_at('c5000000-0000-0000-0000-000000000003'::uuid, now())) elem
+   where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
+  'mastery_candidate',
+  'Mastery band is mastery_candidate, NOT Mastered, when evidence is stale'
 );
 
 reset role;

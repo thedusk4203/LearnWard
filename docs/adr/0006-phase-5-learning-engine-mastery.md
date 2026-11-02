@@ -396,12 +396,17 @@ A high score with sparse evidence remains `Mastery candidate` rather than `Maste
 
 **Consequence:** One 10/10 worksheet cannot instantly declare durable mastery.
 
-### Sticky Mastery Attainment & Schema Persistence
-- **Schema persistence:** Both `child_mastery_states` and `mastery_state_revisions` persist `mastery_attained_at timestamptz NULL`. When initial attainment criteria are met (`mastery_score >= 85 AND confidence = High AND >= 2 distinct recent verified assessments`), `mastery_attained_at` is set to the triggering evidence's verification timestamp.
-- **Sticky retention against time decay:** Once attained, `mastery_attained_at` is durable and sticky; it is never reverted to NULL by elapsed time or read-time confidence decay.
-- **Confidence vs. Mastery orthogonality:** When time passes without new assessments (e.g. 61+ days), read-time `confidence_band` decays from `high` to `low`, but `mastery_band` remains `mastered` while `mastery_attained_at` remains unchanged. The system distinguishes between "historical mastery attained" and "recency/confidence of current evidence".
-- **Subsequent lower evidence:** If subsequent verified assessments yield lower performance, the numeric `mastery_score` updates downwards via EWMA, but `mastery_attained_at` is preserved and `mastery_band` remains `mastered`.
-- **Prerequisite unlock safety:** A prerequisite skill that was attained retains its attained status across time decay, guaranteeing that downstream dependent skills maintain prerequisite satisfaction for Phase 5.2 unlock eligibility.
+### Sticky Mastery Attainment & Temporal Declaration Semantics
+- **Chronology vs. Declaration Distinction:**
+  - `numeric mastery history = canonical academic chronology`: EWMA numeric mastery is rebuilt deterministically from the complete immutable evidence set sorted by `(effective_occurred_at ASC, verified_at ASC, verified_learning_event_id ASC)`.
+  - `mastery attainment declaration = server-authoritative processing/read timeline event`: `mastery_attained_at` represents the authoritative instant LearnWard actually declares mastery. It does not represent retrospective historical evidence timestamps.
+- **Server-Authoritative Declaration Instant (`v_processing_as_of`):** During learning processing, the engine captures one `v_processing_as_of := transaction_timestamp()`. Initial attainment criteria (`final mastery_score >= 85 AND confidence = High AND >= 2 distinct recent verified assessments`) are evaluated strictly at `as_of = v_processing_as_of` over the rolling 60-day window `[v_processing_as_of - interval '60 days', v_processing_as_of]`. If satisfied, `mastery_attained_at` is stamped with `v_processing_as_of`.
+- **Stale Evidence Prohibition:** Historical evidence may influence current numeric mastery, but stale historical evidence (>60 days old at declaration time) cannot retroactively manufacture a current Mastered declaration.
+- **Schema Persistence:** Both `child_mastery_states` and `mastery_state_revisions` persist `mastery_attained_at timestamptz NULL`. Once non-null, prior attainment is preserved across rebuilds.
+- **Read-Time Temporal Semantics (`mastery_attained_at <= as_of`):** `mastery_attained_at` applies to reads only when `mastery_attained_at <= as_of`. For historical reads where `as_of < mastery_attained_at`, the read must NOT expose `mastery_band = 'mastered'`, as attainment had not occurred yet at that historical time.
+- **Sticky Retention Against Time Decay:** Once attained at $T_{\text{attained}}$, for all reads with `as_of >= T_attained`, `mastery_band` remains `mastered` even if elapsed time (e.g. 61+ days) drops read-time `confidence_band` from `high` to `low`. The system distinguishes between "historical mastery attained" and "recency/confidence of current evidence".
+- **Subsequent Lower Evidence:** If subsequent verified assessments yield lower performance, the numeric `mastery_score` updates downwards via EWMA, but `mastery_attained_at` is preserved and `mastery_band` remains `mastered` for `as_of >= T_attained`.
+- **Prerequisite Unlock Safety:** A prerequisite skill that was attained retains its attained status across time decay, guaranteeing that downstream dependent skills maintain prerequisite satisfaction for Phase 5.2 unlock eligibility.
 
 ---
 

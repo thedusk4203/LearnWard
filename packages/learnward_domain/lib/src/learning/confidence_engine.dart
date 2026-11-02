@@ -56,15 +56,22 @@ class ConfidenceEngine {
     }
 
     // Evaluate MasteryBand
-    final MasteryBand mastBand;
+    final bool isMastered;
     if (masteryAttainedAt != null) {
+      isMastered = !masteryAttainedAt.isAfter(asOf);
+    } else {
+      isMastered =
+          (masteryScore != null &&
+          masteryScore >= 85.0 &&
+          confBand == ConfidenceBand.high &&
+          distinctCount >= 2);
+    }
+
+    final MasteryBand mastBand;
+    if (isMastered) {
       mastBand = MasteryBand.mastered;
-    } else if (masteryScore == null || distinctCount == 0) {
+    } else if (masteryScore == null || evidence.isEmpty) {
       mastBand = MasteryBand.noData;
-    } else if (masteryScore >= 85.0 &&
-        confBand == ConfidenceBand.high &&
-        distinctCount >= 2) {
-      mastBand = MasteryBand.mastered;
     } else if (masteryScore >= 85.0) {
       mastBand = MasteryBand.masteryCandidate;
     } else if (masteryScore >= 70.0) {

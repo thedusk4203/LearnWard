@@ -162,12 +162,33 @@ async function main() {
       }
     }
 
-    // Query get_child_mastery for this child
-    const querySql = `
-      set role authenticated;
-      select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
-      select public.get_child_mastery('${childId}'::uuid);
-    `;
+    // Query get_child_mastery for this child based on fixture read_mode
+    let querySql;
+    if (fixture.read_mode === 'before_attainment') {
+      querySql = `
+        set role authenticated;
+        select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+        select private.get_child_mastery_at(
+          '${childId}'::uuid,
+          coalesce(
+            (select mastery_attained_at from public.child_mastery_states where child_id = '${childId}'::uuid and learning_node_id = '${nodeId}'::uuid) - interval '1 second',
+            now() - interval '1 second'
+          )
+        );
+      `;
+    } else if (fixture.read_mode === 'aged_61_days') {
+      querySql = `
+        set role authenticated;
+        select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+        select private.get_child_mastery_at('${childId}'::uuid, now() + interval '61 days');
+      `;
+    } else {
+      querySql = `
+        set role authenticated;
+        select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+        select public.get_child_mastery('${childId}'::uuid);
+      `;
+    }
 
     const queryRes = await runPsql(querySql);
     if (queryRes.code !== 0) {

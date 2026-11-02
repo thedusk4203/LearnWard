@@ -185,5 +185,119 @@
       "confidence_band": "low",
       "mastery_band": "emerging"
     }
+  },
+  {
+    "scenario": "No attainment with stale historical evidence (>60d)",
+    "node_type": "skill",
+    "difficulty_level": "standard",
+    "observations": [
+      {
+        "performance_pct": 95,
+        "occurred_offset_days": 180
+      },
+      {
+        "performance_pct": 95,
+        "occurred_offset_days": 170
+      }
+    ],
+    "expected": {
+      "mastery_score": 95,
+      "confidence_units": 0,
+      "confidence_band": "low",
+      "mastery_band": "mastery_candidate"
+    }
+  },
+  {
+    "scenario": "Historical read before attainment does not report Mastered",
+    "node_type": "skill",
+    "difficulty_level": "standard",
+    "read_mode": "before_attainment",
+    "observations": [
+      {
+        "performance_pct": 85,
+        "occurred_offset_days": 25
+      },
+      {
+        "performance_pct": 90,
+        "occurred_offset_days": 20
+      },
+      {
+        "performance_pct": 92,
+        "occurred_offset_days": 15
+      },
+      {
+        "performance_pct": 95,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 90.83,
+      "confidence_units": 3,
+      "confidence_band": "medium",
+      "mastery_band": "mastery_candidate"
+    }
+  },
+  {
+    "scenario": "Aged read after attainment retains Mastered band despite Low confidence",
+    "node_type": "skill",
+    "difficulty_level": "standard",
+    "read_mode": "aged_61_days",
+    "observations": [
+      {
+        "performance_pct": 85,
+        "occurred_offset_days": 25
+      },
+      {
+        "performance_pct": 90,
+        "occurred_offset_days": 20
+      },
+      {
+        "performance_pct": 92,
+        "occurred_offset_days": 15
+      },
+      {
+        "performance_pct": 95,
+        "occurred_offset_days": 10
+      }
+    ],
+    "expected": {
+      "mastery_score": 90.83,
+      "confidence_units": 0,
+      "confidence_band": "low",
+      "mastery_band": "mastered"
+    }
+  },
+  {
+    "scenario": "Lower score after attainment preserves Mastered band",
+    "node_type": "skill",
+    "difficulty_level": "standard",
+    "observations": [
+      {
+        "performance_pct": 85,
+        "occurred_offset_days": 25
+      },
+      {
+        "performance_pct": 90,
+        "occurred_offset_days": 20
+      },
+      {
+        "performance_pct": 92,
+        "occurred_offset_days": 15
+      },
+      {
+        "performance_pct": 95,
+        "occurred_offset_days": 10
+      },
+      {
+        "performance_pct": 60,
+        "occurred_offset_days": 2
+      }
+    ],
+    "expected": {
+      "mastery_score": 80.04,
+      "confidence_units": 5,
+      "confidence_band": "high",
+      "mastery_band": "mastered"
+    }
   }
 ]
