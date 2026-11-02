@@ -16,6 +16,21 @@ final class InMemoryPendingRewardCommandStore
   }
 
   @override
+  Future<PendingRewardCommand?> findPendingSpinCommand({
+    required String familyId,
+    required String childId,
+  }) async {
+    for (final cmd in _commands.values.toList().reversed) {
+      if (cmd.operation == RewardCommandOperation.spinWheel &&
+          cmd.familyId == familyId &&
+          cmd.childId == childId) {
+        return cmd;
+      }
+    }
+    return null;
+  }
+
+  @override
   Future<PendingRewardCommand?> findPendingRedeemCommand({
     required String familyId,
     required String childId,

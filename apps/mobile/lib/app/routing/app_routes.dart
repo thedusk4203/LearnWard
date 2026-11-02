@@ -34,6 +34,9 @@ abstract final class AppRoutes {
   static const String parentFulfillmentInbox = '/parent/redemptions';
   static const String parentFulfillmentInboxName = 'parentFulfillmentInbox';
 
+  static const String parentWheelSettings = '/parent/wheel-settings';
+  static const String parentWheelSettingsName = 'parentWheelSettings';
+
   static const String childMode = '/child';
   static const String childModeName = 'childMode';
 
@@ -42,6 +45,9 @@ abstract final class AppRoutes {
 
   static const String childRedemptions = '/child/redemptions';
   static const String childRedemptionsName = 'childRedemptions';
+
+  static const String childWheel = '/child/wheel';
+  static const String childWheelName = 'childWheel';
 
   static const String childAddAssessment = '/child/assessments/add';
   static const String childAddAssessmentName = 'childAddAssessment';

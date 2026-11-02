@@ -550,15 +550,22 @@ public.spin_reward_wheel(
   p_child_id uuid default null
 ) returns jsonb
 ```
-- Step 1: `auth.uid() is not null`.
-- Step 2: Load child profile from `child_profiles` to resolve authoritative `v_family_id`. Load `families.timezone`.
-- Step 3: Authorize: caller must be active family adult of `v_family_id` OR exact paired child device.
-- Step 4: Inspect `command_receipts` for `operation = 'spin_wheel'`. Return existing spin/redemption if replay.
-- Step 5: Lock `child_balances` for `p_child_id` `FOR UPDATE`. Lock `family_wheel_settings` for `v_family_id` `FOR UPDATE`. Verify `is_enabled = true` and `rp_balance_minor >= spin_cost_minor`.
-- Daily Cap Verification: Calculate calendar day using `families.timezone`. If spins today $\ge \text{daily\_spin\_cap}$, abort with `LW202`.
-- Pool Verification: Gather active rewards where `wheel_enabled = true` and child eligible. If count $< 3$, abort with `LW203`.
-- Step 6: Server pseudorandom selection; construct `selection_snapshot`. Insert into `rp_ledger` (`amount_minor = -spin_cost_minor`). Insert into `reward_redemptions` (`origin = 'wheel'`). Insert into `wheel_spins`. Update `child_balances`.
-- Step 7: Insert `command_receipts` row. Return payload.
+- Step 1: Input validation: `p_command_id` and `p_child_id` required (`22000`). `auth.uid()` required (`42501`).
+- Step 2: Load child profile from `child_profiles` to resolve authoritative `v_family_id` (`P0002` if not found).
+- Step 3: Authorize caller: must be active family adult of `v_family_id` OR exact paired child device (`42501` if denied, strictly before timezone/config checks to prevent side channels).
+- Step 4: Inspect `command_receipts` for `operation = 'spin_wheel'`. If replay, return existing historical spin payload immediately (replay survives any later family config corruption).
+- Step 5 (New spin only): Load and validate `families.timezone` fail-closed (`LW004` if invalid/missing). Lock `family_wheel_settings FOR SHARE` and check `is_enabled` (`LW206` if disabled).
+- Step 6: Acquire `LOCK TABLE public.rewards IN SHARE MODE` to serialize concurrent parent catalog writes during snapshot acquisition (tradeoff: global catalog write serialization for correctness now, family-scoped optimization later if contention emerges). Materialize eligible pool into in-memory array in `id ASC` order. Check candidate count $\ge 3$ (`LW203` if fewer).
+- Step 7: Lock `child_balances` `FOR UPDATE` and check `rp_balance_minor >= spin_cost_minor` (`LW201` if insufficient).
+- Step 8: Verify daily cap using `families.timezone` local day boundaries (`LW202` if reached).
+- Step 9: Server pseudorandom draw from in-memory pool; construct immutable `selection_snapshot`.
+- Step 10: Atomic writes:
+  - `reward_redemptions` (`origin = 'wheel'`, `status = 'pending_fulfillment'`)
+  - `wheel_spins` (composite FK `fk_wheel_spins_redemption_composite` linked to redemption)
+  - `rp_ledger` (`amount_minor = -spin_cost_minor`, `reason_code = 'wheel_spin'`, `source_type = 'reward_redemption'`, `source_id = v_redemption_id`, `metadata.spin_id = v_spin_id`). The economic transaction is anchored to the immutable `reward_redemption`, keeping redemption debits and cancellation refunds linked to the same source entity while `wheel_spins` provides the server-committed selection/audit snapshot.
+  - `child_balances` (decrement balance)
+  - `command_receipts` (insert receipt)
+- Step 11: Return result payload.
 
 #### 3. `fulfill_reward_redemption`
 ```text

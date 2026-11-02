@@ -47,3 +47,13 @@ final class InvalidRedemptionException implements Exception {
   @override
   String toString() => 'InvalidRedemptionException: $message';
 }
+
+/// Raised when wheel or wheel settings domain invariants are violated.
+final class InvalidWheelException implements Exception {
+  const InvalidWheelException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'InvalidWheelException: ';
+}

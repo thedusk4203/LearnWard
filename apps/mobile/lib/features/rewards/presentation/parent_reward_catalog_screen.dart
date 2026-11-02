@@ -304,6 +304,16 @@ class _ParentRewardCatalogScreenState
                         padding: EdgeInsets.zero,
                         labelStyle: theme.textTheme.labelSmall,
                       ),
+                      if (reward.wheelEnabled && reward.wheelTier != null) ...[
+                        const SizedBox(width: 4),
+                        Chip(
+                          avatar: const Icon(Icons.toll, size: 14),
+                          label: Text(reward.wheelTier!.displayName),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          labelStyle: theme.textTheme.labelSmall,
+                        ),
+                      ],
                       const Spacer(),
                       Text(
                         reward.isActive ? 'Active' : 'Paused',

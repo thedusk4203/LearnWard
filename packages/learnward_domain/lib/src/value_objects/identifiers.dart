@@ -128,3 +128,24 @@ final class RewardRedemptionId {
   @override
   String toString() => value;
 }
+
+/// Strongly-typed identifier for a [WheelSpin].
+final class WheelSpinId {
+  WheelSpinId(this.value) {
+    if (value.trim().isEmpty) {
+      throw const InvalidWheelException('WheelSpinId cannot be empty.');
+    }
+  }
+
+  final String value;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is WheelSpinId && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => value;
+}

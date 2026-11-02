@@ -207,6 +207,28 @@ final rewardRepositoryProvider = Provider<RewardRepository>((ref) {
   throw MissingSupabaseConfigurationException(config.environment);
 });
 
+/// Repository for Celebration Wheel operations, configuration and spin history.
+final wheelRepositoryProvider = Provider<WheelRepository>((ref) {
+  final config = ref.watch(appConfigProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (client != null) {
+    return SupabaseWheelRepository(client);
+  }
+  if (config.canUseLocalDemoRepositories) {
+    final rewardRepo = ref.watch(rewardRepositoryProvider);
+    final growthRepo = ref.watch(growthRepositoryProvider);
+    return InMemoryWheelRepository(
+      rewardRepository: rewardRepo is InMemoryRewardRepository
+          ? rewardRepo
+          : null,
+      growthRepository: growthRepo is InMemoryGrowthRepository
+          ? growthRepo
+          : null,
+    );
+  }
+  throw MissingSupabaseConfigurationException(config.environment);
+});
+
 /// Notifier managing the currently selected family.
 class ActiveFamilyNotifier extends Notifier<Family?> {
   @override

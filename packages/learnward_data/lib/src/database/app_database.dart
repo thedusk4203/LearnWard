@@ -198,6 +198,25 @@ class AppDatabase extends _$AppDatabase
   }
 
   @override
+  Future<PendingRewardCommand?> findPendingSpinCommand({
+    required String familyId,
+    required String childId,
+  }) async {
+    final query = select(pendingRewardCommands)
+      ..where(
+        (entry) =>
+            entry.operation.equals(RewardCommandOperation.spinWheel.wireValue) &
+            entry.familyId.equals(familyId) &
+            entry.childId.equals(childId),
+      )
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+      ..limit(1);
+    final row = await query.getSingleOrNull();
+    if (row == null) return null;
+    return _mapRowToPendingCommand(row);
+  }
+
+  @override
   Future<PendingRewardCommand?> findPendingRedeemCommand({
     required String familyId,
     required String childId,

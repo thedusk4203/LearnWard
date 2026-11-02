@@ -460,29 +460,17 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                               ),
                               const SizedBox(width: AppSpacing.sm),
                               Expanded(
-                                child: Tooltip(
-                                  message: 'Celebration Wheel is launching in Phase 4.2!',
-                                  child: OutlinedButton.icon(
-                                    key: const Key(
-                                      'child_wheel_placeholder_button',
-                                    ),
-                                    icon: const Icon(
-                                      Icons.toll_outlined,
-                                      size: 18,
-                                    ),
-                                    label: const Text('Wheel (Phase 4.2)'),
-                                    onPressed: () {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                            const SnackBar(
-                                              content: Text(
-                                                'Celebration Wheel is coming in Phase 4.2!',
-                                              ),
-                                              duration: Duration(seconds: 2),
-                                            ),
-                                          );
-                                    },
+                                child: OutlinedButton.icon(
+                                  key: const Key('child_wheel_button'),
+                                  icon: const Icon(
+                                    Icons.toll_outlined,
+                                    size: 18,
                                   ),
+                                  label: const Text('Celebration Wheel'),
+                                  onPressed: () async {
+                                    await context.push(AppRoutes.childWheel);
+                                    if (mounted) unawaited(_loadEconomyData());
+                                  },
                                 ),
                               ),
                             ],
