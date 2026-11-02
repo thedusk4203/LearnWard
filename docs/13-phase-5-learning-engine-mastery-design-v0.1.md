@@ -106,7 +106,7 @@ The recommendation layer returns at most three candidate choices. It does not is
 
 ### 3.7 Authoritative catalog-version provenance
 
-Every verified learning event must belong to an immutable, server-snapshotted catalog version. Delayed processing or platform catalog upgrades must never cause an immutable historical event to resolve to a different catalog version or Subject root. Legacy records are backfilled via additive DDL (`DEFAULT 'pilot-v0.1' NOT NULL` then `DROP DEFAULT`) without row updates or disabling frozen Phase 2 triggers (`LW102`, `LW103`). Steady-state assessment creation snapshots the active catalog version via `BEFORE INSERT` trigger ignoring caller input; VLE creation copies assessment snapshot via `BEFORE INSERT` trigger. `pilot-v0.1` contains Subject roots for all canonical subjects (`math`, `english`, `literature`, `science`, `other`). Published catalog content is completely immutable; registry lifecycle metadata transitions strictly `draft -> active -> retired` through a trusted promotion procedure that guarantees exactly one active catalog before commit (raising SQLSTATE `LW501` if missing).
+Every verified learning event must belong to an immutable, server-snapshotted catalog version. Delayed processing or platform catalog upgrades must never cause an immutable historical event to resolve to a different catalog version or Subject root. Legacy records are backfilled via additive DDL (`DEFAULT 'pilot-v0.1' NOT NULL` then `DROP DEFAULT`) without row updates or disabling frozen Phase 2 triggers (`LW102`, `LW103`). Steady-state assessment creation snapshots the active catalog version via `BEFORE INSERT` trigger ignoring caller input; VLE creation copies assessment snapshot via `BEFORE INSERT` trigger. `pilot-v0.1` contains Subject roots for all canonical subjects (`math`, `english`, `literature`, `science`, `other`). Catalog authoring and promotion is strictly a platform-level deployment concern; family adults are tenant admins, not curriculum admins, and promotion execution is revoked from `PUBLIC`, `anon`, and `authenticated`. Published catalog content is completely immutable; registry lifecycle metadata transitions strictly `draft -> active -> retired` through a trusted promotion procedure that guarantees exactly one active catalog before commit (raising SQLSTATE `LW501` if missing).
 
 ### 3.8 Single effective observation per VLE/node
 
@@ -192,8 +192,17 @@ CREATE UNIQUE INDEX uq_learning_catalog_versions_single_active
 
 Atomic promotion contract & lifecycle metadata:
 - Exactly ONE version has `status = 'active'` at any time.
+- Catalog authoring and promotion is strictly a **platform administration / deployment concern**, NOT an application tenant capability. Family adults, shared-child sessions, and paired-child identities have zero catalog administration privileges. Family membership is irrelevant to global curriculum administration.
+- Draft catalogs and their content (`draft learning_catalog_versions`, `learning_nodes`, `learning_prerequisites`) are platform-owned and authored solely via migrations, controlled seed/content-release tooling, or privileged platform/service-role administrative paths. They are never family-created data, and direct client writes (`INSERT`, `UPDATE`, `DELETE`) remain denied.
 - Registry lifecycle metadata transitions strictly `draft -> active -> retired` through the trusted promotion procedure; `retired` is terminal.
-- Promoting a `draft` version to `active` executes a trusted serialized promotion routine (`promote_learning_catalog_version(p_new_version text)`) that:
+- Promoting a `draft` version to `active` executes a trusted serialized promotion routine (`promote_learning_catalog_version(p_new_version text)`):
+  ```sql
+  REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM PUBLIC;
+  REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM anon;
+  REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM authenticated;
+  ```
+  Only trusted platform/service-role execution or release migrations may invoke it.
+  When executed, the trusted promotion routine:
   1. Serializes promotion attempts via coordination locking (e.g. advisory or table lock on `learning_catalog_versions`);
   2. Locks and validates that `p_new_version` exists and has `status = 'draft'` before retiring the current active catalog;
   3. Validates the candidate catalog is publishable (all five canonical Subject roots exist, valid hierarchy edges, and valid Skill-only acyclic DAG prerequisite graph);
@@ -973,6 +982,28 @@ command_receipts.operation = process_learning
 resource_id = verified_learning_event_id
 ```
 
+#### Additive `command_receipts` migration for `process_learning`
+Frozen Phase 4.2 currently constrains `command_receipts.operation` to:
+```text
+create_draft, submit, verify, reject, process_growth, redeem_reward, fulfill_reward, cancel_reward, spin_wheel
+```
+Phase 5 design requires inserting receipts with `operation = 'process_learning'`.
+Therefore, Phase 5 implementation MUST explicitly include an additive migration that replaces the existing CHECK constraint (`command_receipts_operation_check`), preserving all 9 frozen Phase 1–4 operations while adding `process_learning`:
+```sql
+ALTER TABLE public.command_receipts
+  DROP CONSTRAINT IF EXISTS command_receipts_operation_check,
+  ADD CONSTRAINT command_receipts_operation_check
+    CHECK (operation IN (
+      'create_draft', 'submit', 'verify', 'reject', 'process_growth',
+      'redeem_reward', 'fulfill_reward', 'cancel_reward', 'spin_wheel',
+      'process_learning'
+    ));
+```
+Canonical future operation set:
+`create_draft`, `submit`, `verify`, `reject`, `process_growth`, `redeem_reward`, `fulfill_reward`, `cancel_reward`, `spin_wheel`, `process_learning`.
+Frozen Phase 1–4 migrations are never rewritten.
+Crucially, **`process_learning_event` cannot ship until `command_receipts.operation` accepts `process_learning`**.
+
 #### Immutable processing result snapshot
 Logical processing events are tracked in:
 ```sql
@@ -1223,14 +1254,22 @@ Authorization:
 
 Global taxonomy/prerequisite data contains no child PII and is client read-only.
 
-Trusted public Phase 5 functions follow repository hardening:
+Phase 5 strictly separates client-facing trusted functions from platform-only administration:
 
+### Client-Facing Trusted Phase 5 Functions
+Client-facing functions (`set_assessment_learning_mappings`, `process_learning_event`, `catch_up_unprocessed_learning`, and learning read RPCs) follow repository hardening:
 - `SECURITY DEFINER`,
 - `SET search_path = ''`,
 - fully qualified objects,
-- exact signature grants,
-- execution revoked from `PUBLIC`/`anon`,
-- explicit authorization before private replay/result data is returned.
+- exact signature grants to `authenticated`,
+- execution revoked from `PUBLIC` and `anon`,
+- explicit family/child tenant authorization before private replay/result data is accessed or returned.
+
+### Platform-Only Administration
+Global curriculum administration functions (such as catalog publication, content releases, and `promote_learning_catalog_version`) are strictly platform deployment/administration concerns:
+- `EXECUTE` is revoked from `PUBLIC`, `anon`, and `authenticated`,
+- active family adults and children have zero curriculum administration privileges,
+- callable exclusively by release migrations and trusted service-role execution.
 
 Shared Child Mode under an adult session remains UX containment, not a cryptographic sibling boundary.
 
@@ -1380,64 +1419,74 @@ At minimum implementation must prove:
 19. **Cross-version recommendation isolation:** Recommendations evaluate against the current active catalog without treating old-version mastery as active-catalog mastery.
 
 ### Mapping lifecycle & security
-13. **Cannot map while draft:** Mapping RPC rejects calls when `assessment.status = 'draft'`.
-14. **Cannot map after terminal:** Mapping RPC rejects calls when `assessment.status` is `verified` or `rejected`.
-15. **Paired child mapping denied:** Paired child identity cannot call mapping RPC.
-16. **Cross-family mapping denied:** Active adult from Family A cannot set mappings for Family B.
-17. **Direct table mutation denied:** Direct client `INSERT`, `UPDATE`, `DELETE` on `assessment_learning_mappings` are denied.
-18. **Mapping vs verification concurrency:** Concurrent mapping and verification calls serialize on assessment row; verification never observes partial mapping set.
-19. **Mapping vs rejection concurrency:** Concurrent mapping and rejection serialize safely.
+20. **Cannot map while draft:** Mapping RPC rejects calls when `assessment.status = 'draft'`.
+21. **Cannot map after terminal:** Mapping RPC rejects calls when `assessment.status` is `verified` or `rejected`.
+22. **Paired child mapping denied:** Paired child identity cannot call mapping RPC.
+23. **Cross-family mapping denied:** Active adult from Family A cannot set mappings for Family B.
+24. **Direct table mutation denied:** Direct client `INSERT`, `UPDATE`, `DELETE` on `assessment_learning_mappings` are denied.
+25. **Mapping vs verification concurrency:** Concurrent mapping and verification calls serialize on assessment row; verification never observes partial mapping set.
+26. **Mapping vs rejection concurrency:** Concurrent mapping and rejection serialize safely.
 
 ### Observation aggregation & evidence uniqueness
-20. **One effective observation per VLE/node:** Every processed VLE produces at most one effective evidence row per node.
-21. **Duplicate component key rejected:** Mapping two components with the same `component_key` on one assessment/node is rejected.
-22. **Assessment total single mapping:** `assessment_total` cannot be mapped more than once to the same node.
-23. **Component score aggregation:** Multiple component mappings for the same node aggregate deterministically by score mass: `sum(raw) / sum(max)`.
-24. **Item group aggregation:** Multiple item groups for the same node aggregate deterministically: `sum(correct) / sum(items)`.
-25. **Mixed score sources rejected:** An assessment mapping both `component_score` and `item_group` to the same node fails closed.
-26. **Insertion order invariance:** Aggregating mappings in different insertion orders produces identical evidence atoms and EWMA results.
-27. **No confidence inflation:** Split mappings produce only one effective observation and count confidence units once.
-28. **Subject fallback:** Every verified event creates exactly one Subject root evidence atom without explicit mappings.
+27. **One effective observation per VLE/node:** Every processed VLE produces at most one effective mastery observation per mapped node; multiple mappings for the same node aggregate deterministically.
+28. **Duplicate component key rejected:** Mapping two components with the same `component_key` on the same assessment is rejected.
+29. **Assessment total single mapping:** `assessment_total` cannot be mapped more than once on the same assessment.
+30. **Component score aggregation:** Multiple component mappings for the same node aggregate by score mass: `sum(raw_score) / sum(max_score)`.
+31. **Item group aggregation:** Multiple item groups for the same node aggregate by item counts: `sum(correct_count) / sum(item_count)`.
+32. **Mixed score sources rejected:** An assessment mapping both `component_score` and `item_group` to the same node is rejected.
+33. **Insertion order invariance:** Aggregating mappings in different insertion sequences produces identical aggregate scores and identical EWMA inputs.
+34. **No confidence inflation:** Split mappings produce only one effective observation and contribute one observation to confidence count.
+35. **Subject fallback:** Every verified event creates exactly one Subject root evidence atom even if detailed mappings are omitted.
 
 ### Effective chronology & future timestamp bounds
-29. **Effective occurred calculation:** Server derives `effective_occurred_at = least(occurred_at, verified_at)`.
-30. **Future timestamp cannot extend confidence:** Far-future raw `occurred_at` is clamped to `verified_at` and bounded by `as_of`.
-31. **Future timestamp cannot dominate recency:** Freshness elapsed time cannot be negative.
+36. **Effective occurred calculation:** Server derives `effective_occurred_at = least(occurred_at, verified_at)`.
+37. **Future timestamp cannot extend confidence:** Far-future raw `occurred_at` is clamped to `verified_at` and bounded by `as_of`.
+38. **Future timestamp cannot dominate recency:** Freshness elapsed time cannot be negative.
 
 ### Recovery diagnostic provenance & recency
-32. **Diagnostic counts preserved:** Effective evidence rows snapshot `item_count` and `correct_count` for `item_group`.
-33. **Item group recovery raise:** `performance_pct < 70 AND item_count >= 3 AND incorrect_count >= 2` raises `review_suggested`.
-34. **Component score recovery raise:** `performance_pct <= 50` raises `review_suggested`.
-35. **Assessment total cannot raise skill recovery:** Whole-test score never creates Skill recovery.
-36. **Recovery expiry at 30 days:** Unresolved recovery signal older than 30 days decays to `none`.
-37. **Allowed source clear:** A later observation with `performance_pct >= 70` from `component_score` or `item_group` clears `review_suggested`.
-38. **Broad evidence cannot clear skill recovery:** An `assessment_total` observation never clears a Skill recovery signal.
+39. **Diagnostic counts preserved:** Effective evidence rows snapshot `item_count` and `correct_count` for `item_group`.
+40. **Item group recovery raise:** `performance_pct < 70 AND item_count >= 3 AND incorrect_count >= 2` raises `review_suggested`.
+41. **Component score recovery raise:** `performance_pct <= 50` raises `review_suggested`.
+42. **Assessment total cannot raise skill recovery:** Whole-test score never creates Skill recovery.
+43. **Recovery expiry at 30 days:** Unresolved recovery signal older than 30 days decays to `none`.
+44. **Allowed source clear:** A later observation with `performance_pct >= 70` from `component_score` or `item_group` clears `review_suggested`.
+45. **Broad evidence cannot clear skill recovery:** An `assessment_total` observation never clears a Skill recovery signal.
 
 ### Time determinism & boundaries
-39. **Single `as_of` clock:** Read model evaluation captures `v_as_of := transaction_timestamp();` and passes it across confidence, freshness, and recovery.
-40. **Boundary parity:** 14-day, 30-day, 45-day, and 60-day boundary fixtures yield identical classifications in Dart and PostgreSQL.
-40a. **Canonical chronology source tie-break:** Two VLEs with identical `(effective_occurred_at, verified_at)` produce identical EWMA ordering and mastery projections regardless of evidence UUID assignment or insertion sequence, because ordering is tied to `verified_learning_event_id ASC`.
+46. **Single `as_of` clock:** Read model evaluation captures `v_as_of := transaction_timestamp();` and passes it across confidence, freshness, and recovery.
+47. **Boundary parity:** 14-day, 30-day, 45-day, and 60-day boundary fixtures yield identical classifications in Dart and PostgreSQL.
+48. **Canonical chronology source tie-break:** Two VLEs with identical `(effective_occurred_at, verified_at)` produce identical EWMA ordering and mastery projections regardless of evidence UUID assignment or insertion sequence, because ordering is tied to `verified_learning_event_id ASC`.
 
-### Idempotency & concurrency
-41. **Same command replay:** Calling `process_learning_event` with the same `command_id` and VLE replays committed result snapshot from immutable `learning_processing_events` without duplicating evidence or revisions.
-42. **Concurrent same-command replay:** Two concurrent calls with identical `command_id` and VLE serialize on lock, recheck receipts, and return clean replays without primary-key collisions.
-42a. **Replay invariant to subsequent VLEs:** Replaying `process_learning_event` for VLE 1 after VLE 2 has altered `child_mastery_states` returns the identical committed result snapshot from `learning_processing_events` without reflecting VLE 2's mutations.
-43. **New command on processed VLE:** Calling with a new `command_id` on an already-processed VLE binds a new command receipt pointing `resource_id = verified_learning_event_id` and returns the committed result snapshot without duplicate evidence or revisions.
-44. **Reused command on different VLE:** Calling with an existing `command_id` targeting a different VLE is rejected.
-45. **Concurrent same-VLE processing:** Two concurrent calls produce one logical processing event and one evidence set.
-46. **Concurrent different-VLE processing:** Two concurrent VLEs affecting the same previously unseen child/node serialize on child+node locks and converge to identical canonical mastery projection.
-47. **Late older evidence rebuild:** Late-arriving older evidence rebuilds projection to canonical chronology order.
-48. **Catch-up idempotency & authorization:** `catch_up_unprocessed_learning` requires active family adult authorization; paired child identity is denied (`42501`); cross-family adult is denied (`42501`); processes unprocessed VLEs anchored on `unique(verified_learning_event_id)`; re-running catch-up is a safe no-op.
-49. **Concurrent catch-up and manual process:** Safe convergence without double evidence or revision duplication.
-50. **Two concurrent catch-up workers:** Safe convergence without double evidence or revision duplication.
+### Idempotency, concurrency & command receipts
+49. **Command receipts migration preserves Phase 1–4 operations:** After the additive migration, existing operations `create_draft`, `submit`, `verify`, `reject`, `process_growth`, `redeem_reward`, `fulfill_reward`, `cancel_reward`, and `spin_wheel` remain valid and accepted.
+50. **Command receipts migration accepts `process_learning`:** Receipts with `operation = 'process_learning'` are successfully inserted and validated.
+51. **Command receipts rejects unknown operation:** Attempting to insert a receipt with an unknown operation (e.g. `'unknown_op'`) fails the CHECK constraint.
+52. **Existing command receipt rows preserved:** Pre-existing command receipts from Phases 1–4 survive the constraint replacement migration unmodified.
+53. **Same command replay:** Calling `process_learning_event` with the same `command_id` and VLE replays committed result snapshot from immutable `learning_processing_events` without duplicating evidence or revisions.
+54. **Concurrent same-command replay:** Two concurrent calls with identical `command_id` and VLE serialize on lock, recheck receipts, and return clean replays without primary-key collisions.
+55. **Replay invariant to subsequent VLEs:** Replaying `process_learning_event` for VLE 1 after VLE 2 has altered `child_mastery_states` returns the identical committed result snapshot from `learning_processing_events` without reflecting VLE 2's mutations.
+56. **New command on processed VLE:** Calling with a new `command_id` on an already-processed VLE binds a new command receipt pointing `resource_id = verified_learning_event_id` and returns the committed result snapshot without duplicate evidence or revisions.
+57. **Reused command on different VLE:** Calling with an existing `command_id` targeting a different VLE is rejected.
+58. **Concurrent same-VLE processing:** Two concurrent calls produce one logical processing event and one evidence set.
+59. **Concurrent different-VLE processing:** Two concurrent VLEs affecting the same previously unseen child/node serialize on child+node locks and converge to identical canonical mastery projection.
+60. **Late older evidence rebuild:** Late-arriving older evidence rebuilds projection to canonical chronology order.
+61. **Catch-up idempotency & authorization:** `catch_up_unprocessed_learning` requires active family adult authorization; paired child identity is denied (`42501`); cross-family adult is denied (`42501`); processes unprocessed VLEs anchored on `unique(verified_learning_event_id)`; re-running catch-up is a safe no-op.
+62. **Concurrent catch-up and manual process:** Safe convergence without double evidence or revision duplication.
+63. **Two concurrent catch-up workers:** Safe convergence without double evidence or revision duplication.
 
-### Security, isolation & audit immutability
-51. **Cross-family read denied:** Active adult from Family A cannot read child learning state in Family B.
-52. **Paired child sibling isolation:** Paired child A cannot read learning state for sibling child B.
-53. **Direct client writes denied:** Client cannot INSERT/UPDATE/DELETE `learning_nodes`, `learning_prerequisites`, `learning_evidence_events`, `mastery_state_revisions`, `child_mastery_states`, or `learning_processing_events`.
-54. **Audit tables append-only:** UPDATE and DELETE are rejected on `learning_evidence_events`, `mastery_state_revisions`, and `learning_processing_events`.
-55. **Grade snapshot provenance:** Historical evidence retains immutable `grade_level_snapshot` after profile grade changes; missing current profile grade fails closed for grade-scoped Unlock/Explore.
-56. **Reward/economy invariance:** Mutating XP, RP balances, reward tiers, redemptions, or Wheel outcomes produces zero change in mastery scores, confidence, freshness, recovery signals, or next-challenge candidate rankings.
+### Security, isolation, audit immutability & platform administration
+64. **Cross-family read denied:** Active adult from Family A cannot read child learning state in Family B.
+65. **Paired child sibling isolation:** Paired child A cannot read learning state for sibling child B.
+66. **Direct client writes denied:** Client cannot INSERT/UPDATE/DELETE `learning_nodes`, `learning_prerequisites`, `learning_evidence_events`, `mastery_state_revisions`, `child_mastery_states`, or `learning_processing_events`.
+67. **Active family adult catalog promotion denied:** Active family adult calling `promote_learning_catalog_version` is denied (`EXECUTE` permission denied).
+68. **Paired child catalog promotion denied:** Paired child calling `promote_learning_catalog_version` is denied (`EXECUTE` permission denied).
+69. **Anonymous catalog promotion denied:** Anon calling `promote_learning_catalog_version` is denied (`EXECUTE` permission denied).
+70. **Normal authenticated user draft mutation denied:** Normal authenticated user cannot `INSERT`, `UPDATE`, or `DELETE` draft catalog versions or draft nodes/prerequisites.
+71. **Platform-controlled promotion succeeds:** Privileged service-role execution successfully promotes a valid publishable draft catalog to active.
+72. **Invalid platform promotion rolls back:** Candidate draft missing canonical roots, containing cycles, or lacking draft status fails validation and rolls back atomically, preserving existing active catalog.
+73. **Audit tables append-only:** UPDATE and DELETE are rejected on `learning_evidence_events`, `mastery_state_revisions`, and `learning_processing_events`.
+74. **Grade snapshot provenance:** Historical evidence retains immutable `grade_level_snapshot` after profile grade changes; missing current profile grade fails closed for grade-scoped Unlock/Explore.
+75. **Reward/economy invariance:** Mutating XP, RP balances, reward tiers, redemptions, or Wheel outcomes produces zero change in mastery scores, confidence, freshness, recovery signals, or next-challenge candidate rankings.
 
 ---
 
@@ -1505,21 +1554,36 @@ This design PR creates **no migration**.
 
 After approval, Phase 5 implementation is additive. Frozen Phase 1–4 migration files are never rewritten.
 
-Expected semantic database areas:
+Phase 5.1 migration work includes at minimum:
 
 ```text
-learning_catalog_versions
-learning_nodes
-learning_prerequisites
-assessment_learning_mappings
-learning_evidence_events
-mastery_state_revisions
-child_mastery_states
-learning_processing_events
-Phase 5 RPCs / RLS / grants / triggers / indexes
+ALTER assessments
+  + learning_catalog_version provenance (DDL-safe DEFAULT 'pilot-v0.1' NOT NULL, then DROP DEFAULT, Before Insert trigger)
+
+ALTER verified_learning_events
+  + learning_catalog_version provenance (DDL-safe DEFAULT 'pilot-v0.1' NOT NULL, then DROP DEFAULT, Before Insert trigger)
+
+ALTER command_receipts
+  operation CHECK constraint replaced to add 'process_learning' while preserving all 9 frozen operations
+
+CREATE learning_catalog_versions
+CREATE learning_nodes
+CREATE assessment_learning_mappings
+CREATE learning_evidence_events
+CREATE mastery_state_revisions
+CREATE child_mastery_states
+CREATE learning_processing_events
+Phase 5.1 functions / triggers / RLS / grants / indexes
 ```
 
-Exact physical names may be refined during implementation review without changing the frozen semantic boundaries.
+Phase 5.2 includes:
+
+```text
+CREATE learning_prerequisites
+Freshness / Recovery / recommendation functions and read models
+```
+
+Exact physical migration files and names may be refined during implementation review without changing these frozen semantic boundaries.
 
 ---
 

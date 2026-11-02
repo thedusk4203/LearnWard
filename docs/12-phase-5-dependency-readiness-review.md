@@ -154,13 +154,21 @@ Furthermore, catalog-version provenance and lifecycle must be fully defined:
   3. Execute `ALTER TABLE ... ALTER COLUMN learning_catalog_version DROP DEFAULT` on both tables so steady-state writes cannot silently fall back to an obsolete default.
   4. Install a `BEFORE INSERT` trigger on `assessments` that snapshots the active registry version into `NEW.learning_catalog_version` (ignoring caller input and raising SQLSTATE `LW501` if no active catalog exists).
   5. Install a `BEFORE INSERT` trigger on `verified_learning_events` that copies `NEW.learning_catalog_version` directly from the parent assessment snapshot.
-- **Catalog registry lifecycle & atomic promotion contract:** A dedicated catalog version registry (`learning_catalog_versions`) tracks version identifiers, lifecycle state (`draft | active | retired`), activation timestamp, and creation timestamp. Promoting a new catalog version to `active` executes a trusted serialized promotion routine that:
+- **Catalog registry lifecycle, atomic promotion contract & platform-only authorization:** A dedicated catalog version registry (`learning_catalog_versions`) tracks version identifiers, lifecycle state (`draft | active | retired`), activation timestamp, and creation timestamp. Promoting a new catalog version to `active` is strictly a **platform administration / deployment concern**, NOT an application tenant capability. Family adults, shared-child sessions, and paired-child identities have zero catalog administration privileges. Family membership is irrelevant to global curriculum administration.
+  If an internal promotion routine (`promote_learning_catalog_version(p_new_version text)`) is provided in SQL:
+  ```sql
+  REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM PUBLIC;
+  REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM anon;
+  REVOKE EXECUTE ON FUNCTION public.promote_learning_catalog_version(text) FROM authenticated;
+  ```
+  Only trusted platform/service-role execution or release migrations may invoke it.
+  When executed, the trusted promotion routine:
   1. Serializes promotion attempts via coordination locking;
   2. Locks and validates that `p_new_version` exists and is strictly `draft` before retiring current active catalog;
   3. Validates the candidate catalog is publishable (all five canonical Subject roots exist, hierarchy is valid, prerequisite graph is valid and acyclic);
   4. Retires the previous active version (`status = 'retired'`) and activates the candidate (`status = 'active'`, `activated_at = clock_timestamp()`) atomically;
   5. Asserts exactly one active catalog exists before commit; failure raises SQLSTATE `LW501` ('No active learning catalog'), rolling back the transaction.
-- **Catalog content immutability vs registry lifecycle metadata:** Published **catalog content (nodes and prerequisite edges)** in active or retired versions is completely immutable. In-place node mutations, deactivations (`is_active = false`), and reparenting are strictly forbidden and rejected. Registry lifecycle metadata transitions strictly `draft -> active -> retired` through the trusted promotion routine; `retired` is terminal.
+- **Draft catalog authoring authority & published content immutability:** Draft catalogs and their content (`draft learning_catalog_versions`, `learning_nodes`, `learning_prerequisites`) are platform-owned and authored solely via migrations, controlled seed/content-release tooling, or privileged platform/service-role administrative paths. They are never family-created data, and direct client writes (`INSERT`, `UPDATE`, `DELETE`) remain denied. Once a version becomes `active`, its published **catalog content (nodes and prerequisite edges)** is completely immutable; in-place node mutations, deactivations (`is_active = false`), and reparenting are strictly forbidden and rejected. Registry lifecycle metadata transitions strictly `draft -> active -> retired` through the trusted promotion routine; `retired` is terminal.
 - **Complete pilot catalog bootstrap:** The initial `pilot-v0.1` catalog MUST contain exactly one Subject root node for every frozen canonical subject key (`math`, `english`, `literature`, `science`, `other`). Missing subject roots would cause unmapped VLE fallback processing to fail closed.
 - **Cross-version recommendation semantics & scoped authoring:** Historical evidence and mastery remain permanently attached to their original catalog nodes and version. The recommendation engine evaluates candidates against the current active catalog. Phase 5 v0.1 does not perform automatic cross-version mastery migration; cross-version transfer requires a future explicit crosswalk policy. Furthermore, an assessment authored under `pilot-v0.1` that is in `pending_review` when `pilot-v0.2` becomes active remains fully map-able and verifiable against `pilot-v0.1` via catalog version-scoped reads.
 - Exactly one Subject root node must exist per `(catalog_version, subject_key)`.
@@ -266,7 +274,30 @@ Detailed skill mapping can create unacceptable parent admin work. Phase 5 must d
 ### Gap I — Concurrent command replay race and catch-up receipt semantics
 
 The relationship between public RPC idempotency (`command_receipts`), logical processing events (`learning_processing_events`), and bulk catch-up needs explicit definition:
-- Explicit operation `process_learning` with `resource_id = verified_learning_event_id`.
+- **Additive `command_receipts` migration for `process_learning`:** Frozen Phase 4.2 currently constrains `command_receipts.operation` to:
+  ```text
+  create_draft, submit, verify, reject, process_growth, redeem_reward, fulfill_reward, cancel_reward, spin_wheel
+  ```
+  Phase 5 design requires inserting receipts with:
+  ```text
+  operation = 'process_learning'
+  resource_id = verified_learning_event_id
+  ```
+  Therefore, Phase 5 implementation MUST explicitly include an additive migration that replaces the existing CHECK constraint (`command_receipts_operation_check`), preserving all 9 frozen Phase 1–4 operations while adding `process_learning`:
+  ```sql
+  ALTER TABLE public.command_receipts
+    DROP CONSTRAINT IF EXISTS command_receipts_operation_check,
+    ADD CONSTRAINT command_receipts_operation_check
+      CHECK (operation IN (
+        'create_draft', 'submit', 'verify', 'reject', 'process_growth',
+        'redeem_reward', 'fulfill_reward', 'cancel_reward', 'spin_wheel',
+        'process_learning'
+      ));
+  ```
+  Canonical future operation set:
+  `create_draft`, `submit`, `verify`, `reject`, `process_growth`, `redeem_reward`, `fulfill_reward`, `cancel_reward`, `spin_wheel`, `process_learning`.
+  Frozen Phase 1–4 migrations are never rewritten.
+  Crucially, **`process_learning_event` cannot ship until `command_receipts.operation` accepts `process_learning`**.
 - **Post-lock re-check & immutable replay result snapshot:**
   - `learning_processing_events` preserves an immutable processing result summary (`id`, `verified_learning_event_id UNIQUE`, `assessment_id`, `child_id`, `family_id`, `processed_at`, `evidence_count`, `affected_node_ids`, `status = 'processed'`), with composite foreign key `(child_id, family_id) REFERENCES public.child_profiles(id, family_id)`.
   - `affected_node_ids` is stored in canonical sorted node-ID order (ascending) to guarantee that historical replay responses are byte- and logically stable.
@@ -282,7 +313,7 @@ The relationship between public RPC idempotency (`command_receipts`), logical pr
 The accompanying detailed design resolves these as follows:
 
 1. **Verified-only authoritative inputs.** Phase 5 v0.1 processes `verified_learning_events`; pre-verification photos/self-reports do not alter authoritative mastery.
-2. **Platform-owned versioned taxonomy with immutable catalog provenance & registry.** The server snapshots the active catalog version at assessment creation into `assessments.learning_catalog_version` via `BEFORE INSERT` trigger, copied into `verified_learning_events.learning_catalog_version` upon verification via `BEFORE INSERT` trigger. A dedicated catalog version registry (`learning_catalog_versions`) ensures exactly one server-controlled active authoring catalog version exists at any time via a trusted promotion procedure that validates publishability and asserts exactly one active catalog before commit (failing closed with SQLSTATE `LW501`). Legacy records are migrated to `pilot-v0.1` via additive DDL (`DEFAULT 'pilot-v0.1' NOT NULL` then `DROP DEFAULT`) without row updates or disabling frozen Phase 2 immutability triggers (`LW102`, `LW103`). `pilot-v0.1` contains exactly one Subject root for every canonical subject key (`math`, `english`, `literature`, `science`, `other`). Published catalog content is completely immutable; registry lifecycle metadata transitions strictly `draft -> active -> retired`. `pending_review` assessments remain map-able to their authored catalog version even after a newer version is activated. Prerequisite edges enforce matching catalog version and same subject key via composite FKs to `learning_nodes(catalog_version, subject_key, id)`, with Skill-only endpoints and DAG acyclicity enforced by the promotion gate.
+2. **Platform-owned versioned taxonomy, immutable catalog provenance & platform-only promotion.** The server snapshots the active catalog version at assessment creation into `assessments.learning_catalog_version` via `BEFORE INSERT` trigger, copied into `verified_learning_events.learning_catalog_version` upon verification via `BEFORE INSERT` trigger. A dedicated catalog version registry (`learning_catalog_versions`) ensures exactly one server-controlled active authoring catalog version exists at any time via a trusted promotion procedure that validates publishability and asserts exactly one active catalog before commit (failing closed with SQLSTATE `LW501`). Catalog authoring and promotion is strictly a platform-level deployment concern; family adults are tenant administrators, not curriculum administrators, and execution of promotion routines is revoked from `PUBLIC`, `anon`, and `authenticated`. Draft catalogs are authored solely via platform migrations or service-role tooling. Legacy records are migrated to `pilot-v0.1` via additive DDL (`DEFAULT 'pilot-v0.1' NOT NULL` then `DROP DEFAULT`) without row updates or disabling frozen Phase 2 immutability triggers (`LW102`, `LW103`). `pilot-v0.1` contains exactly one Subject root for every canonical subject key (`math`, `english`, `literature`, `science`, `other`). Published catalog content is completely immutable; registry lifecycle metadata transitions strictly `draft -> active -> retired`. `pending_review` assessments remain map-able to their authored catalog version even after a newer version is activated. Prerequisite edges enforce matching catalog version and same subject key via composite FKs to `learning_nodes(catalog_version, subject_key, id)`, with Skill-only endpoints and DAG acyclicity enforced by the promotion gate.
 3. **One effective observation per VLE/node with deterministic aggregation.** At most one effective mastery observation exists per `(verified_learning_event_id, learning_node_id)`. Multiple mappings for the same node aggregate deterministically (by score mass for component scores: `sum(raw) / sum(max)`, or by counts for item groups: `sum(correct) / sum(items)`). Within one assessment/node, duplicate component identities (`component_key`) are rejected, and mixing score source types is disallowed. Confidence counts the single effective observation once.
 4. **No automatic descendant propagation.** Evidence updates only the node whose granularity is actually supported. Subject fallback is automatic; detailed mappings are optional.
 5. **Pending-review-only mapping lifecycle & granularity.** Authoritative detailed mappings may be set or replaced ONLY while `assessment.status = 'pending_review'`. Draft editing never leaves dangling mappings. Direct table mutations are revoked; mappings mutate strictly via trusted adult RPC serialized against assessment verification/rejection. A whole-test score cannot be relabeled as one specific skill score.
@@ -295,7 +326,7 @@ The accompanying detailed design resolves these as follows:
 12. **Recovery v0.1 is a deterministic signal with 30-day recency window.** `review_suggested` is raised for Topic/Skill from diagnostic evidence counts (`item_count >= 3 AND incorrect_count >= 2` for item groups; `performance_pct <= 50` for component scores). Broad `assessment_total` cannot raise or clear Skill recovery. Signal expires to `none` after 30 days without confirming weakness. A later observation with `performance_pct >= 70` clears it immediately.
 13. **Recommendations are read-only candidates.** Up to three choices are generated deterministically from learning state, graph prerequisites, and current grade context.
 14. **Reward separation is structural and testable.** Mastery/recommendation inputs contain no XP/RP/reward fields.
-15. **Strict idempotency, post-lock recheck, and catch-up contract.** `command_receipts.operation = process_learning` with `resource_id = verified_learning_event_id`. Inside the VLE lock, re-reading receipts and processing events prevents concurrent same-command replay collisions. Same-command replay (and new-command calls on already-processed VLEs) returns the committed result snapshot from immutable `learning_processing_events` without recomputing from mutable `child_mastery_states`. Reusing a command ID for a different VLE is rejected. Bulk catch-up `catch_up_unprocessed_learning(family_id)` requires active family adult authorization (paired child and cross-family denied) and executes internal trusted processing anchored on `unique(verified_learning_event_id)` without forging synthetic public command IDs.
+15. **Strict idempotency, post-lock recheck, and catch-up contract.** `command_receipts.operation = process_learning` with `resource_id = verified_learning_event_id`. Phase 5 implementation includes an additive migration replacing `command_receipts_operation_check` to add `process_learning` alongside all 9 frozen Phase 1–4 operations; `process_learning_event` cannot ship until this migration is applied. Inside the VLE lock, re-reading receipts and processing events prevents concurrent same-command replay collisions. Same-command replay (and new-command calls on already-processed VLEs) returns the committed result snapshot from immutable `learning_processing_events` without recomputing from mutable `child_mastery_states`. Reusing a command ID for a different VLE is rejected. Bulk catch-up `catch_up_unprocessed_learning(family_id)` requires active family adult authorization (paired child and cross-family denied) and executes internal trusted processing anchored on `unique(verified_learning_event_id)` without forging synthetic public command IDs.
 
 ---
 
@@ -306,6 +337,8 @@ The accompanying detailed design resolves these as follows:
 | Legacy assessments predate catalog version provenance | Critical | Additive DDL-safe backfill (`DEFAULT 'pilot-v0.1' NOT NULL` then `DROP DEFAULT`), steady-state triggers for assessment/VLE provenance, preserving frozen Phase 2 immutability triggers (`LW102`, `LW103`) |
 | Incomplete pilot catalog bootstrap | Critical | `pilot-v0.1` must contain exactly one Subject root for every canonical subject (`math`, `english`, `literature`, `science`, `other`) |
 | Catalog promotion leaves zero active versions | Critical | Trusted promotion routine locks, validates draft, atomically transitions `active -> retired` and `draft -> active`, and asserts exactly one active row before commit (SQLSTATE `LW501`) |
+| Authenticated users or family adults promote or mutate global catalog | Critical | Platform-only catalog authorization: `EXECUTE` revoked from `PUBLIC`, `anon`, and `authenticated`; family adults are tenant admins, not curriculum admins |
+| Command receipt rejects `process_learning` | High | Additive Phase 5 migration replaces `command_receipts_operation_check` to add `process_learning` while preserving all 9 frozen operations |
 | Prerequisite edges cross catalog versions or subjects | High | `learning_prerequisites` carries `subject_key` with composite FKs to `learning_nodes(catalog_version, subject_key, id)`; Skill-only and DAG verified at promotion gate |
 | Replay recomputes from mutated current projection | High | Replay returns immutable result snapshot from `learning_processing_events` (with canonical sorted node IDs), independent of subsequent `child_mastery_states` updates |
 | Catch-up called by unauthorized user | High | `catch_up_unprocessed_learning` authenticates and requires active family adult authorization; paired child and cross-family calls denied |
@@ -337,8 +370,13 @@ Implement Phase 5 in two bounded slices after design approval.
 
 ### Phase 5.1 — Knowledge + Mastery Foundation
 
+- additive schema modifications to existing tables:
+  - `ALTER assessments` (+ `learning_catalog_version` provenance, triggers),
+  - `ALTER verified_learning_events` (+ `learning_catalog_version` provenance, triggers),
+  - `ALTER command_receipts` (replace `command_receipts_operation_check` to accept `process_learning` alongside all 9 frozen Phase 1–4 operations),
 - catalog version registry (`learning_catalog_versions`),
 - deterministic legacy catalog migration (`pilot-v0.1`),
+- platform-only draft catalog authoring and trusted promotion routine (`EXECUTE` revoked from `PUBLIC`, `anon`, `authenticated`),
 - versioned learning-node hierarchy,
 - assessment-to-node mappings (`pending_review` only),
 - immutable learning evidence atoms with diagnostic facts,
