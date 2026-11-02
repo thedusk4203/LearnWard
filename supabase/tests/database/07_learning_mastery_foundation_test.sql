@@ -453,18 +453,18 @@ select throws_ok(
   'Mapping Math assessment to English node is rejected with LW004'
 );
 
--- Test 34: Duplicate component_key on same assessment is rejected
+-- Test 34: Duplicate component_key on same assessment node is rejected (LW004)
 select throws_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
        '[
          {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "component_score", "component_key": "q1", "raw_score": 5, "max_score": 10},
-         {"learning_node_id": "b0000003-0000-0000-0000-000000000002", "score_source": "component_score", "component_key": "q1", "raw_score": 8, "max_score": 10}
+         {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "component_score", "component_key": "q1", "raw_score": 8, "max_score": 10}
         ]'::jsonb
      ) $$,
-  '23505',
+  'LW004',
   NULL,
-  'Duplicate component_key on same assessment is rejected'
+  'Duplicate component_key on same assessment node is rejected with LW004'
 );
 
 -- Test 35: Multiple assessment_total mappings rejected (LW004)

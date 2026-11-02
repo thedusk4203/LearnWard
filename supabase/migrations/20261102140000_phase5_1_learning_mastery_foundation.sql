@@ -547,6 +547,10 @@ create table if not exists public.assessment_learning_mappings (
   )
 );
 
+create unique index if not exists uq_assessment_learning_mappings_node_comp
+  on public.assessment_learning_mappings (assessment_id, learning_node_id, component_key)
+  where component_key is not null;
+
 alter table public.assessment_learning_mappings enable row level security;
 
 -- RLS: active family adults and child devices can read mappings for their family
@@ -1265,8 +1269,8 @@ $$;
 -- ---------------------------------------------------------------------------
 
 create or replace function public.process_learning_event(
-  p_verified_event_id uuid,
-  p_command_id uuid
+  p_command_id uuid,
+  p_verified_event_id uuid
 )
 returns jsonb
 language plpgsql
