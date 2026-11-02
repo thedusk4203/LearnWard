@@ -20,6 +20,7 @@ void main() {
       final getMappings = GetAssessmentLearningMappings(repository);
 
       final mapping = AssessmentLearningMapping(
+        id: '00000000-0000-0000-0000-000000000099',
         familyId: familyId,
         childId: childId,
         assessmentId: assessmentId,
@@ -28,6 +29,9 @@ void main() {
         componentKey: 'q1',
         componentRawScore: 9,
         componentMaxScore: 10,
+        confirmedByUserId: '00000000-0000-0000-0000-000000000001',
+        createdAt: DateTime.utc(2026, 11, 2, 10, 0, 0),
+        updatedAt: DateTime.utc(2026, 11, 2, 10, 0, 0),
       );
 
       final result = await setMappings(

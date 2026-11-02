@@ -51,23 +51,51 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_in_promo boolean;
+  v_in_boot boolean;
 begin
+  v_in_promo := (coalesce(current_setting('learnward.in_catalog_promotion', true), 'false') = 'true');
+  v_in_boot := (coalesce(current_setting('learnward.bootstrap', true), 'false') = 'true');
+
+  if tg_op = 'INSERT' then
+    if new.status != 'draft' and not v_in_boot then
+      raise exception 'New catalog versions must start in draft status' using errcode = 'LW102';
+    end if;
+    return new;
+  end if;
+
   if tg_op = 'UPDATE' then
     if new.version != old.version then
       raise exception 'Catalog version name is immutable' using errcode = 'LW102';
     end if;
 
-    if session_user not in ('postgres', 'supabase_admin') then
-      if old.status = 'retired' and new.status != 'retired' then
-        raise exception 'Retired catalog cannot be modified or reactivated' using errcode = 'LW102';
-      end if;
-
-      if old.status = 'active' and new.status not in ('active', 'retired') then
-        raise exception 'Active catalog cannot revert to draft' using errcode = 'LW102';
-      end if;
+    if old.status = 'retired' then
+      raise exception 'Retired catalog cannot be modified or reactivated' using errcode = 'LW102';
     end if;
 
-    return new;
+    if old.status = 'active' and new.status = 'retired' then
+      if not v_in_promo then
+        raise exception 'Direct catalog retirement is not permitted; use promote_learning_catalog_version' using errcode = 'LW102';
+      end if;
+      return new;
+    end if;
+
+    if old.status = 'draft' and new.status = 'active' then
+      if not v_in_promo and not v_in_boot then
+        raise exception 'Direct catalog activation is not permitted; use promote_learning_catalog_version' using errcode = 'LW102';
+      end if;
+      return new;
+    end if;
+
+    if old.status = new.status then
+      if old.status in ('active', 'retired') and not v_in_promo then
+        raise exception 'Published catalog versions are immutable' using errcode = 'LW102';
+      end if;
+      return new;
+    end if;
+
+    raise exception 'Invalid catalog lifecycle status transition: % -> %', old.status, new.status using errcode = 'LW102';
   end if;
 
   if tg_op = 'DELETE' then
@@ -84,7 +112,7 @@ $$;
 
 drop trigger if exists trg_learning_catalog_versions_mutation on public.learning_catalog_versions;
 create trigger trg_learning_catalog_versions_mutation
-  before update or delete on public.learning_catalog_versions
+  before insert or update or delete on public.learning_catalog_versions
   for each row
   execute function private.validate_learning_catalog_version_mutation();
 
@@ -343,6 +371,9 @@ begin
     raise exception 'Catalog version parameter is required' using errcode = '22000';
   end if;
 
+  -- Set transaction-local promotion context
+  perform set_config('learnward.in_catalog_promotion', 'true', true);
+
   -- 1. Coordination locking on the catalog registry
   perform 1 from public.learning_catalog_versions for update;
 
@@ -430,6 +461,9 @@ begin
   if v_active_count != 1 then
     raise exception 'No active learning catalog' using errcode = 'LW501';
   end if;
+
+  -- Reset promotion context
+  perform set_config('learnward.in_catalog_promotion', 'false', true);
 
   return jsonb_build_object(
     'status', 'success',
@@ -575,21 +609,20 @@ security definer
 set search_path = ''
 as $$
 declare
+  v_found boolean;
   v_assessment_version text;
 begin
-  select learning_catalog_version into v_assessment_version
+  select true, learning_catalog_version
+  into v_found, v_assessment_version
   from public.assessments
   where id = new.assessment_id;
 
-  if v_assessment_version is null then
-    -- Fallback to active if assessment not found
-    select version into v_assessment_version
-    from public.learning_catalog_versions
-    where status = 'active';
+  if not coalesce(v_found, false) then
+    raise exception 'Assessment % not found', new.assessment_id using errcode = 'P0002';
   end if;
 
   if v_assessment_version is null then
-    raise exception 'No active learning catalog' using errcode = 'LW501';
+    raise exception 'Assessment is missing catalog snapshot' using errcode = 'LW501';
   end if;
 
   new.learning_catalog_version := v_assessment_version;
@@ -624,16 +657,37 @@ create table if not exists public.assessment_learning_mappings (
   updated_at timestamptz not null default clock_timestamp(),
   foreign key (child_id, family_id) references public.child_profiles(id, family_id),
   constraint uq_assessment_learning_mappings unique (assessment_id, learning_node_id, component_key),
-  constraint chk_mapping_component check (
-    score_source != 'component_score' or
-    (trim(component_key) != '' and component_raw_score is not null and component_raw_score >= 0 and component_max_score is not null and component_max_score > 0 and component_raw_score <= component_max_score)
-  ),
-  constraint chk_mapping_item_group check (
-    score_source != 'item_group' or
-    (trim(component_key) != '' and item_count is not null and correct_count is not null and correct_count <= item_count)
-  ),
-  constraint chk_mapping_assessment_total check (
-    score_source != 'assessment_total' or component_key = 'assessment_total'
+  constraint chk_assessment_learning_mappings_score_source check (
+    (
+      score_source = 'assessment_total'
+      and component_key = 'assessment_total'
+      and component_raw_score is null
+      and component_max_score is null
+      and item_count is null
+      and correct_count is null
+    ) or (
+      score_source = 'component_score'
+      and component_key <> 'assessment_total'
+      and trim(component_key) <> ''
+      and component_raw_score is not null
+      and component_raw_score >= 0
+      and component_max_score is not null
+      and component_max_score > 0
+      and component_raw_score <= component_max_score
+      and item_count is null
+      and correct_count is null
+    ) or (
+      score_source = 'item_group'
+      and component_key <> 'assessment_total'
+      and trim(component_key) <> ''
+      and item_count is not null
+      and item_count > 0
+      and correct_count is not null
+      and correct_count >= 0
+      and correct_count <= item_count
+      and component_raw_score is null
+      and component_max_score is null
+    )
   )
 );
 
@@ -682,7 +736,6 @@ declare
   v_correct integer;
   v_node_sources jsonb := '{}'::jsonb;
   v_comp_keys jsonb := '{}'::jsonb;
-  v_total_mapped boolean := false;
   v_result jsonb := '[]'::jsonb;
 begin
   if p_assessment_id is null then
@@ -756,14 +809,6 @@ begin
         raise exception 'assessment_total cannot be mapped to a Skill node' using errcode = 'LW004';
       end if;
 
-      -- Invariant: at most one assessment_total mapping per assessment
-      if v_score_source = 'assessment_total' then
-        if v_total_mapped then
-          raise exception 'At most one assessment_total mapping allowed per assessment' using errcode = 'LW004';
-        end if;
-        v_total_mapped := true;
-      end if;
-
       -- Invariant: no mixed score sources for the same node
       if v_node_sources ? (v_node.id::text) then
         if (v_node_sources ->> (v_node.id::text)) != v_score_source then
@@ -785,10 +830,19 @@ begin
           raise exception 'assessment_total component_key must be assessment_total' using errcode = 'LW004';
         end if;
         v_comp_key := 'assessment_total';
+        v_raw := null;
+        v_max := null;
+        v_items := null;
+        v_correct := null;
+
+        if v_comp_keys ? (v_node.id::text || ':' || v_comp_key) then
+          raise exception 'Duplicate component_key % for node %', v_comp_key, v_node.id using errcode = 'LW004';
+        end if;
+        v_comp_keys := jsonb_set(v_comp_keys, array[v_node.id::text || ':' || v_comp_key], 'true'::jsonb);
       elsif v_score_source = 'component_score' then
         v_comp_key := trim(coalesce(v_comp_key, ''));
-        if v_comp_key = '' then
-          raise exception 'component_key is required for component_score' using errcode = 'LW004';
+        if v_comp_key = '' or v_comp_key = 'assessment_total' then
+          raise exception 'component_key is required and cannot be assessment_total for component_score' using errcode = 'LW004';
         end if;
         -- Check component_key uniqueness per assessment/node
         if v_comp_keys ? (v_node.id::text || ':' || v_comp_key) then
@@ -799,10 +853,12 @@ begin
         if v_raw is null or v_raw < 0 or v_max is null or v_max <= 0 or v_raw > v_max then
           raise exception 'Invalid component score values: raw=%, max=%', v_raw, v_max using errcode = 'LW004';
         end if;
+        v_items := null;
+        v_correct := null;
       elsif v_score_source = 'item_group' then
         v_comp_key := trim(coalesce(v_comp_key, ''));
-        if v_comp_key = '' then
-          raise exception 'component_key is required for item_group' using errcode = 'LW004';
+        if v_comp_key = '' or v_comp_key = 'assessment_total' then
+          raise exception 'component_key is required and cannot be assessment_total for item_group' using errcode = 'LW004';
         end if;
         -- Check component_key uniqueness per assessment/node
         if v_comp_keys ? (v_node.id::text || ':' || v_comp_key) then
@@ -813,6 +869,8 @@ begin
         if v_items is null or v_items <= 0 or v_correct is null or v_correct < 0 or v_correct > v_items then
           raise exception 'Invalid item group values: items=%, correct=%', v_items, v_correct using errcode = 'LW004';
         end if;
+        v_raw := null;
+        v_max := null;
       end if;
 
       insert into public.assessment_learning_mappings (

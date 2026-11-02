@@ -50,7 +50,7 @@ final class LearningPrerequisite {
 /// Mapping from an assessment or its component to a reference learning node.
 final class AssessmentLearningMapping {
   const AssessmentLearningMapping({
-    this.id,
+    required this.id,
     required this.familyId,
     required this.childId,
     required this.assessmentId,
@@ -63,12 +63,12 @@ final class AssessmentLearningMapping {
     this.componentMaxScore,
     this.itemCount,
     this.correctCount,
-    this.confirmedByUserId,
-    this.createdAt,
-    this.updatedAt,
+    required this.confirmedByUserId,
+    required this.createdAt,
+    required this.updatedAt,
   });
 
-  final String? id;
+  final String id;
   final FamilyId familyId;
   final ChildId childId;
   final AssessmentId assessmentId;
@@ -81,21 +81,56 @@ final class AssessmentLearningMapping {
   final double? componentMaxScore;
   final int? itemCount;
   final int? correctCount;
-  final String? confirmedByUserId;
-  final DateTime? createdAt;
-  final DateTime? updatedAt;
+  final String confirmedByUserId;
+  final DateTime createdAt;
+  final DateTime updatedAt;
 
   // Backwards compatibility getters
   double? get rawScore => componentRawScore;
   double? get maxScore => componentMaxScore;
 
   factory AssessmentLearningMapping.fromJson(Map<String, dynamic> json) {
+    final id = json['id'] as String?;
+    if (id == null) {
+      throw const FormatException('Missing required field: id');
+    }
+    final familyIdStr = json['family_id'] as String?;
+    if (familyIdStr == null) {
+      throw const FormatException('Missing required field: family_id');
+    }
+    final childIdStr = json['child_id'] as String?;
+    if (childIdStr == null) {
+      throw const FormatException('Missing required field: child_id');
+    }
+    final assessmentIdStr = json['assessment_id'] as String?;
+    if (assessmentIdStr == null) {
+      throw const FormatException('Missing required field: assessment_id');
+    }
+    final learningNodeIdStr = json['learning_node_id'] as String?;
+    if (learningNodeIdStr == null) {
+      throw const FormatException('Missing required field: learning_node_id');
+    }
+    final confirmedByUserId = json['confirmed_by_user_id'] as String?;
+    if (confirmedByUserId == null) {
+      throw const FormatException(
+        'Missing required field: confirmed_by_user_id',
+      );
+    }
+    final createdAtStr = json['created_at'] as String?;
+    if (createdAtStr == null) {
+      throw const FormatException('Missing required field: created_at');
+    }
+    final updatedAtStr = json['updated_at'] as String?;
+    if (updatedAtStr == null) {
+      throw const FormatException('Missing required field: updated_at');
+    }
+
     return AssessmentLearningMapping(
-      id: json['id'] as String?,
-      familyId: FamilyId(json['family_id'] as String),
-      childId: ChildId(json['child_id'] as String),
-      assessmentId: AssessmentId(json['assessment_id'] as String),
-      learningNodeId: LearningNodeId(json['learning_node_id'] as String),
+      id: id,
+      familyId: FamilyId(familyIdStr),
+      childId: ChildId(childIdStr),
+      assessmentId: AssessmentId(assessmentIdStr),
+      learningNodeId: LearningNodeId(learningNodeIdStr),
       nodeTitle: json['node_title'] as String?,
       nodeType: json['node_type'] != null
           ? LearningNodeType.fromValue(json['node_type'] as String)
@@ -110,13 +145,9 @@ final class AssessmentLearningMapping {
               ?.toDouble(),
       itemCount: (json['item_count'] as num?)?.toInt(),
       correctCount: (json['correct_count'] as num?)?.toInt(),
-      confirmedByUserId: json['confirmed_by_user_id'] as String?,
-      createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'] as String)
-          : null,
-      updatedAt: json['updated_at'] != null
-          ? DateTime.parse(json['updated_at'] as String)
-          : null,
+      confirmedByUserId: confirmedByUserId,
+      createdAt: DateTime.parse(createdAtStr),
+      updatedAt: DateTime.parse(updatedAtStr),
     );
   }
 
@@ -269,6 +300,15 @@ final class ChildMasteryProjection {
   final DateTime updatedAt;
 
   factory ChildMasteryProjection.fromJson(Map<String, dynamic> json) {
+    final asOfStr = json['as_of'] as String?;
+    if (asOfStr == null) {
+      throw const FormatException('Missing required field: as_of');
+    }
+    final updatedAtStr = json['updated_at'] as String?;
+    if (updatedAtStr == null) {
+      throw const FormatException('Missing required field: updated_at');
+    }
+
     return ChildMasteryProjection(
       childId: ChildId(json['child_id'] as String),
       learningNodeId: LearningNodeId(json['learning_node_id'] as String),
@@ -288,8 +328,8 @@ final class ChildMasteryProjection {
       ),
       confidenceUnits: (json['confidence_units'] as num).toDouble(),
       masteryBand: MasteryBand.fromValue(json['mastery_band'] as String),
-      asOf: DateTime.parse((json['as_of'] ?? json['updated_at']) as String),
-      updatedAt: DateTime.parse(json['updated_at'] as String),
+      asOf: DateTime.parse(asOfStr),
+      updatedAt: DateTime.parse(updatedAtStr),
     );
   }
 }

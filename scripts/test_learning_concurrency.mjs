@@ -178,6 +178,8 @@ async function main() {
   }
   console.log('  -> PASS: Serialized first-write converged to canonical score (87.00) across 2 revisions.');
 
+  const initOutput = JSON.parse(res1.stdout);
+
   // -------------------------------------------------------------------------
   // Scenario 2: Concurrent Same-Command Replay Race
   // -------------------------------------------------------------------------
@@ -205,6 +207,19 @@ async function main() {
     process.exit(1);
   }
   console.log('  -> PASS: Concurrent replay serialized cleanly with exactly 1 receipt recorded.');
+
+  // Same-command replay using the original command cmd1
+  const sameCmdReplaySql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${cmd1}'::uuid, '${vleId1}'::uuid);
+  `;
+  const sameCmdRes = await runPsql(sameCmdReplaySql);
+  if (sameCmdRes.code !== 0) {
+    console.error('Same-command replay failed:', sameCmdRes.stderr);
+    process.exit(1);
+  }
+  const sameCmdOutput = JSON.parse(sameCmdRes.stdout);
 
   // -------------------------------------------------------------------------
   // Scenario 3: New Command on Already-Processed VLE
@@ -237,6 +252,33 @@ async function main() {
     process.exit(1);
   }
   console.log('  -> PASS: New command bound receipt without duplicate revisions.');
+
+  const newCmdOutput = JSON.parse(newCmdRes.stdout);
+
+  // Strict 9-field equality comparison between initial execution, same-command replay, and new-command replay
+  const fields9 = [
+    'processing_id',
+    'verified_learning_event_id',
+    'assessment_id',
+    'family_id',
+    'child_id',
+    'evidence_count',
+    'affected_node_ids',
+    'status',
+    'processed_at',
+  ];
+
+  for (const field of fields9) {
+    const vInit = typeof initOutput[field] === 'object' ? JSON.stringify(initOutput[field]) : String(initOutput[field]);
+    const vSame = typeof sameCmdOutput[field] === 'object' ? JSON.stringify(sameCmdOutput[field]) : String(sameCmdOutput[field]);
+    const vNew = typeof newCmdOutput[field] === 'object' ? JSON.stringify(newCmdOutput[field]) : String(newCmdOutput[field]);
+
+    if (vInit !== vSame || vSame !== vNew) {
+      console.error(`9-field equality mismatch on "${field}": init=${vInit}, same=${vSame}, new=${vNew}`);
+      process.exit(1);
+    }
+  }
+  console.log('  -> PASS: Strict 9-field equality verified between initial execution, same-command replay, and new-command replay.');
 
   // -------------------------------------------------------------------------
   // Scenario 4: Concurrent Catch-Up and Manual Process Convergence
@@ -297,34 +339,94 @@ async function main() {
   console.log('  -> PASS: Concurrent catch-up and manual process converged to exactly 1 event.');
 
   // -------------------------------------------------------------------------
-  // Scenario 5: Post-Lock Mismatched Receipt Rejection (42501)
+  // Scenario 5: Real Two-Session Post-Lock Race (42501)
   // -------------------------------------------------------------------------
-  console.log('Scenario 5: Testing post-lock mismatched command receipt rejection...');
+  console.log('Scenario 5: Testing real two-session post-lock race for process_learning_event...');
 
-  const mismatchCmd = crypto.randomUUID();
-  // Pre-bind mismatchCmd to a different resource / operation
-  const prebindSql = `
-    insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id)
-    values ('${mismatchCmd}', '${familyId}', '${ownerId}', 'verify', '${assessId1}');
-  `;
-  const prebindRes = await runPsql(prebindSql);
-  if (prebindRes.code !== 0) {
-    console.error('Failed to pre-bind mismatched command receipt:', prebindRes.stderr);
+  const raceCmd = crypto.randomUUID();
+  const raceVleId = vleId1;
+
+  // Session B starts an interactive psql process and acquires transaction-level advisory lock on the VLE
+  const sessionB = spawn(
+    'docker',
+    ['exec', '-i', 'supabase_db_learnward', 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-t', '-A'],
+    { stdio: ['pipe', 'pipe', 'pipe'] }
+  );
+
+  let bStdout = '';
+  let bStderr = '';
+  sessionB.stdout.on('data', (d) => { bStdout += d.toString(); });
+  sessionB.stderr.on('data', (d) => { bStderr += d.toString(); });
+
+  sessionB.stdin.write(`
+    BEGIN;
+    SELECT pg_advisory_xact_lock(hashtext('vle_${raceVleId}'));
+    SELECT 'LOCK_ACQUIRED';
+  `);
+
+  // Wait until Session B has acquired the advisory lock
+  for (let i = 0; i < 50; i++) {
+    if (bStdout.includes('LOCK_ACQUIRED')) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  if (!bStdout.includes('LOCK_ACQUIRED')) {
+    console.error('Session B failed to acquire advisory lock:', bStderr);
     process.exit(1);
   }
 
-  const mismatchSql = `
+  // Session A starts process_learning_event in the background:
+  // It passes the initial receipt check (receipt does not exist yet),
+  // then blocks trying to acquire pg_advisory_xact_lock on the VLE.
+  const sessionAPromise = runPsql(`
     \\set VERBOSITY verbose
     set role authenticated;
     select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
-    select public.process_learning_event('${mismatchCmd}'::uuid, '${vleId1}'::uuid);
-  `;
-  const mismatchRes = await runPsql(mismatchSql);
-  if (mismatchRes.code === 0 || (!mismatchRes.stderr.includes('42501') && !mismatchRes.stderr.includes('Invalid command replay'))) {
-    console.error('Expected 42501 for mismatched command receipt, got:', mismatchRes);
+    select public.process_learning_event('${raceCmd}'::uuid, '${raceVleId}'::uuid);
+  `);
+
+  // Wait until Session A is definitively blocked waiting for the advisory lock in pg_locks
+  let aBlocked = false;
+  for (let i = 0; i < 60; i++) {
+    const checkLock = await runPsql(`
+      select count(*) from pg_locks
+      where locktype = 'advisory'
+        and not granted;
+    `);
+    if (checkLock.stdout.trim() === '1') {
+      aBlocked = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  if (!aBlocked) {
+    console.error('Session A did not block on the advisory lock as expected');
     process.exit(1);
   }
-  console.log('  -> PASS: Mismatched command receipt rejected with 42501.');
+
+  // While Session A is blocked between initial receipt check and post-lock recheck,
+  // insert a mismatched command receipt for raceCmd
+  const insertMismatch = await runPsql(`
+    insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id)
+    values ('${raceCmd}', '${familyId}', '${ownerId}', 'verify', '${assessId1}');
+  `);
+  if (insertMismatch.code !== 0) {
+    console.error('Failed to bind mismatched receipt during race:', insertMismatch.stderr);
+    process.exit(1);
+  }
+
+  // Now release Session B's lock so Session A can unblock and run its post-lock recheck
+  sessionB.stdin.write('COMMIT;\n');
+  sessionB.stdin.end();
+
+  const aRes = await sessionAPromise;
+  if (aRes.code === 0 || (!aRes.stderr.includes('42501') && !aRes.stderr.includes('Invalid command replay'))) {
+    console.error('Expected Session A to fail post-lock recheck with 42501, got:', aRes);
+    process.exit(1);
+  }
+
+  console.log('  -> PASS: Session A blocked on advisory lock, Session B bound mismatched receipt, Session A failed post-lock recheck with 42501.');
 
   console.log('\nAll Learning Concurrency Regression Tests PASSED!');
 }

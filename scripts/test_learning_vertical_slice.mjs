@@ -147,6 +147,52 @@ async function main() {
   }
   console.log('  -> PASS: Learning event processed successfully.');
 
+  const initOutput = JSON.parse(procRes.stdout);
+
+  // Same-command replay
+  const sameCmdRes = await runPsql(procSql);
+  if (sameCmdRes.code !== 0) {
+    console.error('Same-command replay failed:', sameCmdRes.stderr);
+    process.exit(1);
+  }
+  const sameCmdOutput = JSON.parse(sameCmdRes.stdout);
+
+  // New-command replay on processed VLE
+  const newCmdId = crypto.randomUUID();
+  const newCmdSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${newCmdId}'::uuid, '${vleId}'::uuid);
+  `;
+  const newCmdRes = await runPsql(newCmdSql);
+  if (newCmdRes.code !== 0) {
+    console.error('New command on processed VLE failed:', newCmdRes.stderr);
+    process.exit(1);
+  }
+  const newCmdOutput = JSON.parse(newCmdRes.stdout);
+
+  const fields9 = [
+    'processing_id',
+    'verified_learning_event_id',
+    'assessment_id',
+    'family_id',
+    'child_id',
+    'evidence_count',
+    'affected_node_ids',
+    'status',
+    'processed_at',
+  ];
+  for (const f of fields9) {
+    const v1 = typeof initOutput[f] === 'object' ? JSON.stringify(initOutput[f]) : String(initOutput[f]);
+    const v2 = typeof sameCmdOutput[f] === 'object' ? JSON.stringify(sameCmdOutput[f]) : String(sameCmdOutput[f]);
+    const v3 = typeof newCmdOutput[f] === 'object' ? JSON.stringify(newCmdOutput[f]) : String(newCmdOutput[f]);
+    if (v1 !== v2 || v2 !== v3) {
+      console.error(`9-field equality mismatch on "${f}": init=${v1}, same=${v2}, new=${v3}`);
+      process.exit(1);
+    }
+  }
+  console.log('  -> PASS: 9-field equality strictly verified across initial, same-command replay, and new-command replay.');
+
   console.log('7. Querying child mastery read model...');
   const getMasterySql = `
     set role authenticated;

@@ -1,5 +1,5 @@
 begin;
-select plan(89);
+select plan(110);
 
 -- ===========================================================================
 -- FIXTURES SETUP (Superuser context)
@@ -265,68 +265,122 @@ select throws_ok(
   'Promoting draft catalog missing required 5 Subject roots fails with LW004'
 );
 
--- Test 24: Candidate catalog with prerequisite cycle is rejected with LW004
-insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2-cycle', 'draft');
+-- Test 24: Candidate catalog with prerequisite edges linking non-Skill nodes is rejected with LW004
+insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2-bad-edge', 'draft');
 insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
 values
-  ('pilot-v0.2-cycle', 'subject', 'math', 'pilot-v0.2-cycle:subject:math', 'Mathematics', null),
-  ('pilot-v0.2-cycle', 'subject', 'english', 'pilot-v0.2-cycle:subject:english', 'English', null),
-  ('pilot-v0.2-cycle', 'subject', 'literature', 'pilot-v0.2-cycle:subject:literature', 'Literature', null),
-  ('pilot-v0.2-cycle', 'subject', 'science', 'pilot-v0.2-cycle:subject:science', 'Science', null),
-  ('pilot-v0.2-cycle', 'subject', 'other', 'pilot-v0.2-cycle:subject:other', 'Other', null);
+  ('pilot-v0.2-bad-edge', 'subject', 'math', 'pilot-v0.2-bad-edge:subject:math', 'Mathematics', null),
+  ('pilot-v0.2-bad-edge', 'subject', 'english', 'pilot-v0.2-bad-edge:subject:english', 'English', null),
+  ('pilot-v0.2-bad-edge', 'subject', 'literature', 'pilot-v0.2-bad-edge:subject:literature', 'Literature', null),
+  ('pilot-v0.2-bad-edge', 'subject', 'science', 'pilot-v0.2-bad-edge:subject:science', 'Science', null),
+  ('pilot-v0.2-bad-edge', 'subject', 'other', 'pilot-v0.2-bad-edge:subject:other', 'Other', null);
 
 insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
 values
-  ('pilot-v0.2-cycle', 'domain', 'math', 'pilot-v0.2-cycle:math:domain1', 'Domain 1',
-   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:subject:math'));
-
-insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
-values
-  ('pilot-v0.2-cycle', 'topic', 'math', 'pilot-v0.2-cycle:math:topic1', 'Topic 1',
-   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:math:domain1'));
+  ('pilot-v0.2-bad-edge', 'domain', 'math', 'pilot-v0.2-bad-edge:math:domain1', 'Domain 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-bad-edge' and canonical_key = 'pilot-v0.2-bad-edge:subject:math'));
 
 insert into public.learning_nodes (id, catalog_version, node_type, subject_key, canonical_key, title, parent_id)
 values
-  ('c0000001-0000-0000-0000-000000000001'::uuid, 'pilot-v0.2-cycle', 'skill', 'math', 'pilot-v0.2-cycle:math:skill1', 'Skill 1', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:math:topic1')),
-  ('c0000001-0000-0000-0000-000000000002'::uuid, 'pilot-v0.2-cycle', 'skill', 'math', 'pilot-v0.2-cycle:math:skill2', 'Skill 2', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle' and canonical_key = 'pilot-v0.2-cycle:math:topic1'));
+  ('c0000002-0000-0000-0000-000000000001'::uuid, 'pilot-v0.2-bad-edge', 'skill', 'math', 'pilot-v0.2-bad-edge:math:skill1', 'Skill 1', null);
 
 insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
 values
-  ('pilot-v0.2-cycle', 'math', 'c0000001-0000-0000-0000-000000000001'::uuid, 'c0000001-0000-0000-0000-000000000002'::uuid),
-  ('pilot-v0.2-cycle', 'math', 'c0000001-0000-0000-0000-000000000002'::uuid, 'c0000001-0000-0000-0000-000000000001'::uuid);
+  ('pilot-v0.2-bad-edge', 'math',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-bad-edge' and canonical_key = 'pilot-v0.2-bad-edge:math:domain1'),
+   'c0000002-0000-0000-0000-000000000001'::uuid);
 
 select throws_ok(
-  $$ select public.promote_learning_catalog_version('pilot-v0.2-cycle') $$,
+  $$ select public.promote_learning_catalog_version('pilot-v0.2-bad-edge') $$,
   'LW004',
   NULL,
-  'Promoting draft catalog with cyclic prerequisites is rejected with LW004'
+  'Promoting catalog with non-Skill prerequisite edge fails with LW004'
 );
 
--- Test 25: Setup complete valid draft catalog pilot-v0.2 and promote successfully
-insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2', 'draft');
+-- Test 25: Candidate catalog with 2-node prerequisite cycle is rejected with LW004
+insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2-cycle-2', 'draft');
 insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
 values
-  ('pilot-v0.2', 'subject', 'math', 'pilot-v0.2:subject:math', 'Mathematics', null),
-  ('pilot-v0.2', 'subject', 'english', 'pilot-v0.2:subject:english', 'English', null),
-  ('pilot-v0.2', 'subject', 'literature', 'pilot-v0.2:subject:literature', 'Literature', null),
-  ('pilot-v0.2', 'subject', 'science', 'pilot-v0.2:subject:science', 'Science', null),
-  ('pilot-v0.2', 'subject', 'other', 'pilot-v0.2:subject:other', 'Other', null);
+  ('pilot-v0.2-cycle-2', 'subject', 'math', 'pilot-v0.2-cycle-2:subject:math', 'Mathematics', null),
+  ('pilot-v0.2-cycle-2', 'subject', 'english', 'pilot-v0.2-cycle-2:subject:english', 'English', null),
+  ('pilot-v0.2-cycle-2', 'subject', 'literature', 'pilot-v0.2-cycle-2:subject:literature', 'Literature', null),
+  ('pilot-v0.2-cycle-2', 'subject', 'science', 'pilot-v0.2-cycle-2:subject:science', 'Science', null),
+  ('pilot-v0.2-cycle-2', 'subject', 'other', 'pilot-v0.2-cycle-2:subject:other', 'Other', null);
 
-select lives_ok(
-  $$ select public.promote_learning_catalog_version('pilot-v0.2') $$,
-  'Service role promotes valid complete draft catalog pilot-v0.2'
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2-cycle-2', 'domain', 'math', 'pilot-v0.2-cycle-2:math:domain1', 'Domain 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle-2' and canonical_key = 'pilot-v0.2-cycle-2:subject:math'));
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2-cycle-2', 'topic', 'math', 'pilot-v0.2-cycle-2:math:topic1', 'Topic 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle-2' and canonical_key = 'pilot-v0.2-cycle-2:math:domain1'));
+
+insert into public.learning_nodes (id, catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('c0000001-0000-0000-0000-000000000001'::uuid, 'pilot-v0.2-cycle-2', 'skill', 'math', 'pilot-v0.2-cycle-2:math:skill1', 'Skill 1', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle-2' and canonical_key = 'pilot-v0.2-cycle-2:math:topic1')),
+  ('c0000001-0000-0000-0000-000000000002'::uuid, 'pilot-v0.2-cycle-2', 'skill', 'math', 'pilot-v0.2-cycle-2:math:skill2', 'Skill 2', (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle-2' and canonical_key = 'pilot-v0.2-cycle-2:math:topic1'));
+
+insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
+values
+  ('pilot-v0.2-cycle-2', 'math', 'c0000001-0000-0000-0000-000000000001'::uuid, 'c0000001-0000-0000-0000-000000000002'::uuid),
+  ('pilot-v0.2-cycle-2', 'math', 'c0000001-0000-0000-0000-000000000002'::uuid, 'c0000001-0000-0000-0000-000000000001'::uuid);
+
+select throws_ok(
+  $$ select public.promote_learning_catalog_version('pilot-v0.2-cycle-2') $$,
+  'LW004',
+  NULL,
+  'Promoting draft catalog with 2-node cycle is rejected with LW004'
 );
 
--- Test 26: After promotion, exactly one active version exists and previous was retired
-select is(
-  (select version from public.learning_catalog_versions where status = 'active'),
-  'pilot-v0.2',
-  'Newly promoted version pilot-v0.2 is now active'
-);
+-- Test 26: Candidate catalog with >100-node prerequisite cycle is rejected with LW004
+insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2-cycle-120', 'draft');
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2-cycle-120', 'subject', 'math', 'pilot-v0.2-cycle-120:subject:math', 'Mathematics', null),
+  ('pilot-v0.2-cycle-120', 'subject', 'english', 'pilot-v0.2-cycle-120:subject:english', 'English', null),
+  ('pilot-v0.2-cycle-120', 'subject', 'literature', 'pilot-v0.2-cycle-120:subject:literature', 'Literature', null),
+  ('pilot-v0.2-cycle-120', 'subject', 'science', 'pilot-v0.2-cycle-120:subject:science', 'Science', null),
+  ('pilot-v0.2-cycle-120', 'subject', 'other', 'pilot-v0.2-cycle-120:subject:other', 'Other', null);
 
--- Roll back active version to pilot-v0.1 for fixture consistency across rest of test
-update public.learning_catalog_versions set status = 'retired' where version = 'pilot-v0.2';
-update public.learning_catalog_versions set status = 'active' where version = 'pilot-v0.1';
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2-cycle-120', 'domain', 'math', 'pilot-v0.2-cycle-120:math:domain1', 'Domain 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle-120' and canonical_key = 'pilot-v0.2-cycle-120:subject:math'));
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2-cycle-120', 'topic', 'math', 'pilot-v0.2-cycle-120:math:topic1', 'Topic 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle-120' and canonical_key = 'pilot-v0.2-cycle-120:math:domain1'));
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+select
+  'pilot-v0.2-cycle-120', 'skill', 'math', 'pilot-v0.2-cycle-120:math:skill_' || i, 'Skill ' || i,
+  (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-cycle-120' and canonical_key = 'pilot-v0.2-cycle-120:math:topic1')
+from generate_series(1, 120) i;
+
+insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
+select
+  'pilot-v0.2-cycle-120', 'math', n1.id, n2.id
+from generate_series(1, 119) i
+join public.learning_nodes n1 on n1.catalog_version = 'pilot-v0.2-cycle-120' and n1.canonical_key = 'pilot-v0.2-cycle-120:math:skill_' || i
+join public.learning_nodes n2 on n2.catalog_version = 'pilot-v0.2-cycle-120' and n2.canonical_key = 'pilot-v0.2-cycle-120:math:skill_' || (i + 1);
+
+insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
+select
+  'pilot-v0.2-cycle-120', 'math', n1.id, n2.id
+from public.learning_nodes n1
+cross join public.learning_nodes n2
+where n1.catalog_version = 'pilot-v0.2-cycle-120' and n1.canonical_key = 'pilot-v0.2-cycle-120:math:skill_120'
+  and n2.catalog_version = 'pilot-v0.2-cycle-120' and n2.canonical_key = 'pilot-v0.2-cycle-120:math:skill_1';
+
+select throws_ok(
+  $$ select public.promote_learning_catalog_version('pilot-v0.2-cycle-120') $$,
+  'LW004',
+  NULL,
+  'Promoting candidate catalog with >100-node prerequisite cycle is rejected with LW004'
+);
 
 -- ===========================================================================
 -- SECTION 5: PROVENANCE SNAPSHOTTING & LEGACY PROTECTION (Tests 27-31)
@@ -542,7 +596,7 @@ select throws_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
        '[
-         {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "assessment_total", "component_key": "custom_key"}
+         {"learning_node_id": "b0000001-0000-0000-0000-000000000001", "score_source": "assessment_total", "component_key": "custom_key"}
         ]'::jsonb
      ) $$,
   'LW004',
@@ -550,21 +604,58 @@ select throws_ok(
   'assessment_total with custom component_key != assessment_total is rejected with LW004'
 );
 
--- Test 40: Multiple assessment_total mappings rejected (LW004)
+-- Test 40: assessment_total targeting Skill node is rejected with LW004
 select throws_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
        '[
-         {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "assessment_total"},
-         {"learning_node_id": "b0000003-0000-0000-0000-000000000002", "score_source": "assessment_total"}
+         {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "assessment_total"}
         ]'::jsonb
      ) $$,
   'LW004',
   NULL,
-  'Multiple assessment_total mappings rejected with LW004'
+  'assessment_total targeting Skill node is rejected with LW004'
 );
 
--- Test 41: Mixed score sources on the same node rejected (LW004)
+-- Test 41: component_score using component_key = assessment_total is rejected with LW004
+select throws_ok(
+  $$ select public.set_assessment_learning_mappings(
+       'a5000000-0000-0000-0000-000000000002'::uuid,
+       '[
+         {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "component_score", "component_key": "assessment_total", "raw_score": 5, "max_score": 10}
+        ]'::jsonb
+     ) $$,
+  'LW004',
+  NULL,
+  'component_score using reserved component_key assessment_total is rejected with LW004'
+);
+
+-- Test 42: item_group using component_key = assessment_total is rejected with LW004
+select throws_ok(
+  $$ select public.set_assessment_learning_mappings(
+       'a5000000-0000-0000-0000-000000000002'::uuid,
+       '[
+         {"learning_node_id": "b0000003-0000-0000-0000-000000000001", "score_source": "item_group", "component_key": "assessment_total", "item_count": 5, "correct_count": 4}
+        ]'::jsonb
+     ) $$,
+  'LW004',
+  NULL,
+  'item_group using reserved component_key assessment_total is rejected with LW004'
+);
+
+-- Test 43: assessment_total mapped to two distinct non-Skill nodes (Domain and Topic) succeeds
+select lives_ok(
+  $$ select public.set_assessment_learning_mappings(
+       'a5000000-0000-0000-0000-000000000002'::uuid,
+       '[
+         {"learning_node_id": "b0000001-0000-0000-0000-000000000001", "score_source": "assessment_total"},
+         {"learning_node_id": "b0000002-0000-0000-0000-000000000001", "score_source": "assessment_total"}
+        ]'::jsonb
+     ) $$,
+  'assessment_total mapped to distinct Domain and Topic nodes succeeds'
+);
+
+-- Test 44: Mixed score sources on the same node rejected (LW004)
 select throws_ok(
   $$ select public.set_assessment_learning_mappings(
        'a5000000-0000-0000-0000-000000000002'::uuid,
@@ -682,6 +773,61 @@ select throws_ok(
   'LW103',
   NULL,
   'set_assessment_learning_mappings rejects verified assessment'
+);
+
+-- Table check constraint enforcement on direct write
+reset role;
+
+select throws_ok(
+  $$ insert into public.assessment_learning_mappings (
+       family_id, child_id, assessment_id, learning_node_id, score_source, component_key,
+       component_raw_score, component_max_score, confirmed_by_user_id
+     ) values (
+       'f5000000-0000-0000-0000-000000000001'::uuid,
+       'c5000000-0000-0000-0000-000000000001'::uuid,
+       'a5000000-0000-0000-0000-000000000002'::uuid,
+       'b0000003-0000-0000-0000-000000000001'::uuid,
+       'component_score', 'assessment_total',
+       5, 10,
+       '50000000-0000-0000-0000-000000000001'::uuid
+     ) $$,
+  '23514',
+  NULL,
+  'Check constraint rejects component_score with reserved key assessment_total'
+);
+
+select throws_ok(
+  $$ insert into public.assessment_learning_mappings (
+       family_id, child_id, assessment_id, learning_node_id, score_source, component_key,
+       item_count, correct_count, confirmed_by_user_id
+     ) values (
+       'f5000000-0000-0000-0000-000000000001'::uuid,
+       'c5000000-0000-0000-0000-000000000001'::uuid,
+       'a5000000-0000-0000-0000-000000000002'::uuid,
+       'b0000003-0000-0000-0000-000000000001'::uuid,
+       'item_group', 'assessment_total',
+       5, 4,
+       '50000000-0000-0000-0000-000000000001'::uuid
+     ) $$,
+  '23514',
+  NULL,
+  'Check constraint rejects item_group with reserved key assessment_total'
+);
+
+select throws_ok(
+  $$ insert into public.assessment_learning_mappings (
+       family_id, child_id, assessment_id, learning_node_id, score_source, component_key, confirmed_by_user_id
+     ) values (
+       'f5000000-0000-0000-0000-000000000001'::uuid,
+       'c5000000-0000-0000-0000-000000000001'::uuid,
+       'a5000000-0000-0000-0000-000000000002'::uuid,
+       'b0000001-0000-0000-0000-000000000001'::uuid,
+       'assessment_total', 'custom_key',
+       '50000000-0000-0000-0000-000000000001'::uuid
+     ) $$,
+  '23514',
+  NULL,
+  'Check constraint rejects assessment_total with component_key != assessment_total'
 );
 
 -- ===========================================================================
@@ -1125,6 +1271,225 @@ select is(
   (select count(*)::integer from public.learning_nodes where catalog_version = 'pilot-v0.2-bad'),
   0,
   'Authenticated role cannot see learning nodes from draft catalogs'
+);
+
+reset role;
+
+-- ===========================================================================
+-- SECTION 11: CATALOG LIFECYCLE ENFORCEMENT & DEEP PROVENANCE (Tests 90-104)
+-- ===========================================================================
+
+-- Create a delayed assessment while pilot-v0.1 is active
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
+  occurred_at, raw_score, max_score
+) values (
+  'a5000000-0000-0000-0000-000000000099'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000001'::uuid,
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'pending_review', 'math', 'Mathematics', 'quiz', 'Delayed Quiz',
+  now(), 95, 100
+);
+
+-- Test 90: Delayed assessment stamped pilot-v0.1
+select is(
+  (select learning_catalog_version from public.assessments where id = 'a5000000-0000-0000-0000-000000000099'::uuid),
+  'pilot-v0.1',
+  'Assessment created before promotion stamped active catalog pilot-v0.1'
+);
+
+-- Setup candidate catalog pilot-v0.2 with >100 nodes in an acyclic chain
+insert into public.learning_catalog_versions (version, status) values ('pilot-v0.2', 'draft');
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2', 'subject', 'math', 'pilot-v0.2:subject:math', 'Mathematics', null),
+  ('pilot-v0.2', 'subject', 'english', 'pilot-v0.2:subject:english', 'English', null),
+  ('pilot-v0.2', 'subject', 'literature', 'pilot-v0.2:subject:literature', 'Literature', null),
+  ('pilot-v0.2', 'subject', 'science', 'pilot-v0.2:subject:science', 'Science', null),
+  ('pilot-v0.2', 'subject', 'other', 'pilot-v0.2:subject:other', 'Other', null);
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2', 'domain', 'math', 'pilot-v0.2:math:domain1', 'Domain 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2' and canonical_key = 'pilot-v0.2:subject:math'));
+
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+values
+  ('pilot-v0.2', 'topic', 'math', 'pilot-v0.2:math:topic1', 'Topic 1',
+   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2' and canonical_key = 'pilot-v0.2:math:domain1'));
+
+-- 120 skill nodes in pilot-v0.2
+insert into public.learning_nodes (catalog_version, node_type, subject_key, canonical_key, title, parent_id)
+select
+  'pilot-v0.2', 'skill', 'math', 'pilot-v0.2:math:skill_' || i, 'Skill ' || i,
+  (select id from public.learning_nodes where catalog_version = 'pilot-v0.2' and canonical_key = 'pilot-v0.2:math:topic1')
+from generate_series(1, 120) i;
+
+-- 119 acyclic prerequisite edges: i -> i+1
+insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
+select
+  'pilot-v0.2', 'math', n1.id, n2.id
+from generate_series(1, 119) i
+join public.learning_nodes n1 on n1.catalog_version = 'pilot-v0.2' and n1.canonical_key = 'pilot-v0.2:math:skill_' || i
+join public.learning_nodes n2 on n2.catalog_version = 'pilot-v0.2' and n2.canonical_key = 'pilot-v0.2:math:skill_' || (i + 1);
+
+-- Test 91: Candidate catalog with >100-node acyclic chain promotes successfully
+select lives_ok(
+  $$ select public.promote_learning_catalog_version('pilot-v0.2') $$,
+  'Candidate catalog with >100-node acyclic chain promotes successfully'
+);
+
+-- Test 92: Newly promoted pilot-v0.2 is now active
+select is(
+  (select version from public.learning_catalog_versions where status = 'active'),
+  'pilot-v0.2',
+  'Newly promoted version pilot-v0.2 is now active'
+);
+
+-- Test 93: Previously active pilot-v0.1 is now retired
+select is(
+  (select status from public.learning_catalog_versions where version = 'pilot-v0.1'),
+  'retired',
+  'Previously active version pilot-v0.1 is now retired'
+);
+
+-- Test 94: Exactly one active catalog version exists
+select is(
+  (select count(*)::integer from public.learning_catalog_versions where status = 'active'),
+  1,
+  'Exactly one catalog version is active post-promotion'
+);
+
+-- Test 95: Delayed VLE insert copies original assessment catalog snapshot pilot-v0.1 even after active catalog promoted
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values (
+  '70000000-0000-0000-0000-000000000099'::uuid, 'verify',
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000099'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid
+);
+
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id
+) values (
+  'e5000000-0000-0000-0000-000000000099'::uuid,
+  '70000000-0000-0000-0000-000000000099'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'a5000000-0000-0000-0000-000000000099'::uuid,
+  'verified', 'pending_review', 'verified',
+  '50000000-0000-0000-0000-000000000001'::uuid
+);
+
+insert into public.verified_learning_events (
+  id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+  raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot
+) values (
+  '15000000-0000-0000-0000-000000000099'::uuid,
+  'a5000000-0000-0000-0000-000000000099'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000001'::uuid,
+  'math', 'Mathematics', 'Delayed Quiz', 'quiz', 'normal',
+  95, 100, 9.50, now(), now(), '50000000-0000-0000-0000-000000000001'::uuid,
+  'e5000000-0000-0000-0000-000000000099'::uuid, 4
+);
+
+select is(
+  (select learning_catalog_version from public.verified_learning_events where id = '15000000-0000-0000-0000-000000000099'::uuid),
+  'pilot-v0.1',
+  'Delayed VLE faithfully retains assessment catalog snapshot pilot-v0.1 despite active catalog being pilot-v0.2'
+);
+
+-- Test 96: New assessment created post-promotion stamps newly active catalog pilot-v0.2
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title,
+  occurred_at, raw_score, max_score
+) values (
+  'a5000000-0000-0000-0000-000000000098'::uuid,
+  'f5000000-0000-0000-0000-000000000001'::uuid,
+  'c5000000-0000-0000-0000-000000000001'::uuid,
+  '50000000-0000-0000-0000-000000000001'::uuid,
+  'draft', 'math', 'Mathematics', 'quiz', 'New v0.2 Quiz',
+  now(), 100, 100
+);
+
+select is(
+  (select learning_catalog_version from public.assessments where id = 'a5000000-0000-0000-0000-000000000098'::uuid),
+  'pilot-v0.2',
+  'New assessment created post-promotion stamps newly active catalog pilot-v0.2'
+);
+
+-- Test 97: Inserting VLE with missing parent assessment fails with P0002
+select throws_ok(
+  $$ insert into public.verified_learning_events (
+       id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty,
+       raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot
+     ) values (
+       gen_random_uuid(), gen_random_uuid(),
+       'f5000000-0000-0000-0000-000000000001'::uuid,
+       'c5000000-0000-0000-0000-000000000001'::uuid,
+       'math', 'Mathematics', 'Orphan VLE', 'quiz', 'normal',
+       90, 100, 9.0, now(), now(), '50000000-0000-0000-0000-000000000001'::uuid,
+       gen_random_uuid(), 4
+     ) $$,
+  'P0002',
+  NULL,
+  'VLE insertion fails closed with P0002 when parent assessment is missing'
+);
+
+-- Test 98: Direct UPDATE draft -> active rejected with LW102
+insert into public.learning_catalog_versions (version, status) values ('draft-bypass-v1', 'draft');
+select throws_ok(
+  $$ update public.learning_catalog_versions set status = 'active' where version = 'draft-bypass-v1' $$,
+  'LW102',
+  NULL,
+  'Direct UPDATE draft -> active rejected with LW102'
+);
+
+-- Test 99: Direct UPDATE active -> retired rejected with LW102
+select throws_ok(
+  $$ update public.learning_catalog_versions set status = 'retired' where version = 'pilot-v0.2' $$,
+  'LW102',
+  NULL,
+  'Direct UPDATE active -> retired rejected with LW102'
+);
+
+-- Test 100: Reactivating retired catalog version rejected with LW102
+select throws_ok(
+  $$ update public.learning_catalog_versions set status = 'active' where version = 'pilot-v0.1' $$,
+  'LW102',
+  NULL,
+  'Reactivating retired catalog version rejected with LW102'
+);
+
+-- Test 101: Direct INSERT of non-draft catalog version rejected with LW102
+select throws_ok(
+  $$ insert into public.learning_catalog_versions (version, status) values ('active-bypass-v1', 'active') $$,
+  'LW102',
+  NULL,
+  'Direct INSERT of non-draft catalog version rejected with LW102'
+);
+
+-- Test 102: Direct DELETE of active catalog version rejected with LW102
+select throws_ok(
+  $$ delete from public.learning_catalog_versions where version = 'pilot-v0.2' $$,
+  'LW102',
+  NULL,
+  'Direct DELETE of active catalog version rejected with LW102'
+);
+
+-- Test 103: Direct DELETE of retired catalog version rejected with LW102
+select throws_ok(
+  $$ delete from public.learning_catalog_versions where version = 'pilot-v0.1' $$,
+  'LW102',
+  NULL,
+  'Direct DELETE of retired catalog version rejected with LW102'
+);
+
+-- Test 104: Direct DELETE of draft catalog version succeeds
+select lives_ok(
+  $$ delete from public.learning_catalog_versions where version = 'draft-bypass-v1' $$,
+  'Direct DELETE of draft catalog version succeeds'
 );
 
 reset role;
