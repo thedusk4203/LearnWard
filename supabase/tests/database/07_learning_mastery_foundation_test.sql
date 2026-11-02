@@ -1893,10 +1893,10 @@ select is(
 
 -- Test 115: Time-only aging (61+ days): mastery_attained_at is unchanged
 select is(
-  (select elem ->> 'mastery_attained_at'
+  (select (elem ->> 'mastery_attained_at')::timestamptz
    from jsonb_array_elements(private.get_child_mastery_at('c5000000-0000-0000-0000-000000000002'::uuid, now() + interval '61 days')) elem
    where elem ->> 'canonical_key' = 'pilot-v0.1:math:arithmetic:addition:single_digit'),
-  (select mastery_attained_at::text
+  (select mastery_attained_at
    from public.child_mastery_states
    where child_id = 'c5000000-0000-0000-0000-000000000002'::uuid
      and learning_node_id = 'b0000003-0000-0000-0000-000000000001'::uuid),
