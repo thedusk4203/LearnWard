@@ -290,17 +290,17 @@ values
   ('c0000002-0000-0000-0000-000000000001'::uuid, 'pilot-v0.2-bad-edge', 'skill', 'math', 'pilot-v0.2-bad-edge:math:skill1', 'Skill 1',
    (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-bad-edge' and canonical_key = 'pilot-v0.2-bad-edge:math:topic1'));
 
-insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
-values
-  ('pilot-v0.2-bad-edge', 'math',
-   (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-bad-edge' and canonical_key = 'pilot-v0.2-bad-edge:math:domain1'),
-   'c0000002-0000-0000-0000-000000000001'::uuid);
-
 select throws_ok(
-  $$ select public.promote_learning_catalog_version('pilot-v0.2-bad-edge') $$,
+  $$
+  insert into public.learning_prerequisites (catalog_version, subject_key, prerequisite_node_id, dependent_node_id)
+  values
+    ('pilot-v0.2-bad-edge', 'math',
+     (select id from public.learning_nodes where catalog_version = 'pilot-v0.2-bad-edge' and canonical_key = 'pilot-v0.2-bad-edge:math:domain1'),
+     'c0000002-0000-0000-0000-000000000001'::uuid)
+  $$,
   'LW004',
   NULL,
-  'Promoting catalog with non-Skill prerequisite edge fails with LW004'
+  'Prerequisite edge linking non-Skill node is rejected with LW004'
 );
 
 -- Test 25: Candidate catalog with 2-node prerequisite cycle is rejected with LW004
