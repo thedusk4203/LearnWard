@@ -166,8 +166,7 @@ async function main() {
     let querySql;
     if (fixture.read_mode === 'before_attainment') {
       querySql = `
-        set role authenticated;
-        select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+        reset role;
         select private.get_child_mastery_at(
           '${childId}'::uuid,
           coalesce(
@@ -178,8 +177,7 @@ async function main() {
       `;
     } else if (fixture.read_mode === 'aged_61_days') {
       querySql = `
-        set role authenticated;
-        select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+        reset role;
         select private.get_child_mastery_at('${childId}'::uuid, now() + interval '61 days');
       `;
     } else {
