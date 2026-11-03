@@ -501,8 +501,18 @@ async function main() {
         }
       }
       if ('dependents' in expNode) {
-        if (JSON.stringify(pr.dependents) !== JSON.stringify(expNode.dependents)) {
-          errs.push(`node_state.dependents: expected ${JSON.stringify(expNode.dependents)}, got ${JSON.stringify(pr.dependents)}`);
+        if (pr.dependents.length !== expNode.dependents.length) {
+          errs.push(`node_state.dependents.length: expected ${expNode.dependents.length}, got ${pr.dependents.length}`);
+        } else {
+          for (let i = 0; i < expNode.dependents.length; i++) {
+            const actD = pr.dependents[i];
+            const expD = expNode.dependents[i];
+            for (const k of Object.keys(expD)) {
+              if (actD[k] !== expD[k]) {
+                errs.push(`node_state.dependents[${i}].${k}: expected ${expD[k]}, got ${actD[k]}`);
+              }
+            }
+          }
         }
       }
     }
