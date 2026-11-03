@@ -1153,43 +1153,44 @@ Broad mastery display and non-grade-specific Recovery/Developing/Refresh logic m
 
 ## 20. Next Challenge Engine v0.1
 
+> **Authoritative Phase 5.2 Specification:** See [Phase 5.2 Detailed Design v0.1](15-phase-5-2-skill-graph-recommendation-design-v0.1.md) and [ADR 0007](adr/0007-phase-5-2-skill-graph-recommendation.md) (`PROPOSED`) for the frozen disjoint eligibility predicates, Explore proximity ranks, global total comparator, recommended-difficulty table, and read-only RPC schemas.
+
 Maximum child-facing candidates:
 
 ```text
 3
 ```
 
-Priority:
+Priority (mutually exclusive partition resolving the `70..84.99` Developing/Refresh overlap):
 
 ```text
 A. Recovery
-B. Developing
-C. Refresh
+B. Refresh
+C. Developing
 D. Unlock
-E. Exploration
+E. Explore
 ```
 
 ### Recovery
 
-Eligible when a Topic/Skill has `review_suggested` within the 30-day recency window. Prefer the most recent meaningful recovery signal.
-
-### Developing
-
-Eligible when:
-
-```text
-50 <= mastery_score < 85
-```
-
-with no higher-priority Recovery candidate.
+Eligible when an observed Topic/Skill has active `review_suggested` within the 30-day recency window. Prefer the most recent unresolved diagnostic weakness.
 
 ### Refresh
 
-Eligible when:
+Eligible when an observed Topic/Skill has no active Recovery and:
 
 ```text
 mastery_score >= 70
-AND freshness = Needs refresh
+AND freshness = needs_refresh
+```
+
+### Developing
+
+Eligible when an observed non-Mastered Topic/Skill (`mastery_band != 'mastered'`) has no active Recovery and:
+
+```text
+50 <= mastery_score < 85
+AND freshness != needs_refresh
 ```
 
 ### Unlock
@@ -1455,8 +1456,8 @@ At minimum implementation must prove:
 
 ### Observation aggregation & evidence uniqueness
 27. **One effective observation per VLE/node:** Every processed VLE produces at most one effective mastery observation per mapped node; multiple mappings for the same node aggregate deterministically.
-28. **Duplicate component key rejected:** Mapping two components with the same `component_key` on the same assessment is rejected.
-29. **Assessment total single mapping:** `assessment_total` cannot be mapped more than once on the same assessment.
+28. **Duplicate node component key rejected:** Mapping two components with the same `(learning_node_id, component_key)` on the same assessment is rejected by `UNIQUE(assessment_id, learning_node_id, component_key)`.
+29. **Assessment total mapping uniqueness:** `assessment_total` may map to multiple distinct non-Skill nodes on one assessment. For any fixed `(assessment_id, learning_node_id)`, there may be only one `assessment_total` component, enforced by canonical `component_key = 'assessment_total'` and `UNIQUE(assessment_id, learning_node_id, component_key)`.
 30. **Component score aggregation:** Multiple component mappings for the same node aggregate by score mass: `sum(raw_score) / sum(max_score)`.
 31. **Item group aggregation:** Multiple item groups for the same node aggregate by item counts: `sum(correct_count) / sum(item_count)`.
 32. **Mixed score sources rejected:** An assessment mapping both `component_score` and `item_group` to the same node is rejected.
@@ -1532,7 +1533,7 @@ Table-driven tests for:
 - freshness boundaries relative to `asOf` (14 days, 45 days) using `effective_occurred_at`,
 - recovery signal raise rules (item count >= 3 & incorrect count >= 2, component score <= 50), 30-day expiry, and clear rule (>= 70),
 - canonical evidence sorting comparator (`effective_occurred_at ASC, verified_at ASC, verified_learning_event_id ASC`),
-- next challenge candidate ranking priority (Recovery -> Developing -> Refresh -> Unlock -> Exploration) and tie-breakers.
+- next challenge candidate ranking priority (Recovery -> Refresh -> Developing -> Unlock -> Explore) and tie-breakers.
 
 ### Application
 

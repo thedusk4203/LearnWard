@@ -76,6 +76,9 @@ Level    │    Wheel   Store
 | [Phase 4 Freeze Receipt](docs/freezes/phase-4-reward-economy-wheel-freeze.md) | Frozen Phase 4 baseline, CI receipt, unified RP economy, Store and Wheel lifecycle, concurrency and anti-compulsion invariants |
 | [Phase 5 Learning Engine ADR](docs/adr/0006-phase-5-learning-engine-mastery.md) | Accepted architectural decisions for Phase 5 Learning Engine, curriculum catalog, EWMA mastery, confidence scoring, and temporal declaration |
 | [Phase 5.1 Freeze Receipt](docs/freezes/phase-5-1-learning-mastery-foundation-freeze.md) | Frozen Phase 5.1 baseline, CI receipt, zero-GUC catalog lifecycle, deterministic EWMA rebuild, and Dart/Postgres parity |
+| [Phase 5.2 Dependency & Readiness Review](docs/14-phase-5-2-dependency-readiness-review.md) | Phase 5.2 dependency audit against frozen Phase 5.1 baseline (`PASS FOR DESIGN`; implementation not started) |
+| [Phase 5.2 Detailed Design v0.1](docs/15-phase-5-2-skill-graph-recommendation-design-v0.1.md) | Proposed Phase 5.2 detailed design: Skill Graph traversal, Freshness, Recovery replay, Next Challenge engine, RPC schemas, and parity matrix |
+| [Phase 5.2 Skill Graph & Recommendation ADR](docs/adr/0007-phase-5-2-skill-graph-recommendation.md) | Proposed architectural decisions (`PROPOSED`) for Phase 5.2 read-time projections, disjoint priority partition, and deterministic comparator |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
