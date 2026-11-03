@@ -745,7 +745,7 @@ insert into public.command_receipts (command_id, operation, actor_user_id, resou
 values ('75200000-0000-0000-0000-000000000099'::uuid, 'verify', '52000000-0000-0000-0000-000000000001'::uuid, 'a5200000-0000-0000-0000-000000000099'::uuid, 'f5200000-0000-0000-0000-000000000001'::uuid);
 
 insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
-values ('re520000-0000-0000-0000-000000000099'::uuid, '75200000-0000-0000-0000-000000000099'::uuid, 'f5200000-0000-0000-0000-000000000001'::uuid, 'a5200000-0000-0000-0000-000000000099'::uuid, 'verified', 'pending_review', 'verified', '52000000-0000-0000-0000-000000000001'::uuid);
+values ('de520000-0000-0000-0000-000000000099'::uuid, '75200000-0000-0000-0000-000000000099'::uuid, 'f5200000-0000-0000-0000-000000000001'::uuid, 'a5200000-0000-0000-0000-000000000099'::uuid, 'verified', 'pending_review', 'verified', '52000000-0000-0000-0000-000000000001'::uuid);
 
 insert into public.verified_learning_events (
   id, assessment_id, family_id, child_id, subject_key, subject, title,
@@ -758,7 +758,7 @@ insert into public.verified_learning_events (
   'c5200000-0000-0000-0000-000000000002'::uuid,
   'math', 'Mathematics', 'Developing Quiz', 'quiz', 'normal', 60, 100, 6.00,
   '2026-01-01T00:00:00Z'::timestamptz, '2026-01-10T00:00:00Z'::timestamptz,
-  '52000000-0000-0000-0000-000000000001'::uuid, 're520000-0000-0000-0000-000000000099'::uuid, 2, 'pilot-v0.1'
+  '52000000-0000-0000-0000-000000000001'::uuid, 'de520000-0000-0000-0000-000000000099'::uuid, 2, 'pilot-v0.1'
 );
 
 insert into public.learning_evidence_events (
