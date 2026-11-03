@@ -147,10 +147,10 @@ async function main() {
       id, family_id, child_id, created_by_user_id, status, subject_key, subject,
       assessment_type, difficulty, title, occurred_at, raw_score, max_score, learning_catalog_version
     ) values
-      ('a5200000-0000-0000-0000-000000000002', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'test', 'above_level', 'Strong Addition Test 1', now() - interval '4 days', 100, 100, 'pilot-v0.1'),
-      ('a5200000-0000-0000-0000-000000000003', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'test', 'above_level', 'Strong Addition Test 2', now() - interval '3 days', 100, 100, 'pilot-v0.1'),
-      ('a5200000-0000-0000-0000-000000000004', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'test', 'above_level', 'Strong Addition Test 3', now() - interval '2 days', 100, 100, 'pilot-v0.1'),
-      ('a5200000-0000-0000-0000-000000000005', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'test', 'above_level', 'Strong Addition Test 4', now() - interval '1 day', 100, 100, 'pilot-v0.1');
+      ('a5200000-0000-0000-0000-000000000002', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', 'normal', 'Strong Addition Quiz 1', now() - interval '4 days', 100, 100, 'pilot-v0.1'),
+      ('a5200000-0000-0000-0000-000000000003', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', 'normal', 'Strong Addition Quiz 2', now() - interval '3 days', 100, 100, 'pilot-v0.1'),
+      ('a5200000-0000-0000-0000-000000000004', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', 'normal', 'Strong Addition Quiz 3', now() - interval '2 days', 100, 100, 'pilot-v0.1'),
+      ('a5200000-0000-0000-0000-000000000005', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', 'normal', 'Strong Addition Quiz 4', now() - interval '1 day', 100, 100, 'pilot-v0.1');
 
     set local role authenticated;
     select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', true);
@@ -189,10 +189,10 @@ async function main() {
       assessment_type, difficulty, raw_score, max_score, normalized_score,
       occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
     ) values
-      ('15200000-0000-0000-0000-000000000002', 'a5200000-0000-0000-0000-000000000002', '${familyId}', '${childId}', 'math', 'Mathematics', 'Strong Addition Test 1', 'test', 'above_level', 100, 100, 10.00, now() - interval '4 days', now() - interval '4 days', '${ownerId}', 'e5200000-0000-0000-0000-000000000002', 2, 'pilot-v0.1'),
-      ('15200000-0000-0000-0000-000000000003', 'a5200000-0000-0000-0000-000000000003', '${familyId}', '${childId}', 'math', 'Mathematics', 'Strong Addition Test 2', 'test', 'above_level', 100, 100, 10.00, now() - interval '3 days', now() - interval '3 days', '${ownerId}', 'e5200000-0000-0000-0000-000000000003', 2, 'pilot-v0.1'),
-      ('15200000-0000-0000-0000-000000000004', 'a5200000-0000-0000-0000-000000000004', '${familyId}', '${childId}', 'math', 'Mathematics', 'Strong Addition Test 3', 'test', 'above_level', 100, 100, 10.00, now() - interval '2 days', now() - interval '2 days', '${ownerId}', 'e5200000-0000-0000-0000-000000000004', 2, 'pilot-v0.1'),
-      ('15200000-0000-0000-0000-000000000005', 'a5200000-0000-0000-0000-000000000005', '${familyId}', '${childId}', 'math', 'Mathematics', 'Strong Addition Test 4', 'test', 'above_level', 100, 100, 10.00, now() - interval '1 day', now() - interval '1 day', '${ownerId}', 'e5200000-0000-0000-0000-000000000005', 2, 'pilot-v0.1');
+      ('15200000-0000-0000-0000-000000000002', 'a5200000-0000-0000-0000-000000000002', '${familyId}', '${childId}', 'math', 'Mathematics', 'Strong Addition Quiz 1', 'quiz', 'normal', 100, 100, 10.00, now() - interval '4 days', now() - interval '4 days', '${ownerId}', 'e5200000-0000-0000-0000-000000000002', 2, 'pilot-v0.1'),
+      ('15200000-0000-0000-0000-000000000003', 'a5200000-0000-0000-0000-000000000003', '${familyId}', '${childId}', 'math', 'Mathematics', 'Strong Addition Quiz 2', 'quiz', 'normal', 100, 100, 10.00, now() - interval '3 days', now() - interval '3 days', '${ownerId}', 'e5200000-0000-0000-0000-000000000003', 2, 'pilot-v0.1'),
+      ('15200000-0000-0000-0000-000000000004', 'a5200000-0000-0000-0000-000000000004', '${familyId}', '${childId}', 'math', 'Mathematics', 'Strong Addition Quiz 3', 'quiz', 'normal', 100, 100, 10.00, now() - interval '2 days', now() - interval '2 days', '${ownerId}', 'e5200000-0000-0000-0000-000000000004', 2, 'pilot-v0.1'),
+      ('15200000-0000-0000-0000-000000000005', 'a5200000-0000-0000-0000-000000000005', '${familyId}', '${childId}', 'math', 'Mathematics', 'Strong Addition Quiz 4', 'quiz', 'normal', 100, 100, 10.00, now() - interval '1 day', now() - interval '1 day', '${ownerId}', 'e5200000-0000-0000-0000-000000000005', 2, 'pilot-v0.1');
 
     update public.assessments set status = 'verified' where id in (
       'a5200000-0000-0000-0000-000000000002',
