@@ -2,7 +2,7 @@
 
 - **Status:** READY FOR DESIGN (implementation NOT authorized)
 - **Reviewed baseline:** `main` @ `16568a99da157f296fdf30c3b5e28d902bee5fbc`
-- **Readiness gates:** PR #9 comment `6594086334` — PASS FOR DESIGN; PR #10 audit `6594895418` — REQUEST CHANGES (resolved in current checkpoint)
+- **Readiness gates:** PR #9 comment `6594086334` — PASS FOR DESIGN; PR #10 audits `6594895418`, `6595582324` — REQUEST CHANGES (resolved in current checkpoint)
 - **Upstream contract:** Phase 5.1 — FROZEN ([freeze receipt](freezes/phase-5-1-learning-mastery-foundation-freeze.md)), [ADR 0006](adr/0006-phase-5-learning-engine-mastery.md) — ACCEPTED
 - **Detailed design produced by this checkpoint:** [Phase 5.2 Detailed Design v0.1](15-phase-5-2-skill-graph-recommendation-design-v0.1.md), [ADR 0007](adr/0007-phase-5-2-skill-graph-recommendation.md) — PROPOSED
 
@@ -88,7 +88,7 @@ Phase 5.2 adds **no tables**, no mutable recommendation/freshness/recovery state
 
 ## 4. Readiness Blockers and Resolution
 
-The blockers raised in gates `6594086334` and `6594895418` are resolved in the detailed design:
+The blockers raised in gates `6594086334`, `6594895418`, and `6595582324` are resolved in the detailed design:
 
 | Blocker | Resolution (design section) |
 |---|---|
@@ -99,10 +99,11 @@ The blockers raised in gates `6594086334` and `6594895418` are resolved in the d
 | 5. Catalog rollout / content scope | Active catalog only, version-scoped node identity, no cross-version carry-forward, no `pilot-v0.1` mutation, no promotion in Phase 5.2 (§4.3, §4.4) |
 | 6. Stale Phase 5.1 test requirement | `docs/13` Section 27 tests 28–29 corrected to the frozen `UNIQUE(assessment_id, learning_node_id, component_key)` contract |
 | 7. RPC / payload contracts | Exact signatures, error codes and canonical response schemas (§13, §14) |
-| 8. Exact source of mastery / confidence semantics | Explicitly frozen: Phase 5.2 is a consumer of Phase 5.1 Mastery/Confidence; reuses exact `private.get_child_mastery_at` / `ConfidenceEngine.evaluate` formulas at same `as_of` (§4.2) |
+| 8. Exact source of mastery / confidence semantics & sticky-only `mastery_band` | Explicitly frozen: Phase 5.2 consumes exact Phase 5.1 `private.get_child_mastery_at` 60-day `effective_occurred_at` Confidence bounds (no `verified_at <= as_of` filter added to Confidence); Dart reuses `ConfidenceEngine.evaluate` for confidence fields only while both SQL and Dart derive `mastery_band` strictly from sticky `mastery_attained_at <= as_of` and never manufacture `mastered` at read time (§3.3, §4.2, §15.3) |
 | 9. `recommended_difficulty` for unseen Topic | Explicitly frozen: `null` for unseen Topic, unseen Subject/Domain, and locked/incompatible unseen Skills (§12.2) |
 | 10. `prerequisite_state.dependents` contract | Explicitly frozen: active-catalog Skills depending directly on inspected node with prerequisite/grade status, sorted deterministically by `catalog_sort_path ASC, learning_node_id ASC` (§8.2) |
-| 11. `private.*_at` evaluation-clock semantics | Explicitly frozen: evaluation clock over current committed projection (not arbitrary historical event-sourced reconstruction) with dual evidence visibility `verified_at <= as_of AND effective_occurred_at <= as_of` (§3.2, §3.3) |
+| 11. `private.*_at` evaluation-clock, dual visibility & Freshness source | Explicitly frozen: evaluation clock over current committed projection; dual visibility `verified_at <= as_of AND effective_occurred_at <= as_of` governs Phase 5.2 direct-evidence derivations (Recovery, `latest_evidence`, and visible `latest_effective_occurred_at` for Freshness, converging with `cms.last_evidence_occurred_at` on public reads) (§3.2, §3.3, §5.2) |
+| 12. Phase 5.1 vs Phase 5.2 fixed-clock parity test specification | Explicitly frozen: Part A compares `private.get_child_mastery_at(child_id, fixed_as_of)` against `private.get_node_learning_state_at(child_id, node_id, fixed_as_of)` on the 5 overlapping JSON fields; Part B validates `distinct_recent_vle_count` against the frozen Phase 5.1 60-day distinct-VLE query (§18.1) |
 
 ---
 
@@ -111,7 +112,8 @@ The blockers raised in gates `6594086334` and `6594895418` are resolved in the d
 | Risk | Mitigation |
 |---|---|
 | Dart/PostgreSQL divergence in ordering (UUID, arrays, numerics) | Comparator specifies UUID byte order = lowercase canonical string order, integer-array lexicographic order, scores compared at 2-decimal precision |
-| Future-verified evidence leaking into historical evaluation frames | Dual visibility filter requires `effective_occurred_at <= as_of AND verified_at <= as_of` |
+| Dart `ConfidenceEngine.masteryBand` fallback manufacturing read-time `mastered` | Phase 5.2 Dart reuses `ConfidenceEngine.evaluate` for confidence fields only; `mastery_band` in both SQL and Dart is derived strictly from sticky `mastery_attained_at <= as_of` |
+| Future-verified evidence leaking into Phase 5.2 direct-evidence historical frames | Dual visibility filter (`effective_occurred_at <= as_of AND verified_at <= as_of`) governs Recovery, `latest_evidence`, and Freshness, while Confidence preserves exact frozen Phase 5.1 60-day `effective_occurred_at` bounds |
 | Attempting full historical mastery reconstruction | Clarified boundary: `private.*_at` evaluates time-varying read fields over current committed projection; full historical reconstruction is deferred |
 | Sparse pilot catalog limits UX realism | Transactional fixtures for richer graphs; content expansion deferred to a separate platform catalog-release gate |
 | Redundant Topic + child Skill candidates | Accepted in v0.1 (distinct node IDs, deterministic); ancestor/descendant suppression deferred |

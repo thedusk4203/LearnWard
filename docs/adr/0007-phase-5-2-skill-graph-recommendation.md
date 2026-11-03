@@ -5,7 +5,7 @@
 - **Target:** Phase 5.2 — Skill Graph + Recommendation Foundation (completing Phase 5 v0.1)
 - **Reviewed Baseline:** `main` @ `16568a99da157f296fdf30c3b5e28d902bee5fbc`
 - **Upstream Contract:** [ADR 0006 — Phase 5 Learning Engine, Mastery & Recommendation Decisions](0006-phase-5-learning-engine-mastery.md) (`ACCEPTED`), [Phase 5.1 Freeze Receipt](../freezes/phase-5-1-learning-mastery-foundation-freeze.md) (`FROZEN`)
-- **Readiness Gate:** PR #9 Comment `6594086334` (`PASS FOR DESIGN`), PR #10 Audit `6594895418` (`REQUEST CHANGES`)
+- **Readiness Gate:** PR #9 Comment `6594086334` (`PASS FOR DESIGN`), PR #10 Audits `6594895418`, `6595582324` (`REQUEST CHANGES`)
 - **Detailed Design:** [docs/15-phase-5-2-skill-graph-recommendation-design-v0.1.md](../15-phase-5-2-skill-graph-recommendation-design-v0.1.md)
 
 This ADR remains **`PROPOSED`** during the Phase 5.2 design review and implementation cycle. It may be marked `ACCEPTED` only after Phase 5.2 implementation passes independent audit, merges to `main`, and completes post-merge CI verification.
@@ -16,7 +16,7 @@ This ADR remains **`PROPOSED`** during the Phase 5.2 design review and implement
 
 Phase 5.1 froze the versioned curriculum catalog (`learning_catalog_versions`, `learning_nodes`, `learning_prerequisites`), component-level assessment mappings, immutable evidence atoms (`learning_evidence_events`), deterministic EWMA mastery rebuild (`child_mastery_states`, `mastery_state_revisions`), rolling 60-day Confidence Engine v0.1, and server-authoritative sticky `mastery_attained_at`.
 
-Phase 5.2 completes Phase 5 by delivering Skill Graph traversal, Freshness, Recovery, Next Challenge recommendation candidate generation, and coverage presentation. Following design audits `6594086334` and `6594895418`, the key architectural decisions below are frozen to ensure complete determinism and cross-platform parity between PostgreSQL RPCs and pure Dart domain engines.
+Phase 5.2 completes Phase 5 by delivering Skill Graph traversal, Freshness, Recovery, Next Challenge recommendation candidate generation, and coverage presentation. Following design audits `6594086334`, `6594895418`, and `6595582324`, the key architectural decisions below are frozen to ensure complete determinism and cross-platform parity between PostgreSQL RPCs and pure Dart domain engines.
 
 ---
 
@@ -41,19 +41,21 @@ Phase 5.2 introduces **no** mutable recommendation, freshness, or recovery table
 
 ---
 
-## Decision 3 — Phase 5.2 Reuses Exact Phase 5.1 Mastery & Confidence Semantics
+## Decision 3 — Phase 5.2 Reuses Exact Phase 5.1 Mastery & Confidence Semantics (Sticky-Only `mastery_band`)
 
 ```text
 Phase 5.2 is a consumer of Phase 5.1 Mastery/Confidence semantics.
 It does not redefine them.
+
+Mastery declaration is a persisted server event.
+Read-time evaluation consumes mastery_attained_at; it does not manufacture attainment.
 ```
 
-For every observed active-catalog node, Phase 5.2 consumes the exact formulas frozen in Phase 5.1 (`private.get_child_mastery_at` / `ConfidenceEngine.evaluate`) at the same authoritative `as_of`:
+For every observed active-catalog node, Phase 5.2 consumes the exact authoritative formulas frozen in Phase 5.1 (`private.get_child_mastery_at`) at the same authoritative `as_of`:
 - `mastery_score`: from `child_mastery_states.mastery_score`.
-- `mastery_band`: `mastered` if `mastery_attained_at <= as_of`, else `mastery_candidate` (>= 85), `secure` (>= 70), `developing` (>= 50), `emerging` (< 50).
-- `confidence_units` & `confidence_band`: rolling 60-day window (`effective_occurred_at >= as_of - 60d AND effective_occurred_at <= as_of AND verified_at <= as_of`), units = `sum(specificity_weight * level_weight)`, high if units > 3.5 AND distinct recent VLEs >= 2, medium if units >= 1.5, low otherwise.
-
-Pure Dart domain engines reuse `ConfidenceEngine.evaluate` directly. Phase 5.2 MUST NOT create an alternative confidence formula.
+- `mastery_band` (**sticky-attainment-only rule**): `'mastered'` if and only if `mastery_attained_at IS NOT NULL AND mastery_attained_at <= as_of`, else `'mastery_candidate'` (`>= 85.00`), `'secure'` (`>= 70.00`), `'developing'` (`>= 50.00`), `'emerging'` (`< 50.00`).
+- `confidence_units`, `distinct_recent_vle_count`, & `confidence_band`: evaluated over the **exact** frozen Phase 5.1 60-day effective-occurrence window (`effective_occurred_at >= as_of - interval '60 days' AND effective_occurred_at <= as_of`, without adding a Phase-5.2-only `verified_at <= as_of` filter), where `confidence_units = round(sum(specificity_weight * level_weight), 2)`, `'high'` if `confidence_units > 3.50 AND distinct_recent_vle_count >= 2`, `'medium'` if `confidence_units >= 1.50`, and `'low'` otherwise.
+- **Dart `ConfidenceEngine` boundary:** Because frozen Phase 5.1 `ConfidenceEngine.evaluate` contains a fallback branch that returns `MasteryBand.mastered` when `masteryAttainedAt == null` if `masteryScore >= 85 && confBand == ConfidenceBand.high && distinctCount >= 2`, Phase 5.2 Dart domain engines reuse `ConfidenceEngine.evaluate` **only** for `(confidenceUnits, distinctRecentVles, confidenceBand)` and **never** use `ConfidenceEngine.evaluate(...).masteryBand`. Both PostgreSQL and Dart derive `mastery_band` strictly from the sticky-attainment rule above (`mastery_attained_at IS NULL` with `mastery_score = 90` and High confidence yields `'mastery_candidate'`, never `'mastered'`).
 
 ---
 
@@ -61,15 +63,15 @@ Pure Dart domain engines reuse `ConfidenceEngine.evaluate` directly. Phase 5.2 M
 
 Internal `private.*_at(..., p_as_of)` helpers are **deterministic evaluation-clock helpers over the CURRENT COMMITTED Phase 5.1 projection.**
 
-They are NOT arbitrary historical snapshot reconstruction APIs. They vary time-parameterized derivations (confidence window, freshness elapsed duration, recovery expiry, sticky attainment visibility), but they do NOT reconstruct historical numeric EWMA `mastery_score` before subsequent assessments were processed. Full historical event-sourced reconstruction is explicitly outside scope for Phase 5.2 v0.1.
+They are NOT arbitrary historical snapshot reconstruction APIs. They vary time-parameterized derivations (60-day confidence window, visible-evidence freshness elapsed duration, recovery replay & 30-day expiry, sticky attainment visibility), but they do NOT reconstruct historical numeric EWMA `mastery_score` before subsequent assessments were processed. Full historical event-sourced reconstruction is explicitly outside scope for Phase 5.2 v0.1.
 
 In production client-facing RPCs, `v_as_of := transaction_timestamp()` is captured once at request entry.
 
 ---
 
-## Decision 5 — Dual Temporal Visibility Rule (`effective_occurred_at <= as_of AND verified_at <= as_of`)
+## Decision 5 — Dual Temporal Visibility Rule (`effective_occurred_at <= as_of AND verified_at <= as_of`) Scoped to Phase 5.2 Direct-Evidence Reads
 
-Whenever Phase 5.2 reads `learning_evidence_events` (for Recovery replay, `latest_evidence`, and Confidence evaluation), it requires:
+Whenever Phase 5.2 derives **new Phase 5.2 direct-evidence read fields**—specifically **Recovery replay**, **`latest_evidence`**, and **Freshness (`latest_effective_occurred_at`)**—from `public.learning_evidence_events`, it requires:
 
 ```sql
 effective_occurred_at <= as_of
@@ -79,15 +81,19 @@ AND verified_at <= as_of
 - `effective_occurred_at` represents academic chronology (when the learning occurred).
 - `verified_at` represents authority visibility time (when the evidence was verified into the authoritative system).
 
-An event verified at `T3` cannot participate in an evaluation at `T2` (`T2 < T3`) merely because its `effective_occurred_at = T1` is old. In production public RPCs, all already-committed rows naturally satisfy `verified_at <= as_of`. For internal `private.*_at` helpers, this rule guarantees that future-verified evidence never leaks backward into historical evaluation test frames.
+An event with `effective_occurred_at = T1` and `verified_at = T3` (`T1 < T2 < T3`) evaluated at `as_of = T2` is **invisible** to Recovery replay, `latest_evidence`, and Freshness (while Confidence continues to follow the exact frozen Phase 5.1 effective-occurrence window `[T2 - 60d, T2]`). At `as_of >= T3`, the event is visible across all derivations. In production public RPCs (`v_as_of := transaction_timestamp()`), all committed rows naturally satisfy `effective_occurred_at <= verified_at <= v_as_of`.
 
 ---
 
-## Decision 6 — Freshness Engine v0.1 (`recent | aging | needs_refresh | unknown`)
+## Decision 6 — Freshness Engine v0.1 (`recent | aging | needs_refresh | unknown`) & Visible-Evidence Source
 
-For `latest_effective_occurred_at` (`child_mastery_states.last_evidence_occurred_at`) and `elapsed = greatest(0, as_of - latest_effective_occurred_at)`:
+For any node at `as_of`, `latest_effective_occurred_at` is the maximum `effective_occurred_at` among Phase 5.2-visible evidence (`effective_occurred_at <= as_of AND verified_at <= as_of`):
+- On public reads (`as_of = transaction_timestamp()`), this converges identically with `child_mastery_states.last_evidence_occurred_at`.
+- On explicit historical `private.*_at` evaluations, deriving `latest_effective_occurred_at` from visible evidence ensures internal payload consistency: if no evidence is visible at `as_of`, `latest_effective_occurred_at = null`, `latest_evidence = null`, `recovery_signal = 'none'`, `freshness = 'unknown'`, and `days_since_last_evidence = null`.
 
-- `latest_effective_occurred_at IS NULL` -> `unknown`
+With `elapsed = greatest(0, as_of - latest_effective_occurred_at)`:
+
+- `latest_effective_occurred_at IS NULL` -> `unknown` (`days_since_last_evidence = null`)
 - `elapsed <= 14 days` -> `recent`
 - `14 days < elapsed <= 45 days` -> `aging`
 - `elapsed > 45 days` -> `needs_refresh`

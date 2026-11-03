@@ -3,7 +3,7 @@
 - **Status:** PROPOSED (Design Checkpoint — Implementation NOT Authorized)
 - **Reviewed Baseline:** `main` @ `16568a99da157f296fdf30c3b5e28d902bee5fbc`
 - **Upstream Contract:** Phase 5.1 — FROZEN ([freeze receipt](freezes/phase-5-1-learning-mastery-foundation-freeze.md)), [ADR 0006](adr/0006-phase-5-learning-engine-mastery.md) — ACCEPTED
-- **Readiness Review:** [Phase 5.2 Dependency / Readiness Review](14-phase-5-2-dependency-readiness-review.md) (PR #9 comment `6594086334`, PR #10 audit `6594895418`)
+- **Readiness Review:** [Phase 5.2 Dependency / Readiness Review](14-phase-5-2-dependency-readiness-review.md) (PR #9 comment `6594086334`, PR #10 audits `6594895418`, `6595582324`)
 - **Companion ADR:** [ADR 0007 — Phase 5.2 Skill Graph, Freshness, Recovery & Next Challenge Decisions](adr/0007-phase-5-2-skill-graph-recommendation.md) (`PROPOSED`)
 
 ---
@@ -58,9 +58,10 @@ v_as_of := transaction_timestamp();
 ```
 
 That single `v_as_of` value is passed across all downstream derivations in the request:
-- **Sticky mastery attainment check:** `mastery_attained_at IS NOT NULL AND mastery_attained_at <= v_as_of` (used for both `mastery_band = 'mastered'` and prerequisite satisfaction);
-- **Confidence 60-day window:** `effective_occurred_at >= v_as_of - interval '60 days' AND effective_occurred_at <= v_as_of` (with authority visibility `verified_at <= v_as_of`);
-- **Freshness 14d / 45d elapsed duration:** `greatest(interval '0 seconds', v_as_of - latest_effective_occurred_at)`;
+- **Sticky mastery attainment check:** `mastery_attained_at IS NOT NULL AND mastery_attained_at <= v_as_of` (used as the sole route to `mastery_band = 'mastered'` and for prerequisite satisfaction);
+- **Confidence 60-day window (exact frozen Phase 5.1 semantics):** `effective_occurred_at >= v_as_of - interval '60 days' AND effective_occurred_at <= v_as_of` (consuming the exact Phase 5.1 `private.get_child_mastery_at` effective-occurrence bounds without adding a `verified_at <= v_as_of` filter);
+- **Phase 5.2 direct-evidence authority visibility (`verified_at <= v_as_of AND effective_occurred_at <= v_as_of`):** governs `latest_evidence`, Recovery replay, and Freshness (`latest_effective_occurred_at`);
+- **Freshness 14d / 45d elapsed duration:** `greatest(interval '0 seconds', v_as_of - latest_effective_occurred_at)` where `latest_effective_occurred_at` is the maximum `effective_occurred_at` among Phase 5.2-visible evidence (`effective_occurred_at <= v_as_of AND verified_at <= v_as_of`; identical to `cms.last_evidence_occurred_at` on all current public reads);
 - **Recovery replay upper bound & 30-day recency window:** `effective_occurred_at <= v_as_of AND verified_at <= v_as_of` and `v_as_of - latest_unresolved_weakness_at <= interval '30 days'`;
 - **Response metadata:** echoed as `as_of` in every response payload.
 
@@ -84,27 +85,47 @@ They are NOT arbitrary historical snapshot reconstruction APIs.
 ```
 
 - **What `p_as_of` varies:**
-  - `confidence_band` & `confidence_units` (rolling 60-day window relative to `p_as_of`);
-  - `freshness` (elapsed duration relative to `p_as_of`);
-  - `recovery_signal` (replay over evidence visible at `p_as_of` and 30-day expiry relative to `p_as_of`);
+  - `confidence_band`, `confidence_units`, & `distinct_recent_vle_count` (rolling 60-day effective-occurrence window `[p_as_of - 60 days, p_as_of]`, matching frozen Phase 5.1 `private.get_child_mastery_at`);
+  - `freshness` & `days_since_last_evidence` (elapsed duration relative to `p_as_of` from the latest Phase 5.2-visible evidence `effective_occurred_at <= p_as_of AND verified_at <= p_as_of`);
+  - `recovery_signal` & `latest_unresolved_weakness_at` (replay over evidence visible at `p_as_of` via `effective_occurred_at <= p_as_of AND verified_at <= p_as_of`, plus 30-day expiry relative to `p_as_of`);
+  - `latest_evidence` (latest canonical evidence row visible at `p_as_of` via `effective_occurred_at <= p_as_of AND verified_at <= p_as_of`);
   - `mastery_attained_at <= p_as_of` gate (determining whether `mastery_band = 'mastered'` and whether prerequisites are satisfied at `p_as_of`);
   - `is_prerequisite_satisfied` visibility at `p_as_of`.
 - **What `p_as_of` does NOT do:** It does NOT reconstruct historical numeric EWMA `mastery_score` before subsequently processed VLEs. Full historical numeric mastery reconstruction would require replaying the entire immutable evidence ledger and is explicitly outside Phase 5.2 v0.1 scope.
 - **Parity fixture precondition:** Parity fixtures evaluating at explicit `p_as_of` MUST establish the child's committed projection at or before `p_as_of`, then advance `p_as_of` forward to test temporal transitions (aging, expiry, sticky attainment), unless explicitly testing the temporal visibility guard.
 
-### 3.3 Evidence Authority Visibility Rule (`verified_at <= as_of`)
+### 3.3 Phase 5.2 Direct-Evidence Authority Visibility (`verified_at <= as_of`) vs Phase 5.1 Confidence Bounds
 
-Whenever Phase 5.2 queries `public.learning_evidence_events` (for Recovery replay, `latest_evidence`, and Confidence evaluation), it MUST enforce **dual temporal bounds**:
+Phase 5.2 cleanly separates **frozen Phase 5.1 Confidence reuse** from **new Phase 5.2 direct-evidence read derivations**:
 
-```sql
-effective_occurred_at <= v_as_of
-AND verified_at <= v_as_of
-```
+1. **Confidence (`confidence_units`, `distinct_recent_vle_count`, `confidence_band`) — Exact Phase 5.1 Effective-Occurrence Bounds:**
+   Frozen Phase 5.1 (`private.get_child_mastery_at(p_child_id, p_as_of)` and [ADR 0006](adr/0006-phase-5-learning-engine-mastery.md)) evaluates the 60-day Confidence window using ONLY:
+   ```sql
+   effective_occurred_at >= v_as_of - interval '60 days'
+   and effective_occurred_at <= v_as_of
+   ```
+   Phase 5.2 reuses this **exact** predicate without adding `AND verified_at <= v_as_of`, ensuring 100% parity with `private.get_child_mastery_at(p_child_id, v_as_of)`.
+2. **Phase 5.2 Direct-Evidence Read Derivations (Recovery, `latest_evidence`, and Freshness) — Dual Temporal Visibility Bounds:**
+   Whenever Phase 5.2 derives **Recovery replay**, **`latest_evidence`**, or **Freshness (`latest_effective_occurred_at`)** from `public.learning_evidence_events`, it enforces **dual temporal bounds**:
+   ```sql
+   effective_occurred_at <= v_as_of
+   and verified_at <= v_as_of
+   ```
+   - **`effective_occurred_at`** = academic chronology (when the learning occurred).
+   - **`verified_at`** = authority visibility time (when the evidence was verified into the authoritative system).
 
-- **`effective_occurred_at`** = academic chronology (when the learning occurred).
-- **`verified_at`** = authority visibility time (when the evidence was verified into the authoritative system).
+#### Explicit Evaluation Behavior for Backdated / Future-Verified Evidence (`T1 < T2 < T3`)
 
-An evidence event verified at `T3` MUST NOT participate in an evaluation at `T2` (`T2 < T3`) merely because its historical `effective_occurred_at = T1` was before `T2`. In production public RPCs where `v_as_of := transaction_timestamp()`, all committed rows already satisfy `verified_at <= v_as_of`. For internal `private.*_at` evaluation helpers, the `verified_at <= v_as_of` guard guarantees that future-verified evidence never leaks backward into historical evaluation frames.
+Suppose an evidence event has `effective_occurred_at = T1` and `verified_at = T3` (`T1 < T2 < T3`):
+
+| Derivation Surface | Evaluated at `as_of = T2` (`T1 < T2 < T3`) | Evaluated at `as_of >= T3` |
+|---|---|---|
+| **Recovery (`recovery_signal`, `latest_unresolved_weakness_at`)** | **Invisible** (`verified_at = T3 > T2` excluded by dual visibility) | **Visible** (participates in canonical replay & 30d window relative to `as_of`) |
+| **`latest_evidence` summary (`get_node_learning_state`)** | **Invisible** (`verified_at = T3 > T2` excluded by dual visibility) | **Visible** |
+| **Freshness (`latest_effective_occurred_at`, `freshness`, `days_since_last_evidence`)** | **Invisible** (derived from latest visible evidence with `effective_occurred_at <= T2 AND verified_at <= T2`; `'unknown'` / `null` if no prior visible evidence exists) | **Visible** (`latest_effective_occurred_at >= T1`) |
+| **Confidence (`confidence_units`, `distinct_recent_vle_count`, `confidence_band`)** | Follows **exact frozen Phase 5.1 effective-occurrence semantics** (`effective_occurred_at` in `[T2 - 60d, T2]`, matching `private.get_child_mastery_at(child_id, T2)`) | Follows **exact frozen Phase 5.1 effective-occurrence semantics** (`effective_occurred_at` in `[as_of - 60d, as_of]`) |
+
+In production client-facing RPCs where `v_as_of := transaction_timestamp()`, all committed rows already satisfy `effective_occurred_at <= verified_at <= v_as_of`, so both rules naturally see the complete committed evidence set and `latest_effective_occurred_at` equals `cms.last_evidence_occurred_at`.
 
 ### 3.4 Unified Internal Derivation Pipeline
 
@@ -119,14 +140,15 @@ capture as_of clock (transaction_timestamp() in public RPCs)
   ↓
 build active catalog universe (is_active = true along full ancestor chain)
   ↓
-for observed nodes:
-  consume frozen Phase 5.1 mastery & confidence semantics at as_of
-  (mastery_score, mastery_band, confidence_units, confidence_band, distinct_recent_vles)
+for observed nodes, consume frozen Phase 5.1 mastery & confidence semantics at as_of:
+  - mastery_score from child_mastery_states
+  - mastery_band via sticky-only attainment (mastery_attained_at <= as_of => mastered; never manufactured at read time)
+  - confidence_units, distinct_recent_vle_count, confidence_band over [as_of - 60d, as_of] effective_occurred_at
   ↓
-apply evidence visibility (verified_at <= as_of AND effective_occurred_at <= as_of):
-  - resolve latest_evidence summary
+apply Phase 5.2 direct-evidence visibility (verified_at <= as_of AND effective_occurred_at <= as_of):
+  - resolve latest_evidence summary and visible latest_effective_occurred_at
   - execute Recovery replay & 30-day recency expiry
-  - evaluate Freshness relative to latest_effective_occurred_at
+  - evaluate Freshness relative to visible latest_effective_occurred_at
   ↓
 derive prerequisite & dependent graph state:
   - prerequisites: check mastery_attained_at <= as_of for all active incoming edges
@@ -175,7 +197,7 @@ Each active-universe node `n` is `LEFT JOIN`ed to `public.child_mastery_states c
 
 | Classification | Predicate | Derived Read-Time Defaults |
 |---|---|---|
-| **`seen` (`is_observed = true`)** | `cms.learning_node_id IS NOT NULL` (equivalently `cms.effective_evidence_count >= 1`) | `mastery_score = cms.mastery_score` (`0.00..100.00`), `mastery_band` in `{emerging, developing, secure, mastery_candidate, mastered}`, `confidence_band` in `{low, medium, high}`, `freshness` in `{recent, aging, needs_refresh}`, `latest_effective_occurred_at = cms.last_evidence_occurred_at` |
+| **`seen` (`is_observed = true`)** | `cms.learning_node_id IS NOT NULL` (equivalently `cms.effective_evidence_count >= 1`) | `mastery_score = cms.mastery_score` (`0.00..100.00`), `mastery_band` in `{emerging, developing, secure, mastery_candidate, mastered}`, `confidence_band` in `{low, medium, high}`, `latest_effective_occurred_at = max(ev.effective_occurred_at)` over visible evidence (`effective_occurred_at <= v_as_of AND verified_at <= v_as_of`, which equals `cms.last_evidence_occurred_at` on all current public reads), `freshness` in `{recent, aging, needs_refresh}` (or `'unknown'` if no evidence is visible yet at an explicit historical `p_as_of`) |
 | **`unseen` (`is_observed = false`)** | `cms.learning_node_id IS NULL` (no authoritative child evidence/mastery on this node) | `mastery_score = null`, `mastery_band = null`, `confidence_band = null`, `confidence_units = 0.00`, `freshness = 'unknown'`, `recovery_signal = 'none'`, `latest_effective_occurred_at = null` |
 
 **Invariants:**
@@ -189,12 +211,15 @@ Each active-universe node `n` is `LEFT JOIN`ed to `public.child_mastery_states c
 ```text
 Phase 5.2 is a consumer of Phase 5.1 Mastery/Confidence semantics.
 It does not redefine them.
+
+Mastery declaration is a persisted server event.
+Read-time evaluation consumes mastery_attained_at; it does not manufacture attainment.
 ```
 
-For every observed active-catalog node `n` at evaluation `v_as_of`, Phase 5.2 consumes the exact formulas frozen in Phase 5.1 (`private.get_child_mastery_at` / `ConfidenceEngine.evaluate`):
+For every observed active-catalog node `n` at evaluation `v_as_of`, Phase 5.2 consumes the exact authoritative formulas frozen in Phase 5.1 (`private.get_child_mastery_at`):
 
 1. **`mastery_score`:** from `cms.mastery_score` (numeric `0.00..100.00`).
-2. **`mastery_band`:**
+2. **`mastery_band` (Sticky-Attainment-Only Rule):**
    ```sql
    case
      when cms.mastery_attained_at is not null and cms.mastery_attained_at <= v_as_of then 'mastered'
@@ -204,8 +229,10 @@ For every observed active-catalog node `n` at evaluation `v_as_of`, Phase 5.2 co
      else 'emerging'
    end
    ```
-3. **`confidence_units` and `confidence_band`:**
-   Evaluated over `learning_evidence_events` where `child_id = p_child_id AND learning_node_id = n.id AND effective_occurred_at >= v_as_of - interval '60 days' AND effective_occurred_at <= v_as_of AND verified_at <= v_as_of`:
+   - **Critical Dart parity constraint (`ConfidenceEngine` boundary):** In frozen Phase 5.1 Dart (`packages/learnward_domain/lib/src/learning/confidence_engine.dart`), `ConfidenceEngine.evaluate` contains a legacy fallback branch that returns `MasteryBand.mastered` when `masteryAttainedAt == null` if `masteryScore >= 85 && confBand == ConfidenceBand.high && distinctCount >= 2`. Authoritative Phase 5.1 SQL (`private.get_child_mastery_at`) and [ADR 0006](adr/0006-phase-5-learning-engine-mastery.md) forbid manufacturing `mastered` at read time when `mastery_attained_at IS NULL` (or `> v_as_of`).
+   - Therefore, without modifying frozen Phase 5.1 code, Phase 5.2 Dart domain engines (`NextChallengeEngine` and node-state / overview builders) may reuse `ConfidenceEngine.evaluate` **ONLY** for confidence fields (`confidenceUnits`, `distinctRecentVles`, `confidenceBand`), and **MUST NOT** consume `ConfidenceEngine.evaluate(...).masteryBand`. Both PostgreSQL and Dart in Phase 5.2 derive `mastery_band` exclusively from the sticky-attainment formula above: if `mastery_attained_at` is `null` or `> v_as_of` and `mastery_score >= 85.00`, `mastery_band` is unconditionally `'mastery_candidate'` (`MasteryBand.masteryCandidate`), even when `confidence_band = 'high'` and `distinct_recent_vle_count >= 2`.
+3. **`confidence_units`, `distinct_recent_vle_count`, and `confidence_band`:**
+   Evaluated over `learning_evidence_events` using the **exact** frozen Phase 5.1 60-day effective-occurrence window (`child_id = p_child_id AND learning_node_id = n.id AND effective_occurred_at >= v_as_of - interval '60 days' AND effective_occurred_at <= v_as_of`, with **no** extra `verified_at <= v_as_of` filter):
    - `confidence_units = round(sum(specificity_weight * level_weight), 2)`
    - `distinct_recent_vle_count = count(distinct verified_learning_event_id)`
    - `confidence_band`:
@@ -213,7 +240,7 @@ For every observed active-catalog node `n` at evaluation `v_as_of`, Phase 5.2 co
      - `'medium'` if `confidence_units >= 1.50` (and not high)
      - `'low'` otherwise (`confidence_units < 1.50` or `distinct_recent_vle_count < 2` when units > 3.50)
 
-In pure Dart domain code, `ConfidenceEngine.evaluate` is reused directly; no separate confidence engine or altered thresholds exist in Phase 5.2.
+In pure Dart domain code, `ConfidenceEngine.evaluate` is reused directly for `(confidenceUnits, distinctRecentVles, confidenceBand)` so no second confidence formula or altered threshold exists in Phase 5.2.
 
 ### 4.3 Version-Scoped Node Identity & Historical Catalog Isolation
 
@@ -240,11 +267,35 @@ needs_refresh
 unknown
 ```
 
-### 5.2 Exact Boundary Contract
+### 5.2 Exact Source of `latest_effective_occurred_at` & Boundary Contract
 
-Given `latest_effective_occurred_at` (`cms.last_evidence_occurred_at` for a `seen` node, or `null` for an `unseen` node) and server-authoritative `as_of`:
+#### Authoritative Source of `latest_effective_occurred_at` (Public Reads vs `private.*_at` Helpers)
 
-1. If `latest_effective_occurred_at IS NULL` (`unseen` node):
+For any node `n` at evaluation clock `v_as_of`, `latest_effective_occurred_at` is the maximum `ev.effective_occurred_at` among Phase 5.2-visible evidence rows for `(p_child_id, n.id)`:
+
+```sql
+select max(ev.effective_occurred_at)
+from public.learning_evidence_events ev
+where ev.child_id = p_child_id
+  and ev.learning_node_id = n.id
+  and ev.effective_occurred_at <= v_as_of
+  and ev.verified_at <= v_as_of
+```
+
+- **Public / current RPCs (`v_as_of := transaction_timestamp()`):** Every committed row in `public.learning_evidence_events` satisfies `effective_occurred_at <= verified_at <= v_as_of`. Consequently, `max(ev.effective_occurred_at)` over visible evidence and `cms.last_evidence_occurred_at` are **identical** (`cms.last_evidence_occurred_at` may be used as an equivalent fast path whenever `cms.last_verified_at <= v_as_of`).
+- **Explicit historical evaluation helpers (`private.*_at` with explicit `p_as_of`):** Computing `latest_effective_occurred_at` from Phase 5.2-visible evidence (`effective_occurred_at <= p_as_of AND verified_at <= p_as_of`) guarantees complete internal consistency across the response payload: if all evidence on a node was verified after `p_as_of` (e.g., `effective_occurred_at = T1 < p_as_of < verified_at = T3`), then at `p_as_of`:
+  - `latest_effective_occurred_at = null`,
+  - `latest_evidence = null`,
+  - `recovery_signal = 'none'`,
+  - `freshness = 'unknown'`, and
+  - `days_since_last_evidence = null`
+  (never returning `latest_evidence = null` alongside `freshness = 'recent'` from a future-verified event). As frozen in §3.2, this does not reconstruct historical numeric `mastery_score`.
+
+#### Freshness Elapsed-Duration Thresholds
+
+Given `latest_effective_occurred_at` and server-authoritative `as_of`:
+
+1. If `latest_effective_occurred_at IS NULL` (`unseen` node, or no evidence visible at `as_of`):
    - `freshness = 'unknown'`
    - `days_since_last_evidence = null`
 2. Otherwise, compute clamped non-negative elapsed duration:
@@ -1048,6 +1099,8 @@ All Phase 5.2 domain additions live in `packages/learnward_domain/lib/src/learni
 3. **`NextChallengeEngine` (`next_challenge_engine.dart`):**
    - Pure methods for:
      - active-catalog universe assembly & active-ancestor filtering,
+     - observed-node Mastery & Confidence consumption: invokes `ConfidenceEngine.evaluate` **only** for `(confidenceUnits, distinctRecentVles, confidenceBand)` over the 60-day `effectiveOccurredAt` window (`!effectiveOccurredAt.isBefore(asOf.subtract(Duration(days: 60))) && !effectiveOccurredAt.isAfter(asOf)`), and derives `masteryBand` exclusively via the sticky-attainment rule (`masteryAttainedAt != null && !masteryAttainedAt.isAfter(asOf) => MasteryBand.mastered`, else `>= 85 => MasteryBand.masteryCandidate`, `>= 70 => MasteryBand.secure`, `>= 50 => MasteryBand.developing`, `< 50 => MasteryBand.emerging`), never reading `ConfidenceEngine.evaluate(...).masteryBand`,
+     - Phase 5.2 direct-evidence visibility filtering (`!effectiveOccurredAt.isAfter(asOf) && !verifiedAt.isAfter(asOf)`) for `latestEvidence`, `latestEffectiveOccurredAt` -> `FreshnessEngine.evaluate`, and `RecoveryEngine.evaluate`,
      - `isGradeCompatible({required int? schoolGrade, required int? gradeMin, required int? gradeMax})`,
      - prerequisite satisfaction (`masteryAttainedAt != null && !masteryAttainedAt.isAfter(asOf)`),
      - dependents evaluation with deterministic sorting,
@@ -1117,81 +1170,88 @@ Phase 5.2 adds calm, honest, non-manipulative UI surfaces in `apps/mobile/lib/fe
 Shared JSON parity fixtures (`fixtures/learning_v02_recommendation_parity_fixtures.json`) executed by both Dart (`packages/learnward_domain/test/next_challenge_parity_test.dart`) and PostgreSQL (`scripts/test_learning_recommendation_parity.mjs` calling `private.*_at` inside per-fixture `BEGIN ... ROLLBACK` transactions), complemented by pgTAP (`supabase/tests/database/11_phase5_2_recommendation_test.sql`), MUST cover at minimum:
 
 ### 18.1 Mastery & Confidence Reuse Parity (Phase 5.1 vs Phase 5.2)
-1. Exact equality between Phase 5.1 `get_child_mastery` and Phase 5.2 node-state fields (`mastery_score`, `mastery_band`, `confidence_band`, `confidence_units`, `distinct_recent_vle_count`, `mastery_attained_at`) for identical child/node/as_of.
+1. **Two-part fixed-clock Phase 5.1 vs Phase 5.2 parity:**
+   - **Part A (Authoritative overlap parity at `fixed_as_of`):** Compare `private.get_child_mastery_at(child_id, fixed_as_of)` against `private.get_node_learning_state_at(child_id, node_id, fixed_as_of)` (and `private.get_child_learning_overview_at(child_id, fixed_as_of)` for the same observed node) at the exact same `fixed_as_of` across the **5 overlapping JSON fields**: `mastery_score`, `mastery_band`, `confidence_band`, `confidence_units`, and `mastery_attained_at`.
+   - **Part B (`distinct_recent_vle_count` verification):** Because `private.get_child_mastery_at` computes `distinct_recent_vles` internally without returning `distinct_recent_vle_count` in its JSON object, verify Phase 5.2 `state.distinct_recent_vle_count` separately against the frozen Phase 5.1 60-day evidence query `count(distinct verified_learning_event_id)` over `effective_occurred_at >= fixed_as_of - interval '60 days' AND effective_occurred_at <= fixed_as_of` (and `ConfidenceEngine.evaluate(...).distinctRecentVles` in Dart).
 2. Low confidence state (< 1.5 units).
 3. Medium confidence state (>= 1.5 units, or > 3.5 units with only 1 VLE).
 4. High confidence state (> 3.5 units AND >= 2 distinct VLEs).
-5. Mastery Candidate state (`mastery_score >= 85.00` without sticky attainment).
-6. Sticky Mastered state (`mastery_attained_at <= as_of`).
-7. Sticky Mastered with numeric score subsequent drop below 85 (e.g. `78.00`): remains `mastery_band = 'mastered'` in both Phase 5.1 and Phase 5.2.
-8. 61-day confidence aging: evidence older than 60 days drops confidence units to 0.00 and band to Low, while sticky Mastered remains `mastered`.
+5. Mastery Candidate state with low/medium confidence (`mastery_score >= 85.00`, `mastery_attained_at IS NULL` -> `mastery_band = 'mastery_candidate'`).
+6. **Mastery Candidate with High confidence but `mastery_attained_at IS NULL` (sticky-attainment-only guard):** `mastery_score = 90.00`, `confidence_band = 'high'`, `distinct_recent_vle_count >= 2`, `mastery_attained_at = NULL` -> authoritative Phase 5.2 `mastery_band = 'mastery_candidate'` (**NOT** `'mastered'`) in both PostgreSQL and Dart (proving Dart does not use the `ConfidenceEngine.masteryBand` fallback when `masteryAttainedAt == null`).
+7. Sticky Mastered state (`mastery_attained_at <= as_of` -> `mastery_band = 'mastered'`).
+8. Sticky Mastered with numeric score subsequent drop below 85 (e.g. `78.00`): remains `mastery_band = 'mastered'` in both Phase 5.1 and Phase 5.2.
+9. 61-day confidence aging: evidence older than 60 days drops confidence units to 0.00 and band to Low, while sticky Mastered remains `mastered`.
 
-### 18.2 Evaluation-Clock & Evidence Temporal Visibility (`verified_at <= as_of`)
-9. **Authority visibility boundary:** Evidence event with `effective_occurred_at = Jan 1` and `verified_at = Jan 10`. Evaluated at `as_of = Jan 5`: event is **invisible** (does not appear in Recovery replay, does not appear in `latest_evidence`, does not contribute to Confidence units).
-10. Evaluated at `as_of = Jan 10 00:00:00` or later: event is **visible** across Recovery, `latest_evidence`, and Confidence.
-11. Bounded evaluation clock: `private.*_at` evaluates time-varying fields (freshness, recovery expiry, confidence window, sticky attainment) without attempting historical numeric EWMA rebuild.
+### 18.2 Evaluation-Clock & Evidence Temporal Visibility (`verified_at <= as_of` vs Phase 5.1 Confidence)
+10. **Authority visibility boundary at `T1 < T2 < T3`:** Evidence event with `effective_occurred_at = Jan 1` (`T1`) and `verified_at = Jan 10` (`T3`). Evaluated at `as_of = Jan 5` (`T2`):
+    - **Recovery replay:** event is **invisible** (`recovery_signal = 'none'`);
+    - **`latest_evidence`:** event is **invisible** (`latest_evidence = null` if no prior visible evidence);
+    - **Freshness (`latest_effective_occurred_at`):** event is **invisible** (`freshness = 'unknown'`, `days_since_last_evidence = null` if no prior visible evidence);
+    - **Confidence (`confidence_units`, `distinct_recent_vle_count`, `confidence_band`):** follows the **exact frozen Phase 5.1 effective-occurrence window** (`effective_occurred_at` in `[Jan 5 - 60d, Jan 5]`, matching `private.get_child_mastery_at(child_id, '2026-01-05')` with zero Phase-5.2-only `verified_at` divergence).
+11. Evaluated at `as_of = Jan 10 00:00:00` (`T3`) or later: event is **visible** across Recovery, `latest_evidence`, Freshness (`latest_effective_occurred_at = Jan 1`), and Confidence.
+12. Bounded evaluation clock: `private.*_at` evaluates time-varying fields (freshness, recovery expiry, confidence window, sticky attainment) without attempting historical numeric EWMA rebuild.
 
 ### 18.3 Freshness Boundaries
-12. `elapsed == 14 days` exact (`1,209,600s`) -> `recent`
-13. `elapsed == 14 days + 1 second` -> `aging`
-14. `elapsed == 45 days` exact (`3,888,000s`) -> `aging`
-15. `elapsed == 45 days + 1 second` -> `needs_refresh`
-16. Unseen node (`latest_effective_occurred_at == null`) -> `unknown`
-17. Sticky `Mastered` node at `elapsed == 46 days` -> `mastery_band = 'mastered'` AND `freshness = 'needs_refresh'` (no score or band decay)
+13. `elapsed == 14 days` exact (`1,209,600s`) -> `recent`
+14. `elapsed == 14 days + 1 second` -> `aging`
+15. `elapsed == 45 days` exact (`3,888,000s`) -> `aging`
+16. `elapsed == 45 days + 1 second` -> `needs_refresh`
+17. Unseen node (`latest_effective_occurred_at == null`) -> `unknown`
+18. Sticky `Mastered` node at `elapsed == 46 days` -> `mastery_band = 'mastered'` AND `freshness = 'needs_refresh'` (no score or band decay)
 
 ### 18.4 Recovery Replay & Boundaries
-18. `item_group` qualifying weakness (`performance_pct = 60.00`, `item_count = 5`, `correct_count = 3`, `incorrect = 2`) -> `review_suggested`
-19. `item_group` non-qualifying weakness (`performance_pct = 66.67`, `item_count = 3`, `correct_count = 2`, `incorrect = 1`; and `item_count = 2, correct_count = 0`) -> `none`
-20. `component_score <= 50` (`performance_pct = 50.00`) -> `review_suggested` (`50.01` -> `none`)
-21. `assessment_total` low score (`performance_pct = 20.00`) on Topic and Subject fallback -> ignored (`none`); `assessment_total` high score (`95.00`) after active weakness -> does NOT clear `review_suggested`
-22. Later credible clear (`component_score` or `item_group` with `performance_pct = 70.00`) on same node -> resets to `none`
-23. `30 days` exact boundary (`as_of - latest_weak_at == 30 days`) -> `review_suggested`
-24. `30 days + 1 second` expiry (`as_of - latest_weak_at == 30 days + 1 second`) -> `none`
-25. Same-timestamp canonical tie-break: weak observation and clear observation with identical `(effective_occurred_at, verified_at)` resolve strictly by `verified_learning_event_id ASC`
+19. `item_group` qualifying weakness (`performance_pct = 60.00`, `item_count = 5`, `correct_count = 3`, `incorrect = 2`) -> `review_suggested`
+20. `item_group` non-qualifying weakness (`performance_pct = 66.67`, `item_count = 3`, `correct_count = 2`, `incorrect = 1`; and `item_count = 2, correct_count = 0`) -> `none`
+21. `component_score <= 50` (`performance_pct = 50.00`) -> `review_suggested` (`50.01` -> `none`)
+22. `assessment_total` low score (`performance_pct = 20.00`) on Topic and Subject fallback -> ignored (`none`); `assessment_total` high score (`95.00`) after active weakness -> does NOT clear `review_suggested`
+23. Later credible clear (`component_score` or `item_group` with `performance_pct = 70.00`) on same node -> resets to `none`
+24. `30 days` exact boundary (`as_of - latest_weak_at == 30 days`) -> `review_suggested`
+25. `30 days + 1 second` expiry (`as_of - latest_weak_at == 30 days + 1 second`) -> `none`
+26. Same-timestamp canonical tie-break: weak observation and clear observation with identical `(effective_occurred_at, verified_at)` resolve strictly by `verified_learning_event_id ASC`
 
 ### 18.5 Skill Graph Prerequisites, Dependents & Catalog Versioning
-26. All explicit prerequisites attained (`mastery_attained_at <= as_of`) -> dependent unseen Skill eligible for `unlock`
-27. Multi-prerequisite Skill with 1 attained and 1 unattained (including `mastery_candidate` with score `90` but `mastery_attained_at IS NULL`) -> blocked (not eligible for `unlock` or `explore`)
-28. Prerequisite attained historically, now `> 60 days` old so current `confidence_band = 'low'` -> still satisfied (`unlock` succeeds)
-29. Prerequisite attained historically, later evidence lowered current `mastery_score` below `85` (`e.g. 72.00`) -> sticky `mastery_attained_at` still satisfies prerequisite (`unlock` succeeds)
-30. Zero-prerequisite unseen grade-compatible Skill -> classified as `explore` (`explore_available_skill`), never `unlock`
-31. **Dependents contract:** Skill with zero outgoing prerequisite edges returns `dependents = []`.
-32. **Dependents contract:** Skill with 1 outgoing dependent (`single_digit -> double_digit`) returns dependent with exact structure, correct prerequisite counts, and grade compatibility.
-33. **Dependents contract:** Multiple outgoing dependents sorted strictly by `catalog_sort_path ASC, learning_node_id ASC`.
-34. **Dependents contract:** Inactive or retired-catalog dependent Skills excluded from `dependents`.
-35. Non-Skill nodes (`subject`, `domain`, `topic`): `prerequisites = []`, `dependents = []`, `prerequisite_state.applicable = false`.
-36. Cross-version isolation: promoting a transactional `pilot-v0.2-test` catalog isolates `pilot-v0.1` mastery; retired-version `mastery_attained_at` does not unlock `pilot-v0.2-test` skills or mark `pilot-v0.2-test` nodes as `seen`
+27. All explicit prerequisites attained (`mastery_attained_at <= as_of`) -> dependent unseen Skill eligible for `unlock`
+28. Multi-prerequisite Skill with 1 attained and 1 unattained (including `mastery_candidate` with score `90` and High confidence but `mastery_attained_at IS NULL`) -> blocked (not eligible for `unlock` or `explore`)
+29. Prerequisite attained historically, now `> 60 days` old so current `confidence_band = 'low'` -> still satisfied (`unlock` succeeds)
+30. Prerequisite attained historically, later evidence lowered current `mastery_score` below `85` (`e.g. 72.00`) -> sticky `mastery_attained_at` still satisfies prerequisite (`unlock` succeeds)
+31. Zero-prerequisite unseen grade-compatible Skill -> classified as `explore` (`explore_available_skill`), never `unlock`
+32. **Dependents contract:** Skill with zero outgoing prerequisite edges returns `dependents = []`.
+33. **Dependents contract:** Skill with 1 outgoing dependent (`single_digit -> double_digit`) returns dependent with exact structure, correct prerequisite counts, and grade compatibility.
+34. **Dependents contract:** Multiple outgoing dependents sorted strictly by `catalog_sort_path ASC, learning_node_id ASC`.
+35. **Dependents contract:** Inactive or retired-catalog dependent Skills excluded from `dependents`.
+36. Non-Skill nodes (`subject`, `domain`, `topic`): `prerequisites = []`, `dependents = []`, `prerequisite_state.applicable = false`.
+37. Cross-version isolation: promoting a transactional `pilot-v0.2-test` catalog isolates `pilot-v0.1` mastery; retired-version `mastery_attained_at` does not unlock `pilot-v0.2-test` skills or mark `pilot-v0.2-test` nodes as `seen`
 
 ### 18.6 Grade Filtering & Node Detail Difficulty
-37. `school_grade` inside `[grade_min, grade_max]` (including exact `grade_min` and exact `grade_max` inclusive boundaries) -> eligible for `unlock` / `explore`
-38. `school_grade < grade_min` (below range) -> excluded from `unlock` / `explore`
-39. `school_grade > grade_max` (above range) -> excluded from `unlock` / `explore`
-40. `school_grade IS NULL` -> grade-scoped `unlock` / `explore` fail closed; `recovery`, `refresh`, and `developing` still return normally
-41. Unbounded node (`grade_min IS NULL AND grade_max IS NULL`) -> compatible even when `school_grade IS NULL`
-42. **Unseen Topic difficulty:** `node_type = topic AND is_observed = false` -> `recommended_difficulty = null` in Node Detail.
-43. Unseen Subject / Domain -> `recommended_difficulty = null`.
-44. Locked unseen Skill -> `recommended_difficulty = null`.
+38. `school_grade` inside `[grade_min, grade_max]` (including exact `grade_min` and exact `grade_max` inclusive boundaries) -> eligible for `unlock` / `explore`
+39. `school_grade < grade_min` (below range) -> excluded from `unlock` / `explore`
+40. `school_grade > grade_max` (above range) -> excluded from `unlock` / `explore`
+41. `school_grade IS NULL` -> grade-scoped `unlock` / `explore` fail closed; `recovery`, `refresh`, and `developing` still return normally
+42. Unbounded node (`grade_min IS NULL AND grade_max IS NULL`) -> compatible even when `school_grade IS NULL`
+43. **Unseen Topic difficulty:** `node_type = topic AND is_observed = false` -> `recommended_difficulty = null` in Node Detail.
+44. Unseen Subject / Domain -> `recommended_difficulty = null`.
+45. Locked unseen Skill -> `recommended_difficulty = null`.
 
 ### 18.7 Next Challenge Ranking, Overlap Resolution & Limits
-45. `recovery` beats `refresh`, `developing`, `unlock`, and `explore`; multiple `recovery` nodes sort by `latest_unresolved_weakness_at DESC`
-46. `refresh` vs `developing` overlap resolved: score `75.00` at `46d` (`needs_refresh`) classifies as `refresh` (`normal` difficulty) and ranks ahead of score `60.00` at `10d` (`developing`, `normal` difficulty), while score `75.00` at `10d` classifies as `developing` (`hard` difficulty); sticky `Mastered` node with score `78.00` at `10d` and no recovery is excluded from `developing`
-47. `developing` orders lowest `mastery_score ASC` first (`55.00` before `72.00`)
-48. `unlock` orders ahead of `explore` and sorts by `catalog_sort_path ASC`
-49. `explore` orders by `explore_proximity_rank ASC` (`0` same Topic < `1` same Domain < `2` same Subject < `3` cold-start Subject)
-50. Maximum `3` candidates enforced; invalid `p_limit` (`0`, `-1`, `4`, `null`) rejected with `22000`; invalid `p_subject_key` rejected with `22000`
-51. Deterministic tie-break down to `catalog_sort_path ASC` then `learning_node_id ASC`
-52. `p_subject_key` filter restricts returned candidates to that subject while respecting all eligibility rules
-53. No-candidate scenario returns `"candidates": []` cleanly with valid envelope metadata
+46. `recovery` beats `refresh`, `developing`, `unlock`, and `explore`; multiple `recovery` nodes sort by `latest_unresolved_weakness_at DESC`
+47. `refresh` vs `developing` overlap resolved: score `75.00` at `46d` (`needs_refresh`) classifies as `refresh` (`normal` difficulty) and ranks ahead of score `60.00` at `10d` (`developing`, `normal` difficulty), while score `75.00` at `10d` classifies as `developing` (`hard` difficulty); sticky `Mastered` node with score `78.00` at `10d` and no recovery is excluded from `developing`
+48. `developing` orders lowest `mastery_score ASC` first (`55.00` before `72.00`)
+49. `unlock` orders ahead of `explore` and sorts by `catalog_sort_path ASC`
+50. `explore` orders by `explore_proximity_rank ASC` (`0` same Topic < `1` same Domain < `2` same Subject < `3` cold-start Subject)
+51. Maximum `3` candidates enforced; invalid `p_limit` (`0`, `-1`, `4`, `null`) rejected with `22000`; invalid `p_subject_key` rejected with `22000`
+52. Deterministic tie-break down to `catalog_sort_path ASC` then `learning_node_id ASC`
+53. `p_subject_key` filter restricts returned candidates to that subject while respecting all eligibility rules
+54. No-candidate scenario returns `"candidates": []` cleanly with valid envelope metadata
 
 ### 18.8 Security & Tenant Isolation (pgTAP)
-54. Active family adult (`owner` and `parent`) succeeds on all 3 RPCs
-55. Paired active child device succeeds for its exact `child_id` on all 3 RPCs
-56. Paired sibling child device calling any of the 3 RPCs for another child in the same family is denied (`42501`)
-57. Cross-family active adult calling any of the 3 RPCs is denied (`42501`)
-58. Unauthenticated / `anon` caller is denied (`42501` / no `EXECUTE` grant); `authenticated` cannot `EXECUTE` `private.*_at` helpers
+55. Active family adult (`owner` and `parent`) succeeds on all 3 RPCs
+56. Paired active child device succeeds for its exact `child_id` on all 3 RPCs
+57. Paired sibling child device calling any of the 3 RPCs for another child in the same family is denied (`42501`)
+58. Cross-family active adult calling any of the 3 RPCs is denied (`42501`)
+59. Unauthenticated / `anon` caller is denied (`42501` / no `EXECUTE` grant); `authenticated` cannot `EXECUTE` `private.*_at` helpers
 
 ### 18.9 Economy Invariance
-59. Recording Growth Engine awards, mutating `xp_ledger`, `rp_ledger`, `child_balances`, creating/redeeming/cancelling Reward Store items, and executing Celebration Wheel spins produce **identical** outputs (modulo `as_of` when using explicit `private.*_at(..., v_fixed_as_of)`), identical scores, and identical candidate rankings across all 3 Phase 5.2 read functions.
+60. Recording Growth Engine awards, mutating `xp_ledger`, `rp_ledger`, `child_balances`, creating/redeeming/cancelling Reward Store items, and executing Celebration Wheel spins produce **identical** outputs (modulo `as_of` when using explicit `private.*_at(..., v_fixed_as_of)`), identical scores, and identical candidate rankings across all 3 Phase 5.2 read functions.
 
 ---
 
