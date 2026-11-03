@@ -12,7 +12,7 @@
 **Merge Timestamp:** `2026-11-03T11:48:34Z`  
 **Freeze Date:** 2026-11-03  
 **ADR:** 0007 (ACCEPTED)  
-**Upstream Contract:** [ADR 0006](file:///c:/PERSONAL1/LearnWard/docs/adr/0006-phase-5-learning-engine-mastery.md) (ACCEPTED), [Phase 5.1 Freeze Receipt](file:///c:/PERSONAL1/LearnWard/docs/freezes/phase-5-1-learning-mastery-foundation-freeze.md) (FROZEN)  
+**Upstream Contract:** [ADR 0006](../adr/0006-phase-5-learning-engine-mastery.md) (ACCEPTED), [Phase 5.1 Freeze Receipt](phase-5-1-learning-mastery-foundation-freeze.md) (FROZEN)  
 
 ---
 
@@ -22,12 +22,15 @@ Final verified test totals from post-merge CI run [`41630504285`](https://github
 
 | Test Suite | Total Tests | Passed | Result |
 |---|---|---|---|
-| **Database & RLS pgTAP** (8 files) | 438 | 438 | **PASS** |
-| - *Phase 5.2 Skill Graph & Next Challenge* (`08_phase5_2_skill_graph_recommendation_test.sql`) | 61 | 61 | **PASS** |
+| **Database & RLS pgTAP Total** (8 files) | 438 | 438 | **PASS** |
+| - *Auth Simulation* (`01_auth_simulation_test.sql`) | 2 | 2 | **PASS** |
+| - *Family RLS Security* (`02_family_rls_security_test.sql`) | 36 | 36 | **PASS** |
+| - *Assessment Security* (`03_assessment_security_test.sql`) | 42 | 42 | **PASS** |
+| - *Phase 3 Growth Engine* (`04_growth_ledger_test.sql`) | 46 | 46 | **PASS** |
+| - *Phase 4.1 Reward Store* (`05_reward_store_test.sql`) | 49 | 49 | **PASS** |
+| - *Phase 4.2 Celebration Wheel* (`06_celebration_wheel_test.sql`) | 67 | 67 | **PASS** |
 | - *Phase 5.1 Mastery Foundation* (`07_learning_mastery_foundation_test.sql`) | 135 | 135 | **PASS** |
-| - *Phase 4 Reward & Wheel* (`06_reward_economy_wheel_test.sql`) | 114 | 114 | **PASS** |
-| - *Phase 3 Growth Engine* (`05_growth_engine_ledger_test.sql`) | 71 | 71 | **PASS** |
-| - *Phase 1–2 Tests* (`01`–`04`) | 57 | 57 | **PASS** |
+| - *Phase 5.2 Skill Graph & Next Challenge* (`08_phase5_2_skill_graph_recommendation_test.sql`) | 61 | 61 | **PASS** |
 | **Domain Tests** (`packages/learnward_domain`) | 196 | 196 | **PASS** |
 | **Application Tests** (`packages/learnward_application`) | 43 | 43 | **PASS** |
 | **Data Tests** (`packages/learnward_data`) | 29 | 29 | **PASS** |
@@ -192,3 +195,16 @@ Phase 5.2 — Skill Graph + Recommendation Foundation:     FROZEN
 Phase 5 — Learning Engine, Mastery & Recommendations:   COMPLETE / FROZEN
 Phase 6 — Next Phase:                                    NOT STARTED
 ```
+
+---
+
+## 5. Documentation Correction Record
+
+- **Checkpoint:** Post-freeze documentation correction
+- **Independent Audit Reference:** [PR #11 Independent Audit Comment 6603778065](https://github.com/thedusk4203/LearnWard/pull/11#issuecomment-6603778065)
+- **Pre-Correction Main Baseline:** `49f91720404d932d0f5020124124bb11e7a97b51`
+- **Summary:** Phase 5.2 implementation freeze remains valid and frozen. This documentation-only correction checkpoint resolved:
+  1. Corrected database & RLS pgTAP subtotal test attribution across all 8 authoritative test files (438 / 438 total unchanged);
+  2. Removed nonexistent test file references (`05_growth_engine_ledger_test.sql`, `06_reward_economy_wheel_test.sql`);
+  3. Replaced local-machine absolute links (`file:///c:/...`) with repository-relative Markdown links.
+- **Invariance:** No frozen runtime or migration contract changed. The correction only fixes receipt metadata/test subtotal attribution and repository links.
