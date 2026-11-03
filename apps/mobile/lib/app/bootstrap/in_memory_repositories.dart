@@ -1324,9 +1324,9 @@ final class InMemoryLearningRepository implements LearningRepository {
   void _seedPilotCatalog() {
     const subjects = <(String, String, int)>[
       ('math', 'Mathematics', 1),
-      ('english', 'English Language', 2),
+      ('english', 'English Language Arts', 2),
       ('literature', 'Literature & Reading', 3),
-      ('science', 'Natural Sciences', 4),
+      ('science', 'Science', 4),
       ('other', 'Other Subjects', 5),
     ];
     for (final (key, title, sortOrder) in subjects) {
@@ -1410,7 +1410,7 @@ final class InMemoryLearningRepository implements LearningRepository {
         nodeType: LearningNodeType.topic,
         subjectKey: 'english',
         canonicalKey: 'pilot-v0.1:english:grammar:punctuation',
-        title: 'Sentence Punctuation',
+        title: 'Punctuation',
         parentId: LearningNodeId('b0000001-0000-0000-0000-000000000002'),
         gradeMin: 1,
         gradeMax: 5,
@@ -1422,7 +1422,7 @@ final class InMemoryLearningRepository implements LearningRepository {
         nodeType: LearningNodeType.skill,
         subjectKey: 'english',
         canonicalKey: 'pilot-v0.1:english:grammar:punctuation:end_marks',
-        title: 'Sentence End Marks',
+        title: 'End Punctuation Marks',
         parentId: LearningNodeId('b0000002-0000-0000-0000-000000000002'),
         gradeMin: 1,
         gradeMax: 3,
