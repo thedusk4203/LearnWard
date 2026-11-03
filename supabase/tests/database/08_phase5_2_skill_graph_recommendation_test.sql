@@ -563,12 +563,12 @@ insert into public.child_mastery_states (
 
 -- Test 51: Weak component evidence triggers recovery_signal = review_suggested
 select is(
-  (private.evaluate_node_recovery_at(
+  (select recovery_signal from private.evaluate_node_recovery_at(
     'c5200000-0000-0000-0000-000000000001'::uuid,
     'b0000003-0000-0000-0000-000000000001'::uuid,
     'skill',
     '2026-06-01T12:00:00Z'::timestamptz
-  )) ->> 'recovery_signal',
+  )),
   'review_suggested',
   'Weak component evidence (40%) evaluates to recovery_signal = review_suggested'
 );
@@ -593,12 +593,12 @@ select is(
 
 -- Test 54: 30 days + 1 second expires unresolved weakness to none
 select is(
-  (private.evaluate_node_recovery_at(
+  (select recovery_signal from private.evaluate_node_recovery_at(
     'c5200000-0000-0000-0000-000000000001'::uuid,
     'b0000003-0000-0000-0000-000000000001'::uuid,
     'skill',
     '2026-06-27T12:00:01Z'::timestamptz
-  )) ->> 'recovery_signal',
+  )),
   'none',
   'Unresolved weakness expires to none at 30 days + 1 second'
 );
@@ -667,12 +667,12 @@ where child_id = 'c5200000-0000-0000-0000-000000000001'::uuid
 
 -- Test 55: Credible clear resets recovery_signal to none
 select is(
-  (private.evaluate_node_recovery_at(
+  (select recovery_signal from private.evaluate_node_recovery_at(
     'c5200000-0000-0000-0000-000000000001'::uuid,
     'b0000003-0000-0000-0000-000000000001'::uuid,
     'skill',
     '2026-06-01T12:00:00Z'::timestamptz
-  )) ->> 'recovery_signal',
+  )),
   'none',
   'Later credible clear (95% component_score) resets recovery_signal to none'
 );
