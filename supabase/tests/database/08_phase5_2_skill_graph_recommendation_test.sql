@@ -535,16 +535,17 @@ insert into public.learning_evidence_events (
 );
 
 insert into public.mastery_state_revisions (
-  id, family_id, child_id, learning_node_id, evidence_event_id, engine_version,
-  prior_mastery_score, new_mastery_score, effective_weight, alpha_used,
-  effective_evidence_count, distinct_assessment_count, created_at
+  id, family_id, child_id, learning_node_id, trigger_verified_learning_event_id, engine_version,
+  previous_mastery_score, new_mastery_score, effective_evidence_count,
+  latest_evidence_at, mastery_attained_at, calculation_snapshot, created_at
 ) values (
   'ab521000-0000-0000-0000-000000000001'::uuid,
   'f5200000-0000-0000-0000-000000000001'::uuid,
   'c5200000-0000-0000-0000-000000000001'::uuid,
   'b0000003-0000-0000-0000-000000000001'::uuid,
-  'ee521000-0000-0000-0000-000000000001'::uuid,
-  'mastery-v0.1', null, 40.00, 1.00, 0.35, 1, 1, '2026-05-28T12:00:00Z'::timestamptz
+  '15210000-0000-0000-0000-000000000001'::uuid,
+  'mastery-v0.1', null, 40.00, 1,
+  '2026-05-28T12:00:00Z'::timestamptz, null, '{}'::jsonb, '2026-05-28T12:00:00Z'::timestamptz
 );
 
 insert into public.child_mastery_states (

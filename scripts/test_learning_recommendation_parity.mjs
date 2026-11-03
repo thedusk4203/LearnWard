@@ -116,10 +116,10 @@ function buildCaseSetupSql(fixture, ids) {
 
   let sql = `
     -- Ensure pilot-v0.1 is the active catalog at the start of this case transaction
-    alter table public.learning_catalog_versions disable trigger trg_learning_catalog_versions_lifecycle;
+    alter table public.learning_catalog_versions disable trigger trg_learning_catalog_versions_mutation;
     update public.learning_catalog_versions set status = 'retired' where status = 'active' and version <> 'pilot-v0.1';
     update public.learning_catalog_versions set status = 'active', activated_at = coalesce(activated_at, now()) where version = 'pilot-v0.1';
-    alter table public.learning_catalog_versions enable trigger trg_learning_catalog_versions_lifecycle;
+    alter table public.learning_catalog_versions enable trigger trg_learning_catalog_versions_mutation;
 
     insert into auth.users (id, aud, role, email) values
       ('${ownerId}', 'authenticated', 'authenticated', 'owner_${ownerId}@test.com'),
