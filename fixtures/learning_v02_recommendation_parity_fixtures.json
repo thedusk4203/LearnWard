@@ -1,0 +1,3314 @@
+[
+  {
+    "case_id": 1,
+    "section": "18.1",
+    "scenario": "Two-part fixed-clock Phase 5.1 vs Phase 5.2 parity (5 overlapping fields + distinct_recent_vle_count)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 92,
+        "effective_evidence_count": 4,
+        "distinct_assessment_count": 2,
+        "last_evidence_occurred_at": "2026-11-02T10:00:00.000Z",
+        "mastery_attained_at": "2026-11-02T10:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": 5,
+        "correct_count": 5,
+        "effective_occurred_at": "2026-11-01T10:00:00.000Z",
+        "verified_at": "2026-11-01T10:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": 5,
+        "correct_count": 4,
+        "effective_occurred_at": "2026-11-01T10:00:00.000Z",
+        "verified_at": "2026-11-01T10:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 95,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": 5,
+        "correct_count": 5,
+        "effective_occurred_at": "2026-11-02T10:00:00.000Z",
+        "verified_at": "2026-11-02T10:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000004",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 95,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": 5,
+        "correct_count": 5,
+        "effective_occurred_at": "2026-11-02T10:00:00.000Z",
+        "verified_at": "2026-11-02T10:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "phase51_overlap": {
+        "verify_overlap": true,
+        "mastery_score": 92,
+        "mastery_band": "mastered",
+        "confidence_band": "high",
+        "confidence_units": 4,
+        "mastery_attained_at": "2026-11-02T10:05:00.000Z",
+        "distinct_recent_vle_count": 4
+      },
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 92,
+        "mastery_band": "mastered",
+        "confidence_band": "high",
+        "confidence_units": 4,
+        "distinct_recent_vle_count": 4,
+        "freshness": "recent",
+        "days_since_last_evidence": 1,
+        "recovery_signal": "none",
+        "recommended_difficulty": "challenge"
+      }
+    }
+  },
+  {
+    "case_id": 2,
+    "section": "18.1",
+    "scenario": "Low confidence state (< 1.5 units)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 76,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 76,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 76,
+        "mastery_band": "secure",
+        "confidence_band": "low",
+        "confidence_units": 0.7,
+        "distinct_recent_vle_count": 1,
+        "freshness": "recent",
+        "recovery_signal": "none",
+        "recommended_difficulty": "hard"
+      }
+    }
+  },
+  {
+    "case_id": 3,
+    "section": "18.1",
+    "scenario": "Medium confidence state (>= 1.5 units, or > 3.5 units with only 1 VLE)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 80,
+        "effective_evidence_count": 2,
+        "distinct_assessment_count": 2,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 80,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 80,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 80,
+        "mastery_band": "secure",
+        "confidence_band": "medium",
+        "confidence_units": 2,
+        "distinct_recent_vle_count": 2,
+        "freshness": "recent",
+        "recovery_signal": "none",
+        "recommended_difficulty": "hard"
+      }
+    }
+  },
+  {
+    "case_id": 4,
+    "section": "18.1",
+    "scenario": "High confidence state (> 3.5 units AND >= 2 distinct VLEs)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 82,
+        "effective_evidence_count": 4,
+        "distinct_assessment_count": 4,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 80,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 82,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 84,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000004",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 82,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 82,
+        "mastery_band": "secure",
+        "confidence_band": "high",
+        "confidence_units": 4,
+        "distinct_recent_vle_count": 4,
+        "freshness": "recent",
+        "recovery_signal": "none",
+        "recommended_difficulty": "hard"
+      }
+    }
+  },
+  {
+    "case_id": 5,
+    "section": "18.1",
+    "scenario": "Mastery Candidate state with low/medium confidence (mastery_score >= 85.00, mastery_attained_at IS NULL)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 88,
+        "effective_evidence_count": 2,
+        "distinct_assessment_count": 2,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 88,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 88,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 88,
+        "mastery_band": "mastery_candidate",
+        "confidence_band": "medium",
+        "confidence_units": 2,
+        "distinct_recent_vle_count": 2,
+        "freshness": "recent",
+        "recovery_signal": "none",
+        "recommended_difficulty": "hard"
+      }
+    }
+  },
+  {
+    "case_id": 6,
+    "section": "18.1",
+    "scenario": "Mastery Candidate with High confidence but mastery_attained_at IS NULL (sticky-attainment-only guard)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 90,
+        "effective_evidence_count": 4,
+        "distinct_assessment_count": 4,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000004",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "phase51_overlap": {
+        "verify_overlap": true,
+        "mastery_score": 90,
+        "mastery_band": "mastery_candidate",
+        "confidence_band": "high",
+        "confidence_units": 4,
+        "mastery_attained_at": null,
+        "distinct_recent_vle_count": 4
+      },
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 90,
+        "mastery_band": "mastery_candidate",
+        "confidence_band": "high",
+        "confidence_units": 4,
+        "distinct_recent_vle_count": 4,
+        "freshness": "recent",
+        "recovery_signal": "none",
+        "recommended_difficulty": "challenge"
+      }
+    }
+  },
+  {
+    "case_id": 7,
+    "section": "18.1",
+    "scenario": "Sticky Mastered state (mastery_attained_at <= as_of -> mastery_band = mastered)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 91,
+        "effective_evidence_count": 4,
+        "distinct_assessment_count": 4,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 91,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 91,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 91,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000004",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 91,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 91,
+        "mastery_band": "mastered",
+        "confidence_band": "high",
+        "confidence_units": 4,
+        "distinct_recent_vle_count": 4,
+        "freshness": "recent",
+        "recovery_signal": "none",
+        "recommended_difficulty": "challenge"
+      }
+    }
+  },
+  {
+    "case_id": 8,
+    "section": "18.1",
+    "scenario": "Sticky Mastered with numeric score subsequent drop below 85 (78.00) remains mastered in Phase 5.1 and 5.2",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 78,
+        "effective_evidence_count": 5,
+        "distinct_assessment_count": 3,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-10-20T12:00:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 65,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "phase51_overlap": {
+        "verify_overlap": true,
+        "mastery_score": 78,
+        "mastery_band": "mastered",
+        "confidence_band": "medium",
+        "confidence_units": 2.7,
+        "mastery_attained_at": "2026-10-20T12:00:00.000Z",
+        "distinct_recent_vle_count": 3
+      },
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 78,
+        "mastery_band": "mastered",
+        "confidence_band": "medium",
+        "confidence_units": 2.7,
+        "distinct_recent_vle_count": 3,
+        "freshness": "recent",
+        "recovery_signal": "none",
+        "recommended_difficulty": "hard"
+      }
+    }
+  },
+  {
+    "case_id": 9,
+    "section": "18.1",
+    "scenario": "61-day confidence aging drops confidence units to 0.00 and band to Low while sticky Mastered remains mastered",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 92,
+        "effective_evidence_count": 4,
+        "distinct_assessment_count": 2,
+        "last_evidence_occurred_at": "2026-09-02T12:00:00.000Z",
+        "mastery_attained_at": "2026-09-02T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 92,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-09-01T12:00:00.000Z",
+        "verified_at": "2026-09-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 92,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-09-02T12:00:00.000Z",
+        "verified_at": "2026-09-02T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 92,
+        "mastery_band": "mastered",
+        "confidence_band": "low",
+        "confidence_units": 0,
+        "distinct_recent_vle_count": 0,
+        "freshness": "needs_refresh",
+        "days_since_last_evidence": 62,
+        "recovery_signal": "none",
+        "recommended_difficulty": "normal"
+      }
+    }
+  },
+  {
+    "case_id": 10,
+    "section": "18.2",
+    "scenario": "Authority visibility boundary at T1 < T2 < T3 (occurred Jan 1, verified Jan 10, evaluated at Jan 5)",
+    "as_of": "2026-01-05T00:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 40,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-01-01T00:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 40,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-01-01T00:00:00.000Z",
+        "verified_at": "2026-01-10T00:00:00.000Z"
+      }
+    ],
+    "expected": {
+      "phase51_overlap": {
+        "verify_overlap": true,
+        "mastery_score": 40,
+        "mastery_band": "emerging",
+        "confidence_band": "low",
+        "confidence_units": 0.7,
+        "mastery_attained_at": null,
+        "distinct_recent_vle_count": 1
+      },
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 40,
+        "mastery_band": "emerging",
+        "confidence_band": "low",
+        "confidence_units": 0.7,
+        "distinct_recent_vle_count": 1,
+        "freshness": "unknown",
+        "days_since_last_evidence": null,
+        "recovery_signal": "none",
+        "latest_unresolved_weakness_at": null,
+        "latest_evidence_present": false,
+        "recommended_difficulty": "normal"
+      }
+    }
+  },
+  {
+    "case_id": 11,
+    "section": "18.2",
+    "scenario": "Authority visibility boundary at T3 (evaluated at Jan 10 00:00:00: visible across Recovery, latest_evidence, Freshness, and Confidence)",
+    "as_of": "2026-01-10T00:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 40,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-01-01T00:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 40,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-01-01T00:00:00.000Z",
+        "verified_at": "2026-01-10T00:00:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 40,
+        "mastery_band": "emerging",
+        "confidence_band": "low",
+        "confidence_units": 0.7,
+        "distinct_recent_vle_count": 1,
+        "freshness": "recent",
+        "days_since_last_evidence": 9,
+        "recovery_signal": "review_suggested",
+        "latest_unresolved_weakness_at": "2026-01-01T00:00:00.000Z",
+        "latest_evidence_present": true,
+        "recommended_difficulty": "below_level"
+      }
+    }
+  },
+  {
+    "case_id": 12,
+    "section": "18.2",
+    "scenario": "Bounded evaluation clock: future mastery_attained_at (> as_of) evaluates as mastery_candidate without historical EWMA rebuild",
+    "as_of": "2026-11-02T00:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 91,
+        "effective_evidence_count": 4,
+        "distinct_assessment_count": 2,
+        "last_evidence_occurred_at": "2026-11-01T10:00:00.000Z",
+        "mastery_attained_at": "2026-11-03T10:00:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 91,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T10:00:00.000Z",
+        "verified_at": "2026-11-01T10:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 91,
+        "mastery_band": "mastery_candidate",
+        "confidence_band": "low",
+        "confidence_units": 1,
+        "distinct_recent_vle_count": 1,
+        "freshness": "recent",
+        "days_since_last_evidence": 0,
+        "recovery_signal": "none"
+      }
+    }
+  },
+  {
+    "case_id": 13,
+    "section": "18.3",
+    "scenario": "Freshness boundary: elapsed == 14 days exact (1,209,600s) -> recent",
+    "as_of": "2026-11-15T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 80,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 80,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "freshness": "recent",
+        "days_since_last_evidence": 14
+      }
+    }
+  },
+  {
+    "case_id": 14,
+    "section": "18.3",
+    "scenario": "Freshness boundary: elapsed == 14 days + 1 second -> aging",
+    "as_of": "2026-11-15T12:00:01.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 80,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 80,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "freshness": "aging",
+        "days_since_last_evidence": 14
+      }
+    }
+  },
+  {
+    "case_id": 15,
+    "section": "18.3",
+    "scenario": "Freshness boundary: elapsed == 45 days exact (3,888,000s) -> aging",
+    "as_of": "2026-12-16T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 80,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 80,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "freshness": "aging",
+        "days_since_last_evidence": 45
+      }
+    }
+  },
+  {
+    "case_id": 16,
+    "section": "18.3",
+    "scenario": "Freshness boundary: elapsed == 45 days + 1 second -> needs_refresh",
+    "as_of": "2026-12-16T12:00:01.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 80,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 80,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "freshness": "needs_refresh",
+        "days_since_last_evidence": 45
+      }
+    }
+  },
+  {
+    "case_id": 17,
+    "section": "18.3",
+    "scenario": "Freshness boundary: Unseen node (latest_effective_occurred_at == null) -> unknown",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "is_observed": false,
+        "mastery_score": null,
+        "mastery_band": null,
+        "freshness": "unknown",
+        "days_since_last_evidence": null
+      }
+    }
+  },
+  {
+    "case_id": 18,
+    "section": "18.3",
+    "scenario": "Sticky Mastered node at elapsed == 46 days -> mastery_band = mastered AND freshness = needs_refresh (no score or band decay)",
+    "as_of": "2026-12-17T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 93,
+        "effective_evidence_count": 4,
+        "distinct_assessment_count": 2,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 93,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 93,
+        "mastery_band": "mastered",
+        "freshness": "needs_refresh",
+        "days_since_last_evidence": 46,
+        "recommended_difficulty": "normal"
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000001",
+          "b0000003-0000-0000-0000-000000000002",
+          "b0000003-0000-0000-0000-000000000003"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 19,
+    "section": "18.4",
+    "scenario": "Recovery: item_group qualifying weakness (performance_pct = 60.00, item_count = 5, correct_count = 3, incorrect = 2) -> review_suggested",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 60,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 60,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": 5,
+        "correct_count": 3,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "recovery_signal": "review_suggested",
+        "latest_unresolved_weakness_at": "2026-11-01T12:00:00.000Z",
+        "recommended_difficulty": "below_level"
+      }
+    }
+  },
+  {
+    "case_id": 20,
+    "section": "18.4",
+    "scenario": "Recovery: item_group non-qualifying weakness (item_count = 3, correct_count = 2; and item_count = 2, correct_count = 0) -> none",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 55,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 66.67,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": 3,
+        "correct_count": 2,
+        "effective_occurred_at": "2026-11-01T10:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 0,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": 2,
+        "correct_count": 0,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "recovery_signal": "none",
+        "latest_unresolved_weakness_at": null,
+        "recommended_difficulty": "normal"
+      }
+    }
+  },
+  {
+    "case_id": 21,
+    "section": "18.4",
+    "scenario": "Recovery: component_score <= 50 boundary (50.00 on single_digit -> review_suggested; 50.01 on end_marks -> none)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 50,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      },
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "mastery_score": 50.01,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 50,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "score_source": "component_score",
+        "performance_pct": 50.01,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "recovery_signal": "review_suggested",
+        "latest_unresolved_weakness_at": "2026-11-01T12:00:00.000Z",
+        "recommended_difficulty": "below_level"
+      },
+      "overview": {
+        "active_recovery_count": 1
+      }
+    }
+  },
+  {
+    "case_id": 22,
+    "section": "18.4",
+    "scenario": "Recovery: assessment_total low score ignored and assessment_total high score (95.00) does NOT clear active review_suggested",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 68,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      },
+      {
+        "node_id": "b0000002-0000-0000-0000-000000000001",
+        "mastery_score": 20,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000002-0000-0000-0000-000000000001",
+        "score_source": "assessment_total",
+        "performance_pct": 20,
+        "specificity_weight": 0.35,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T10:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 40,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T11:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "assessment_total",
+        "performance_pct": 95,
+        "specificity_weight": 0.35,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-02T11:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "recovery_signal": "review_suggested",
+        "latest_unresolved_weakness_at": "2026-11-01T11:00:00.000Z"
+      },
+      "overview": {
+        "active_recovery_count": 1
+      }
+    }
+  },
+  {
+    "case_id": 23,
+    "section": "18.4",
+    "scenario": "Recovery: Later credible clear (component_score with performance_pct = 70.00) on same node resets to none",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 65,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 40,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T10:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 70,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-02T10:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "recovery_signal": "none",
+        "latest_unresolved_weakness_at": null,
+        "recommended_difficulty": "normal"
+      }
+    }
+  },
+  {
+    "case_id": 24,
+    "section": "18.4",
+    "scenario": "Recovery: 30 days exact boundary (as_of - latest_weak_at == 30 days) -> review_suggested",
+    "as_of": "2026-12-01T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 45,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 45,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "recovery_signal": "review_suggested",
+        "latest_unresolved_weakness_at": "2026-11-01T12:00:00.000Z",
+        "recommended_difficulty": "below_level"
+      }
+    }
+  },
+  {
+    "case_id": 25,
+    "section": "18.4",
+    "scenario": "Recovery: 30 days + 1 second expiry (as_of - latest_weak_at == 30 days + 1 second) -> none",
+    "as_of": "2026-12-01T12:00:01.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 45,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 45,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "recovery_signal": "none",
+        "latest_unresolved_weakness_at": null,
+        "recommended_difficulty": "normal"
+      }
+    }
+  },
+  {
+    "case_id": 26,
+    "section": "18.4",
+    "scenario": "Recovery: Same-timestamp canonical tie-break resolves strictly by verified_learning_event_id ASC",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 60,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      },
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "mastery_score": 60,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 40,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 75,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "score_source": "component_score",
+        "performance_pct": 75,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "score_source": "component_score",
+        "performance_pct": 40,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "recovery_signal": "none",
+        "latest_unresolved_weakness_at": null
+      },
+      "overview": {
+        "active_recovery_count": 1
+      }
+    }
+  },
+  {
+    "case_id": 27,
+    "section": "18.5",
+    "scenario": "All explicit prerequisites attained (mastery_attained_at <= as_of) -> dependent unseen Skill eligible for unlock",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000002",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 92,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 92,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": false,
+        "prerequisite_applicable": true,
+        "prerequisite_count": 1,
+        "attained_prerequisite_count": 1,
+        "is_prerequisite_satisfied": true,
+        "recommended_difficulty": "normal"
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000002",
+          "b0000003-0000-0000-0000-000000000003"
+        ],
+        "candidates": [
+          {
+            "rank": 1,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000002",
+            "priority_class": "unlock",
+            "reason_code": "unlock_prerequisites_mastered",
+            "recommended_difficulty": "normal",
+            "attained_prerequisite_titles": [
+              "Single Digit Addition"
+            ]
+          },
+          {
+            "rank": 2,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000003",
+            "priority_class": "explore",
+            "reason_code": "explore_available_skill",
+            "recommended_difficulty": "normal"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 28,
+    "section": "18.5",
+    "scenario": "Multi-prerequisite Skill with 1 attained and 1 unattained (mastery_candidate with score 90 and High confidence but mastery_attained_at IS NULL) -> blocked",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000005",
+    "extra_nodes": [
+      {
+        "id": "b0000003-0000-0000-0000-000000000004",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:place_value",
+        "title": "Place Value Foundations",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 1,
+        "grade_max": 3,
+        "sort_order": 3,
+        "is_active": true
+      },
+      {
+        "id": "b0000003-0000-0000-0000-000000000005",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:regrouping",
+        "title": "Addition with Regrouping",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 2,
+        "grade_max": 4,
+        "sort_order": 4,
+        "is_active": true
+      }
+    ],
+    "extra_prerequisites": [
+      {
+        "catalog_version": "pilot-v0.1",
+        "prerequisite_node_id": "b0000003-0000-0000-0000-000000000001",
+        "dependent_node_id": "b0000003-0000-0000-0000-000000000005"
+      },
+      {
+        "catalog_version": "pilot-v0.1",
+        "prerequisite_node_id": "b0000003-0000-0000-0000-000000000004",
+        "dependent_node_id": "b0000003-0000-0000-0000-000000000005"
+      }
+    ],
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 92,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000004",
+        "mastery_score": 90,
+        "effective_evidence_count": 4,
+        "distinct_assessment_count": 2,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 92,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000004",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000004",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000003-0000-0000-0000-000000000004",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000004",
+        "node_id": "b0000003-0000-0000-0000-000000000004",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": false,
+        "prerequisite_applicable": true,
+        "prerequisite_count": 2,
+        "attained_prerequisite_count": 1,
+        "is_prerequisite_satisfied": false,
+        "recommended_difficulty": null
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000002",
+          "b0000003-0000-0000-0000-000000000003"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 29,
+    "section": "18.5",
+    "scenario": "Prerequisite attained historically, now > 60 days old so current confidence_band = low -> still satisfied (unlock succeeds)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000002",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 92,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-08-20T12:00:00.000Z",
+        "mastery_attained_at": "2026-08-20T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 92,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-08-20T12:00:00.000Z",
+        "verified_at": "2026-08-20T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": false,
+        "prerequisite_count": 1,
+        "attained_prerequisite_count": 1,
+        "is_prerequisite_satisfied": true,
+        "recommended_difficulty": "normal"
+      }
+    }
+  },
+  {
+    "case_id": 30,
+    "section": "18.5",
+    "scenario": "Prerequisite attained historically, later evidence lowered current mastery_score below 85 (72.00) -> sticky mastery_attained_at still satisfies prerequisite",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000002",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 72,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-10-15T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 72,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": false,
+        "prerequisite_count": 1,
+        "attained_prerequisite_count": 1,
+        "is_prerequisite_satisfied": true,
+        "recommended_difficulty": "normal"
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000002",
+          "b0000003-0000-0000-0000-000000000003"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 31,
+    "section": "18.5",
+    "scenario": "Zero-prerequisite unseen grade-compatible Skill -> classified as explore (explore_available_skill), never unlock",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "is_observed": false,
+        "prerequisite_applicable": true,
+        "prerequisite_count": 0,
+        "attained_prerequisite_count": 0,
+        "is_prerequisite_satisfied": true,
+        "recommended_difficulty": "normal"
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000001",
+          "b0000003-0000-0000-0000-000000000003"
+        ],
+        "candidates": [
+          {
+            "rank": 1,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000001",
+            "priority_class": "explore",
+            "reason_code": "explore_available_skill",
+            "recommended_difficulty": "normal",
+            "explore_proximity_rank": 3
+          },
+          {
+            "rank": 2,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000003",
+            "priority_class": "explore",
+            "reason_code": "explore_available_skill",
+            "recommended_difficulty": "normal",
+            "explore_proximity_rank": 3
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 32,
+    "section": "18.5",
+    "scenario": "Dependents contract: Skill with zero outgoing prerequisite edges returns dependents = []",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000003",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "prerequisite_applicable": true,
+        "dependent_ids": []
+      }
+    }
+  },
+  {
+    "case_id": 33,
+    "section": "18.5",
+    "scenario": "Dependents contract: Skill with 1 outgoing dependent (single_digit -> double_digit) returns dependent with exact structure and prerequisite counts",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 92,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 92,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "dependent_ids": [
+          "b0000003-0000-0000-0000-000000000002"
+        ],
+        "dependents": [
+          {
+            "learning_node_id": "b0000003-0000-0000-0000-000000000002",
+            "canonical_key": "pilot-v0.1:math:arithmetic:addition:double_digit",
+            "title": "Double Digit Addition",
+            "grade_min": 2,
+            "grade_max": 4,
+            "is_observed": false,
+            "is_grade_compatible": true,
+            "prerequisite_count": 1,
+            "attained_prerequisite_count": 1,
+            "is_prerequisite_satisfied": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 34,
+    "section": "18.5",
+    "scenario": "Dependents contract: Multiple outgoing dependents sorted strictly by catalog_sort_path ASC, learning_node_id ASC",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "extra_nodes": [
+      {
+        "id": "b0000003-0000-0000-0000-000000000006",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:word_problems",
+        "title": "Addition Word Problems",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 2,
+        "grade_max": 4,
+        "sort_order": 2,
+        "is_active": true
+      },
+      {
+        "id": "b0000003-0000-0000-0000-000000000005",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:regrouping",
+        "title": "Addition with Regrouping",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 2,
+        "grade_max": 4,
+        "sort_order": 3,
+        "is_active": true
+      }
+    ],
+    "extra_prerequisites": [
+      {
+        "catalog_version": "pilot-v0.1",
+        "prerequisite_node_id": "b0000003-0000-0000-0000-000000000001",
+        "dependent_node_id": "b0000003-0000-0000-0000-000000000006"
+      },
+      {
+        "catalog_version": "pilot-v0.1",
+        "prerequisite_node_id": "b0000003-0000-0000-0000-000000000001",
+        "dependent_node_id": "b0000003-0000-0000-0000-000000000005"
+      }
+    ],
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "dependent_ids": [
+          "b0000003-0000-0000-0000-000000000002",
+          "b0000003-0000-0000-0000-000000000006",
+          "b0000003-0000-0000-0000-000000000005"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 35,
+    "section": "18.5",
+    "scenario": "Dependents contract: Inactive dependent Skill excluded from dependents",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "extra_nodes": [
+      {
+        "id": "b0000003-0000-0000-0000-000000000007",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:inactive_dep",
+        "title": "Inactive Addition Skill",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 2,
+        "grade_max": 4,
+        "sort_order": 5,
+        "is_active": false
+      }
+    ],
+    "extra_prerequisites": [
+      {
+        "catalog_version": "pilot-v0.1",
+        "prerequisite_node_id": "b0000003-0000-0000-0000-000000000001",
+        "dependent_node_id": "b0000003-0000-0000-0000-000000000007"
+      }
+    ],
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "dependent_ids": [
+          "b0000003-0000-0000-0000-000000000002"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 36,
+    "section": "18.5",
+    "scenario": "Non-Skill nodes (subject, domain, topic): prerequisites = [], dependents = [], prerequisite_state.applicable = false",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000002-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "prerequisite_applicable": false,
+        "prerequisite_count": 0,
+        "attained_prerequisite_count": 0,
+        "is_prerequisite_satisfied": true,
+        "dependent_ids": []
+      }
+    }
+  },
+  {
+    "case_id": 37,
+    "section": "18.5",
+    "scenario": "Cross-version isolation: promoting pilot-v0.2-test catalog isolates pilot-v0.1 mastery and does not unlock pilot-v0.2-test skills",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "active_catalog_version": "pilot-v0.2-test",
+    "inspect_node_id": "c0000003-0000-0000-0000-000000000001",
+    "extra_catalogs": [
+      {
+        "version": "pilot-v0.2-test",
+        "status": "active"
+      }
+    ],
+    "extra_nodes": [
+      {
+        "id": "c0000000-0000-0000-0000-000000000001",
+        "catalog_version": "pilot-v0.2-test",
+        "node_type": "subject",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.2-test:subject:math",
+        "title": "Mathematics",
+        "parent_id": null,
+        "grade_min": null,
+        "grade_max": null,
+        "sort_order": 1,
+        "is_active": true
+      },
+      {
+        "id": "c0000000-0000-0000-0000-000000000002",
+        "catalog_version": "pilot-v0.2-test",
+        "node_type": "subject",
+        "subject_key": "english",
+        "canonical_key": "pilot-v0.2-test:subject:english",
+        "title": "English Language",
+        "parent_id": null,
+        "grade_min": null,
+        "grade_max": null,
+        "sort_order": 2,
+        "is_active": true
+      },
+      {
+        "id": "c0000000-0000-0000-0000-000000000003",
+        "catalog_version": "pilot-v0.2-test",
+        "node_type": "subject",
+        "subject_key": "literature",
+        "canonical_key": "pilot-v0.2-test:subject:literature",
+        "title": "Literature & Reading",
+        "parent_id": null,
+        "grade_min": null,
+        "grade_max": null,
+        "sort_order": 3,
+        "is_active": true
+      },
+      {
+        "id": "c0000000-0000-0000-0000-000000000004",
+        "catalog_version": "pilot-v0.2-test",
+        "node_type": "subject",
+        "subject_key": "science",
+        "canonical_key": "pilot-v0.2-test:subject:science",
+        "title": "Natural Sciences",
+        "parent_id": null,
+        "grade_min": null,
+        "grade_max": null,
+        "sort_order": 4,
+        "is_active": true
+      },
+      {
+        "id": "c0000000-0000-0000-0000-000000000005",
+        "catalog_version": "pilot-v0.2-test",
+        "node_type": "subject",
+        "subject_key": "other",
+        "canonical_key": "pilot-v0.2-test:subject:other",
+        "title": "Other Subjects",
+        "parent_id": null,
+        "grade_min": null,
+        "grade_max": null,
+        "sort_order": 5,
+        "is_active": true
+      },
+      {
+        "id": "c0000001-0000-0000-0000-000000000001",
+        "catalog_version": "pilot-v0.2-test",
+        "node_type": "domain",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.2-test:math:arithmetic",
+        "title": "Arithmetic v2",
+        "parent_id": "c0000000-0000-0000-0000-000000000001",
+        "grade_min": 1,
+        "grade_max": 6,
+        "sort_order": 1,
+        "is_active": true
+      },
+      {
+        "id": "c0000002-0000-0000-0000-000000000001",
+        "catalog_version": "pilot-v0.2-test",
+        "node_type": "topic",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.2-test:math:arithmetic:addition",
+        "title": "Addition v2",
+        "parent_id": "c0000001-0000-0000-0000-000000000001",
+        "grade_min": 1,
+        "grade_max": 4,
+        "sort_order": 1,
+        "is_active": true
+      },
+      {
+        "id": "c0000003-0000-0000-0000-000000000001",
+        "catalog_version": "pilot-v0.2-test",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.2-test:math:arithmetic:addition:single_digit",
+        "title": "Single Digit Addition v2",
+        "parent_id": "c0000002-0000-0000-0000-000000000001",
+        "grade_min": 1,
+        "grade_max": 2,
+        "sort_order": 1,
+        "is_active": true
+      },
+      {
+        "id": "c0000003-0000-0000-0000-000000000002",
+        "catalog_version": "pilot-v0.2-test",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.2-test:math:arithmetic:addition:double_digit",
+        "title": "Double Digit Addition v2",
+        "parent_id": "c0000002-0000-0000-0000-000000000001",
+        "grade_min": 2,
+        "grade_max": 4,
+        "sort_order": 2,
+        "is_active": true
+      }
+    ],
+    "extra_prerequisites": [
+      {
+        "catalog_version": "pilot-v0.2-test",
+        "prerequisite_node_id": "c0000003-0000-0000-0000-000000000001",
+        "dependent_node_id": "c0000003-0000-0000-0000-000000000002"
+      }
+    ],
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 95,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 95,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "overview": {
+        "active_catalog_version": "pilot-v0.2-test",
+        "total_skills": 2,
+        "observed_skills": 0,
+        "unseen_skills": 2,
+        "mastered_skills": 0
+      },
+      "node_state": {
+        "is_observed": false
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "c0000003-0000-0000-0000-000000000001"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 38,
+    "section": "18.6",
+    "scenario": "Grade filter: school_grade inside [grade_min, grade_max] inclusive boundaries (grade 2 matches 1..2 max and 2..4 min)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000002",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 92,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 92,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_grade_compatible": true,
+        "recommended_difficulty": "normal"
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000002",
+          "b0000003-0000-0000-0000-000000000003"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 39,
+    "section": "18.6",
+    "scenario": "Grade filter: school_grade < grade_min (grade 1 below double_digit 2..4) -> excluded from unlock",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 1,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000002",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 92,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 92,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_grade_compatible": false,
+        "recommended_difficulty": null
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000003"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 40,
+    "section": "18.6",
+    "scenario": "Grade filter: school_grade > grade_max (grade 5 above single_digit 1..2 and end_marks 1..3) -> excluded from explore",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 5,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "is_grade_compatible": false,
+        "recommended_difficulty": null
+      },
+      "next_challenge": {
+        "candidate_node_ids": []
+      }
+    }
+  },
+  {
+    "case_id": 41,
+    "section": "18.6",
+    "scenario": "Grade filter: school_grade IS NULL -> grade-scoped unlock/explore fail closed while recovery, refresh, and developing still return normally",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": null,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000003",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 62,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 62,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_grade_compatible": false,
+        "recommended_difficulty": null
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000001"
+        ],
+        "candidates": [
+          {
+            "rank": 1,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000001",
+            "priority_class": "developing",
+            "reason_code": "developing_keep_practicing",
+            "recommended_difficulty": "normal"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 42,
+    "section": "18.6",
+    "scenario": "Grade filter: Unbounded node (grade_min IS NULL AND grade_max IS NULL) -> compatible even when school_grade IS NULL",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": null,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000008",
+    "extra_nodes": [
+      {
+        "id": "b0000003-0000-0000-0000-000000000008",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:mental_math",
+        "title": "Mental Math Strategies",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": null,
+        "grade_max": null,
+        "sort_order": 3,
+        "is_active": true
+      }
+    ],
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "is_grade_compatible": true,
+        "recommended_difficulty": "normal"
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000008"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 43,
+    "section": "18.6",
+    "scenario": "Unseen Topic difficulty: node_type = topic AND is_observed = false -> recommended_difficulty = null in Node Detail",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000002-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "is_observed": false,
+        "recommended_difficulty": null
+      }
+    }
+  },
+  {
+    "case_id": 44,
+    "section": "18.6",
+    "scenario": "Unseen Subject / Domain -> recommended_difficulty = null in Node Detail",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000001-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "is_observed": false,
+        "recommended_difficulty": null
+      }
+    }
+  },
+  {
+    "case_id": 45,
+    "section": "18.6",
+    "scenario": "Locked unseen Skill -> recommended_difficulty = null in Node Detail",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000002",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "node_state": {
+        "is_observed": false,
+        "is_prerequisite_satisfied": false,
+        "recommended_difficulty": null
+      }
+    }
+  },
+  {
+    "case_id": 46,
+    "section": "18.7",
+    "scenario": "recovery beats refresh, developing, unlock, and explore; multiple recovery nodes sort by latest_unresolved_weakness_at DESC",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000003",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 45,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-10-25T12:00:00.000Z",
+        "mastery_attained_at": "2026-10-01T12:00:00.000Z"
+      },
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "mastery_score": 48,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      },
+      {
+        "node_id": "b0000002-0000-0000-0000-000000000001",
+        "mastery_score": 60,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 45,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-10-25T12:00:00.000Z",
+        "verified_at": "2026-10-25T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "score_source": "component_score",
+        "performance_pct": 48,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000002-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 60,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000003",
+          "b0000003-0000-0000-0000-000000000001",
+          "b0000002-0000-0000-0000-000000000001"
+        ],
+        "candidates": [
+          {
+            "rank": 1,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000003",
+            "priority_class": "recovery",
+            "reason_code": "recovery_recent_errors",
+            "recommended_difficulty": "below_level"
+          },
+          {
+            "rank": 2,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000001",
+            "priority_class": "recovery",
+            "reason_code": "recovery_recent_errors",
+            "recommended_difficulty": "below_level"
+          },
+          {
+            "rank": 3,
+            "learning_node_id": "b0000002-0000-0000-0000-000000000001",
+            "priority_class": "developing",
+            "reason_code": "developing_keep_practicing",
+            "recommended_difficulty": "normal"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 47,
+    "section": "18.7",
+    "scenario": "refresh vs developing overlap resolved: score 75 at 46d classifies as refresh (normal), score 75 at 10d classifies as developing (hard), sticky Mastered with score 78 at 10d excluded from developing",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 75,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-09-18T12:00:00.000Z",
+        "mastery_attained_at": null
+      },
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "mastery_score": 75,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-10-24T12:00:00.000Z",
+        "mastery_attained_at": null
+      },
+      {
+        "node_id": "b0000002-0000-0000-0000-000000000001",
+        "mastery_score": 78,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-10-24T12:00:00.000Z",
+        "mastery_attained_at": "2026-10-10T12:00:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 75,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-09-18T12:00:00.000Z",
+        "verified_at": "2026-09-18T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "score_source": "component_score",
+        "performance_pct": 75,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-10-24T12:00:00.000Z",
+        "verified_at": "2026-10-24T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000002-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 78,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-10-24T12:00:00.000Z",
+        "verified_at": "2026-10-24T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000001",
+          "b0000003-0000-0000-0000-000000000003"
+        ],
+        "candidates": [
+          {
+            "rank": 1,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000001",
+            "priority_class": "refresh",
+            "reason_code": "refresh_stale_secure_skill",
+            "recommended_difficulty": "normal"
+          },
+          {
+            "rank": 2,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000003",
+            "priority_class": "developing",
+            "reason_code": "developing_keep_practicing",
+            "recommended_difficulty": "hard"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 48,
+    "section": "18.7",
+    "scenario": "developing orders lowest mastery_score ASC first (55.00 before 72.00)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000003",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 72,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      },
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "mastery_score": 55,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 72,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "score_source": "component_score",
+        "performance_pct": 55,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000003",
+          "b0000003-0000-0000-0000-000000000001"
+        ],
+        "candidates": [
+          {
+            "rank": 1,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000003",
+            "priority_class": "developing",
+            "recommended_difficulty": "normal"
+          },
+          {
+            "rank": 2,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000001",
+            "priority_class": "developing",
+            "recommended_difficulty": "hard"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 49,
+    "section": "18.7",
+    "scenario": "unlock orders ahead of explore and sorts by catalog_sort_path ASC",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000002",
+    "extra_nodes": [
+      {
+        "id": "b0000003-0000-0000-0000-000000000006",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:word_problems",
+        "title": "Addition Word Problems",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 2,
+        "grade_max": 4,
+        "sort_order": 3,
+        "is_active": true
+      }
+    ],
+    "extra_prerequisites": [
+      {
+        "catalog_version": "pilot-v0.1",
+        "prerequisite_node_id": "b0000003-0000-0000-0000-000000000001",
+        "dependent_node_id": "b0000003-0000-0000-0000-000000000006"
+      }
+    ],
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 94,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 94,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000002",
+          "b0000003-0000-0000-0000-000000000006",
+          "b0000003-0000-0000-0000-000000000003"
+        ],
+        "candidates": [
+          {
+            "rank": 1,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000002",
+            "priority_class": "unlock"
+          },
+          {
+            "rank": 2,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000006",
+            "priority_class": "unlock"
+          },
+          {
+            "rank": 3,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000003",
+            "priority_class": "explore"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 50,
+    "section": "18.7",
+    "scenario": "explore orders by explore_proximity_rank ASC (0 same Topic < 1 same Domain < 2 same Subject < 3 cold-start Subject)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "limit": 3,
+    "extra_nodes": [
+      {
+        "id": "b0000003-0000-0000-0000-000000000004",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:place_value",
+        "title": "Place Value Foundations",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 1,
+        "grade_max": 3,
+        "sort_order": 3,
+        "is_active": true
+      },
+      {
+        "id": "b0000002-0000-0000-0000-000000000003",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "topic",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:subtraction",
+        "title": "Subtraction Operations",
+        "parent_id": "b0000001-0000-0000-0000-000000000001",
+        "grade_min": 1,
+        "grade_max": 4,
+        "sort_order": 2,
+        "is_active": true
+      },
+      {
+        "id": "b0000003-0000-0000-0000-000000000009",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:subtraction:single_digit",
+        "title": "Single Digit Subtraction",
+        "parent_id": "b0000002-0000-0000-0000-000000000003",
+        "grade_min": 1,
+        "grade_max": 3,
+        "sort_order": 1,
+        "is_active": true
+      },
+      {
+        "id": "b0000001-0000-0000-0000-000000000003",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "domain",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:geometry",
+        "title": "Geometry",
+        "parent_id": "pilot-v0.1:subject:math",
+        "grade_min": 1,
+        "grade_max": 6,
+        "sort_order": 2,
+        "is_active": true
+      },
+      {
+        "id": "b0000002-0000-0000-0000-000000000004",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "topic",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:geometry:shapes",
+        "title": "Basic Shapes",
+        "parent_id": "b0000001-0000-0000-0000-000000000003",
+        "grade_min": 1,
+        "grade_max": 4,
+        "sort_order": 1,
+        "is_active": true
+      },
+      {
+        "id": "b0000003-0000-0000-0000-000000000010",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:geometry:shapes:2d_shapes",
+        "title": "2D Shapes",
+        "parent_id": "b0000002-0000-0000-0000-000000000004",
+        "grade_min": 1,
+        "grade_max": 3,
+        "sort_order": 1,
+        "is_active": true
+      }
+    ],
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 88,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 88,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000004",
+          "b0000003-0000-0000-0000-000000000009",
+          "b0000003-0000-0000-0000-000000000010"
+        ],
+        "candidates": [
+          {
+            "rank": 1,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000004",
+            "priority_class": "explore",
+            "explore_proximity_rank": 0
+          },
+          {
+            "rank": 2,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000009",
+            "priority_class": "explore",
+            "explore_proximity_rank": 1
+          },
+          {
+            "rank": 3,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000010",
+            "priority_class": "explore",
+            "explore_proximity_rank": 2
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 51,
+    "section": "18.7",
+    "scenario": "Maximum 3 candidates enforced; invalid p_limit (0, -1, 4, null) and invalid p_subject_key rejected with 22000",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "limit": 2,
+    "extra_nodes": [
+      {
+        "id": "b0000003-0000-0000-0000-000000000004",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:place_value",
+        "title": "Place Value Foundations",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 1,
+        "grade_max": 3,
+        "sort_order": 3,
+        "is_active": true
+      }
+    ],
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000001",
+          "b0000003-0000-0000-0000-000000000004"
+        ]
+      },
+      "rpc_expect_error": {
+        "verify_invalid_limits": [
+          0,
+          -1,
+          4
+        ],
+        "verify_invalid_subject_key": "history",
+        "sqlstate": "22000"
+      }
+    }
+  },
+  {
+    "case_id": 52,
+    "section": "18.7",
+    "scenario": "Deterministic tie-break down to catalog_sort_path ASC then learning_node_id ASC",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "limit": 3,
+    "extra_nodes": [
+      {
+        "id": "b0000003-0000-0000-0000-000000000012",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:tie_b",
+        "title": "Tie Skill B",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 1,
+        "grade_max": 3,
+        "sort_order": 1,
+        "is_active": true
+      },
+      {
+        "id": "b0000003-0000-0000-0000-000000000011",
+        "catalog_version": "pilot-v0.1",
+        "node_type": "skill",
+        "subject_key": "math",
+        "canonical_key": "pilot-v0.1:math:arithmetic:addition:tie_a",
+        "title": "Tie Skill A",
+        "parent_id": "b0000002-0000-0000-0000-000000000001",
+        "grade_min": 1,
+        "grade_max": 3,
+        "sort_order": 1,
+        "is_active": true
+      }
+    ],
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000001",
+          "b0000003-0000-0000-0000-000000000011",
+          "b0000003-0000-0000-0000-000000000012"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 53,
+    "section": "18.7",
+    "scenario": "p_subject_key filter restricts returned candidates to that subject while respecting all eligibility rules",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "subject_key_filter": "english",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000003"
+        ],
+        "candidates": [
+          {
+            "rank": 1,
+            "learning_node_id": "b0000003-0000-0000-0000-000000000003",
+            "priority_class": "explore",
+            "reason_code": "explore_available_skill",
+            "recommended_difficulty": "normal"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 54,
+    "section": "18.7",
+    "scenario": "No-candidate scenario returns candidates: [] cleanly with valid envelope metadata",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 95,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000002",
+        "mastery_score": 90,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-02T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-02T12:05:00.000Z"
+      },
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "mastery_score": 91,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-11-02T12:00:00.000Z",
+        "mastery_attained_at": "2026-11-02T12:05:00.000Z"
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "item_group",
+        "performance_pct": 95,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000002",
+        "node_id": "b0000003-0000-0000-0000-000000000002",
+        "score_source": "item_group",
+        "performance_pct": 90,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      },
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000003",
+        "node_id": "b0000003-0000-0000-0000-000000000003",
+        "score_source": "item_group",
+        "performance_pct": 91,
+        "specificity_weight": 1,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "next_challenge": {
+        "candidate_node_ids": []
+      }
+    }
+  },
+  {
+    "case_id": 55,
+    "section": "18.8",
+    "scenario": "Active family adult (owner and parent) succeeds on all 3 RPCs",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "rpc_security_check": {
+        "caller": "family_adult",
+        "expect_success": true
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000001",
+          "b0000003-0000-0000-0000-000000000003"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 56,
+    "section": "18.8",
+    "scenario": "Paired active child device succeeds for its exact child_id on all 3 RPCs",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "rpc_security_check": {
+        "caller": "paired_child",
+        "expect_success": true
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000001",
+          "b0000003-0000-0000-0000-000000000003"
+        ]
+      }
+    }
+  },
+  {
+    "case_id": 57,
+    "section": "18.8",
+    "scenario": "Paired sibling child device calling any of the 3 RPCs for another child in the same family is denied (42501)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "rpc_security_check": {
+        "caller": "sibling_child",
+        "expect_success": false,
+        "sqlstate": "42501"
+      }
+    }
+  },
+  {
+    "case_id": 58,
+    "section": "18.8",
+    "scenario": "Cross-family active adult calling any of the 3 RPCs is denied (42501)",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "rpc_security_check": {
+        "caller": "cross_family_adult",
+        "expect_success": false,
+        "sqlstate": "42501"
+      }
+    }
+  },
+  {
+    "case_id": 59,
+    "section": "18.8",
+    "scenario": "Unauthenticated / anon caller is denied (42501 / no EXECUTE grant); authenticated cannot EXECUTE private.*_at helpers",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [],
+    "evidence_events": [],
+    "expected": {
+      "rpc_security_check": {
+        "caller": "unauthenticated_and_private_helper",
+        "expect_success": false,
+        "sqlstate": "42501"
+      }
+    }
+  },
+  {
+    "case_id": 60,
+    "section": "18.9",
+    "scenario": "Economy Invariance: Growth Engine awards, XP/RP ledgers, child_balances, Reward Store redemptions, and Celebration Wheel spins produce identical Phase 5.2 outputs",
+    "as_of": "2026-11-03T12:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "economy_mutations": true,
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 68,
+        "effective_evidence_count": 2,
+        "distinct_assessment_count": 2,
+        "last_evidence_occurred_at": "2026-11-01T12:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 68,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-11-01T12:00:00.000Z",
+        "verified_at": "2026-11-01T12:05:00.000Z"
+      }
+    ],
+    "expected": {
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 68,
+        "mastery_band": "developing",
+        "freshness": "recent",
+        "recovery_signal": "none",
+        "recommended_difficulty": "normal"
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000001",
+          "b0000003-0000-0000-0000-000000000003"
+        ]
+      }
+    }
+  }
+]

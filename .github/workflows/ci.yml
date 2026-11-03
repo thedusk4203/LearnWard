@@ -133,6 +133,12 @@ jobs:
       - name: Run Learning Mastery concurrency regression test
         run: node scripts/test_learning_concurrency.mjs
 
+      - name: Run Phase 5.2 Skill Graph & Next Challenge Dart/Postgres 60-case parity test
+        run: node scripts/test_learning_recommendation_parity.mjs
+
+      - name: Run Phase 5.2 Skill Graph & Next Challenge vertical slice integration test
+        run: node scripts/test_learning_recommendation_vertical_slice.mjs
+
       - name: Run Learning Mastery vertical slice integration test
         run: node scripts/test_learning_vertical_slice.mjs
 

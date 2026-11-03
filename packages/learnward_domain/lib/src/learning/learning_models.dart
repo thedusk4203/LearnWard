@@ -169,9 +169,11 @@ final class LearningEvidenceEvent {
     required this.familyId,
     required this.childId,
     required this.verifiedLearningEventId,
+    this.assessmentId,
     required this.learningNodeId,
     required this.nodeType,
     required this.subjectKey,
+    this.difficulty,
     required this.scoreSource,
     this.componentKey,
     this.rawScore,
@@ -190,9 +192,11 @@ final class LearningEvidenceEvent {
   final FamilyId familyId;
   final ChildId childId;
   final String verifiedLearningEventId;
+  final String? assessmentId;
   final LearningNodeId learningNodeId;
   final LearningNodeType nodeType;
   final String subjectKey;
+  final String? difficulty;
   final ScoreSource scoreSource;
   final String? componentKey;
   final double? rawScore;

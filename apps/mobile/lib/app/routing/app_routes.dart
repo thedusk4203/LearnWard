@@ -52,6 +52,9 @@ abstract final class AppRoutes {
   static const String childMastery = '/child/mastery';
   static const String childMasteryName = 'childMastery';
 
+  static const String childNodeDetail = '/child/learning/node';
+  static const String childNodeDetailName = 'childNodeDetail';
+
   static const String childAddAssessment = '/child/assessments/add';
   static const String childAddAssessmentName = 'childAddAssessment';
 
@@ -60,6 +63,12 @@ abstract final class AppRoutes {
 
   static const String parentVerifiedHistory = '/parent/assessments/history';
   static const String parentVerifiedHistoryName = 'parentVerifiedHistory';
+
+  static const String parentLearningOverview = '/parent/learning/overview';
+  static const String parentLearningOverviewName = 'parentLearningOverview';
+
+  static const String parentNodeDetail = '/parent/learning/node';
+  static const String parentNodeDetailName = 'parentNodeDetail';
 
   // Reserved for later phases
   static const String pair = '/pair';

@@ -539,9 +539,29 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                             right: AppSpacing.md,
                             bottom: AppSpacing.sm,
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
+                          child: Wrap(
+                            alignment: WrapAlignment.end,
+                            spacing: AppSpacing.xs,
                             children: [
+                              TextButton.icon(
+                                key: Key(
+                                  'view_learning_overview_${child.id.value}',
+                                ),
+                                icon: const Icon(
+                                  Icons.account_tree_outlined,
+                                  size: 18,
+                                ),
+                                label: const Text('Learning Overview'),
+                                onPressed: () {
+                                  context.push(
+                                    AppRoutes.parentLearningOverview,
+                                    extra: {
+                                      'childId': child.id,
+                                      'childDisplayName': child.displayName,
+                                    },
+                                  );
+                                },
+                              ),
                               TextButton.icon(
                                 key: Key('view_history_${child.id.value}'),
                                 icon: const Icon(Icons.history, size: 18),
