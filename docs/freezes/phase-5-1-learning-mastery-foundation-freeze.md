@@ -1,7 +1,7 @@
 # Phase 5.1 Freeze Receipt — Learning Engine, Mastery & Confidence Foundation
 
 **Status:** FROZEN  
-**Target:** Phase 5.1 — Learning Engine, Mastery & Confidence Foundation  
+**Target:** Phase 5.1 — Knowledge + Mastery Foundation (`Learning Engine, Mastery & Confidence Foundation`)  
 **PR:** [#9 — feat(phase-5.1): implement learning engine, mastery and confidence foundation](https://github.com/thedusk4203/LearnWard/pull/9)  
 **Approved Implementation HEAD:** `7cf8661444212a3e891fe152f855d160b27cccc2`  
 **Independent Audit:** PASS / MERGE READY (Comment `6592730362`)  
@@ -9,7 +9,7 @@
 **Post-merge Main CI Run ID:** `41558681324` — **SUCCESS (4/4 green)**  
 **Merge Timestamp:** `2026-11-03T01:16:43Z`  
 **Freeze Date:** 2026-11-03  
-**Freeze Receipt PR Comment:** [Issue Comment 6592996483](https://github.com/thedusk4203/LearnWard/pull/9#issuecomment-6592996483)  
+**Freeze Receipt PR Comment:** [Issue Comment 6592996483](https://github.com/thedusk4203/LearnWard/pull/9#issuecomment-6592996483) (corrected per [Audit Comment 6593421918](https://github.com/thedusk4203/LearnWard/pull/9#issuecomment-6593421918))  
 **ADR:** 0006 (ACCEPTED)  
 
 ---
@@ -45,7 +45,7 @@
    - Strict lifecycle: `draft -> active -> retired`, where `retired` is terminal.
 
 2. **Five Canonical Subject Roots:**
-   - Strictly validated root nodes: `math`, `reading`, `writing`, `science`, `social_studies`.
+   - Strictly validated root nodes matching the frozen canonical `subject_key` domain: `math`, `english`, `literature`, `science`, `other`.
    - Pilot content seeded under version `pilot-v0.1` and promoted to `active`.
 
 3. **Immutable Catalog Provenance:**
@@ -53,25 +53,24 @@
    - Foreign key relations prevent catalog corruption or orphaned curriculum nodes.
 
 4. **Assessment Learning Mappings:**
-   - Authoritative mapping identity: `(family_id, child_id, assessment_id, learning_node_id, component_key)`.
-   - Mandatory `component_key NOT NULL` enforced with `UNIQUE(assessment_id, learning_node_id, component_key)`.
-   - Reserved canonical `assessment_total` key for whole-assessment node bindings.
-   - System stamped `child_id` (copied from assessment) and `confirmed_by_user_id` (authenticated active adult).
+   - Authoritative uniqueness / component identity: `UNIQUE(assessment_id, learning_node_id, component_key)` with mandatory `component_key NOT NULL` on every authoritative row.
+   - Server-authoritative tenant and provenance fields: `family_id`, `child_id` (copied from the authoritative assessment, not caller-controlled), and `confirmed_by_user_id` (authenticated active family adult); these provenance fields are not part of the component uniqueness key.
+   - Reserved canonical `assessment_total` key for whole-assessment node bindings (allowing whole-assessment mapping to distinct non-Skill nodes without duplicate component inflation).
 
 5. **Effective Learning Evidence:**
-   - Derived evidence events resolve node-level specificity weights (Skill 1.0, Topic 0.75, Domain 0.50, Subject 0.35) and assessment level weights (Standard 1.0, Above-level 1.25, Below-level 0.50 with 100% ceiling constraint).
+   - Derived evidence events resolve node-level specificity weights (Skill `1.00`, Topic `0.75`, Domain `0.50`, Subject `0.35`) and assessment level weights (`normal = 1.00`, `hard = 1.00`, `challenge = 1.00`, `below_level = 0.50`; hard and challenge work receive no arbitrary mastery bonus).
 
 6. **Canonical Deterministic Mastery Rebuild:**
    - Out-of-order and historical evidence arrival handled deterministically by rebuilding node state from the complete immutable evidence set sorted in canonical academic chronology:
      `ORDER BY effective_occurred_at ASC, verified_at ASC, verified_learning_event_id ASC`.
 
 7. **Option A Initialization ($M_1 = P_1$):**
-   - The first chronological observation directly initializes the node mastery score ($M_1 = P_1$).
+   - The first chronological observation directly initializes the node mastery score ($M_1 = P_1$). Below-level 100% initializes score to 100 while confidence remains constrained (`< 1.5` Low), preventing premature `Mastered` declaration.
 
 8. **EWMA Subsequent Updates:**
    - Subsequent observations update score via EWMA:
      $M_t = (1 - \alpha_t) \cdot M_{t-1} + \alpha_t \cdot P_t$
-     where $\alpha_t = \alpha_{\text{base}} \cdot W_{\text{spec}} \cdot W_{\text{lvl}}$ with $\alpha_{\text{base}} = 0.35$.
+     where $\alpha_t = \text{round}(\alpha_{\text{base}} \cdot W_{\text{spec}} \cdot W_{\text{lvl}}, 4)$ with $\alpha_{\text{base}} = 0.35$.
 
 9. **Confidence Engine v0.1:**
    - Confidence units calculated across a rolling 60-day window:
@@ -115,7 +114,26 @@
 
 ---
 
-## 3. Scope Deferred to Future Phases
+## 3. Scope Deferred to Phase 5.2
 
-- **Phase 5.2 (Skill Trees & Curated Pilot Content):** Full prerequisite graph traversal, unlocked status resolution, and curriculum tree visualization.
-- **Phase 5.3 (Recommendation Engine & Next Challenge):** Next-challenge recommendation ranking, zone of proximal development scoring, and parent/child dashboard cards.
+Phase 5 consists strictly of **Phase 5.1 — Knowledge + Mastery Foundation** (frozen here) and **Phase 5.2 — Skill Graph + Recommendation Foundation** (per `docs/13-phase-5-learning-engine-mastery-design-v0.1.md` Section 4):
+
+- **Phase 5.2 — Skill Graph + Recommendation Foundation:**
+  - Prerequisite graph traversal for Unlock / Explore candidate selection,
+  - Dynamic Freshness (`14d` / `45d` boundaries relative to server-authoritative `as_of`),
+  - Deterministic Recovery signal (`review_suggested` with 30-day recency/expiry window),
+  - Next-Challenge candidate engine (up to three candidate choices),
+  - Explanation and coverage presentation,
+  - Child choice UI.
+
+---
+
+## 4. Documentation Correction Record
+
+- **Audit Gate Reference:** [PR #9 Issue Comment 6593421918](https://github.com/thedusk4203/LearnWard/pull/9#issuecomment-6593421918)
+- **Summary:** Phase 5.1 implementation freeze remains valid. This documentation-only correction checkpoint resolved source-of-truth wording drift introduced during the initial freeze checkpoint (`3accfca4950929cc9a6b82850a1ba7b4da15e89a`):
+  1. Canonical Subject roots (`math`, `english`, `literature`, `science`, `other`);
+  2. Assessment level weights (`normal = 1.00`, `hard = 1.00`, `challenge = 1.00`, `below_level = 0.50`);
+  3. Mapping identity wording (`UNIQUE(assessment_id, learning_node_id, component_key)` component uniqueness vs. `family_id`, `child_id`, `confirmed_by_user_id` tenant/provenance fields);
+  4. Phase 5.2 scope (`Skill Graph + Recommendation Foundation`) and removal of the accidental Phase 5.3 split.
+- **Invariance:** No runtime, migration, algorithm, security, or test contract changed.

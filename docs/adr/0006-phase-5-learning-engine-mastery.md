@@ -11,7 +11,7 @@
 - **Independent Audit Receipt:** Comment 6592730362 (PASS / MERGE READY)
 - **Freeze Receipt:** [docs/freezes/phase-5-1-learning-mastery-foundation-freeze.md](../freezes/phase-5-1-learning-mastery-foundation-freeze.md) (PR #9 [Comment 6592996483](https://github.com/thedusk4203/LearnWard/pull/9#issuecomment-6592996483))
 
-This ADR is **ACCEPTED** following the completion and merge of Phase 5.1. The Phase 5.1 foundation contract is verified across 377 pgTAP database tests, 134 domain unit tests, 13 cross-platform parity scenarios, and full 4/4 green CI verification. All technical decisions below are frozen baseline architecture. Sub-phases 5.2 and 5.3 will build additively on this foundation.
+This ADR is **ACCEPTED** following the completion and merge of Phase 5.1. The Phase 5.1 foundation contract is verified across 377 pgTAP database tests, 134 domain unit tests, 13 cross-platform parity scenarios, and full 4/4 green CI verification. All technical decisions below are frozen baseline architecture. Phase 5.2 (Skill Graph + Recommendation Foundation) will build additively on this foundation.
 
 ---
 
