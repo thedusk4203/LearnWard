@@ -80,7 +80,7 @@ Level    │    Wheel   Store
 | [Phase 5.2 Detailed Design v0.1](docs/15-phase-5-2-skill-graph-recommendation-design-v0.1.md) | Proposed Phase 5.2 detailed design: Skill Graph traversal, Freshness, Recovery replay, Next Challenge engine, RPC schemas, and parity matrix |
 | [Phase 5.2 Skill Graph & Recommendation ADR](docs/adr/0007-phase-5-2-skill-graph-recommendation.md) | Accepted architectural decisions for Phase 5.2 read-time projections, disjoint priority partition, and deterministic comparator |
 | [Phase 5.2 Freeze Receipt](docs/freezes/phase-5-2-skill-graph-recommendation-foundation-freeze.md) | Frozen Phase 5.2 baseline, CI receipt, Skill Graph traversal, Freshness, Recovery, Next Challenge candidate engine, and Dart/Postgres parity |
-| [Phase 6 Dependency & Readiness Review](docs/16-phase-6-pilot-hardening-dependency-readiness-review.md) | Phase 6 pilot hardening dependency audit against sealed Phase 5 baseline (`PASS FOR DESIGN`; implementation not started) |
+| [Phase 6 Dependency & Readiness Review](docs/16-phase-6-pilot-hardening-dependency-readiness-review.md) | Phase 6 pilot hardening dependency audit against sealed Phase 5 baseline (RECOMMENDED VERDICT: PASS FOR DESIGN PENDING INDEPENDENT READINESS AUDIT + REQUIRED CI; implementation not started) |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering

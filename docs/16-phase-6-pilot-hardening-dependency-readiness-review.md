@@ -1,6 +1,6 @@
 # Phase 6 Dependency & Readiness Review — Pilot Hardening
 
-- **Status:** PASS FOR DESIGN (Implementation NOT AUTHORIZED / NOT STARTED)
+- **Status:** RECOMMENDED VERDICT: PASS FOR DESIGN PENDING INDEPENDENT READINESS AUDIT + REQUIRED CI (Implementation NOT AUTHORIZED / NOT STARTED)
 - **Reviewed Baseline:** `main` @ `da0ad970d30d3a761640e0bc5eb1c320cebd4f27`
 - **Sealing Audit Reference:** PR #11 Comment `6605235500` — **PASS / SEALED**
 - **Upstream Contracts:**
@@ -11,10 +11,10 @@
   - Phase 5.1 — Learning Engine & Mastery: **FROZEN** ([Phase 5.1 Freeze Receipt](freezes/phase-5-1-learning-mastery-foundation-freeze.md), [ADR 0006](adr/0006-phase-5-learning-engine-mastery.md))
   - Phase 5.2 — Skill Graph & Recommendations: **FROZEN** ([Phase 5.2 Freeze Receipt](freezes/phase-5-2-skill-graph-recommendation-foundation-freeze.md), [ADR 0007](adr/0007-phase-5-2-skill-graph-recommendation.md))
   - Phase 5 — Complete Learning Engine: **COMPLETE / SEALED**
-- **Phase 6 Implementation Status:** **NOT STARTED**
+- **Phase 6 Status:** **NOT STARTED** (Detailed Design remains **NOT AUTHORIZED** until independent readiness audit passes)
 
 > [!IMPORTANT]
-> This document is a documentation-only readiness and dependency analysis. It does NOT authorize migrations, runtime code, SDK additions, notification provider configuration, release signing, or external distribution.
+> This document is a documentation-only readiness and dependency analysis. It does NOT authorize migrations, runtime code, SDK additions, notification provider configuration, release signing, or external distribution. It does not self-approve any milestone or gate.
 
 ---
 
@@ -54,22 +54,22 @@ Each area below is evaluated against the actual codebase at baseline `da0ad970d3
 
 | Capability Area | Status | Existing Implementation Baseline | Phase 6 Requirement |
 |---|---|---|---|
-| **Local Database & Drift Schema** | `PARTIAL` | `AppDatabase` (schema v4) with `LocalMetadataEntries`, `LocalAssessmentDrafts`, `PendingRewardCommands` | Needs unified schema migration strategy, tenant scoping, and command status metadata |
-| **Offline Command Queue** | `PARTIAL` | Specialized command journal for reward redemption and wheel spin in `PendingRewardCommands` | Generalization to all offline mutations (assessment submit, review, etc.) or clear feature-bounded outboxes |
-| **Actor-Aware Command Recovery** | `MISSING` | `PendingRewardCommands` lacks `actor_user_id` / `actor_role`; server fail-closed but client cannot self-heal | Bind queued commands to authenticated actor identity; evict or reject on identity mismatch |
-| **Offline Security & Containment** | `PARTIAL` | Server enforces strict RLS and immutable ledgers; zero offline RP/mastery generation | Local SQLite data persists across sign-out and device grant revocation; fail-closed local wipe needed |
-| **Failure & Retry UX** | `PARTIAL` | `AddAssessmentScreen` maps network errors; `ChildWheelScreen` has retry banner; other screens leak raw exceptions | Unified user-friendly error mapper, actionable retry components, and offline banners across all screens |
-| **Evidence & Media Reliability** | `PARTIAL` | `image_picker` used; 10 MiB limit; compensation deletion on DB error in `UploadAssessmentEvidence` | Missing iOS camera/photo permission strings (`Info.plist`); missing offline upload resumption and storage recovery |
-| **Push Notifications** | `MISSING` | Zero push dependencies in `pubspec.yaml`; zero device token tables in schema | Notification abstraction, device token registration, family targeting, and deep-link routing |
-| **Metric Telemetry (VLPE)** | `PARTIAL` | Core VLPE, results logged, trends, and economy balance metrics directly derivable from PostgreSQL DB | Client-side privacy-preserving event envelope for self-chosen challenge tracking and UX interaction timing |
-| **Analytics Privacy Contract** | `BLOCKED BY DESIGN DECISION` | Database contains sensitive minors' academic evidence and photos | Strict sanitization contract forbidding PII, child names, and image URLs in telemetry payloads |
-| **Privacy & Data Retention** | `BLOCKED BY DESIGN DECISION` | Immutable append-only triggers on ledgers, events, and revisions block database deletion | Architectural policy resolving right-to-erasure vs. immutable ledger auditability |
+| **Local Database & Drift Schema** | `PARTIAL` | `AppDatabase` (schema v4) with `LocalMetadataEntries`, `LocalAssessmentDrafts`, `PendingRewardCommands` | Needs schema migration strategy (v5), actor binding, and status metadata |
+| **Offline Command Queue** | `PARTIAL` | Specialized command journal for reward redemption and wheel spin in `PendingRewardCommands` | Bounded feature outboxes for offline mutations; assessment submission retry queue |
+| **Actor-Aware Command Recovery** | `MISSING` | `PendingRewardCommands` lacks `actor_user_id` / `actor_role`; server fail-closed but client cannot self-heal | Bind queued commands to authenticated actor identity; eviction/rejection on identity mismatch |
+| **Offline Security & Containment** | `PARTIAL` | Server enforces strict RLS and immutable ledgers; zero offline RP/mastery generation | Local data persists across logout/unpair; explicit per-class local cleanup lifecycle needed |
+| **Failure & Retry UX** | `PARTIAL` | `AddAssessmentScreen` maps network errors; `ChildWheelScreen` has retry banner; other screens leak raw exceptions | Unified user-friendly error mapper, actionable retry components, and offline banners across screens |
+| **Evidence & Media Reliability** | `PARTIAL` | `image_picker` used; 10 MiB limit; compensation deletion on DB error in `UploadAssessmentEvidence` | Missing iOS camera/photo permission strings (`Info.plist`); missing offline upload resumption |
+| **Push Notifications** | `MISSING` | Zero push dependencies in `pubspec.yaml`; zero device token tables in schema | Architecture decision (push vs. in-app vs. hybrid), token registration, and deep-link routing |
+| **Metric Telemetry (VLPE)** | `PARTIAL` | 12 of 16 pilot metrics derivable from authoritative PostgreSQL DB; pure VLPE requires growth + learning processing | Client-side privacy-preserving event envelope for self-chosen challenge tracking and UX interaction timing |
+| **Analytics Privacy Contract** | `UNDECIDED — DESIGN REQUIRED` | Database contains sensitive minors' academic evidence and photos | Strict sanitization contract forbidding PII, child names, and image URLs in telemetry payloads |
+| **Privacy & Data Retention** | `UNDECIDED — DESIGN REQUIRED` | Immutable append-only triggers on ledgers, events, and revisions block database deletion | Architectural policy resolving right-to-erasure vs. immutable ledger auditability |
 | **Accessibility & Semantics** | `MISSING` | Standard Flutter widgets; zero `Semantics` widgets; zero `Tooltip` labels across mobile app | Comprehensive semantics labeling, 48x48 dp touch target verification, and dynamic type overflow testing |
 | **Reduced Motion / Wheel Safety** | `PARTIAL` | Wheel has 4-second spin animation; server outcome is deterministic and non-losing | Reduced-motion setting bypass (`MediaQuery.disableAnimationsOf`) with instant reveal preserving outcome |
-| **Android Release Distribution** | `MISSING` | Debug APK built in CI; `build.gradle.kts` uses debug signing for release build type | Production keystore generation, CI secret injection, release signing, and internal track deployment |
-| **iOS / TestFlight Distribution** | `MISSING` | iOS simulator compiled in CI; debug profile; missing camera usage strings | Team ID, provisioning profile, export options, release archive workflow, and TestFlight pipeline |
-| **Environment Configuration** | `PARTIAL` | `dart_defines.json` supported (`APP_ENV`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`) | Staging vs. Production project isolation, CI secret management, and production deep link hosts |
-| **Staging Migration & Verification** | `PARTIAL` | Local CI executes `supabase db reset` and 438 pgTAP tests | Automated remote migration execution and post-migration smoke verification pipeline |
+| **Android Release Distribution** | `PARTIAL` | Debug APK built in CI; `build.gradle.kts` uses debug signing for release build type | Production keystore, release signing, artifact generation, and manual/automated internal track distribution |
+| **iOS / TestFlight Distribution** | `PARTIAL` | iOS simulator compiled in CI; debug profile; missing camera usage strings | Bundle ID, distribution provisioning, archive generation, and manual/automated TestFlight distribution |
+| **Environment Configuration** | `PARTIAL` | `dart_defines.json` supported (`APP_ENV`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`) | Staging vs. Production project isolation, secret management, and production deep link hosts |
+| **Staging Migration & Verification** | `PARTIAL` | Local CI executes `supabase db reset` and 438 pgTAP tests | Remote migration execution procedure and post-migration smoke verification script |
 | **Operational Diagnostics** | `MISSING` | Client exceptions logged to console; no diagnostic support screen or correlation IDs | Non-sensitive diagnostic payload screen for pilot parents and testers (correlation ID, sync state) |
 | **Schema Version Compatibility** | `MISSING` | Local Drift schema at v4; queued commands have no payload versioning | Explicit schema versioning on queued local command payloads to survive client app updates |
 | **Frozen Contracts Invariance** | `READY` | Phases 1–5 frozen, tested, and sealed with 438 pgTAP tests and 61-case parity | Must remain 100% green without modification throughout Phase 6 |
@@ -80,7 +80,7 @@ Each area below is evaluated against the actual codebase at baseline `da0ad970d3
 
 ### 3.1 Current Local Database Inventory
 The local database is powered by Drift (`packages/learnward_data/lib/src/database/app_database.dart`), currently at `schemaVersion = 4`:
-1. `local_metadata_entries`: Key-value text storage (`key`, `value`, `updated_at`).
+1. `local_metadata_entries`: Key-value text storage (`key`, `value`, `updated_at`). Used by `LocalMetadataStore` for Parent Gate PIN hash/salt and active child session.
 2. `local_assessment_drafts`: Full draft assessment state (`localDraftId`, `familyId`, `childId`, `createCommandId`, `submitCommandId`, `evidenceId`, `serverAssessmentId`, `subjectKey`, `subject`, `title`, `assessmentType`, `difficulty`, `rawScore`, `maxScore`, `localPhotoPath`, `entryContext`, `occurredAt`, `updatedAt`).
 3. `pending_reward_commands`: Specialized journal for Store and Wheel operations (`id`, `operation`, `commandId`, `familyId`, `childId`, `rewardId`, `redemptionId`, `cancellationReason`, `createdAt`).
 
@@ -122,7 +122,7 @@ It does **not** persist `actor_user_id` or `actor_role`.
    - Adult A queues a reward fulfillment command (`commandId = C1`). Network times out.
    - Adult A logs out. Adult B (co-parent) logs into the same device.
    - The app detects pending command `C1` and retries it under Adult B's Supabase session.
-   - **Server behavior:** Server checks `command_receipts`. If `C1` was already committed by Adult A, the server raises `42501 (Command caller mismatch)`. The client catches this but cannot distinguish caller mismatch from family authorization failure. If `C1` never reached the server, it executes under Adult B, creating audit trail attribution drift.
+   - **Server behavior:** Server checks `public.command_receipts`. If `C1` was already committed by Adult A, the server raises `42501 (Command caller mismatch)`. The client catches this but cannot distinguish caller mismatch from family authorization failure. If `C1` never reached the server, it executes under Adult B, creating audit trail attribution drift.
 2. **Revoked Child Grant:**
    - A dedicated child device queues a wheel spin command (`C2`). Network times out.
    - Parent revokes the child device grant in family settings.
@@ -134,6 +134,7 @@ Phase 6 detailed design must specify:
 1. Addition of `actor_user_id` and `actor_role` to local command journal schemas.
 2. An eviction / cancellation policy when the active session's `auth.uid()` does not match `actor_user_id`.
 3. Clear error classification when server returns `42501` on replayed commands.
+Detailed design must formally decide the exact identity binding contract before any runtime implementation.
 
 ---
 
@@ -141,15 +142,36 @@ Phase 6 detailed design must specify:
 
 ### 5.1 Local Data Exposure Inventory
 The local client persists:
-- SQLite (`app_database.sqlite`): raw assessment scores, subject titles, child IDs, family IDs, local photo paths, reward titles, redemption IDs.
-- Secure Storage / SharedPreferences: Supabase auth JWT, refresh tokens, active Child Mode PIN, selected active child profile ID.
-- App Documents Directory: Uncompressed photo evidence JPEG/PNG files.
+- **SQLite (`app_database.sqlite`):**
+  - `local_assessment_drafts`: raw assessment scores, subject titles, child IDs, family IDs, local photo paths, entry contexts, draft IDs.
+  - `pending_reward_commands`: command IDs, operations, family IDs, child IDs, reward IDs, redemption IDs, cancellation reasons.
+  - `local_metadata_entries` (via `LocalMetadataStore`):
+    - `parent_gate_pin_hash`: Salted SHA-256 hash of the parent PIN.
+    - `parent_gate_pin_salt`: Random 16-byte hex salt.
+    - `active_child_session`: Full child profile JSON (`id`, `family_id`, `display_name`, `school_grade`, `birth_year`, `avatar_key`, `status`, `created_at`).
+- **Auth Session Persistence:** Supabase Flutter managed auth-session persistence (session tokens, refresh tokens).
+- **App Documents Directory:** Uncompressed photo evidence JPEG/PNG files.
 
-### 5.2 Revocation and Logout Deficiencies
-- **Current Code Behavior:** Logging out or exiting Child Mode does **not** delete local assessment drafts, pending command journals, or cached local evidence images.
+### 5.2 Revocation, Logout & Data Lifecycle Deficiencies
+- **Current Code Behavior:** Logging out or exiting Child Mode does **not** purge local assessment drafts, pending command journals, or cached local evidence images.
 - **Security Implication:** If a child device is unlinked or a shared device is returned, local drafts and photos remain accessible on the file system.
 - **Frozen Contract Invariant:** Offline state must **NEVER** manufacture verified evidence, XP, RP, mastery improvements, reward redemption results, or wheel outcomes. All authoritative calculations remain server-side.
-- **Readiness Requirement:** Phase 6 detailed design must specify a **secure local cleanup lifecycle** triggered on `auth.signOut()`, family switching, or device pairing revocation.
+- **Readiness Finding & Boundaries:** A single blanket `clearAllTables()` wipe on sign-out must **NOT** be pre-frozen in readiness. Phase 6 detailed design must explicitly decide the per-data-class lifecycle across distinct operational transitions:
+  1. Adult sign-out
+  2. Adult identity switch
+  3. Family switch
+  4. Exit shared Child Mode
+  5. Paired child device revocation
+  6. Child profile archive
+  7. Family deletion request
+  
+  The lifecycles of distinct classes must be evaluated separately:
+  - Parent PIN device containment state (`parent_gate_pin_hash`, `parent_gate_pin_salt`)
+  - Active child session (`active_child_session`)
+  - Family drafts (`local_assessment_drafts`)
+  - Pending commands (`pending_reward_commands`)
+  - Local evidence files (documents directory)
+  - Cached read models
 
 ---
 
@@ -207,7 +229,6 @@ Only `ChildWheelScreen` provides an explicit, actionable retry banner for pendin
 Per `docs/08-mobile-architecture-v0.1.md` Section 13, notifications must support family coordination, not engagement farming:
 1. **Parent Approval Required:** Triggered when a child submits an assessment (`assessments.status = 'pending_review'`).
 2. **Reward Fulfilled:** Triggered when a parent marks a redemption fulfilled (`reward_redemptions.status = 'fulfilled'`).
-3. **Optional Learner Reminder:** Self-selected goal reminder (if goals implemented) or promise date approaching.
 
 ### 8.2 Strict Product Anti-Patterns & Invariants
 > [!CAUTION]
@@ -220,41 +241,82 @@ Per `docs/08-mobile-architecture-v0.1.md` Section 13, notifications must support
 
 Notification clicks or app opens are **never** counted as learning progress (VLPE).
 
-### 8.3 Technical Deficiencies
+### 8.3 Technical Deficiencies & Architecture Decision Status
 - Zero push notification packages exist in `apps/mobile/pubspec.yaml`.
 - No database tables exist to store device push tokens (`fcm_tokens` / `apns_tokens`).
-- No token rotation or multi-device fan-out mechanism exists.
-- **Readiness Requirement:** Phase 6 detailed design must specify a provider-agnostic notification service port, token registration table with family/child foreign keys, and deep-link routing definitions.
+- **Architecture Status: UNDECIDED — DETAILED DESIGN REQUIRED.**
+  Readiness does **not** pre-select a notification delivery channel (neither in-app only nor FCM/APNs). Detailed design must explicitly decide:
+  - Delivery architecture: push vs. in-app vs. hybrid
+  - Third-party provider selection (if push chosen)
+  - Device token lifecycle and storage schema
+  - Multi-device family targeting
+  - Token cleanup on logout or device grant revocation
+  - Foreground vs. background notification behavior
+  - Deep-link routing to `ReviewAssessmentScreen` / `ChildRedemptionHistoryScreen`
+  - Idempotent / duplicate delivery handling
 
 ---
 
 ## 9. Metric Instrumentation & Telemetry Audit
 
-### 9.1 North Star Metric: VLPE
+### 9.1 North Star Metric: Canonical VLPE Derivation
 **Verified Learning Progress Events / Active Child / Week (VLPE)**
 Source of truth: `docs/06-metrics-and-hypotheses.md`.
-A VLPE requires: Real learning activity + Trusted evidence + Growth Engine update + Progress/mastery contribution.
 
-### 9.2 Authoritative Database Derivability Analysis
+Per `docs/06-metrics-and-hypotheses.md`, a true VLPE requires:
+```text
+Real learning activity + Trusted evidence + Growth Engine update + Progress/mastery contribution
+```
+
+Therefore, a `verified_learning_event` counts as a canonical VLPE if and only if that same authoritative event has completed **both**:
+1. **Growth processing** (recorded in `public.growth_events`), AND
+2. **Learning/Mastery processing** (recorded in `public.learning_processing_events` with `status = 'processed'`).
+
+An unprocessed or partially processed VLE does **NOT** count as a completed VLPE.
+
+Conceptual authoritative SQL query:
+```sql
+select count(*)
+from public.verified_learning_events vle
+where vle.child_id = :child_id
+  and vle.verified_at >= :start
+  and vle.verified_at < :end
+  and exists (
+    select 1
+    from public.growth_events g
+    where g.verified_learning_event_id = vle.id
+  )
+  and exists (
+    select 1
+    from public.learning_processing_events lp
+    where lp.verified_learning_event_id = vle.id
+      and lp.status = 'processed'
+  );
+```
+Week 4 and Week 8 retention calculations must reuse this exact canonical VLPE definition.
+
+### 9.2 Authoritative Database Derivability Analysis (12 of 16 Derivable)
+
+Exactly **12 of 16** metrics from `docs/06-metrics-and-hypotheses.md` are directly derivable from the authoritative PostgreSQL database without third-party analytics SDKs:
 
 | # | Metric from `docs/06` | Classification | Authoritative Source / Derivation Method |
 |---|---|---|---|
-| 1 | **VLPE / child / week** | `DERIVABLE FROM AUTHORITATIVE DB` | `COUNT(*) FROM public.verified_learning_events WHERE child_id = :id AND verified_at >= :start AND verified_at < :end` |
+| 1 | **VLPE / child / week** | `DERIVABLE FROM AUTHORITATIVE DB` | Canonical query above: VLEs with both `growth_events` and processed `learning_processing_events` |
 | 2 | **Results logged / child / week** | `DERIVABLE FROM AUTHORITATIVE DB` | `COUNT(*) FROM public.assessments WHERE child_id = :id AND created_at >= :start AND created_at < :end` |
-| 3 | **% results logged by child** | `DERIVABLE FROM AUTHORITATIVE DB` | `COUNT(entry_context IN ('shared_child', 'paired_child')) / COUNT(*)` from `assessments` |
-| 4 | **% goals chosen by child** | `NEEDS NEW PRODUCT INPUT` | Goals entity not implemented in Phases 1–5; requires Phase 6 goal or deferred |
-| 5 | **4-week subject trend** | `DERIVABLE FROM AUTHORITATIVE DB` | Grouped `verified_learning_events` score trajectory by `subject_key` over 28 days |
-| 6 | **Recovery completion rate** | `DERIVABLE FROM AUTHORITATIVE DB` | Replayed weak observations in `learning_evidence_events` reaching $\ge 70\%$ within 30 days |
-| 7 | **Personal-best frequency** | `DERIVABLE FROM AUTHORITATIVE DB` | `growth_events.is_personal_best` flag or historical score comparison |
-| 8 | **Parent approval latency** | `DERIVABLE FROM AUTHORITATIVE DB` | `EXTRACT(EPOCH FROM (vle.verified_at - a.created_at))` |
+| 3 | **% results logged by child** | `DERIVABLE FROM AUTHORITATIVE DB` | `COUNT(entry_context IN ('shared_child', 'paired_child')) / COUNT(*)` from `public.assessments` |
+| 4 | **% goals chosen by child** | `NOT CURRENTLY MEASURABLE / DEFERRED` | Goals entity not implemented in Phases 1–5; deferred post-pilot unless detailed design proves strictly necessary for exit gate. Do not add Goals scope solely for metrics. |
+| 5 | **4-week subject trend** | `DERIVABLE FROM AUTHORITATIVE DB` | Grouped `verified_learning_events` score trajectory by `subject_key` over 28-day window |
+| 6 | **Recovery completion rate** | `DERIVABLE FROM AUTHORITATIVE DB` | Replayed weak observations in `learning_evidence_events` reaching $\ge 70\%$ score within 30 days |
+| 7 | **Personal-best frequency** | `DERIVABLE FROM AUTHORITATIVE DB` | Authoritative Growth result: `COUNT(growth_events.personal_best_rp_minor > 0)` or comparison `normalized_score > historical_best` |
+| 8 | **Parent approval latency** | `DERIVABLE FROM AUTHORITATIVE DB` | Immutable review events: `EXTRACT(EPOCH FROM (v_evt.created_at - s_evt.created_at))` where `s_evt.event_type = 'submitted'` and `v_evt.event_type = 'verified'`. Excludes draft creation time. (Rejected decision latency measured via `s_evt -> r_evt`). |
 | 9 | **Parent admin minutes/day** | `NOT CURRENTLY MEASURABLE` | Requires client UI screen session timing or weekly qualitative pilot survey |
-| 10 | **Reward fulfillment rate** | `DERIVABLE FROM AUTHORITATIVE DB` | `COUNT(status = 'fulfilled') / COUNT(status IN ('fulfilled', 'cancelled', 'pending_fulfillment'))` |
+| 10 | **Reward fulfillment rate** | `DERIVABLE FROM AUTHORITATIVE DB` | `COUNT(status = 'fulfilled') / COUNT(status IN ('fulfilled', 'cancelled', 'pending_fulfillment'))` from `public.reward_redemptions` |
 | 11 | **RP earned / week** | `DERIVABLE FROM AUTHORITATIVE DB` | `SUM(amount_minor) FROM public.rp_ledger WHERE amount_minor > 0` |
 | 12 | **RP spent / week** | `DERIVABLE FROM AUTHORITATIVE DB` | `ABS(SUM(amount_minor)) FROM public.rp_ledger WHERE amount_minor < 0` |
-| 13 | **Wheel vs Store spend share** | `DERIVABLE FROM AUTHORITATIVE DB` | `SUM(wheel_spins.spin_cost_minor)` vs. `SUM(reward_redemptions.cost_minor)` |
-| 14 | **Self-chosen challenge rate** | `NEEDS NEW EVENT` | Requires tracking when an assessment is launched directly from a Next Challenge card |
-| 15 | **Week 4 / Week 8 retention** | `DERIVABLE FROM AUTHORITATIVE DB` | Children with $\ge 1$ VLPE in week 4 and week 8 |
-| 16 | **Parent study reminders / week** | `NEEDS NEW PRODUCT INPUT` | Parent Intervention Rate baseline vs. weekly qualitative check-in |
+| 13 | **Wheel vs Store spend share** | `DERIVABLE FROM AUTHORITATIVE DB` | `SUM(wheel_spins.spin_cost_minor)` vs. `SUM(reward_redemptions.rp_cost_minor WHERE origin = 'store')` |
+| 14 | **Self-chosen challenge rate** | `NEEDS NEW CLIENT/UX EVENT` | Requires client event tracking when an assessment is launched directly from a Next Challenge recommendation card |
+| 15 | **Week 4 / Week 8 retention** | `DERIVABLE FROM AUTHORITATIVE DB` | Distinct active children with $\ge 1$ canonical VLPE (both growth + learning processed) in week 4 and week 8 |
+| 16 | **Parent study reminders / week** | `NEEDS NEW PRODUCT INPUT / SURVEY` | Parent Intervention Rate baseline vs. weekly qualitative check-in interview |
 
 ---
 
@@ -300,43 +362,46 @@ Under no circumstances may client telemetry or third-party SDK payloads contain:
 | **H1 — Progress Visibility** | Repeat VLPE rate after high baseline; Next Challenge engagement | Child spontaneous comments during study | Whether learner felt encouraged vs. pressured |
 | **H2 — Growth-Aware Fairness** | VLPE consistency among children starting below 50% baseline | Parent survey on perceived fairness across siblings | Subjective feelings of resentment or parity |
 | **H3 — Learner Autonomy** | Ratio of child-initiated drafts (`entry_context = 'shared_child'`) | Parent observation of study prompting frequency | Whether child initiated study without verbal cues |
-| **H4 — Wheel vs. Store** | Spend ratio between `wheel_spins` and `reward_redemptions` | Child explanation of why they saved vs. spun | Delayed gratification cognitive intent |
-| **H5 — Verification Friction** | Approval latency (`verified_at - created_at`); review event timestamps | Parent interview on approval fatigue | Household negotiation friction |
+| **H4 — Wheel vs. Store** | Spend ratio between `wheel_spins.spin_cost_minor` and `reward_redemptions.rp_cost_minor` | Child explanation of why they saved vs. spun | Delayed gratification cognitive intent |
+| **H5 — Verification Friction** | Review latency between review events (`submitted -> verified`); pending review count | Parent interview on approval fatigue | Household negotiation friction |
 | **H6 — Reward Fulfillment Trust** | Fulfillment rate ($> 90\%$ target); cancellation rate | Child trust expressions during interview | Disappointment over delayed offline promises |
 | **H7 — Novelty Resistance** | Weeks 3–4 VLPE trend vs. Week 1 spin frequency | Child interest in mastery badges after 3 weeks | Intrinsic motivation maturation |
 | **H8 — External-Learning Advantage**| Variety of assessment types (`quiz`, `test`, `homework`, `practice`) | Parent satisfaction with multi-source logging | Tutor / teacher direct perception |
 
-### 11.1 Guardrail Monitoring
-The pilot must track telemetry guardrails to detect failure modes:
-1. **Reward Dependency:** Refusal to study unless RP is attached (measured by parent weekly check-in).
-2. **Farming:** Repeated below-level entries or rapid submission spam (detected via assessment submission frequency filters).
-3. **Parent Burden:** Accumulation of $> 10$ pending reviews or $> 7$ days approval latency.
-4. **Excessive Screen Time:** Client session duration exceeding 15 minutes per day for child mode.
+### 11.1 Authoritative Guardrails & Alert Thresholds
+The pilot must monitor the core qualitative and quantitative guardrails defined in `docs/06-metrics-and-hypotheses.md`:
+1. **Reward Dependency:** Refusal to study unless RP is attached (monitored via weekly parent qualitative check-in).
+2. **Farming:** Repeated below-level entries or rapid submission bursts (monitored via assessment frequency and generated scores).
+3. **Parent Burden:** Approval backlog accumulation and excessive latency. *(Proposed pilot alert thresholds: $> 10$ pending reviews or $> 7$ days approval latency — PROPOSED PILOT ALERT THRESHOLD, NOT YET VALIDATED).*
+4. **Excessive Product Engagement:** Unhealthy screen time in child mode. *(Proposed pilot alert threshold: $> 15$ minutes/day child screen time — PROPOSED PILOT ALERT THRESHOLD, NOT YET VALIDATED).*
+5. **Family Conflict:** Disputes over reward redemption or parental rejection of submitted assessments.
 
 ---
 
 ## 12. Privacy & Data-Retention Audit
 
-The repository handles 16 distinct data classes. Their pilot retention characteristics are summarized below:
+The repository handles 16 distinct data classes. Child-linked data is **NOT** classified as "None" merely because stored values are numeric; all data associated with `child_id` or `family_id` represents child-associated academic, behavioral, or household data.
 
-| # | Data Class | Source of Truth | PII Level | Pilot Retention Policy | Deletion / Cleanup Behavior |
-|---|---|---|---|---|---|
-| 1 | **Auth Users** | Supabase Auth (`auth.users`) | High (Email) | Active during pilot | Managed via Supabase Auth Admin |
-| 2 | **Family Tenancy** | `public.families` | Low (UUID) | Active during pilot | Cascade deletes memberships and children |
-| 3 | **Child Profiles** | `public.child_profiles` | Medium (Name, Grade) | Active during pilot | Parent archives (`status = 'archived'`) |
-| 4 | **Child Device Grants** | `public.child_device_grants` | Medium (Device secret) | Active during pilot | Parent revokes (`status = 'revoked'`) |
-| 5 | **Assessment Drafts/Records** | `public.assessments` | Low (Metadata, scores) | 4 weeks pilot duration | Hard-delete allowed in `draft`; terminal in `verified` |
-| 6 | **Evidence Images** | Storage `assessment-evidence` | High (Schoolwork photos) | 4 weeks pilot duration | Delete on draft cancel; parent retention delete |
-| 7 | **Verified Learning Events** | `public.verified_learning_events` | Low (Immutable event) | Permanent audit trail | Immutable trigger blocks SQL DELETE |
-| 8 | **Learning Evidence** | `public.learning_evidence_events` | Low (Mastery atom) | Permanent audit trail | Immutable trigger blocks SQL DELETE |
-| 9 | **Mastery Projections** | `public.child_mastery_states` | None (Academic scores) | Rebuilt on demand | Upserted; cleared if child profile deleted |
-| 10 | **XP/RP Ledgers** | `public.xp_ledger`, `rp_ledger` | None (Integer units) | Permanent audit trail | Immutable trigger blocks SQL DELETE |
-| 11 | **Balance Projections** | `public.child_balances` | None (Integer units) | Permanent projection | Reconciled via `reconcile_child_balance` |
-| 12 | **Reward Redemptions** | `public.reward_redemptions` | Low (Reward title) | Permanent audit trail | Status lifecycle (`pending -> fulfilled/cancelled`) |
-| 13 | **Wheel Spins** | `public.wheel_spins` | Low (Snapshot) | Permanent audit trail | Immutable audit records |
-| 14 | **Command Receipts** | `private.command_receipts` | None (Idempotency hashes) | 60-day operational TTL | Cleanup via server cron or maintenance |
-| 15 | **Local SQLite Cache** | Device `app_database.sqlite` | Medium (Drafts, cache) | Client lifecycle | Cleared on sign-out / app data wipe |
-| 16 | **Crash Logs & Telemetry** | Client memory / console | Low (Non-sensitive) | Operational debugging | Ephemeral; no PII |
+The table below contrasts **Current Technical Behavior** with **Proposed Pilot Policy** and records **Design Decision Status**:
+
+| # | Data Class | Source of Truth | Data Sensitivity Classification | Current Technical Behavior | Proposed Pilot Policy | Design Decision Status |
+|---|---|---|---|---|---|---|
+| 1 | **Auth Users** | Supabase Auth (`auth.users`) | `DIRECT IDENTIFIER (ADULT EMAIL)` | Managed via Supabase Auth Admin | Retained during active pilot | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 2 | **Family Tenancy** | `public.families` | `DIRECT / PSEUDONYMOUS TENANT DATA` | Structural FK cascades exist, BUT current immutable descendants prevent general tenant hard-delete | Retained during active pilot | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 3 | **Child Profiles** | `public.child_profiles` | `DIRECT IDENTIFIER / CHILD PROFILE` | Parent archives via `status = 'archived'`; direct DELETE blocked | Soft-delete archival with RLS revocation | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 4 | **Child Device Grants** | `public.child_device_grants` | `OPERATIONAL / DEVICE SECRET` | Parent revokes via `status = 'revoked'`; RLS denies access | Revoked grants retained for audit | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 5 | **Assessment Records** | `public.assessments` | `SENSITIVE CHILD-LINKED ACADEMIC` | Hard-delete allowed in `draft`; immutable in `verified`/`rejected` | Retained 4 weeks during pilot | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 6 | **Evidence Images** | Storage `assessment-evidence` | `EVIDENCE MEDIA (STUDENT WORK PHOTOS)` | Compensating delete on draft fail; retained when verified | Retained 4 weeks during pilot | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 7 | **Verified Learning Events** | `public.verified_learning_events` | `SENSITIVE CHILD-LINKED ACADEMIC` | Trigger `trg_prevent_verified_learning_event_mutation` blocks SQL UPDATE/DELETE | Audit trail vs. erasure tension | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 8 | **Learning Evidence** | `public.learning_evidence_events` | `SENSITIVE CHILD-LINKED ACADEMIC` | Trigger `trg_prevent_learning_evidence_events_mutation` blocks UPDATE/DELETE | Audit trail vs. erasure tension | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 9 | **Mastery Projections** | `public.child_mastery_states` | `SENSITIVE CHILD-LINKED ACADEMIC` | Deterministically rebuilt from evidence; upserted | Cleared on child profile archive | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 10 | **XP/RP Ledgers** | `public.xp_ledger`, `public.rp_ledger` | `PSEUDONYMOUS CHILD-LINKED BEHAVIORAL/ECONOMIC` | Triggers `trg_prevent_xp_ledger_mutation` / `trg_prevent_rp_ledger_mutation` block DELETE | Audit trail vs. erasure tension | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 11 | **Balance Projections** | `public.child_balances` | `PSEUDONYMOUS CHILD-LINKED BEHAVIORAL/ECONOMIC` | Updated on ledger append; reconciled via `reconcile_child_balance` | Reconciled on demand | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 12 | **Reward Redemptions** | `public.reward_redemptions` | `PSEUDONYMOUS CHILD-LINKED REWARD BEHAVIOR` | Status lifecycle (`pending -> fulfilled/cancelled`); FK on delete restrict | Status updates only | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 13 | **Wheel Spins** | `public.wheel_spins` | `PSEUDONYMOUS CHILD-LINKED REWARD BEHAVIOR` | Trigger `trg_prevent_wheel_spins_mutation` blocks SQL UPDATE/DELETE | Audit trail vs. erasure tension | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 14 | **Command Receipts** | `public.command_receipts` | `OPERATIONAL / AUDIT TRAIL` | Append-only; stores `command_id`, `operation`, `actor_user_id`, `resource_id`, `family_id`. No TTL or cron cleanup exists. | Operationally retained | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 15 | **Local SQLite Storage** | Device `app_database.sqlite` | `PSEUDONYMOUS CHILD-LINKED & DRAFTS` | Persists across app restart; not wiped on logout | Per-class cleanup lifecycle needed | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 16 | **Crash Logs & Diagnostics** | Client memory / console | `OPERATIONAL / AUDIT` | Console output; non-sensitive diagnostic payload | Ephemeral debugging only | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
 
 ---
 
@@ -344,15 +409,19 @@ The repository handles 16 distinct data classes. Their pilot retention character
 
 ### 13.1 The Conflict
 In Phases 1–5, the database schema deliberately introduced unconditional immutability triggers:
-```sql
-create trigger trg_verified_learning_events_immutable
-before update or delete on public.verified_learning_events
-for each row execute function private.prevent_row_mutation();
-```
-Identical triggers guard `public.xp_ledger`, `public.rp_ledger`, `public.learning_evidence_events`, and `public.mastery_state_revisions`.
+- `trg_prevent_verified_learning_event_mutation` on `public.verified_learning_events` executing `private.prevent_verified_learning_event_mutation()`
+- `trg_prevent_assessment_review_events_mutation` on `public.assessment_review_events` executing `private.prevent_assessment_review_events_mutation()`
+- `trg_prevent_growth_event_mutation` on `public.growth_events` executing `private.prevent_growth_event_mutation()`
+- `trg_prevent_xp_ledger_mutation` on `public.xp_ledger` executing `private.prevent_xp_ledger_mutation()`
+- `trg_prevent_rp_ledger_mutation` on `public.rp_ledger` executing `private.prevent_rp_ledger_mutation()`
+- `trg_prevent_wheel_spins_mutation` on `public.wheel_spins` executing `private.prevent_wheel_spins_mutation()`
+- `trg_prevent_learning_evidence_events_mutation` on `public.learning_evidence_events` executing `private.prevent_learning_evidence_events_mutation()`
+- `trg_prevent_learning_processing_events_mutation` on `public.learning_processing_events` executing `private.prevent_learning_processing_events_mutation()`
+- `trg_prevent_mastery_state_revisions_mutation` on `public.mastery_state_revisions` executing `private.prevent_mastery_state_revisions_mutation()`
+
 Furthermore, foreign keys enforce `ON DELETE RESTRICT` (e.g., `growth_events.verified_learning_event_id`).
 
-If a pilot parent exercises a privacy request ("Delete my family and child's data completely"), executing `DELETE FROM public.families WHERE id = :id` will fail with error `LW102 (immutable row cannot be deleted)`.
+**Result:** Structural FK cascades exist on `families` and `child_profiles`, but current immutable descendant rows prevent a general guaranteed tenant hard-delete. If a user requests deletion, executing `DELETE FROM public.families WHERE id = :id` fails with error code `LW102`.
 
 ### 13.2 Evaluated Resolution Strategies
 
@@ -375,10 +444,14 @@ This tension **must be resolved during Phase 6 detailed design**. The pilot must
 2. **Device Grant Revocation:** A parent revoking a dedicated child device on the server leaves the child's local device holding cached drafts and pending commands.
 3. **Shared Device Child PIN Reset:** If a parent forgets their PIN, there is no safe local recovery mechanism without re-authenticating online.
 
-### 14.2 Readiness Requirement
-Phase 6 detailed design must specify a **Local Security Boundary Handler**:
-- On `auth.onAuthStateChange` emitting `signedOut`, execute `AppDatabase.clearAllTables()`.
-- On child mode unpairing or grant revocation (`42501`), purge local drafts and pending commands for that child ID.
+### 14.2 Readiness Requirement: Lifecycle per Data Class
+A single blanket `clearAllTables()` wipe on sign-out must **NOT** be pre-frozen. Phase 6 detailed design must formally specify the lifecycle of each distinct local data class:
+- **Parent PIN Device Containment (`parent_gate_pin_hash`, `salt`):** Bound to the physical device; may persist across session logout to prevent unauthorized access if the device remains shared.
+- **Active Child Session (`active_child_session`):** Must be cleared on explicit Child Mode exit or parent sign-out.
+- **Local Assessment Drafts (`local_assessment_drafts`):** Bound to `family_id` and `child_id`; must be purged or segregated on family/user switch.
+- **Pending Command Journals (`pending_reward_commands`):** Bound to `actor_user_id`; must not be replayed under a mismatched authenticated identity.
+- **Local Photo Files:** Stored in app documents directory; must be cleaned up when associated drafts are submitted, cancelled, or purged.
+- **Cached Read Models:** Stale-while-revalidate caches must be evicted when switching families.
 
 ---
 
@@ -409,20 +482,18 @@ A thorough audit of `learnward_design_system` and `apps/mobile/lib/features/` re
 
 ## 17. Android & iOS Distribution Readiness Audit
 
-### 17.1 Android Distribution Readiness
-- `applicationId`: `com.learnward.app` (configured in `apps/mobile/android/app/build.gradle.kts`).
-- `minSdk`: Flutter default (21); `targetSdk`: Flutter default (34).
-- **Blocker:** `build.gradle.kts` currently specifies:
-  ```kotlin
-  signingConfig = signingConfigs.getByName("debug")
-  ```
-  for release builds. No release keystore, key alias, or environment variable configuration exists.
-- **Blocker:** Missing Google Play Console service account integration for closed testing track automation.
+### 17.1 Phase 6 Distribution Scope & Baseline
+Phase 6 requires:
+1. **Android internal distribution:** Production keystore signing, stable `applicationId` (`com.learnward.app`), version/build numbering (`pubspec.yaml`), signed release artifact generation (AAB), and distribution track delivery.
+2. **iOS TestFlight distribution:** Stable bundle ID (`com.learnward.app`), distribution provisioning profile, version/build numbering, signed release archive generation (IPA), and TestFlight track delivery.
 
-### 17.2 iOS & TestFlight Readiness
-- `CFBundleIdentifier`: `com.learnward.app` (configured in `apps/mobile/ios/Runner/Info.plist`).
-- **Blocker:** `Info.plist` lacks `NSCameraUsageDescription` and `NSPhotoLibraryUsageDescription`. Attempting to capture evidence on a physical iPhone will crash.
-- **Blocker:** Missing Apple Developer Team ID, distribution provisioning profiles, and App Store Connect API keys for automated TestFlight deployment.
+### 17.2 Automation vs. Manual Upload Classification
+- **Core Pilot Readiness Requirement:** Release signing, stable bundle IDs, version numbering, reproducible release artifact generation, CI secret handling, physical-device installability, and an internal distribution path.
+- **Optional Detailed-Design Choices:** Fully automated CI deployment pipelines (Google Play Console service accounts, App Store Connect API keys) are **OPTIONAL** engineering conveniences. Manually uploading signed AAB / TestFlight archives directly satisfies the pilot exit gate.
+
+### 17.3 Known Platform Blockers
+- **iOS Camera / Photo Strings:** `apps/mobile/ios/Runner/Info.plist` currently lacks `NSCameraUsageDescription` and `NSPhotoLibraryUsageDescription`. Attempting to capture or attach evidence on physical iOS crashes immediately.
+- **Android Signing:** `build.gradle.kts` currently specifies debug signing config for release build types.
 
 ---
 
@@ -445,9 +516,9 @@ A thorough audit of `learnward_design_system` and `apps/mobile/lib/features/` re
 Current repository CI runs `supabase start`, applies all 8 migration files in sequence, and executes 438 pgTAP assertions. This validates schema validity on local Docker instances.
 
 ### 19.2 Missing Staging Gates
-1. No automated migration script exists to apply migrations to a remote Supabase staging project (`supabase db push`).
-2. No data verification smoke test exists to confirm that published catalog seeds (`pilot-v0.1`) and initial subject roots are intact after remote deployment.
-3. No automated schema drift check exists between local migrations and the remote staging database.
+1. Remote migration deployment procedure (`supabase db push` or equivalent).
+2. Automated data verification smoke test confirming published catalog seeds (`pilot-v0.1`) and initial subject roots remain intact after remote deployment.
+3. Automated schema drift check between local migrations and the remote staging database.
 
 ---
 
@@ -522,7 +593,7 @@ Phase 6 pilot hardening touches cross-cutting concerns (offline, UI, release, se
 |---|---|---|---|---|
 | **Actor-Aware Pending Command Journaling** | Phase 4 Freeze §13.1, Phase 4 Design §20 | **Yes** | **Yes** | Prevents caller mismatch errors when adult identity changes on shared device |
 | **iOS Camera / Photo Permission Strings** | Phase 2 Audit | **Yes** | **Yes** | App crashes immediately on iOS without `Info.plist` usage descriptions |
-| **Local Database Cleanup on Sign-Out** | Phase 1 Security Review | **Yes** | **Yes** | Prevents PII and drafts from lingering on shared or unlinked devices |
+| **Local Database Cleanup on Sign-Out** | Phase 1 Security Review | **Yes** | **Yes** | Prevents drafts and session data from lingering across account transitions |
 | **Android Release Keystore & Signing** | Phase 4 Freeze §13.5 | **Yes** | **Yes** | Cannot upload debug-signed APK to Google Play internal testing track |
 | **Family-Scoped Catalog Stabilization Lock** | Phase 4 Freeze §13.2 | **Yes** | **No** | Global `LOCK TABLE rewards IN SHARE MODE` is harmless at pilot scale (< 50 families) |
 | **Resource-Existence Confidentiality** | Phase 4 Freeze §13.3 | **Yes** | **No** | Distinguishing `P0002` from `42501` does not pose a threat in a closed trusted pilot |
@@ -546,27 +617,35 @@ Phase 6.3 — Accessibility Pass, Distribution Hardening (Android/iOS) & Pilot O
 - **Phase 6.2 Focus:** Enable family coordination (approvals/fulfillment) and metric tracking without violating child privacy.
 - **Phase 6.3 Focus:** Ensure the app is accessible to all learners, signed, packaged, and distributed to physical devices via TestFlight and Google Play.
 
-> *Note: This decomposition is a readiness recommendation for planning. It does not create official phases until approved via detailed design.*
+> *Note: This decomposition is a readiness recommendation for planning. It does NOT create official phases until formally evaluated and accepted in Phase 6 detailed design.*
 
 ---
 
 ## 26. Blocker & Risk Matrix
 
+### 26.1 Severity Definitions
+- **BLOCKER:** An architectural or external dependency that prevents detailed design from proceeding.
+- **HIGH:** A critical design decision that MUST be resolved in detailed design before implementation begins.
+- **MEDIUM:** Technical hardening to be implemented during normal phase delivery.
+- **LOW:** Non-critical operational optimization.
+
+### 26.2 Matrix Evaluation
+
 | ID | Area | Severity | Current State | Required Decision | Affected Frozen Contracts | Implementation Dependency | Proceed in Parallel? |
 |---|---|---|---|---|---|---|---|
 | **B1** | **iOS Permissions** | `HIGH` | Missing `NSCameraUsageDescription` / photo strings | Exact user-facing explanation copy | None (iOS config only) | Image picker | Yes |
-| **B2** | **Android Signing** | `HIGH` | Debug keys used for release build | Keystore generation and CI secret strategy | None (build config only) | Gradle build | Yes |
+| **B2** | **Android Release Signing** | `HIGH` | Debug keys used for release build | Keystore generation and CI secret strategy | None (build config only) | Gradle build | Yes |
 | **B3** | **Actor Recovery** | `HIGH` | Commands lack actor binding; replay can fail | Schema addition of `actor_user_id` + eviction | `PendingRewardCommands` Drift schema | Command store | No (blocks 6.1) |
 | **B4** | **Ledger Deletion Tension** | `HIGH` | Immutable triggers block parent right-to-erasure | Adopt Soft-Delete Tombstoning / Purge RPC | `verified_learning_events`, ledgers | RLS / Admin RPC | No (blocks 6.2) |
-| **B5** | **Local Cache Cleanup** | `MEDIUM`| SQLite persists across logout/unpair | Wipe database on sign-out transition | `AppDatabase` lifecycle | Auth listener | Yes |
-| **B6** | **Notification Engine** | `HIGH` | Zero push packages or schema tables | Provider selection (FCM/APNs) & token schema | New additive table only | Push SDK | No (blocks 6.2) |
+| **B5** | **Local Cache Cleanup** | `HIGH` | SQLite persists across logout/unpair | Per-data-class lifecycle contract | `AppDatabase` lifecycle | Auth listener | Yes |
+| **B6** | **Notification Engine** | `HIGH` | Zero push packages or schema tables | Provider selection (FCM/APNs/in-app) & token schema | New additive table only | Push SDK | No (blocks 6.2) |
 | **B7** | **Failure UX Polish** | `MEDIUM`| Raw exceptions rendered on store/overview screens | Implement design system error/retry components | Mobile UI screens | Design system | Yes |
 | **B8** | **Accessibility Semantics**| `MEDIUM`| Zero Semantics widgets; no reduced motion check | Add Semantics labels & instant wheel reveal | Mobile presentation | Design system | Yes |
 
-### Readiness Verdict
-**PASS FOR DETAILED DESIGN.**
-There are **zero BLOCKER-level dependencies** preventing the creation of the Phase 6 detailed design document and ADR. The `HIGH` items above represent well-defined design choices to be formally resolved in the detailed design phase.
-Phase 6 implementation remains **NOT AUTHORIZED / NOT STARTED**.
+### 26.3 Readiness Verdict
+**RECOMMENDED VERDICT: PASS FOR DETAILED DESIGN PENDING INDEPENDENT READINESS AUDIT + REQUIRED CI.**  
+There are **zero BLOCKER-level dependencies** preventing detailed design from proceeding. All `HIGH` items represent concrete design decisions to be formally resolved in the Phase 6 detailed design document and ADR.  
+Phase 6 detailed design and implementation remain **NOT AUTHORIZED / NOT STARTED** until an independent readiness audit passes.
 
 ---
 
@@ -574,14 +653,14 @@ Phase 6 implementation remains **NOT AUTHORIZED / NOT STARTED**.
 
 The future Phase 6 detailed design document and ADR must answer the following questions:
 
-1. **Offline Outbox Architecture:** Should assessment submissions use an extended `LocalAssessmentDrafts` status lifecycle (`draft -> uploading -> submitting`) or a dedicated generic `PendingOperations` table?
+1. **Offline Outbox Architecture:** Should assessment submissions use an extended `LocalAssessmentDrafts` status lifecycle (`draft -> uploading -> submitting`) or a dedicated bounded `PendingOperations` table?
 2. **Actor Binding Contract:** What exact columns will be added to local command journals to represent `actor_user_id` and `actor_role`, and what is the exact client-side eviction logic on auth state change?
 3. **Data Deletion Protocol:** How will family deletion requests be executed without violating the immutable database triggers on `verified_learning_events` and economic ledgers?
-4. **Local Data Purge Lifecycle:** Exactly which local files, SQLite tables, and secure storage keys must be purged when a user signs out or a child device grant is revoked?
-5. **Notification Provider & Token Schema:** Which push provider (e.g., Firebase Cloud Messaging vs. Supabase Edge Functions / APNs) will be integrated, and what is the schema of the device token table?
+4. **Local Data Purge Lifecycle:** Exactly which local files, SQLite tables, and secure storage keys must be purged when a user signs out, an identity switches, or a child device grant is revoked?
+5. **Notification Delivery Channel & Provider:** Will notifications be delivered via push (FCM/APNs), Supabase Realtime in-app banners/badges, or a hybrid model, and what is the device token registration schema?
 6. **Notification Deep-Link Routing:** How will incoming notification payloads safely navigate to `ReviewAssessmentScreen` or `ChildRedemptionHistoryScreen` when the app is backgrounded or killed?
 7. **Client Telemetry Port:** How will the client record self-chosen challenge selections and screen timing without transmitting PII or relying on heavy third-party SDKs?
 8. **Accessibility Standards:** What exact semantic labels, live announcements, and touch target adjustments are required for child mode and celebration wheel screens?
 9. **Reduced Motion Wheel Reveal:** How will `ChildWheelScreen` detect reduced motion preferences and render an instantaneous, celebratory result while preserving server-authoritative outcomes?
-10. **Release Pipeline Secrets:** How will Android upload keystores, Google Play service accounts, and Apple App Store Connect API keys be securely stored and injected in GitHub Actions?
+10. **Release Pipeline & Distribution Strategy:** What is the exact path for Android internal track and iOS TestFlight distribution (manual upload vs. automated CI upload), and how will keystores and secrets be managed?
 11. **Diagnostic Card Surface:** Where and how will pilot diagnostic information (app version, pending command count, sync status) be exposed to parents and pilot administrators?
