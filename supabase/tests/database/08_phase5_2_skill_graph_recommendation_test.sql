@@ -728,51 +728,82 @@ select is(
   'Economy balance mutations do not alter Phase 5.2 Next Challenge recommendations'
 );
 
-
 -- Test 61: Temporal regression: freshness = unknown with committed score 60 MUST NOT leak into Developing at T2, but classifies as Developing at T3
-insert into public.child_mastery_states (
-  family_id, child_id, learning_node_id, engine_version,
-  mastery_score, effective_evidence_count, distinct_assessment_count,
-  last_evidence_event_id, last_evidence_occurred_at, mastery_attained_at, updated_at
+insert into public.assessments (
+  id, family_id, child_id, created_by_user_id, status, subject_key, subject,
+  assessment_type, difficulty, title, occurred_at, raw_score, max_score, learning_catalog_version
 ) values (
+  'a5200000-0000-0000-0000-000000000099'::uuid,
   'f5200000-0000-0000-0000-000000000001'::uuid,
   'c5200000-0000-0000-0000-000000000002'::uuid,
-  'b0000003-0000-0000-0000-000000000001'::uuid,
-  'mastery-v0.1',
-  60.00, 1, 1,
-  'e5200000-0000-0000-0000-000000000099'::uuid,
-  '2026-01-01T00:00:00Z'::timestamptz,
-  null,
-  '2026-01-01T00:00:00Z'::timestamptz
+  '52000000-0000-0000-0000-000000000001'::uuid,
+  'verified', 'math', 'Mathematics', 'quiz', 'normal', 'Developing Quiz',
+  '2026-01-01T00:00:00Z'::timestamptz, 60, 100, 'pilot-v0.1'
 );
 
+insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+values ('75200000-0000-0000-0000-000000000099'::uuid, 'verify', '52000000-0000-0000-0000-000000000001'::uuid, 'a5200000-0000-0000-0000-000000000099'::uuid, 'f5200000-0000-0000-0000-000000000001'::uuid);
+
+insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
+values ('re520000-0000-0000-0000-000000000099'::uuid, '75200000-0000-0000-0000-000000000099'::uuid, 'f5200000-0000-0000-0000-000000000001'::uuid, 'a5200000-0000-0000-0000-000000000099'::uuid, 'verified', 'pending_review', 'verified', '52000000-0000-0000-0000-000000000001'::uuid);
+
 insert into public.verified_learning_events (
-  id, family_id, child_id, assessment_id, assessment_created_by_user_id,
-  verified_by_user_id, learning_node_id, learning_catalog_version, node_type,
-  subject_key, score_source, performance_pct, specificity_weight, level_weight,
-  assessment_difficulty, item_count, correct_count,
-  effective_occurred_at, verified_at, captured_at
+  id, assessment_id, family_id, child_id, subject_key, subject, title,
+  assessment_type, difficulty, raw_score, max_score, normalized_score,
+  occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot, learning_catalog_version
 ) values (
-  'e5200000-0000-0000-0000-000000000099'::uuid,
+  '15200000-0000-0000-0000-000000000099'::uuid,
+  'a5200000-0000-0000-0000-000000000099'::uuid,
   'f5200000-0000-0000-0000-000000000001'::uuid,
   'c5200000-0000-0000-0000-000000000002'::uuid,
-  'a5200000-0000-0000-0000-000000000001'::uuid,
-  '52000000-0000-0000-0000-000000000001'::uuid,
-  '52000000-0000-0000-0000-000000000001'::uuid,
+  'math', 'Mathematics', 'Developing Quiz', 'quiz', 'normal', 60, 100, 6.00,
+  '2026-01-01T00:00:00Z'::timestamptz, '2026-01-10T00:00:00Z'::timestamptz,
+  '52000000-0000-0000-0000-000000000001'::uuid, 're520000-0000-0000-0000-000000000099'::uuid, 2, 'pilot-v0.1'
+);
+
+insert into public.learning_evidence_events (
+  id, family_id, child_id, verified_learning_event_id, assessment_id, learning_node_id,
+  catalog_version, node_type, subject_key, grade_level_snapshot, assessment_type,
+  difficulty, score_source, performance_pct, specificity_weight, level_weight,
+  item_count, correct_count, occurred_at, effective_occurred_at, verified_at
+) values (
+  'ee520000-0000-0000-0000-000000000099'::uuid,
+  'f5200000-0000-0000-0000-000000000001'::uuid,
+  'c5200000-0000-0000-0000-000000000002'::uuid,
+  '15200000-0000-0000-0000-000000000099'::uuid,
+  'a5200000-0000-0000-0000-000000000099'::uuid,
   'b0000003-0000-0000-0000-000000000001'::uuid,
-  'pilot-v0.1',
-  'skill',
-  'math',
-  'component_score',
-  60.00,
-  0.7,
-  1.0,
-  'normal',
-  null,
-  null,
-  '2026-01-01T00:00:00Z'::timestamptz,
-  '2026-01-10T00:00:00Z'::timestamptz,
-  '2026-01-01T00:00:00Z'::timestamptz
+  'pilot-v0.1', 'skill', 'math', 2, 'quiz',
+  'normal', 'component_score', 60.00, 0.70, 1.00,
+  null, null,
+  '2026-01-01T00:00:00Z'::timestamptz, '2026-01-01T00:00:00Z'::timestamptz, '2026-01-10T00:00:00Z'::timestamptz
+);
+
+insert into public.mastery_state_revisions (
+  id, family_id, child_id, learning_node_id, trigger_verified_learning_event_id, engine_version,
+  previous_mastery_score, new_mastery_score, effective_evidence_count,
+  latest_evidence_at, mastery_attained_at, calculation_snapshot, created_at
+) values (
+  'ab520000-0000-0000-0000-000000000099'::uuid,
+  'f5200000-0000-0000-0000-000000000001'::uuid,
+  'c5200000-0000-0000-0000-000000000002'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  '15200000-0000-0000-0000-000000000099'::uuid,
+  'mastery-v0.1', null, 60.00, 1,
+  '2026-01-01T00:00:00Z'::timestamptz, null, '{}'::jsonb, '2026-01-01T00:00:00Z'::timestamptz
+);
+
+insert into public.child_mastery_states (
+  child_id, learning_node_id, family_id, engine_version, mastery_score,
+  effective_evidence_count, distinct_assessment_count, last_evidence_event_id,
+  last_evidence_occurred_at, last_verified_at, latest_revision_id, mastery_attained_at, updated_at
+) values (
+  'c5200000-0000-0000-0000-000000000002'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'f5200000-0000-0000-0000-000000000001'::uuid,
+  'mastery-v0.1', 60.00, 1, 1, 'ee520000-0000-0000-0000-000000000099'::uuid,
+  '2026-01-01T00:00:00Z'::timestamptz, '2026-01-10T00:00:00Z'::timestamptz,
+  'ab520000-0000-0000-0000-000000000099'::uuid, null, '2026-01-01T00:00:00Z'::timestamptz
 );
 
 select is(
@@ -792,7 +823,7 @@ select is(
     )) -> 'candidates' -> 0 ->> 'reason_code'
   ),
   '0:developing_keep_practicing',
-  'At T2 node is absent from Developing candidates; at T3 it classifies as developing_keep_practicing'
+  'At T2 (freshness unknown, score 60) node is absent from Developing; at T3 it classifies as developing_keep_practicing'
 );
 
 select * from finish();
