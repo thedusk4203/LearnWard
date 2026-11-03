@@ -302,18 +302,18 @@ Exactly **12 of 16** metrics from `docs/06-metrics-and-hypotheses.md` are direct
 | # | Metric from `docs/06` | Classification | Authoritative Source / Derivation Method |
 |---|---|---|---|
 | 1 | **VLPE / child / week** | `DERIVABLE FROM AUTHORITATIVE DB` | Canonical query above: VLEs with both `growth_events` and processed `learning_processing_events` |
-| 2 | **Results logged / child / week** | `DERIVABLE FROM AUTHORITATIVE DB` | `COUNT(*) FROM public.assessments WHERE child_id = :id AND created_at >= :start AND created_at < :end` |
-| 3 | **% results logged by child** | `DERIVABLE FROM AUTHORITATIVE DB` | `COUNT(entry_context IN ('shared_child', 'paired_child')) / COUNT(*)` from `public.assessments` |
+| 2 | **Results logged / child / week** | `DERIVABLE FROM AUTHORITATIVE DB` | Immutable submission events (excludes abandoned drafts):<br>`select count(*) from public.assessment_review_events rev join public.assessments a on a.id = rev.assessment_id and a.family_id = rev.family_id where rev.event_type = 'submitted' and a.child_id = :child_id and rev.created_at >= :start and rev.created_at < :end` |
+| 3 | **% results logged by child** | `DERIVABLE FROM AUTHORITATIVE DB` | Filtered aggregate over submitted assessment review events (same population as Metric 2):<br>`count(*) filter (where a.entry_context in ('shared_child', 'paired_child'))::numeric / nullif(count(*), 0)` |
 | 4 | **% goals chosen by child** | `NOT CURRENTLY MEASURABLE / DEFERRED` | Goals entity not implemented in Phases 1–5; deferred post-pilot unless detailed design proves strictly necessary for exit gate. Do not add Goals scope solely for metrics. |
 | 5 | **4-week subject trend** | `DERIVABLE FROM AUTHORITATIVE DB` | Grouped `verified_learning_events` score trajectory by `subject_key` over 28-day window |
 | 6 | **Recovery completion rate** | `DERIVABLE FROM AUTHORITATIVE DB` | Replayed weak observations in `learning_evidence_events` reaching $\ge 70\%$ score within 30 days |
-| 7 | **Personal-best frequency** | `DERIVABLE FROM AUTHORITATIVE DB` | Authoritative Growth result: `COUNT(growth_events.personal_best_rp_minor > 0)` or comparison `normalized_score > historical_best` |
+| 7 | **Personal-best frequency** | `DERIVABLE FROM AUTHORITATIVE DB` | Authoritative Growth result: `count(*) filter (where g.personal_best_rp_minor > 0)` (or historical score threshold: `normalized_score >= historical_best + 0.25` subject to Growth Engine eligibility and anti-farming rules) |
 | 8 | **Parent approval latency** | `DERIVABLE FROM AUTHORITATIVE DB` | Immutable review events: `EXTRACT(EPOCH FROM (v_evt.created_at - s_evt.created_at))` where `s_evt.event_type = 'submitted'` and `v_evt.event_type = 'verified'`. Excludes draft creation time. (Rejected decision latency measured via `s_evt -> r_evt`). |
 | 9 | **Parent admin minutes/day** | `NOT CURRENTLY MEASURABLE` | Requires client UI screen session timing or weekly qualitative pilot survey |
-| 10 | **Reward fulfillment rate** | `DERIVABLE FROM AUTHORITATIVE DB` | `COUNT(status = 'fulfilled') / COUNT(status IN ('fulfilled', 'cancelled', 'pending_fulfillment'))` from `public.reward_redemptions` |
+| 10 | **Reward fulfillment rate** | `DERIVABLE FROM AUTHORITATIVE DB` | Filtered aggregates: `count(*) filter (where status = 'fulfilled')::numeric / nullif(count(*) filter (where status in ('pending_fulfillment', 'fulfilled', 'cancelled')), 0)` from `public.reward_redemptions` |
 | 11 | **RP earned / week** | `DERIVABLE FROM AUTHORITATIVE DB` | `SUM(amount_minor) FROM public.rp_ledger WHERE amount_minor > 0` |
 | 12 | **RP spent / week** | `DERIVABLE FROM AUTHORITATIVE DB` | `ABS(SUM(amount_minor)) FROM public.rp_ledger WHERE amount_minor < 0` |
-| 13 | **Wheel vs Store spend share** | `DERIVABLE FROM AUTHORITATIVE DB` | `SUM(wheel_spins.spin_cost_minor)` vs. `SUM(reward_redemptions.rp_cost_minor WHERE origin = 'store')` |
+| 13 | **Wheel vs Store spend share** | `DERIVABLE FROM AUTHORITATIVE DB` | Authoritative query separating wheel from store spend:<br>`coalesce((select sum(ws.spin_cost_minor) from public.wheel_spins ws where ws.child_id = :id and ws.created_at >= :start and ws.created_at < :end), 0)` vs.<br>`coalesce((select sum(rr.rp_cost_minor) from public.reward_redemptions rr where rr.child_id = :id and rr.origin = 'store' and rr.created_at >= :start and rr.created_at < :end), 0)` |
 | 14 | **Self-chosen challenge rate** | `NEEDS NEW CLIENT/UX EVENT` | Requires client event tracking when an assessment is launched directly from a Next Challenge recommendation card |
 | 15 | **Week 4 / Week 8 retention** | `DERIVABLE FROM AUTHORITATIVE DB` | Distinct active children with $\ge 1$ canonical VLPE (both growth + learning processed) in week 4 and week 8 |
 | 16 | **Parent study reminders / week** | `NEEDS NEW PRODUCT INPUT / SURVEY` | Parent Intervention Rate baseline vs. weekly qualitative check-in interview |
@@ -362,7 +362,7 @@ Under no circumstances may client telemetry or third-party SDK payloads contain:
 | **H1 — Progress Visibility** | Repeat VLPE rate after high baseline; Next Challenge engagement | Child spontaneous comments during study | Whether learner felt encouraged vs. pressured |
 | **H2 — Growth-Aware Fairness** | VLPE consistency among children starting below 50% baseline | Parent survey on perceived fairness across siblings | Subjective feelings of resentment or parity |
 | **H3 — Learner Autonomy** | Ratio of child-initiated drafts (`entry_context = 'shared_child'`) | Parent observation of study prompting frequency | Whether child initiated study without verbal cues |
-| **H4 — Wheel vs. Store** | Spend ratio between `wheel_spins.spin_cost_minor` and `reward_redemptions.rp_cost_minor` | Child explanation of why they saved vs. spun | Delayed gratification cognitive intent |
+| **H4 — Wheel vs. Store** | Spend ratio between `wheel_spins.spin_cost_minor` and `reward_redemptions.rp_cost_minor` (`origin = 'store'`) | Child explanation of why they saved vs. spun | Delayed gratification cognitive intent |
 | **H5 — Verification Friction** | Review latency between review events (`submitted -> verified`); pending review count | Parent interview on approval fatigue | Household negotiation friction |
 | **H6 — Reward Fulfillment Trust** | Fulfillment rate ($> 90\%$ target); cancellation rate | Child trust expressions during interview | Disappointment over delayed offline promises |
 | **H7 — Novelty Resistance** | Weeks 3–4 VLPE trend vs. Week 1 spin frequency | Child interest in mastery badges after 3 weeks | Intrinsic motivation maturation |
@@ -398,7 +398,7 @@ The table below contrasts **Current Technical Behavior** with **Proposed Pilot P
 | 10 | **XP/RP Ledgers** | `public.xp_ledger`, `public.rp_ledger` | `PSEUDONYMOUS CHILD-LINKED BEHAVIORAL/ECONOMIC` | Triggers `trg_prevent_xp_ledger_mutation` / `trg_prevent_rp_ledger_mutation` block DELETE | Audit trail vs. erasure tension | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
 | 11 | **Balance Projections** | `public.child_balances` | `PSEUDONYMOUS CHILD-LINKED BEHAVIORAL/ECONOMIC` | Updated on ledger append; reconciled via `reconcile_child_balance` | Reconciled on demand | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
 | 12 | **Reward Redemptions** | `public.reward_redemptions` | `PSEUDONYMOUS CHILD-LINKED REWARD BEHAVIOR` | Status lifecycle (`pending -> fulfilled/cancelled`); FK on delete restrict | Status updates only | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
-| 13 | **Wheel Spins** | `public.wheel_spins` | `PSEUDONYMOUS CHILD-LINKED REWARD BEHAVIOR` | Trigger `trg_prevent_wheel_spins_mutation` blocks SQL UPDATE/DELETE | Audit trail vs. erasure tension | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
+| 13 | **Wheel Spins** | `public.wheel_spins` | `PSEUDONYMOUS CHILD-LINKED REWARD BEHAVIOR` | Trigger `trg_enforce_wheel_spins_immutability` blocks SQL UPDATE/DELETE | Audit trail vs. erasure tension | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
 | 14 | **Command Receipts** | `public.command_receipts` | `OPERATIONAL / AUDIT TRAIL` | Append-only; stores `command_id`, `operation`, `actor_user_id`, `resource_id`, `family_id`. No TTL or cron cleanup exists. | Operationally retained | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
 | 15 | **Local SQLite Storage** | Device `app_database.sqlite` | `PSEUDONYMOUS CHILD-LINKED & DRAFTS` | Persists across app restart; not wiped on logout | Per-class cleanup lifecycle needed | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
 | 16 | **Crash Logs & Diagnostics** | Client memory / console | `OPERATIONAL / AUDIT` | Console output; non-sensitive diagnostic payload | Ephemeral debugging only | `UNDECIDED — PHASE 6 DESIGN REQUIRED` |
@@ -410,11 +410,11 @@ The table below contrasts **Current Technical Behavior** with **Proposed Pilot P
 ### 13.1 The Conflict
 In Phases 1–5, the database schema deliberately introduced unconditional immutability triggers:
 - `trg_prevent_verified_learning_event_mutation` on `public.verified_learning_events` executing `private.prevent_verified_learning_event_mutation()`
-- `trg_prevent_assessment_review_events_mutation` on `public.assessment_review_events` executing `private.prevent_assessment_review_events_mutation()`
+- `trg_prevent_assessment_review_event_mutation` on `public.assessment_review_events` executing `private.prevent_assessment_review_event_mutation()`
 - `trg_prevent_growth_event_mutation` on `public.growth_events` executing `private.prevent_growth_event_mutation()`
 - `trg_prevent_xp_ledger_mutation` on `public.xp_ledger` executing `private.prevent_xp_ledger_mutation()`
 - `trg_prevent_rp_ledger_mutation` on `public.rp_ledger` executing `private.prevent_rp_ledger_mutation()`
-- `trg_prevent_wheel_spins_mutation` on `public.wheel_spins` executing `private.prevent_wheel_spins_mutation()`
+- `trg_enforce_wheel_spins_immutability` on `public.wheel_spins` executing `private.enforce_wheel_spins_immutability()`
 - `trg_prevent_learning_evidence_events_mutation` on `public.learning_evidence_events` executing `private.prevent_learning_evidence_events_mutation()`
 - `trg_prevent_learning_processing_events_mutation` on `public.learning_processing_events` executing `private.prevent_learning_processing_events_mutation()`
 - `trg_prevent_mastery_state_revisions_mutation` on `public.mastery_state_revisions` executing `private.prevent_mastery_state_revisions_mutation()`
