@@ -782,9 +782,9 @@ async function main() {
         select 'BEFORE_NEXT:' || private.get_next_challenge_candidates_at('${ids.childId}'::uuid, null, 3, '${fixture.as_of}'::timestamptz)::text;
         select 'BEFORE_DETAIL:' || private.get_node_learning_state_at('${ids.childId}'::uuid, 'b0000003-0000-0000-0000-000000000001'::uuid, '${fixture.as_of}'::timestamptz)::text;
 
-        insert into public.child_balances (child_id, family_id, xp_total, rp_balance, rp_lifetime_earned, rp_lifetime_spent)
-        values ('${ids.childId}', '${ids.familyId}', 9999, 500, 1200, 700)
-        on conflict (child_id) do update set xp_total = 9999, rp_balance = 500;
+        insert into public.child_balances (family_id, child_id, xp_total, rp_balance_minor)
+        values ('${ids.familyId}', '${ids.childId}', 9999, 50000)
+        on conflict (child_id) do update set xp_total = 9999, rp_balance_minor = 50000;
 
         select 'AFTER_OVERVIEW:' || private.get_child_learning_overview_at('${ids.childId}'::uuid, '${fixture.as_of}'::timestamptz)::text;
         select 'AFTER_NEXT:' || private.get_next_challenge_candidates_at('${ids.childId}'::uuid, null, 3, '${fixture.as_of}'::timestamptz)::text;

@@ -716,9 +716,9 @@ select is(
 );
 
 -- Test 60: Economy invariance — mutating child_balances has zero effect on Phase 5.2 outputs
-insert into public.child_balances (child_id, family_id, xp_total, rp_balance, rp_lifetime_earned, rp_lifetime_spent)
-values ('c5200000-0000-0000-0000-000000000001'::uuid, 'f5200000-0000-0000-0000-000000000001'::uuid, 5000, 250, 500, 250)
-on conflict (child_id) do update set xp_total = 5000, rp_balance = 250;
+insert into public.child_balances (family_id, child_id, xp_total, rp_balance_minor)
+values ('f5200000-0000-0000-0000-000000000001'::uuid, 'c5200000-0000-0000-0000-000000000001'::uuid, 5000, 25000)
+on conflict (child_id) do update set xp_total = 5000, rp_balance_minor = 25000;
 
 select is(
   (private.get_next_challenge_candidates_at(

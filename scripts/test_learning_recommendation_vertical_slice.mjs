@@ -216,11 +216,11 @@ async function main() {
 
     reset role;
     select 'ECON_COUNT:' || (
-      (select count(*) from public.xp_ledger_entries where child_id = '${childId}') +
-      (select count(*) from public.rp_ledger_entries where child_id = '${childId}') +
-      (select count(*) from public.child_balances where child_id = '${childId}') +
+      (select count(*) from public.xp_ledger where child_id = '${childId}') +
+      (select count(*) from public.rp_ledger where child_id = '${childId}') +
+      (select count(*) from public.child_balances where child_id = '${childId}' and (xp_total <> 0 or rp_balance_minor <> 0)) +
       (select count(*) from public.reward_redemptions where child_id = '${childId}') +
-      (select count(*) from public.reward_wheel_spins where child_id = '${childId}')
+      (select count(*) from public.wheel_spins where child_id = '${childId}')
     )::text;
 
     rollback;
