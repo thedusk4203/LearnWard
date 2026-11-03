@@ -1,11 +1,17 @@
 # ADR 0006 — Phase 5 Learning Engine, Mastery & Recommendation Decisions
 
-- **Status:** PROPOSED
-- **Date:** 2026-11-02
+- **Status:** ACCEPTED
+- **Date:** 2026-11-02 (Proposed), 2026-11-03 (Accepted)
 - **Target:** Phase 5 — Mastery Engine, Skill Trees & Recommendation Foundation
 - **Design Base:** `5a3c7c75fd0f7c691ee8cd974b51b9cb165a4c2c`
+- **Implementation PR:** [#9 — feat(phase-5.1): implement learning engine, mastery and confidence foundation](https://github.com/thedusk4203/LearnWard/pull/9)
+- **Approved Implementation HEAD:** `7cf8661444212a3e891fe152f855d160b27cccc2`
+- **Merge SHA:** `6bb663286746851993d9c66c551e85fe3b9b41a4`
+- **Post-Merge CI Run ID:** `41558681324` (SUCCESS, 4/4 green)
+- **Independent Audit Receipt:** Comment 6592730362 (PASS / MERGE READY)
+- **Freeze Receipt:** [docs/freezes/phase-5-1-learning-mastery-foundation-freeze.md](../freezes/phase-5-1-learning-mastery-foundation-freeze.md) (PR #9 [Comment 6592996483](https://github.com/thedusk4203/LearnWard/pull/9#issuecomment-6592996483))
 
-This ADR remains **PROPOSED** during the design gate. It must not be marked ACCEPTED until Phase 5 implementation has passed independent review and the final frozen contract is verified against actual code.
+This ADR is **ACCEPTED** following the completion and merge of Phase 5.1. The Phase 5.1 foundation contract is verified across 377 pgTAP database tests, 134 domain unit tests, 13 cross-platform parity scenarios, and full 4/4 green CI verification. All technical decisions below are frozen baseline architecture. Sub-phases 5.2 and 5.3 will build additively on this foundation.
 
 ---
 

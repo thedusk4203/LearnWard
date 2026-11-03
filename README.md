@@ -74,6 +74,8 @@ Level    │    Wheel   Store
 | [Phase 4 Reward Economy Design](docs/11-phase-4-reward-economy-wheel-design-v0.1.md) | Phase 4 detailed design: Reward Store, Celebration Wheel, unified RP economy, lifecycle, and safety invariants |
 | [Phase 4 Reward Economy ADR](docs/adr/0005-phase-4-reward-economy-wheel.md) | Accepted architectural decisions for Phase 4 unified RP economy, server-authoritative spins, and concurrency |
 | [Phase 4 Freeze Receipt](docs/freezes/phase-4-reward-economy-wheel-freeze.md) | Frozen Phase 4 baseline, CI receipt, unified RP economy, Store and Wheel lifecycle, concurrency and anti-compulsion invariants |
+| [Phase 5 Learning Engine ADR](docs/adr/0006-phase-5-learning-engine-mastery.md) | Accepted architectural decisions for Phase 5 Learning Engine, curriculum catalog, EWMA mastery, confidence scoring, and temporal declaration |
+| [Phase 5.1 Freeze Receipt](docs/freezes/phase-5-1-learning-mastery-foundation-freeze.md) | Frozen Phase 5.1 baseline, CI receipt, zero-GUC catalog lifecycle, deterministic EWMA rebuild, and Dart/Postgres parity |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
@@ -89,6 +91,8 @@ and the Parent PIN containment boundary. Phase 2 must consume this contract with
 **Phase 4 — Reward Economy & Wheel Experience is FROZEN.** It establishes the unified spendable RP currency (Model C), permanent non-spendable Study XP, parent-configured Reward Catalog, deterministic Store redemptions, server-authoritative pseudorandom Celebration Wheel draws (`PostgreSQL random()`) with immutable selection snapshots, local calendar day spin caps with DST resilience, parental controls, catalog stabilization via table-level share locking, durable SQLite client command journaling surviving process restarts, and complete child celebration presentation.
 - **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **COMPLETE** (Reward catalog management, Store redemption RPC with atomic negative ledger debits, fulfillment and cancellation lifecycles with compensating refunds, parent/child Store presentation, durable client command journaling, file-backed restart persistence).
 - **Phase 4.2 — Celebration Wheel & Parent Controls:** **COMPLETE** (Server-authoritative wheel spins, daily caps, tiered probability selection, celebration animation, durable client journaling).
+
+**Phase 5.1 — Learning Engine, Mastery & Confidence Foundation is FROZEN.** It establishes the zero-GUC learning catalog version lifecycle (draft -> active -> retired), five canonical Subject roots, immutable catalog provenance snapshots on assessments and VLEs, explicit component-level assessment mappings, domain and level weighted evidence events, deterministic EWMA mastery rebuild from canonical academic chronology, initial Option A initialization ($M_1 = P_1$), rolling 60-day Confidence Engine v0.1, server-authoritative declaration instant (`v_processing_as_of`), sticky `mastery_attained_at` with stale evidence prevention, point-in-time read constraints, dual revision/projection state persistence, idempotent `process_learning_event`, bulk catch-up processing, and complete cross-platform Dart/PostgreSQL exact parity.
 
 ### Repository layout
 
