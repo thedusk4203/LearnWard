@@ -3,7 +3,7 @@
  * LearnWard - Phase 5.2 Skill Graph, Freshness, Recovery & Next Challenge Parity Test (PostgreSQL)
  *
  * PURPOSE:
- * Executes all 60 numbered parity cases in fixtures/learning_v02_recommendation_parity_fixtures.json
+ * Executes all 61 numbered parity cases in fixtures/learning_v02_recommendation_parity_fixtures.json
  * against PostgreSQL's Phase 5.2 SQL functions and verifies exact parity with the pure Dart domain engine:
  *   - 18.1 Phase 5.1 Read Semantics Reuse (Cases 1-9, including Part A 5-field overlap & Part B distinct_recent_vle_count)
  *   - 18.2 Unified Evaluation Clock & Verification Authority (Cases 10-12)
@@ -585,7 +585,7 @@ async function main() {
       }
     }
 
-    // Additional PostgreSQL contract / security / economy invariance checks for Cases 51, 55-60
+    // Additional PostgreSQL contract / security / economy invariance checks for Cases 51, 55-61
     if (caseId === 51) {
       const paramCheckSql = `
         begin;
@@ -784,6 +784,49 @@ async function main() {
       }
     }
 
+    if (caseId === 61) {
+      // Temporal regression explicit assertions:
+      // 1. At T2: inspected node MUST NOT be in candidates and no candidate has reason_code = developing_keep_practicing
+      const hasDevAtT2 = actualNext.candidates.some(
+        (c) => c.learning_node_id === fixture.inspect_node_id || c.reason_code === 'developing_keep_practicing'
+      );
+      if (hasDevAtT2) {
+        errs.push('Case 61: node leaked into Developing at T2 before verification (freshness = unknown)');
+      }
+
+      // 2. At T3 (post-verification): node qualifies as Developing
+      const t3Sql = `
+        begin;
+        ${setupSql}
+        select 'NEXT_T3:' || private.get_next_challenge_candidates_at('${ids.childId}'::uuid, NULL, 3, '2026-01-10T00:00:00.000Z'::timestamptz)::text;
+        select 'DETAIL_T3:' || private.get_node_learning_state_at('${ids.childId}'::uuid, ${inspectNodeExpr}, '2026-01-10T00:00:00.000Z'::timestamptz)::text;
+        rollback;
+      `;
+      const t3Res = await runPsql(t3Sql);
+      if (t3Res.code !== 0) {
+        errs.push(`Case 61 T3 query failed: ${t3Res.stderr}`);
+      } else {
+        const t3Lines = t3Res.stdout.split('\n').map((l) => l.trim());
+        const nextT3Line = t3Lines.find((l) => l.startsWith('NEXT_T3:'));
+        const detailT3Line = t3Lines.find((l) => l.startsWith('DETAIL_T3:'));
+        if (!nextT3Line || !detailT3Line) {
+          errs.push('Case 61: Missing T3 output lines');
+        } else {
+          const nextT3 = JSON.parse(nextT3Line.slice('NEXT_T3:'.length));
+          const detailT3 = JSON.parse(detailT3Line.slice('DETAIL_T3:'.length));
+          if (detailT3.state.freshness !== 'recent') {
+            errs.push(`Case 61 at T3: expected freshness recent, got ${detailT3.state.freshness}`);
+          }
+          if (!nextT3.candidates.length || nextT3.candidates[0].learning_node_id !== fixture.inspect_node_id) {
+            errs.push(`Case 61 at T3: expected node ${fixture.inspect_node_id} at candidates[0], got ${nextT3.candidates[0]?.learning_node_id}`);
+          }
+          if (nextT3.candidates[0]?.reason_code !== 'developing_keep_practicing') {
+            errs.push(`Case 61 at T3: expected reason developing_keep_practicing, got ${nextT3.candidates[0]?.reason_code}`);
+          }
+        }
+      }
+    }
+
     if (caseId === 60) {
       const econSql = `
         begin;
@@ -819,10 +862,10 @@ async function main() {
     }
 
     if (errs.length === 0) {
-      console.log(`PASS: [Case ${caseId}/60 | ${section}] ${scenario}`);
+      console.log(`PASS: [Case ${caseId}/${fixtures.length} | ${section}] ${scenario}`);
       passed++;
     } else {
-      console.error(`FAIL: [Case ${caseId}/60 | ${section}] ${scenario}`);
+      console.error(`FAIL: [Case ${caseId}/${fixtures.length} | ${section}] ${scenario}`);
       for (const e of errs) {
         console.error(`  - ${e}`);
       }

@@ -3310,5 +3310,77 @@
         ]
       }
     }
+  },
+  {
+    "case_id": 61,
+    "section": "18.4",
+    "scenario": "Temporal regression: freshness = unknown with committed score 60 MUST NOT leak into Developing at T2; allows Developing at T3",
+    "as_of": "2026-01-05T00:00:00.000Z",
+    "school_grade": 2,
+    "inspect_node_id": "b0000003-0000-0000-0000-000000000001",
+    "mastery_states": [
+      {
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "mastery_score": 60,
+        "effective_evidence_count": 1,
+        "distinct_assessment_count": 1,
+        "last_evidence_occurred_at": "2026-01-01T00:00:00.000Z",
+        "mastery_attained_at": null
+      }
+    ],
+    "evidence_events": [
+      {
+        "vle_id": "10000000-0000-0000-0000-000000000001",
+        "node_id": "b0000003-0000-0000-0000-000000000001",
+        "score_source": "component_score",
+        "performance_pct": 60,
+        "specificity_weight": 0.7,
+        "level_weight": 1,
+        "difficulty": "normal",
+        "item_count": null,
+        "correct_count": null,
+        "effective_occurred_at": "2026-01-01T00:00:00.000Z",
+        "verified_at": "2026-01-10T00:00:00.000Z"
+      }
+    ],
+    "expected": {
+      "phase51_overlap": {
+        "verify_overlap": true,
+        "mastery_score": 60,
+        "mastery_band": "developing",
+        "confidence_band": "low",
+        "confidence_units": 0.7,
+        "mastery_attained_at": null,
+        "distinct_recent_vle_count": 1
+      },
+      "node_state": {
+        "is_observed": true,
+        "mastery_score": 60,
+        "mastery_band": "developing",
+        "confidence_band": "low",
+        "confidence_units": 0.7,
+        "distinct_recent_vle_count": 1,
+        "freshness": "unknown",
+        "days_since_last_evidence": null,
+        "recovery_signal": "none",
+        "latest_unresolved_weakness_at": null,
+        "latest_evidence_present": false,
+        "recommended_difficulty": "normal"
+      },
+      "next_challenge": {
+        "candidate_node_ids": [
+          "b0000003-0000-0000-0000-000000000003"
+        ],
+        "candidates": [
+          {
+            "learning_node_id": "b0000003-0000-0000-0000-000000000003",
+            "priority_class": "explore",
+            "reason_code": "explore_available_skill",
+            "recommended_difficulty": "normal",
+            "rank": 1
+          }
+        ]
+      }
+    }
   }
 ]

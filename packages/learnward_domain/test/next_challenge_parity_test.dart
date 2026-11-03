@@ -180,14 +180,14 @@ String resolveNodeId(String rawIdOrCanonicalKey, List<LearningNode> nodes) {
 }
 
 void main() {
-  group('Phase 5.2 Skill Graph & Next Challenge 60-Case Parity Matrix (Dart)', () {
+  group('Phase 5.2 Skill Graph & Next Challenge 61-Case Parity Matrix (Dart)', () {
     final file = findFixturesFile();
     final fixtures = (jsonDecode(file.readAsStringSync()) as List)
         .cast<Map<String, dynamic>>();
 
-    test('Fixture matrix contains all 60 numbered cases', () {
-      expect(fixtures.length, equals(60));
-      for (var i = 0; i < 60; i++) {
+    test('Fixture matrix contains all 61 numbered cases', () {
+      expect(fixtures.length, equals(61));
+      for (var i = 0; i < 61; i++) {
         expect(fixtures[i]['case_id'], equals(i + 1));
       }
     });
@@ -691,6 +691,62 @@ void main() {
               throwsArgumentError,
             );
           }
+        }
+
+        if (caseId == 61) {
+          // Explicit regression assertions for Case 61:
+          // 1. At T2: freshness unknown + score 60 => no Developing candidate and absent from candidates
+          final hasDevAtT2 = nextChallenge.candidates.any(
+            (c) =>
+                c.learningNodeId == fixture['inspect_node_id'] ||
+                c.reasonCode == NextChallengeReason.developingKeepPracticing ||
+                c.priorityClass == RecommendationPriority.developing,
+          );
+          expect(hasDevAtT2, isFalse);
+
+          // 2. At T3 (post-verification at 2026-01-10T00:00:00Z):
+          final t3AsOf = DateTime.utc(2026, 1, 10);
+          final nodeAtT3 = NextChallengeEngine.buildNodeState(
+            childId: childId,
+            learningNodeId: fixture['inspect_node_id'] as String,
+            schoolGrade: schoolGrade,
+            activeCatalogVersion: activeCatalogVersion,
+            catalogNodes: nodes,
+            prerequisites: prerequisites,
+            masteryStates: masteryStates,
+            evidenceEvents: evidenceEvents,
+            asOf: t3AsOf,
+          );
+          expect(nodeAtT3.state.freshness, equals(MasteryFreshness.recent));
+          expect(nodeAtT3.state.recoverySignal, equals(RecoverySignal.none));
+
+          final nextAtT3 = NextChallengeEngine.getNextChallengeCandidates(
+            childId: childId,
+            schoolGrade: schoolGrade,
+            activeCatalogVersion: activeCatalogVersion,
+            catalogNodes: nodes,
+            prerequisites: prerequisites,
+            masteryStates: masteryStates,
+            evidenceEvents: evidenceEvents,
+            asOf: t3AsOf,
+          );
+          expect(nextAtT3.candidates, isNotEmpty);
+          expect(
+            nextAtT3.candidates.first.learningNodeId,
+            equals(fixture['inspect_node_id']),
+          );
+          expect(
+            nextAtT3.candidates.first.priorityClass,
+            equals(RecommendationPriority.developing),
+          );
+          expect(
+            nextAtT3.candidates.first.reasonCode,
+            equals(NextChallengeReason.developingKeepPracticing),
+          );
+          expect(
+            nextAtT3.candidates.first.recommendedDifficulty,
+            equals(RecommendedDifficulty.normal),
+          );
         }
       });
     }

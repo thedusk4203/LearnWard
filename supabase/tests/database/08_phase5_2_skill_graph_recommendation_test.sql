@@ -1,5 +1,5 @@
 begin;
-select plan(60);
+select plan(61);
 
 -- ===========================================================================
 -- SECTION 1: SCHEMA & CATALOG INVARIANTS (Tests 1-8)
@@ -726,6 +726,73 @@ select is(
   )) -> 'candidates' -> 0 ->> 'canonical_key',
   'pilot-v0.1:math:arithmetic:addition:double_digit',
   'Economy balance mutations do not alter Phase 5.2 Next Challenge recommendations'
+);
+
+
+-- Test 61: Temporal regression: freshness = unknown with committed score 60 MUST NOT leak into Developing at T2, but classifies as Developing at T3
+insert into public.child_mastery_states (
+  family_id, child_id, learning_node_id, engine_version,
+  mastery_score, effective_evidence_count, distinct_assessment_count,
+  last_evidence_event_id, last_evidence_occurred_at, mastery_attained_at, updated_at
+) values (
+  'f5200000-0000-0000-0000-000000000001'::uuid,
+  'c5200000-0000-0000-0000-000000000002'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'mastery-v0.1',
+  60.00, 1, 1,
+  'e5200000-0000-0000-0000-000000000099'::uuid,
+  '2026-01-01T00:00:00Z'::timestamptz,
+  null,
+  '2026-01-01T00:00:00Z'::timestamptz
+);
+
+insert into public.verified_learning_events (
+  id, family_id, child_id, assessment_id, assessment_created_by_user_id,
+  verified_by_user_id, learning_node_id, learning_catalog_version, node_type,
+  subject_key, score_source, performance_pct, specificity_weight, level_weight,
+  assessment_difficulty, item_count, correct_count,
+  effective_occurred_at, verified_at, captured_at
+) values (
+  'e5200000-0000-0000-0000-000000000099'::uuid,
+  'f5200000-0000-0000-0000-000000000001'::uuid,
+  'c5200000-0000-0000-0000-000000000002'::uuid,
+  'a5200000-0000-0000-0000-000000000001'::uuid,
+  '52000000-0000-0000-0000-000000000001'::uuid,
+  '52000000-0000-0000-0000-000000000001'::uuid,
+  'b0000003-0000-0000-0000-000000000001'::uuid,
+  'pilot-v0.1',
+  'skill',
+  'math',
+  'component_score',
+  60.00,
+  0.7,
+  1.0,
+  'normal',
+  null,
+  null,
+  '2026-01-01T00:00:00Z'::timestamptz,
+  '2026-01-10T00:00:00Z'::timestamptz,
+  '2026-01-01T00:00:00Z'::timestamptz
+);
+
+select is(
+  (
+    select count(*)
+    from jsonb_array_elements(
+      (private.get_next_challenge_candidates_at(
+        'c5200000-0000-0000-0000-000000000002'::uuid, null, 3, '2026-01-05T00:00:00Z'::timestamptz
+      )) -> 'candidates'
+    ) c
+    where c ->> 'learning_node_id' = 'b0000003-0000-0000-0000-000000000001'
+       or c ->> 'reason_code' = 'developing_keep_practicing'
+  )::integer || ':' ||
+  (
+    (private.get_next_challenge_candidates_at(
+      'c5200000-0000-0000-0000-000000000002'::uuid, null, 3, '2026-01-10T00:00:00Z'::timestamptz
+    )) -> 'candidates' -> 0 ->> 'reason_code'
+  ),
+  '0:developing_keep_practicing',
+  'At T2 node is absent from Developing candidates; at T3 it classifies as developing_keep_practicing'
 );
 
 select * from finish();

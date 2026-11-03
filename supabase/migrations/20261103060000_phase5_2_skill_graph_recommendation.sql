@@ -983,8 +983,8 @@ begin
           end
         when t.recovery_signal = 'review_suggested' then 'below_level'
         when t.freshness = 'needs_refresh' and t.mastery_score >= 70.00 then 'normal'
-        when t.freshness <> 'needs_refresh' and t.mastery_score >= 50.00 and t.mastery_score < 70.00 and t.mastery_band <> 'mastered' then 'normal'
-        when t.freshness <> 'needs_refresh' and t.mastery_score >= 70.00 and t.mastery_score < 85.00 and t.mastery_band <> 'mastered' then 'hard'
+        when t.freshness in ('recent', 'aging') and t.mastery_score >= 50.00 and t.mastery_score < 70.00 and t.mastery_band <> 'mastered' then 'normal'
+        when t.freshness in ('recent', 'aging') and t.mastery_score >= 70.00 and t.mastery_score < 85.00 and t.mastery_band <> 'mastered' then 'hard'
         when (t.mastery_score >= 85.00 or t.mastery_band = 'mastered') then
           case
             when t.mastery_score >= 90.00 and t.confidence_band = 'high' then 'challenge'
@@ -1315,7 +1315,7 @@ begin
         when ns.node_type in ('topic', 'skill')
              and ns.is_observed
              and ns.recovery_signal = 'none'
-             and ns.freshness <> 'needs_refresh'
+             and ns.freshness in ('recent', 'aging')
              and ns.mastery_score >= 50.00
              and ns.mastery_score < 85.00
              and ns.mastery_band <> 'mastered' then 3

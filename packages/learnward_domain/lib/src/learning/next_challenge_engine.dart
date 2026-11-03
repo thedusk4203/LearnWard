@@ -205,13 +205,15 @@ class NextChallengeEngine {
     if (freshness == MasteryFreshness.needsRefresh && score >= 70.0) {
       return RecommendedDifficulty.normal;
     }
-    if (freshness != MasteryFreshness.needsRefresh &&
+    if ((freshness == MasteryFreshness.recent ||
+            freshness == MasteryFreshness.aging) &&
         score >= 50.0 &&
         score < 70.0 &&
         masteryBand != MasteryBand.mastered) {
       return RecommendedDifficulty.normal;
     }
-    if (freshness != MasteryFreshness.needsRefresh &&
+    if ((freshness == MasteryFreshness.recent ||
+            freshness == MasteryFreshness.aging) &&
         score >= 70.0 &&
         score < 85.0 &&
         masteryBand != MasteryBand.mastered) {
@@ -823,7 +825,8 @@ class NextChallengeEngine {
         reason = NextChallengeReason.refreshStaleSecureSkill;
       } else if (n.isObserved &&
           n.recoverySignal == RecoverySignal.none &&
-          n.freshness != MasteryFreshness.needsRefresh &&
+          (n.freshness == MasteryFreshness.recent ||
+              n.freshness == MasteryFreshness.aging) &&
           (n.masteryScore ?? 0.0) >= 50.0 &&
           (n.masteryScore ?? 0.0) < 85.0 &&
           n.masteryBand != MasteryBand.mastered) {
