@@ -90,3 +90,101 @@ enum CatalogLifecycleStatus {
     );
   }
 }
+
+/// Canonical Freshness classification for LearnWard Phase 5.2.
+enum MasteryFreshness {
+  recent('recent'),
+  aging('aging'),
+  needsRefresh('needs_refresh'),
+  unknown('unknown');
+
+  const MasteryFreshness(this.value);
+
+  final String value;
+
+  static MasteryFreshness fromValue(String value) {
+    return MasteryFreshness.values.firstWhere(
+      (e) => e.value == value,
+      orElse: () => throw ArgumentError('Unknown MasteryFreshness: $value'),
+    );
+  }
+}
+
+/// Canonical Recovery signal for LearnWard Phase 5.2.
+enum RecoverySignal {
+  none('none'),
+  reviewSuggested('review_suggested');
+
+  const RecoverySignal(this.value);
+
+  final String value;
+
+  static RecoverySignal fromValue(String value) {
+    return RecoverySignal.values.firstWhere(
+      (e) => e.value == value,
+      orElse: () => throw ArgumentError('Unknown RecoverySignal: $value'),
+    );
+  }
+}
+
+/// Mutually exclusive Next Challenge priority classes (1 = highest priority).
+enum RecommendationPriority {
+  recovery('recovery', 1),
+  refresh('refresh', 2),
+  developing('developing', 3),
+  unlock('unlock', 4),
+  explore('explore', 5);
+
+  const RecommendationPriority(this.value, this.rank);
+
+  final String value;
+  final int rank;
+
+  static RecommendationPriority fromValue(String value) {
+    return RecommendationPriority.values.firstWhere(
+      (e) => e.value == value,
+      orElse: () =>
+          throw ArgumentError('Unknown RecommendationPriority: $value'),
+    );
+  }
+}
+
+/// Deterministic 1-to-1 reason code for each Next Challenge priority class.
+enum NextChallengeReason {
+  recoveryRecentErrors('recovery_recent_errors'),
+  refreshStaleSecureSkill('refresh_stale_secure_skill'),
+  developingKeepPracticing('developing_keep_practicing'),
+  unlockPrerequisitesMastered('unlock_prerequisites_mastered'),
+  exploreAvailableSkill('explore_available_skill');
+
+  const NextChallengeReason(this.value);
+
+  final String value;
+
+  static NextChallengeReason fromValue(String value) {
+    return NextChallengeReason.values.firstWhere(
+      (e) => e.value == value,
+      orElse: () => throw ArgumentError('Unknown NextChallengeReason: $value'),
+    );
+  }
+}
+
+/// Recommended difficulty aligned 1:1 with the frozen 4-value difficulty vocabulary.
+enum RecommendedDifficulty {
+  belowLevel('below_level'),
+  normal('normal'),
+  hard('hard'),
+  challenge('challenge');
+
+  const RecommendedDifficulty(this.value);
+
+  final String value;
+
+  static RecommendedDifficulty fromValue(String value) {
+    return RecommendedDifficulty.values.firstWhere(
+      (e) => e.value == value,
+      orElse: () =>
+          throw ArgumentError('Unknown RecommendedDifficulty: $value'),
+    );
+  }
+}

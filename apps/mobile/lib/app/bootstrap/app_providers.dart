@@ -237,7 +237,12 @@ final learningRepositoryProvider = Provider<LearningRepository>((ref) {
     return SupabaseLearningRepository(client);
   }
   if (config.canUseLocalDemoRepositories) {
-    return InMemoryLearningRepository();
+    final childRepo = ref.watch(childProfileRepositoryProvider);
+    return InMemoryLearningRepository(
+      childProfileRepository: childRepo is InMemoryChildProfileRepository
+          ? childRepo
+          : null,
+    );
   }
   throw MissingSupabaseConfigurationException(config.environment);
 });

@@ -15,6 +15,8 @@ import '../../features/family/presentation/create_family_screen.dart';
 import '../../features/family/presentation/family_home_screen.dart';
 import '../../features/foundation/presentation/foundation_screen.dart';
 import '../../features/learning/presentation/child_mastery_screen.dart';
+import '../../features/learning/presentation/learning_overview_screen.dart';
+import '../../features/learning/presentation/node_learning_detail_screen.dart';
 import '../../features/rewards/presentation/child_redemption_history_screen.dart';
 import '../../features/rewards/presentation/child_store_screen.dart';
 import '../../features/rewards/presentation/child_wheel_screen.dart';
@@ -178,6 +180,23 @@ final routerProvider = Provider<GoRouter>((ref) {
         },
       ),
       GoRoute(
+        path: AppRoutes.childNodeDetail,
+        name: AppRoutes.childNodeDetailName,
+        builder: (context, state) {
+          final activeChild = ref.read(activeChildModeProvider);
+          final extra = state.extra as Map<String, dynamic>?;
+          final nodeId = extra?['learningNodeId'] as String? ?? '';
+          if (activeChild == null || nodeId.isEmpty) {
+            return const Scaffold(body: Center(child: Text('No active child')));
+          }
+          return NodeLearningDetailScreen(
+            childId: activeChild.id,
+            learningNodeId: nodeId,
+            childDisplayName: activeChild.displayName,
+          );
+        },
+      ),
+      GoRoute(
         path: AppRoutes.childWheel,
         name: AppRoutes.childWheelName,
         builder: (context, state) => const ChildWheelScreen(),
@@ -206,6 +225,29 @@ final routerProvider = Provider<GoRouter>((ref) {
           return VerifiedHistoryScreen(
             childId: extra['childId'] as ChildId,
             childDisplayName: extra['childDisplayName'] as String,
+          );
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.parentLearningOverview,
+        name: AppRoutes.parentLearningOverviewName,
+        builder: (context, state) {
+          final extra = state.extra as Map<String, dynamic>;
+          return LearningOverviewScreen(
+            childId: extra['childId'] as ChildId,
+            childDisplayName: extra['childDisplayName'] as String? ?? 'Learner',
+          );
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.parentNodeDetail,
+        name: AppRoutes.parentNodeDetailName,
+        builder: (context, state) {
+          final extra = state.extra as Map<String, dynamic>;
+          return NodeLearningDetailScreen(
+            childId: extra['childId'] as ChildId,
+            learningNodeId: extra['learningNodeId'] as String,
+            childDisplayName: extra['childDisplayName'] as String? ?? 'Learner',
           );
         },
       ),

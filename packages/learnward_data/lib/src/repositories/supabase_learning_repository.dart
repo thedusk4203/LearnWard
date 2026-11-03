@@ -134,4 +134,64 @@ final class SupabaseLearningRepository implements LearningRepository {
         )
         .toList();
   }
+
+  @override
+  Future<LearningOverview> getChildLearningOverview({
+    required ChildId childId,
+  }) async {
+    final response = await _client.rpc<dynamic>(
+      'get_child_learning_overview',
+      params: {'p_child_id': childId.value},
+    );
+
+    return LearningOverview.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+  }
+
+  @override
+  Future<LearningNodeState> getNodeLearningState({
+    required ChildId childId,
+    required String learningNodeId,
+  }) async {
+    final response = await _client.rpc<dynamic>(
+      'get_node_learning_state',
+      params: {
+        'p_child_id': childId.value,
+        'p_learning_node_id': learningNodeId,
+      },
+    );
+
+    return LearningNodeState.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+  }
+
+  @override
+  Future<NextChallengeRecommendationSet> getNextChallengeCandidates({
+    required ChildId childId,
+    SubjectKey? subjectKey,
+    int limit = 3,
+  }) async {
+    if (limit < 1 || limit > 3) {
+      throw ArgumentError.value(
+        limit,
+        'limit',
+        'Candidate limit must be between 1 and 3',
+      );
+    }
+
+    final response = await _client.rpc<dynamic>(
+      'get_next_challenge_candidates',
+      params: {
+        'p_child_id': childId.value,
+        'p_subject_key': subjectKey?.value,
+        'p_limit': limit,
+      },
+    );
+
+    return NextChallengeRecommendationSet.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+  }
 }

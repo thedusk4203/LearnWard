@@ -3,8 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
+import 'next_challenge_section.dart';
+import 'node_learning_detail_screen.dart';
 
-/// Screen presenting learning mastery projections, bands, and confidence to a child or parent.
+/// Screen presenting learning mastery projections, bands, confidence, and
+/// Phase 5.2 Next Challenge choices to a child or parent.
 class ChildMasteryScreen extends ConsumerStatefulWidget {
   const ChildMasteryScreen({
     super.key,
@@ -109,49 +112,53 @@ class _ChildMasteryScreenState extends ConsumerState<ChildMasteryScreen> {
       );
     }
 
-    if (_projections.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.school_outlined,
-                size: 64,
-                color: theme.colorScheme.onSurfaceVariant.withValues(
-                  alpha: 0.5,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'No Verified Learning Yet',
-                style: theme.textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'When school results are added and verified, mastery and confidence will appear here.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
     return RefreshIndicator(
       onRefresh: _loadMastery,
-      child: ListView.separated(
+      child: ListView(
         padding: const EdgeInsets.all(16),
-        itemCount: _projections.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 12),
-        itemBuilder: (context, index) {
-          final item = _projections[index];
-          return _buildMasteryCard(context, item, theme);
-        },
+        children: [
+          NextChallengeSection(
+            childId: widget.childId,
+            childDisplayName: widget.childDisplayName,
+          ),
+          const SizedBox(height: 16),
+          if (_projections.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.school_outlined,
+                    size: 64,
+                    color: theme.colorScheme.onSurfaceVariant.withValues(
+                      alpha: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No Verified Learning Yet',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'When school results are added and verified, mastery and confidence will appear here.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            ..._projections.map(
+              (item) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _buildMasteryCard(context, item, theme),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -201,99 +208,114 @@ class _ChildMasteryScreenState extends ConsumerState<ChildMasteryScreen> {
     };
 
     return Card(
+      key: Key('mastery_card_${item.learningNodeId.value}'),
       elevation: 1,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(color: theme.colorScheme.outlineVariant),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    item.nodeTitle,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => NodeLearningDetailScreen(
+                childId: widget.childId,
+                learningNodeId: item.learningNodeId.value,
+                childDisplayName: widget.childDisplayName,
+              ),
+            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      item.nodeTitle,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: bandBgColor,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      bandLabel,
+                      style: TextStyle(
+                        color: bandColor,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
-                  decoration: BoxDecoration(
-                    color: bandBgColor,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    bandLabel,
-                    style: TextStyle(
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Text(
+                    '${item.masteryScore.toStringAsFixed(1)}%',
+                    style: theme.textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
                       color: bandColor,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Text(
-                  '${item.masteryScore.toStringAsFixed(1)}%',
-                  style: theme.textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: bandColor,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: (item.masteryScore / 100.0).clamp(0.0, 1.0),
-                      minHeight: 8,
-                      backgroundColor:
-                          theme.colorScheme.surfaceContainerHighest,
-                      color: bandColor,
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: (item.masteryScore / 100.0).clamp(0.0, 1.0),
+                        minHeight: 8,
+                        backgroundColor:
+                            theme.colorScheme.surfaceContainerHighest,
+                        color: bandColor,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            const Divider(height: 1),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(
-                  confIcon,
-                  size: 16,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  confLabel,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  '${item.distinctAssessmentCount} verified ${item.distinctAssessmentCount == 1 ? 'assessment' : 'assessments'}',
-                  style: theme.textTheme.bodySmall?.copyWith(
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Divider(height: 1),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(
+                    confIcon,
+                    size: 16,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
-                ),
-              ],
-            ),
-          ],
+                  const SizedBox(width: 4),
+                  Text(
+                    confLabel,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${item.distinctAssessmentCount} verified ${item.distinctAssessmentCount == 1 ? 'assessment' : 'assessments'}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

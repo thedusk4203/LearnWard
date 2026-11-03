@@ -278,5 +278,107 @@ void main() {
         );
       },
     );
+
+    test('Phase 5.2 LearningOverview, LearningNodeState, and NextChallengeRecommendationSet parse RPC envelopes', () {
+      final childId = ChildId('c0000000-0000-0000-0000-000000000001');
+      final asOf = DateTime.utc(2026, 6, 1, 12, 0);
+      final nodes = [
+        LearningNode(
+          id: LearningNodeId('a0000000-0000-0000-0000-000000000001'),
+          catalogVersion: 'pilot-v0.1',
+          nodeType: LearningNodeType.subject,
+          subjectKey: 'math',
+          canonicalKey: 'pilot-v0.1:subject:math',
+          title: 'Mathematics',
+          sortOrder: 1,
+        ),
+        LearningNode(
+          id: LearningNodeId('b0000001-0000-0000-0000-000000000001'),
+          catalogVersion: 'pilot-v0.1',
+          nodeType: LearningNodeType.domain,
+          subjectKey: 'math',
+          canonicalKey: 'pilot-v0.1:math:arithmetic',
+          title: 'Arithmetic',
+          parentId: LearningNodeId('a0000000-0000-0000-0000-000000000001'),
+          sortOrder: 1,
+        ),
+        LearningNode(
+          id: LearningNodeId('b0000002-0000-0000-0000-000000000001'),
+          catalogVersion: 'pilot-v0.1',
+          nodeType: LearningNodeType.topic,
+          subjectKey: 'math',
+          canonicalKey: 'pilot-v0.1:math:arithmetic:addition',
+          title: 'Addition',
+          parentId: LearningNodeId('b0000001-0000-0000-0000-000000000001'),
+          sortOrder: 1,
+        ),
+        LearningNode(
+          id: LearningNodeId('b0000003-0000-0000-0000-000000000001'),
+          catalogVersion: 'pilot-v0.1',
+          nodeType: LearningNodeType.skill,
+          subjectKey: 'math',
+          canonicalKey: 'pilot-v0.1:math:arithmetic:addition:single_digit',
+          title: 'Single Digit Addition',
+          parentId: LearningNodeId('b0000002-0000-0000-0000-000000000001'),
+          gradeMin: 1,
+          gradeMax: 2,
+          sortOrder: 1,
+        ),
+      ];
+
+      final overviewBuilt = NextChallengeEngine.buildOverview(
+        childId: childId,
+        schoolGrade: 2,
+        activeCatalogVersion: 'pilot-v0.1',
+        catalogNodes: nodes,
+        prerequisites: const [],
+        masteryStates: const [],
+        evidenceEvents: const [],
+        asOf: asOf,
+      );
+      final overview = LearningOverview.fromJson(overviewBuilt.toJson());
+      expect(overview.activeCatalogVersion, equals('pilot-v0.1'));
+      expect(overview.schoolGrade, equals(2));
+
+      final detailBuilt = NextChallengeEngine.buildNodeState(
+        childId: childId,
+        learningNodeId: 'b0000003-0000-0000-0000-000000000001',
+        schoolGrade: 2,
+        activeCatalogVersion: 'pilot-v0.1',
+        catalogNodes: nodes,
+        prerequisites: const [],
+        masteryStates: const [],
+        evidenceEvents: const [],
+        asOf: asOf,
+      );
+      final detail = LearningNodeState.fromJson(detailBuilt.toJson());
+      expect(detail.prerequisiteState.isSatisfied, isTrue);
+      expect(
+        detail.state.recommendedDifficulty,
+        equals(RecommendedDifficulty.normal),
+      );
+
+      final nextBuilt = NextChallengeEngine.getNextChallengeCandidates(
+        childId: childId,
+        schoolGrade: 2,
+        activeCatalogVersion: 'pilot-v0.1',
+        catalogNodes: nodes,
+        prerequisites: const [],
+        masteryStates: const [],
+        evidenceEvents: const [],
+        asOf: asOf,
+        subjectKeyFilter: 'math',
+        limit: 2,
+      );
+      final nextResp = NextChallengeRecommendationSet.fromJson(
+        nextBuilt.toJson(),
+      );
+      expect(nextResp.subjectKeyFilter, equals('math'));
+      expect(nextResp.candidates.length, equals(1));
+      expect(
+        nextResp.candidates.first.reasonCode,
+        equals(NextChallengeReason.exploreAvailableSkill),
+      );
+    });
   });
 }

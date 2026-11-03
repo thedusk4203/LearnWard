@@ -108,5 +108,70 @@ void main() {
         );
       },
     );
+
+    test('GetChildLearningOverview returns all 5 canonical subjects and pilot-v0.1 coverage', () async {
+      final getOverview = GetChildLearningOverview(repository);
+      final overview = await getOverview(childId: childId);
+
+      expect(overview.childId, equals(childId));
+      expect(overview.activeCatalogVersion, equals('pilot-v0.1'));
+      expect(overview.subjects.length, equals(5));
+      expect(overview.overallCoverage.totalSkills, equals(3));
+
+      final mathSubject = overview.subjects.firstWhere(
+        (s) => s.subjectKey == 'math',
+      );
+      final doubleDigit = mathSubject.topics.first.skills.firstWhere(
+        (s) =>
+            s.canonicalKey ==
+            'pilot-v0.1:math:arithmetic:addition:double_digit',
+      );
+      expect(doubleDigit.isPrerequisiteSatisfied, isFalse);
+      expect(doubleDigit.prerequisiteCount, equals(1));
+      expect(doubleDigit.attainedPrerequisiteCount, equals(0));
+    });
+
+    test('GetNodeLearningState returns node detail with prerequisite edges and state', () async {
+      final getNodeState = GetNodeLearningState(repository);
+      const doubleDigitId = 'b0000003-0000-0000-0000-000000000002';
+
+      final detail = await getNodeState(
+        childId: childId,
+        learningNodeId: doubleDigitId,
+      );
+      expect(detail.node.learningNodeId, equals(doubleDigitId));
+      expect(detail.prerequisiteState.applicable, isTrue);
+      expect(detail.prerequisiteState.isSatisfied, isFalse);
+      expect(detail.prerequisiteState.prerequisites.length, equals(1));
+      expect(detail.state.recommendedDifficulty, isNull);
+    });
+
+    test('GetNextChallengeCandidates returns up to 3 candidates, respects subject filter, and validates limit', () async {
+      final getCandidates = GetNextChallengeCandidates(repository);
+
+      final allCandidates = await getCandidates(childId: childId, limit: 3);
+      expect(allCandidates.candidates.length, equals(2));
+      expect(
+        allCandidates.candidates.first.priorityClass,
+        equals(RecommendationPriority.explore),
+      );
+
+      final mathOnly = await getCandidates(
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        limit: 2,
+      );
+      expect(mathOnly.subjectKeyFilter, equals('math'));
+      expect(mathOnly.candidates.every((c) => c.subjectKey == 'math'), isTrue);
+
+      expect(
+        () => getCandidates(childId: childId, limit: 0),
+        throwsArgumentError,
+      );
+      expect(
+        () => getCandidates(childId: childId, limit: 4),
+        throwsArgumentError,
+      );
+    });
   });
 }
