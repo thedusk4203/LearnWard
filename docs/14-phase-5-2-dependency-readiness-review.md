@@ -2,7 +2,7 @@
 
 - **Status:** READY FOR DESIGN (implementation NOT authorized)
 - **Reviewed baseline:** `main` @ `16568a99da157f296fdf30c3b5e28d902bee5fbc`
-- **Readiness gate:** PR #9 comment `6594086334` — PASS FOR DESIGN
+- **Readiness gates:** PR #9 comment `6594086334` — PASS FOR DESIGN; PR #10 audit `6594895418` — REQUEST CHANGES (resolved in current checkpoint)
 - **Upstream contract:** Phase 5.1 — FROZEN ([freeze receipt](freezes/phase-5-1-learning-mastery-foundation-freeze.md)), [ADR 0006](adr/0006-phase-5-learning-engine-mastery.md) — ACCEPTED
 - **Detailed design produced by this checkpoint:** [Phase 5.2 Detailed Design v0.1](15-phase-5-2-skill-graph-recommendation-design-v0.1.md), [ADR 0007](adr/0007-phase-5-2-skill-graph-recommendation.md) — PROPOSED
 
@@ -16,7 +16,7 @@ Phase 5.2 is the second and final slice of Phase 5 (`docs/13-phase-5-learning-en
 
 - prerequisite graph traversal for Unlock / Explore candidate selection,
 - dynamic Freshness (14d / 45d relative to server `as_of`),
-- deterministic Recovery signal (`review_suggested`, 30-day recency window),
+- deterministic Recovery signal (`review_suggested`, dual visibility, 30-day recency window),
 - Next Challenge candidate engine (at most three candidates),
 - learning overview, node state, explanation and coverage presentation,
 - child choice UI.
@@ -62,7 +62,7 @@ The active catalog is `pilot-v0.1` (immutable). Relevant content:
 | `pilot-v0.1:english:grammar:punctuation` | topic | 1–5 | — |
 | `pilot-v0.1:english:grammar:punctuation:end_marks` | skill | 1–3 | none |
 
-This is sufficient to prove prerequisite traversal (one edge), Unlock (`double_digit`), Explore (`single_digit`, `end_marks`), grade filtering (distinct bounded ranges), Freshness, Recovery and Next Challenge. Richer graph scenarios are exercised through transactional test fixtures (Section 4.3 of the detailed design), never by mutating `pilot-v0.1`.
+This is sufficient to prove prerequisite traversal (one edge), Unlock (`double_digit`), Explore (`single_digit`, `end_marks`), grade filtering (distinct bounded ranges), Freshness, Recovery and Next Challenge. Richer graph scenarios are exercised through transactional test fixtures (Section 4.4 of the detailed design), never by mutating `pilot-v0.1`.
 
 ---
 
@@ -71,12 +71,12 @@ This is sufficient to prove prerequisite traversal (one edge), Unlock (`double_d
 | # | Addition | Kind |
 |---|---|---|
 | A1 | `FreshnessEngine` (Dart) + SQL equivalent | Pure read-time derivation |
-| A2 | `RecoveryEngine` (Dart) + SQL equivalent (canonical replay) | Pure read-time derivation |
-| A3 | Learning node state derivation over the **active catalog** (seen + unseen nodes) | Pure read-time derivation |
+| A2 | `RecoveryEngine` (Dart) + SQL equivalent (canonical replay, dual visibility) | Pure read-time derivation |
+| A3 | Learning node state derivation over the **active catalog** (seen + unseen nodes, consuming Phase 5.1 mastery/confidence) | Pure read-time derivation |
 | A4 | `NextChallengeEngine` (Dart) + SQL equivalent: partition, eligibility, comparator, limit | Pure read-time derivation |
 | A5 | Coverage-aware learning overview (no naive averages) | Pure read-time derivation |
 | A6 | `public.get_child_learning_overview(uuid)`, `public.get_node_learning_state(uuid, uuid)`, `public.get_next_challenge_candidates(uuid, text, integer)` | `SECURITY DEFINER`, `STABLE`, read-only RPCs |
-| A7 | Owner-only `private.*_at(..., p_as_of)` helpers for parity tests | Internal functions, no app-role grant |
+| A7 | Owner-only `private.*_at(..., p_as_of)` evaluation-clock helpers for parity tests | Internal functions, no app-role grant |
 | A8 | Domain types, repository port extensions, application use cases | Dart packages |
 | A9 | Supabase data adapter + fakes + in-memory dev repository | Dart packages |
 | A10 | Parent learning overview, node detail, child Next Challenge choice UI | Flutter |
@@ -88,17 +88,21 @@ Phase 5.2 adds **no tables**, no mutable recommendation/freshness/recovery state
 
 ## 4. Readiness Blockers and Resolution
 
-The seven blockers raised in gate `6594086334`, plus the additional freeze items requested for this checkpoint, are resolved in the detailed design:
+The blockers raised in gates `6594086334` and `6594895418` are resolved in the detailed design:
 
 | Blocker | Resolution (design section) |
 |---|---|
 | 1. Developing vs Refresh overlap | Total, mutually exclusive partition with priority Recovery > Refresh > Developing > Unlock > Explore (§7) |
-| 2. Unseen Freshness / candidate universe | Universe = active-catalog `learning_nodes` left-joined to child state; unseen Freshness = `unknown` (§4, §5) |
-| 3. Recovery canonical scan | Deterministic canonical replay with 30-day expiry (§6) |
+| 2. Unseen Freshness / candidate universe | Universe = active-catalog `learning_nodes` left-joined to child state; unseen Freshness = `unknown` (§4.1, §5) |
+| 3. Recovery canonical scan & dual visibility | Deterministic canonical replay with 30-day expiry and `effective_occurred_at <= as_of AND verified_at <= as_of` (§6) |
 | 4. Explore `nearby` + tie-breaks | Proximity ranks 0–3 and global total comparator ending in `learning_node_id` (§10, §11) |
-| 5. Catalog rollout / content scope | Active catalog only, version-scoped node identity, no cross-version carry-forward, no `pilot-v0.1` mutation, no promotion in Phase 5.2 (§4.2, §4.3) |
+| 5. Catalog rollout / content scope | Active catalog only, version-scoped node identity, no cross-version carry-forward, no `pilot-v0.1` mutation, no promotion in Phase 5.2 (§4.3, §4.4) |
 | 6. Stale Phase 5.1 test requirement | `docs/13` Section 27 tests 28–29 corrected to the frozen `UNIQUE(assessment_id, learning_node_id, component_key)` contract |
 | 7. RPC / payload contracts | Exact signatures, error codes and canonical response schemas (§13, §14) |
+| 8. Exact source of mastery / confidence semantics | Explicitly frozen: Phase 5.2 is a consumer of Phase 5.1 Mastery/Confidence; reuses exact `private.get_child_mastery_at` / `ConfidenceEngine.evaluate` formulas at same `as_of` (§4.2) |
+| 9. `recommended_difficulty` for unseen Topic | Explicitly frozen: `null` for unseen Topic, unseen Subject/Domain, and locked/incompatible unseen Skills (§12.2) |
+| 10. `prerequisite_state.dependents` contract | Explicitly frozen: active-catalog Skills depending directly on inspected node with prerequisite/grade status, sorted deterministically by `catalog_sort_path ASC, learning_node_id ASC` (§8.2) |
+| 11. `private.*_at` evaluation-clock semantics | Explicitly frozen: evaluation clock over current committed projection (not arbitrary historical event-sourced reconstruction) with dual evidence visibility `verified_at <= as_of AND effective_occurred_at <= as_of` (§3.2, §3.3) |
 
 ---
 
@@ -107,7 +111,8 @@ The seven blockers raised in gate `6594086334`, plus the additional freeze items
 | Risk | Mitigation |
 |---|---|
 | Dart/PostgreSQL divergence in ordering (UUID, arrays, numerics) | Comparator specifies UUID byte order = lowercase canonical string order, integer-array lexicographic order, scores compared at 2-decimal precision |
-| Concurrent evidence commit during a read | Single `as_of`; read-time derivations consider only evidence with `effective_occurred_at <= as_of` |
+| Future-verified evidence leaking into historical evaluation frames | Dual visibility filter requires `effective_occurred_at <= as_of AND verified_at <= as_of` |
+| Attempting full historical mastery reconstruction | Clarified boundary: `private.*_at` evaluates time-varying read fields over current committed projection; full historical reconstruction is deferred |
 | Sparse pilot catalog limits UX realism | Transactional fixtures for richer graphs; content expansion deferred to a separate platform catalog-release gate |
 | Redundant Topic + child Skill candidates | Accepted in v0.1 (distinct node IDs, deterministic); ancestor/descendant suppression deferred |
 

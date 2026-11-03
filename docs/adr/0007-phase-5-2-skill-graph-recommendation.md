@@ -5,7 +5,7 @@
 - **Target:** Phase 5.2 — Skill Graph + Recommendation Foundation (completing Phase 5 v0.1)
 - **Reviewed Baseline:** `main` @ `16568a99da157f296fdf30c3b5e28d902bee5fbc`
 - **Upstream Contract:** [ADR 0006 — Phase 5 Learning Engine, Mastery & Recommendation Decisions](0006-phase-5-learning-engine-mastery.md) (`ACCEPTED`), [Phase 5.1 Freeze Receipt](../freezes/phase-5-1-learning-mastery-foundation-freeze.md) (`FROZEN`)
-- **Readiness Gate:** PR #9 Comment `6594086334` (`PASS FOR DESIGN`)
+- **Readiness Gate:** PR #9 Comment `6594086334` (`PASS FOR DESIGN`), PR #10 Audit `6594895418` (`REQUEST CHANGES`)
 - **Detailed Design:** [docs/15-phase-5-2-skill-graph-recommendation-design-v0.1.md](../15-phase-5-2-skill-graph-recommendation-design-v0.1.md)
 
 This ADR remains **`PROPOSED`** during the Phase 5.2 design review and implementation cycle. It may be marked `ACCEPTED` only after Phase 5.2 implementation passes independent audit, merges to `main`, and completes post-merge CI verification.
@@ -16,21 +16,13 @@ This ADR remains **`PROPOSED`** during the Phase 5.2 design review and implement
 
 Phase 5.1 froze the versioned curriculum catalog (`learning_catalog_versions`, `learning_nodes`, `learning_prerequisites`), component-level assessment mappings, immutable evidence atoms (`learning_evidence_events`), deterministic EWMA mastery rebuild (`child_mastery_states`, `mastery_state_revisions`), rolling 60-day Confidence Engine v0.1, and server-authoritative sticky `mastery_attained_at`.
 
-Before authorizing Phase 5.2 implementation, independent readiness review (`6594086334`) identified seven design decisions that must be frozen unambiguously so pure Dart domain engines and PostgreSQL read RPCs converge identically:
-
-1. Resolving the `70..84.99` score overlap between `Developing` and `Refresh` (plus sticky-`Mastered` score dips and `Unlock` vs `Explore` boundary);
-2. Defining the active-catalog candidate universe and `unseen` node Freshness/Mastery defaults;
-3. Freezing canonical evidence replay and 30-day expiry for `Recovery`;
-4. Operationalizing `"nearby Skill"` in `Explore` and a strict total tie-break comparator;
-5. Constraining catalog rollout scope (`pilot-v0.1` immutability, version-scoped node identity, no cross-version carry-forward);
-6. Freezing recommended difficulty mapping and coverage-aware non-averaging overview presentation;
-7. Freezing read-only RPC signatures, error codes, authorization, and canonical JSON payloads.
+Phase 5.2 completes Phase 5 by delivering Skill Graph traversal, Freshness, Recovery, Next Challenge recommendation candidate generation, and coverage presentation. Following design audits `6594086334` and `6594895418`, the key architectural decisions below are frozen to ensure complete determinism and cross-platform parity between PostgreSQL RPCs and pure Dart domain engines.
 
 ---
 
 ## Decision 1 — Pure Read-Time Projections with Zero Recommendation Persistence
 
-Freshness, Recovery, Skill Graph prerequisite satisfaction, Coverage summaries, and Next Challenge candidates are evaluated strictly as **read-time deterministic projections** over frozen Phase 5.1 tables and `child_profiles`.
+Freshness, Recovery, Skill Graph prerequisite satisfaction, Dependents, Coverage summaries, and Next Challenge candidates are evaluated strictly as **read-time deterministic projections** over frozen Phase 5.1 tables and `child_profiles`.
 
 Phase 5.2 introduces **no** mutable recommendation, freshness, or recovery tables (`recommendations`, `recovery_states`, `freshness_states` are explicitly rejected for v0.1), **no** background cron jobs, and **no** writes inside any Phase 5.2 RPC (`STABLE` functions only).
 
@@ -49,13 +41,49 @@ Phase 5.2 introduces **no** mutable recommendation, freshness, or recovery table
 
 ---
 
-## Decision 3 — Single Request Clock (`transaction_timestamp()`) & Internal `private.*_at` Parity Helpers
+## Decision 3 — Phase 5.2 Reuses Exact Phase 5.1 Mastery & Confidence Semantics
 
-Client-facing RPCs (`public.get_child_learning_overview`, `public.get_node_learning_state`, `public.get_next_challenge_candidates`) never accept a caller-supplied `as_of`. Each captures `v_as_of := transaction_timestamp()` once and delegates to a non-client-callable `private.*_at(..., p_as_of)` helper (`EXECUTE` revoked from `PUBLIC`, `anon`, and `authenticated`), enabling exact deterministic boundary testing between Dart (`DateTime asOf` required; `DateTime.now()` forbidden) and PostgreSQL.
+```text
+Phase 5.2 is a consumer of Phase 5.1 Mastery/Confidence semantics.
+It does not redefine them.
+```
+
+For every observed active-catalog node, Phase 5.2 consumes the exact formulas frozen in Phase 5.1 (`private.get_child_mastery_at` / `ConfidenceEngine.evaluate`) at the same authoritative `as_of`:
+- `mastery_score`: from `child_mastery_states.mastery_score`.
+- `mastery_band`: `mastered` if `mastery_attained_at <= as_of`, else `mastery_candidate` (>= 85), `secure` (>= 70), `developing` (>= 50), `emerging` (< 50).
+- `confidence_units` & `confidence_band`: rolling 60-day window (`effective_occurred_at >= as_of - 60d AND effective_occurred_at <= as_of AND verified_at <= as_of`), units = `sum(specificity_weight * level_weight)`, high if units > 3.5 AND distinct recent VLEs >= 2, medium if units >= 1.5, low otherwise.
+
+Pure Dart domain engines reuse `ConfidenceEngine.evaluate` directly. Phase 5.2 MUST NOT create an alternative confidence formula.
 
 ---
 
-## Decision 4 — Freshness Engine v0.1 (`recent | aging | needs_refresh | unknown`)
+## Decision 4 — Evaluation-Clock Semantics (`p_as_of`) over Current Committed Projection
+
+Internal `private.*_at(..., p_as_of)` helpers are **deterministic evaluation-clock helpers over the CURRENT COMMITTED Phase 5.1 projection.**
+
+They are NOT arbitrary historical snapshot reconstruction APIs. They vary time-parameterized derivations (confidence window, freshness elapsed duration, recovery expiry, sticky attainment visibility), but they do NOT reconstruct historical numeric EWMA `mastery_score` before subsequent assessments were processed. Full historical event-sourced reconstruction is explicitly outside scope for Phase 5.2 v0.1.
+
+In production client-facing RPCs, `v_as_of := transaction_timestamp()` is captured once at request entry.
+
+---
+
+## Decision 5 — Dual Temporal Visibility Rule (`effective_occurred_at <= as_of AND verified_at <= as_of`)
+
+Whenever Phase 5.2 reads `learning_evidence_events` (for Recovery replay, `latest_evidence`, and Confidence evaluation), it requires:
+
+```sql
+effective_occurred_at <= as_of
+AND verified_at <= as_of
+```
+
+- `effective_occurred_at` represents academic chronology (when the learning occurred).
+- `verified_at` represents authority visibility time (when the evidence was verified into the authoritative system).
+
+An event verified at `T3` cannot participate in an evaluation at `T2` (`T2 < T3`) merely because its `effective_occurred_at = T1` is old. In production public RPCs, all already-committed rows naturally satisfy `verified_at <= as_of`. For internal `private.*_at` helpers, this rule guarantees that future-verified evidence never leaks backward into historical evaluation test frames.
+
+---
+
+## Decision 6 — Freshness Engine v0.1 (`recent | aging | needs_refresh | unknown`)
 
 For `latest_effective_occurred_at` (`child_mastery_states.last_evidence_occurred_at`) and `elapsed = greatest(0, as_of - latest_effective_occurred_at)`:
 
@@ -68,11 +96,11 @@ Time passing never mutates `mastery_score` or sticky `mastery_attained_at` (`Mas
 
 ---
 
-## Decision 5 — Recovery Engine v0.1 via Canonical Chronology Replay & 30-Day Expiry
+## Decision 7 — Recovery Engine v0.1 via Canonical Chronology Replay & 30-Day Expiry
 
 Recovery (`none | review_suggested`) applies only to `topic` and `skill` nodes (`subject`, `domain`, and `unseen` nodes always yield `none`).
 
-1. Filter same-child, same-node `learning_evidence_events` to `score_source IN ('component_score', 'item_group')` and `effective_occurred_at <= as_of`. `assessment_total` is completely ignored (can neither raise nor clear).
+1. Filter same-child, same-node `learning_evidence_events` to `score_source IN ('component_score', 'item_group')`, `effective_occurred_at <= as_of`, and `verified_at <= as_of`. `assessment_total` is completely ignored (can neither raise nor clear).
 2. Sort in canonical academic chronology order: `effective_occurred_at ASC, verified_at ASC, verified_learning_event_id ASC`.
 3. Replay from `(state = 'none', latest_weak_at = null)`:
    - **Qualifying weak** (`item_group` with `performance_pct < 70 AND item_count >= 3 AND (item_count - correct_count) >= 2`, OR `component_score` with `performance_pct <= 50`) sets `state = 'review_suggested'` and `latest_weak_at = ev.effective_occurred_at`.
@@ -82,17 +110,23 @@ Recovery (`none | review_suggested`) applies only to `topic` and `skill` nodes (
 
 ---
 
-## Decision 6 — Sticky Prerequisite Satisfaction & Fail-Closed Current Grade Filtering
+## Decision 8 — Sticky Prerequisite Satisfaction, Outgoing Dependents Contract & Fail-Closed Grade Filtering
 
 1. **Prerequisite contract:** For an active Skill `S`, every explicit incoming edge in `public.learning_prerequisites` (`catalog_version = v_active_version AND dependent_node_id = S.id`) must reference an active prerequisite Skill whose `child_mastery_states` row satisfies `mastery_attained_at IS NOT NULL AND mastery_attained_at <= as_of`. Current 60-day confidence `high` and current `mastery_score >= 85` are **not** required once sticky attainment has been declared.
-2. **Grade filtering (`child_profiles.school_grade`):**
+2. **Outgoing Dependents contract (`prerequisite_state.dependents`):**
+   - For a Skill node `S`: exposes all active-catalog Skills `D` in `v_active_version` where an edge `prerequisite_node_id = S.id AND dependent_node_id = D.id` exists and `D.is_active = true` (with active ancestor chain).
+   - Each item includes `learning_node_id`, `canonical_key`, `title`, `grade_min`, `grade_max`, `is_observed`, `is_grade_compatible`, `prerequisite_count`, `attained_prerequisite_count`, and `is_prerequisite_satisfied`.
+   - A dependent is "unlocked" iff `is_observed = false AND is_grade_compatible = true AND is_prerequisite_satisfied = true`.
+   - Sorted deterministically by `catalog_sort_path ASC, learning_node_id ASC`.
+   - Non-Skill nodes return `dependents = []` and `prerequisite_state.applicable = false`.
+3. **Grade filtering (`child_profiles.school_grade`):**
    - Nodes with `grade_min IS NULL AND grade_max IS NULL` are always grade-compatible.
    - Grade-scoped nodes (`grade_min IS NOT NULL OR grade_max IS NOT NULL`) **fail closed** (`false`) when `school_grade IS NULL`, and otherwise require inclusive `(grade_min IS NULL OR school_grade >= grade_min) AND (grade_max IS NULL OR school_grade <= grade_max)`.
    - `unlock` and `explore` require grade compatibility; `recovery`, `refresh`, and `developing` are evidence-driven and do not filter by `school_grade`.
 
 ---
 
-## Decision 7 — Mutually Exclusive Five-Class Partition & Priority (`Recovery > Refresh > Developing > Unlock > Explore`)
+## Decision 9 — Mutually Exclusive Five-Class Partition & Priority (`Recovery > Refresh > Developing > Unlock > Explore`)
 
 Every active-catalog node qualifies for **at most one** Next Challenge priority class:
 
@@ -106,7 +140,7 @@ Every active-catalog node qualifies for **at most one** Next Challenge priority 
 
 ---
 
-## Decision 8 — Deterministic Explore Proximity (`0..3`), Global Total Comparator & Recommended Difficulty
+## Decision 10 — Explore Proximity (`0..3`), Global Total Comparator & Recommended Difficulty
 
 1. **Explore `explore_proximity_rank`:**
    - `0`: parent Topic has `>= 1` seen sibling Skill;
@@ -120,11 +154,15 @@ Every active-catalog node qualifies for **at most one** Next Challenge priority 
    4. `learning_node_id ASC` (UUID byte / lowercase canonical hyphenated string order).
 3. **Recommended difficulty (`below_level | normal | hard | challenge`):**
    - Next Challenge candidates: `recovery -> below_level`, `refresh -> normal`, `developing (< 70) -> normal`, `developing (70..84.99) -> hard`, `unlock -> normal`, `explore -> normal`.
-   - Node Detail extension for fresh already-high-mastery (`>= 85` or sticky `mastered`, no recovery): `challenge` when `mastery_score >= 90 AND confidence_band = 'high'`, else `hard`.
+   - Node Detail:
+     - Unseen non-Skill (Subject, Domain, unseen Topic) -> `recommended_difficulty = null`.
+     - Locked or grade-incompatible unseen Skill -> `recommended_difficulty = null`.
+     - Eligible unseen Skill -> `normal`.
+     - Observed Topic / Skill -> derived per candidate rules, with fresh high-mastery extension (`>= 85` or sticky `mastered`, no recovery): `challenge` when `mastery_score >= 90 AND confidence_band = 'high'`, else `hard`.
 
 ---
 
-## Decision 9 — Coverage-Aware Non-Averaging Read RPCs & Strict Tenant Authorization
+## Decision 11 — Coverage-Aware Non-Averaging Read RPCs & Strict Tenant Authorization
 
 1. `public.get_child_learning_overview(uuid)`, `public.get_node_learning_state(uuid, uuid)`, and `public.get_next_challenge_candidates(uuid, text default null, integer default 3)` are `SECURITY DEFINER`, `STABLE`, `SET search_path = ''`, granted only to `authenticated` and `service_role`.
 2. Invalid inputs (`NULL` required IDs, `p_limit NOT BETWEEN 1 AND 3`, invalid `p_subject_key`) are **rejected** with `22000` (never silently clamped).
