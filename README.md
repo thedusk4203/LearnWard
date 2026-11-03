@@ -78,7 +78,8 @@ Level    │    Wheel   Store
 | [Phase 5.1 Freeze Receipt](docs/freezes/phase-5-1-learning-mastery-foundation-freeze.md) | Frozen Phase 5.1 baseline, CI receipt, zero-GUC catalog lifecycle, deterministic EWMA rebuild, and Dart/Postgres parity |
 | [Phase 5.2 Dependency & Readiness Review](docs/14-phase-5-2-dependency-readiness-review.md) | Phase 5.2 dependency audit against frozen Phase 5.1 baseline (`PASS FOR DESIGN`; implementation not started) |
 | [Phase 5.2 Detailed Design v0.1](docs/15-phase-5-2-skill-graph-recommendation-design-v0.1.md) | Proposed Phase 5.2 detailed design: Skill Graph traversal, Freshness, Recovery replay, Next Challenge engine, RPC schemas, and parity matrix |
-| [Phase 5.2 Skill Graph & Recommendation ADR](docs/adr/0007-phase-5-2-skill-graph-recommendation.md) | Proposed architectural decisions (`PROPOSED`) for Phase 5.2 read-time projections, disjoint priority partition, and deterministic comparator |
+| [Phase 5.2 Skill Graph & Recommendation ADR](docs/adr/0007-phase-5-2-skill-graph-recommendation.md) | Accepted architectural decisions for Phase 5.2 read-time projections, disjoint priority partition, and deterministic comparator |
+| [Phase 5.2 Freeze Receipt](docs/freezes/phase-5-2-skill-graph-recommendation-foundation-freeze.md) | Frozen Phase 5.2 baseline, CI receipt, Skill Graph traversal, Freshness, Recovery, Next Challenge candidate engine, and Dart/Postgres parity |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
@@ -96,6 +97,8 @@ and the Parent PIN containment boundary. Phase 2 must consume this contract with
 - **Phase 4.2 — Celebration Wheel & Parent Controls:** **COMPLETE** (Server-authoritative wheel spins, daily caps, tiered probability selection, celebration animation, durable client journaling).
 
 **Phase 5.1 — Learning Engine, Mastery & Confidence Foundation is FROZEN.** It establishes the zero-GUC learning catalog version lifecycle (draft -> active -> retired), five canonical Subject roots, immutable catalog provenance snapshots on assessments and VLEs, explicit component-level assessment mappings, domain and level weighted evidence events, deterministic EWMA mastery rebuild from canonical academic chronology, initial Option A initialization ($M_1 = P_1$), rolling 60-day Confidence Engine v0.1, server-authoritative declaration instant (`v_processing_as_of`), sticky `mastery_attained_at` with stale evidence prevention, point-in-time read constraints, dual revision/projection state persistence, idempotent `process_learning_event`, bulk catch-up processing, and complete cross-platform Dart/PostgreSQL exact parity.
+
+**Phase 5.2 — Skill Graph + Recommendation Foundation is FROZEN.** It establishes active-catalog-only node resolution, pure read-time evaluation over the current committed Phase 5.1 projection with zero recommendation persistence tables, exact reuse of Phase 5.1 mastery and 60-day confidence semantics, dual temporal visibility qualification (`effective_occurred_at <= as_of AND verified_at <= as_of`), dynamic Freshness boundaries (`recent` <= 14d, `aging` 14..45d, `needs_refresh` > 45d, `unknown`), deterministic Recovery signal evaluation via canonical chronology replay and 30-day weakness window, strict mutually exclusive five-class recommendation partitioning (`Recovery > Refresh > Developing > Unlock > Explore`) with positive qualification on Developing (`freshness IN ('recent', 'aging')`), Skill-only prerequisite DAG satisfaction via sticky attainment, deterministic multi-tier ranking (maximum 3 candidates), fail-closed grade compatibility filtering, strict family adult and paired child device security, and complete economy independence.
 
 ### Repository layout
 
@@ -270,18 +273,21 @@ Run `node scripts/test_last_owner_concurrency.mjs` to execute the multi-session 
 
 ## Product status
 
-**Current Phase:** Phase 4 — Reward Economy & Wheel Experience — **FROZEN**  
+**Current Phase:** Phase 5 — Mastery Engine, Skill Trees & Recommendation Foundation — **FROZEN / COMPLETE**  
 - **Phase 3:** **FROZEN** (Baseline `c6721497bfbde7cb436467cccaad5b2234d23cc4`, Post-merge CI `41293964415`)  
 - **Phase 4:** **FROZEN** (Merge `6f1057409942a564691fac41509c17d6b602a3af`, Post-merge CI `41380026423`)  
   - **Phase 4.1 — Reward Catalog + Store Redemption Foundation:** **COMPLETE** (Merge `8ca9bbc47aa45b96e8ae441671ec57d57ce95dea`, Post-merge CI `41332029263`)  
   - **Phase 4.2 — Celebration Wheel & Parent Controls:** **COMPLETE** (Merge `6f1057409942a564691fac41509c17d6b602a3af`, Post-merge CI `41380026423`)  
-- **Phase 5 — Mastery Engine, Skill Trees & Recommendation Foundation:** **NOT STARTED**  
-**Frozen code baseline:** `6f1057409942a564691fac41509c17d6b602a3af`  
-**Post-merge CI:** `41380026423` — **SUCCESS**  
-**Code:** Domain entities, pure Dart Growth Engine v0.1, integer minor unit representation, immutable append-only economic ledgers (`xp_ledger`, `rp_ledger`), cached balance projections (`child_balances`), single-snapshot read-only reconciliation (`reconcile_child_balance`), fail-closed immutable grade snapshots, recoverable Growth delivery (`catch_up_unprocessed_growth`), cross-language canonical parity fixtures, reward catalog, store redemption RPC, celebration wheel RPC with server-authoritative pseudorandom tier selection, parent wheel controls, durable SQLite command journaling, and Flutter presentation  
+- **Phase 5 — Mastery Engine, Skill Trees & Recommendation Foundation:** **COMPLETE / FROZEN**  
+  - **Phase 5.1 — Learning Engine, Mastery & Confidence Foundation:** **COMPLETE / FROZEN** (Merge `6bb663286746851993d9c66c551e85fe3b9b41a4`, Post-merge CI `41558681324`)  
+  - **Phase 5.2 — Skill Graph + Recommendation Foundation:** **COMPLETE / FROZEN** (Merge `6dd00177b0d760bd77a34ec702ae34089adc4253`, Post-merge CI `41630504285`)  
+- **Phase 6:** **NOT STARTED**  
+**Frozen code baseline:** `6dd00177b0d760bd77a34ec702ae34089adc4253`  
+**Post-merge CI:** `41630504285` — **SUCCESS**  
+**Code:** Domain entities, pure Dart Growth Engine v0.1, integer minor unit representation, immutable append-only economic ledgers (`xp_ledger`, `rp_ledger`), cached balance projections (`child_balances`), single-snapshot read-only reconciliation (`reconcile_child_balance`), fail-closed immutable grade snapshots, recoverable Growth delivery (`catch_up_unprocessed_growth`), cross-language canonical parity fixtures, reward catalog, store redemption RPC, celebration wheel RPC with server-authoritative pseudorandom tier selection, parent wheel controls, durable SQLite command journaling, Flutter presentation, learning catalog version registry, deterministic EWMA mastery engine, rolling 60-day confidence engine, sticky attainment, Skill Graph traversal, Freshness engine, Recovery engine, Next Challenge candidate engine, and coverage presentation  
 **Mobile target:** Flutter → Android + iOS  
 **Backend direction:** Supabase + Postgres + Storage  
-**Next gate:** Phase 5 design and architectural alignment.
+**Next gate:** Phase 6 readiness review and architectural alignment.
 
 ## Working rule
 

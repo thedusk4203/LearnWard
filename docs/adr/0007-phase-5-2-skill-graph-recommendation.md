@@ -1,14 +1,20 @@
 # ADR 0007 — Phase 5.2 Skill Graph, Freshness, Recovery & Next Challenge Decisions
 
-- **Status:** PROPOSED
-- **Date:** 2026-11-03 (Proposed)
+- **Status:** ACCEPTED
+- **Date:** 2026-11-03 (Proposed), 2026-11-03 (Accepted)
 - **Target:** Phase 5.2 — Skill Graph + Recommendation Foundation (completing Phase 5 v0.1)
 - **Reviewed Baseline:** `main` @ `16568a99da157f296fdf30c3b5e28d902bee5fbc`
 - **Upstream Contract:** [ADR 0006 — Phase 5 Learning Engine, Mastery & Recommendation Decisions](0006-phase-5-learning-engine-mastery.md) (`ACCEPTED`), [Phase 5.1 Freeze Receipt](../freezes/phase-5-1-learning-mastery-foundation-freeze.md) (`FROZEN`)
-- **Readiness Gate:** PR #9 Comment `6594086334` (`PASS FOR DESIGN`), PR #10 Audits `6594895418`, `6595582324` (`REQUEST CHANGES`)
+- **Design PR:** [#10](https://github.com/thedusk4203/LearnWard/pull/10) (Merged @ `80784091d58ce8c29fa31cd166291a5cd1e8268b`)
+- **Implementation PR:** [#11](https://github.com/thedusk4203/LearnWard/pull/11)
+- **Approved Implementation HEAD:** `f76f59bf5dc0a4ccd57396d247752ab08a03eb45`
+- **Implementation Merge SHA:** `6dd00177b0d760bd77a34ec702ae34089adc4253`
+- **Post-Merge CI:** Run ID [`41630504285`](https://github.com/thedusk4203/LearnWard/actions/runs/41630504285) — **SUCCESS (4/4 green)**
+- **Independent Implementation Audit:** Comment `6602872658` (PASS / MERGE READY)
+- **Phase 5.2 Freeze Receipt:** [docs/freezes/phase-5-2-skill-graph-recommendation-foundation-freeze.md](../freezes/phase-5-2-skill-graph-recommendation-foundation-freeze.md)
 - **Detailed Design:** [docs/15-phase-5-2-skill-graph-recommendation-design-v0.1.md](../15-phase-5-2-skill-graph-recommendation-design-v0.1.md)
 
-This ADR remains **`PROPOSED`** during the Phase 5.2 design review and implementation cycle. It may be marked `ACCEPTED` only after Phase 5.2 implementation passes independent audit, merges to `main`, and completes post-merge CI verification.
+This ADR is **`ACCEPTED`**. Phase 5.2 implementation passed independent audit (`6602872658`), PR #11 merged to `main` at `6dd00177b0d760bd77a34ec702ae34089adc4253`, and post-merge CI run `41630504285` completed with all four jobs green.
 
 ---
 
@@ -138,7 +144,7 @@ Every active-catalog node qualifies for **at most one** Next Challenge priority 
 
 1. **`recovery` (`recovery_recent_errors`):** seen `topic`/`skill` with `recovery_signal = 'review_suggested'`.
 2. **`refresh` (`refresh_stale_secure_skill`):** seen `topic`/`skill` with `recovery_signal = 'none'`, `freshness = 'needs_refresh'`, and `mastery_score >= 70.00`.
-3. **`developing` (`developing_keep_practicing`):** seen `topic`/`skill` with `recovery_signal = 'none'`, `freshness != 'needs_refresh'` (`recent` or `aging`), `50.00 <= mastery_score < 85.00`, and `mastery_band != 'mastered'`.
+3. **`developing` (`developing_keep_practicing`):** seen `topic`/`skill` with `recovery_signal = 'none'`, `freshness IN ('recent', 'aging')` (strictly positive qualification; `unknown` is excluded), `50.00 <= mastery_score < 85.00`, and `mastery_band != 'mastered'`.
 4. **`unlock` (`unlock_prerequisites_mastered`):** unseen `skill` with `prerequisite_count >= 1`, all explicit prerequisites attained at `as_of`, and `is_grade_compatible = true`.
 5. **`explore` (`explore_available_skill`):** unseen `skill` with `prerequisite_count = 0` and `is_grade_compatible = true`.
 
