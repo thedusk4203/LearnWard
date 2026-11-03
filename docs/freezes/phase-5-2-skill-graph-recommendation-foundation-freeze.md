@@ -202,9 +202,12 @@ Phase 6 — Next Phase:                                    NOT STARTED
 
 - **Checkpoint:** Post-freeze documentation correction
 - **Independent Audit Reference:** [PR #11 Independent Audit Comment 6603778065](https://github.com/thedusk4203/LearnWard/pull/11#issuecomment-6603778065)
+- **Final Bookkeeping Audit:** [PR #11 Independent Audit Comment 6604625932](https://github.com/thedusk4203/LearnWard/pull/11#issuecomment-6604625932)
 - **Pre-Correction Main Baseline:** `49f91720404d932d0f5020124124bb11e7a97b51`
+- **Correction Commit SHA:** `bd03410d84c190ae3486e0ee17d71cd7665c2a82`
+- **Correction CI:** Run ID [`41639406103`](https://github.com/thedusk4203/LearnWard/actions/runs/41639406103) — **SUCCESS (4/4 green)**
 - **Summary:** Phase 5.2 implementation freeze remains valid and frozen. This documentation-only correction checkpoint resolved:
   1. Corrected database & RLS pgTAP subtotal test attribution across all 8 authoritative test files (438 / 438 total unchanged);
   2. Removed nonexistent test file references (`05_growth_engine_ledger_test.sql`, `06_reward_economy_wheel_test.sql`);
-  3. Replaced local-machine absolute links (`file:///c:/...`) with repository-relative Markdown links.
+  3. Replaced local-machine absolute links with repository-relative Markdown links.
 - **Invariance:** No frozen runtime or migration contract changed. The correction only fixes receipt metadata/test subtotal attribution and repository links.
