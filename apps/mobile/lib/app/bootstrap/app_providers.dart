@@ -229,6 +229,19 @@ final wheelRepositoryProvider = Provider<WheelRepository>((ref) {
   throw MissingSupabaseConfigurationException(config.environment);
 });
 
+/// Repository for learning nodes, mappings, and mastery states.
+final learningRepositoryProvider = Provider<LearningRepository>((ref) {
+  final config = ref.watch(appConfigProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (client != null) {
+    return SupabaseLearningRepository(client);
+  }
+  if (config.canUseLocalDemoRepositories) {
+    return InMemoryLearningRepository();
+  }
+  throw MissingSupabaseConfigurationException(config.environment);
+});
+
 /// Notifier managing the currently selected family.
 class ActiveFamilyNotifier extends Notifier<Family?> {
   @override

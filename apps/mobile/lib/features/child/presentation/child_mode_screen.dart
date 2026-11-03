@@ -335,20 +335,37 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                     const SizedBox(height: AppSpacing.md),
                   ],
 
-                  // 3. Add Result Button
-                  FilledButton.icon(
-                    key: const Key('child_add_assessment_button'),
-                    icon: const Icon(Icons.add_task),
-                    label: const Text('Add Academic Result'),
-                    onPressed: () async {
-                      final result = await context.push<bool>(
-                        AppRoutes.childAddAssessment,
-                      );
-                      if (result == true) {
-                        unawaited(_loadLocalDrafts());
-                        unawaited(_loadEconomyData());
-                      }
-                    },
+                  // 3. Actions: Add Result & View Mastery
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          key: const Key('child_add_assessment_button'),
+                          icon: const Icon(Icons.add_task),
+                          label: const Text('Add Result'),
+                          onPressed: () async {
+                            final result = await context.push<bool>(
+                              AppRoutes.childAddAssessment,
+                            );
+                            if (result == true) {
+                              unawaited(_loadLocalDrafts());
+                              unawaited(_loadEconomyData());
+                            }
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          key: const Key('child_mastery_button'),
+                          icon: const Icon(Icons.school_outlined),
+                          label: const Text('My Mastery'),
+                          onPressed: () {
+                            context.push(AppRoutes.childMastery);
+                          },
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: AppSpacing.md),
 

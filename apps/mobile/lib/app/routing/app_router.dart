@@ -14,6 +14,7 @@ import '../../features/child/presentation/create_child_screen.dart';
 import '../../features/family/presentation/create_family_screen.dart';
 import '../../features/family/presentation/family_home_screen.dart';
 import '../../features/foundation/presentation/foundation_screen.dart';
+import '../../features/learning/presentation/child_mastery_screen.dart';
 import '../../features/rewards/presentation/child_redemption_history_screen.dart';
 import '../../features/rewards/presentation/child_store_screen.dart';
 import '../../features/rewards/presentation/child_wheel_screen.dart';
@@ -161,6 +162,20 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: AppRoutes.childRedemptions,
         name: AppRoutes.childRedemptionsName,
         builder: (context, state) => const ChildRedemptionHistoryScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.childMastery,
+        name: AppRoutes.childMasteryName,
+        builder: (context, state) {
+          final activeChild = ref.read(activeChildModeProvider);
+          if (activeChild == null) {
+            return const Scaffold(body: Center(child: Text('No active child')));
+          }
+          return ChildMasteryScreen(
+            childId: activeChild.id,
+            childDisplayName: activeChild.displayName,
+          );
+        },
       ),
       GoRoute(
         path: AppRoutes.childWheel,

@@ -130,6 +130,15 @@ jobs:
       - name: Run Celebration Wheel timezone boundary test
         run: node scripts/test_reward_wheel_timezone.mjs
 
+      - name: Run Learning Mastery concurrency regression test
+        run: node scripts/test_learning_concurrency.mjs
+
+      - name: Run Learning Mastery vertical slice integration test
+        run: node scripts/test_learning_vertical_slice.mjs
+
+      - name: Run Learning Mastery Dart/Postgres parity test
+        run: node scripts/test_learning_parity.mjs
+
   android:
     name: Android debug build
     needs: [quality, database]

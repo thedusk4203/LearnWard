@@ -1,0 +1,446 @@
+// scripts/test_learning_concurrency.mjs
+/**
+ * LearnWard - Phase 5.1 Learning Mastery Concurrency Regression Test
+ *
+ * SCENARIOS:
+ * 1. First-Write Advisory Lock Serialization:
+ *    When two concurrent process_learning_event transactions process distinct VLEs
+ *    affecting the same previously unseen child and learning node, transaction-level
+ *    advisory locks serialize the first write safely.
+ *    - Both transactions succeed without unique constraint collisions
+ *    - child_mastery_states has exactly 1 row for this child + node
+ *    - mastery_state_revisions has exactly 2 revisions
+ *    - Result converges to canonical chronological ordering
+ *
+ * 2. Concurrent Same-Command Replay Race:
+ *    When two concurrent requests submit the same command_id for the same VLE:
+ *    - One acquires lock and processes
+ *    - The second serializes on lock, rechecks receipts, and returns committed snapshot
+ *    - Exactly ONE learning_processing_events record exists
+ *    - No duplicate evidence or revisions created
+ *
+ * 3. New Command on Already Processed VLE:
+ *    Calling process_learning_event with a new command_id on an already processed VLE:
+ *    - Binds new command receipt to existing VLE
+ *    - Replays existing committed result snapshot
+ *    - Zero additional evidence or revisions generated
+ *
+ * 4. Concurrent Catch-Up and Manual Process Convergence:
+ *    Catch-up and manual process running simultaneously converge safely on the same VLE.
+ */
+
+import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
+
+function runPsql(sql) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'docker',
+      ['exec', '-i', 'supabase_db_learnward', 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-t', '-A'],
+      { stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    child.on('close', (code) => {
+      resolve({ code, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+
+    child.on('error', reject);
+
+    child.stdin.write(sql);
+    child.stdin.end();
+  });
+}
+
+function parseProcessingOutput(stdout) {
+  const lines = stdout.split('\n');
+  const line = lines.find((l) => l.trim().startsWith('{') && l.includes('"processing_id"'));
+  if (!line) {
+    throw new Error(`Could not find processing JSON in stdout: ${stdout}`);
+  }
+  return JSON.parse(line.trim());
+}
+
+async function main() {
+  console.log('=== LearnWard Concurrency Test: Learning Mastery Engine Serialization ===\n');
+
+  const familyId = crypto.randomUUID();
+  const ownerId = crypto.randomUUID();
+  const childId = crypto.randomUUID();
+
+  console.log('Setting up test fixtures for Family and Child...');
+  const setupSql = `
+    insert into auth.users (id, email) values ('${ownerId}', 'learning_concurrency_${ownerId}@test.com')
+    on conflict (id) do nothing;
+
+    insert into public.families (id, name, timezone, locale, created_by_user_id)
+    values ('${familyId}', 'Concurrency Family', 'UTC', 'en_US', '${ownerId}');
+
+    insert into public.family_memberships (family_id, auth_user_id, role, status)
+    values ('${familyId}', '${ownerId}', 'owner', 'active');
+
+    insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year)
+    values ('${childId}', '${familyId}', 'Concurrency Child', 4, 2016);
+  `;
+
+  const setupRes = await runPsql(setupSql);
+  if (setupRes.code !== 0) {
+    console.error('Setup failed:', setupRes.stderr);
+    process.exit(1);
+  }
+
+  // -------------------------------------------------------------------------
+  // Scenario 1: First-Write Lock Serialization on Unseen Child + Node
+  // -------------------------------------------------------------------------
+  console.log('Scenario 1: Testing first-write concurrency on unseen child + node...');
+
+  const assessId1 = crypto.randomUUID();
+  const assessId2 = crypto.randomUUID();
+  const vleId1 = crypto.randomUUID();
+  const vleId2 = crypto.randomUUID();
+  const cmd1 = crypto.randomUUID();
+  const cmd2 = crypto.randomUUID();
+  const revId1 = crypto.randomUUID();
+  const revId2 = crypto.randomUUID();
+  const revCmd1 = crypto.randomUUID();
+  const revCmd2 = crypto.randomUUID();
+
+  // Create two assessments and verify them (one at t1, one at t2)
+  const createAssessSql = `
+    insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title, occurred_at, raw_score, max_score)
+    values
+      ('${assessId1}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', 'Quiz 1', now() - interval '2 days', 80, 100),
+      ('${assessId2}', '${familyId}', '${childId}', '${ownerId}', 'pending_review', 'math', 'Mathematics', 'quiz', 'Quiz 2', now() - interval '1 day', 100, 100);
+
+    -- Map both assessments to Single Digit Addition
+    insert into public.assessment_learning_mappings (family_id, child_id, assessment_id, learning_node_id, score_source, component_key, component_raw_score, component_max_score, confirmed_by_user_id)
+    values
+      ('${familyId}', '${childId}', '${assessId1}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 80, 100, '${ownerId}'),
+      ('${familyId}', '${childId}', '${assessId2}', 'b0000003-0000-0000-0000-000000000001', 'component_score', 'c1', 100, 100, '${ownerId}');
+
+    -- Insert command receipts for review events
+    insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+    values
+      ('${revCmd1}', 'verify', '${ownerId}', '${assessId1}', '${familyId}'),
+      ('${revCmd2}', 'verify', '${ownerId}', '${assessId2}', '${familyId}');
+
+    -- Insert assessment review events
+    insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
+    values
+      ('${revId1}', '${revCmd1}', '${familyId}', '${assessId1}', 'verified', 'pending_review', 'verified', '${ownerId}'),
+      ('${revId2}', '${revCmd2}', '${familyId}', '${assessId2}', 'verified', 'pending_review', 'verified', '${ownerId}');
+
+    -- Insert verified learning events
+    insert into public.verified_learning_events (id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot)
+    values
+      ('${vleId1}', '${assessId1}', '${familyId}', '${childId}', 'math', 'Mathematics', 'Quiz 1', 'quiz', 'normal', 80, 100, 8.00, now() - interval '2 days', now() - interval '2 days', '${ownerId}', '${revId1}', 4),
+      ('${vleId2}', '${assessId2}', '${familyId}', '${childId}', 'math', 'Mathematics', 'Quiz 2', 'quiz', 'normal', 100, 100, 10.00, now() - interval '1 day', now() - interval '1 day', '${ownerId}', '${revId2}', 4);
+
+    update public.assessments set status = 'verified' where id in ('${assessId1}', '${assessId2}');
+  `;
+
+  const assessRes = await runPsql(createAssessSql);
+  if (assessRes.code !== 0) {
+    console.error('Failed to create assessments:', assessRes.stderr);
+    process.exit(1);
+  }
+
+  // Fire process_learning_event for vleId1 and vleId2 concurrently
+  const procSql1 = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${cmd1}'::uuid, '${vleId1}'::uuid);
+  `;
+
+  const procSql2 = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${cmd2}'::uuid, '${vleId2}'::uuid);
+  `;
+
+  const [res1, res2] = await Promise.all([runPsql(procSql1), runPsql(procSql2)]);
+
+  if (res1.code !== 0 || res2.code !== 0) {
+    console.error('Concurrent processing failed:', res1.stderr, res2.stderr);
+    process.exit(1);
+  }
+
+  // Verify child_mastery_states and mastery_state_revisions
+  const verifyStateSql = `
+    select
+      (select count(*) from public.child_mastery_states where child_id = '${childId}' and learning_node_id = 'b0000003-0000-0000-0000-000000000001') || '|' ||
+      (select count(*) from public.mastery_state_revisions where child_id = '${childId}' and learning_node_id = 'b0000003-0000-0000-0000-000000000001') || '|' ||
+      (select mastery_score from public.child_mastery_states where child_id = '${childId}' and learning_node_id = 'b0000003-0000-0000-0000-000000000001');
+  `;
+
+  const verifyRes = await runPsql(verifyStateSql);
+  const [nodeCount, revCount, finalScore] = verifyRes.stdout.split('|');
+
+  if (nodeCount !== '1' || revCount !== '2' || parseFloat(finalScore) !== 87.00) {
+    console.error(`Unexpected state after concurrent first writes: nodes=${nodeCount}, revs=${revCount}, score=${finalScore}`);
+    process.exit(1);
+  }
+  console.log('  -> PASS: Serialized first-write converged to canonical score (87.00) across 2 revisions.');
+
+  const initOutput = parseProcessingOutput(res1.stdout);
+
+  // -------------------------------------------------------------------------
+  // Scenario 2: Concurrent Same-Command Replay Race
+  // -------------------------------------------------------------------------
+  console.log('Scenario 2: Testing concurrent same-command replay race...');
+
+  const replayCmd = crypto.randomUUID();
+  const replaySql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${replayCmd}'::uuid, '${vleId1}'::uuid);
+  `;
+
+  const [repRes1, repRes2] = await Promise.all([runPsql(replaySql), runPsql(replaySql)]);
+  if (repRes1.code !== 0 || repRes2.code !== 0) {
+    console.error('Concurrent replay failed:', repRes1.stderr, repRes2.stderr);
+    process.exit(1);
+  }
+
+  const checkReplaySql = `
+    select count(*) from public.command_receipts where command_id = '${replayCmd}';
+  `;
+  const checkReplayRes = await runPsql(checkReplaySql);
+  if (checkReplayRes.stdout !== '1') {
+    console.error(`Expected exactly 1 receipt for replay command, got ${checkReplayRes.stdout}`);
+    process.exit(1);
+  }
+  console.log('  -> PASS: Concurrent replay serialized cleanly with exactly 1 receipt recorded.');
+
+  // Same-command replay using the original command cmd1
+  const sameCmdReplaySql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${cmd1}'::uuid, '${vleId1}'::uuid);
+  `;
+  const sameCmdRes = await runPsql(sameCmdReplaySql);
+  if (sameCmdRes.code !== 0) {
+    console.error('Same-command replay failed:', sameCmdRes.stderr);
+    process.exit(1);
+  }
+  const sameCmdOutput = parseProcessingOutput(sameCmdRes.stdout);
+
+  // -------------------------------------------------------------------------
+  // Scenario 3: New Command on Already-Processed VLE
+  // -------------------------------------------------------------------------
+  console.log('Scenario 3: Testing new command on already-processed VLE...');
+
+  const newCmd = crypto.randomUUID();
+  const newCmdSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${newCmd}'::uuid, '${vleId1}'::uuid);
+  `;
+
+  const newCmdRes = await runPsql(newCmdSql);
+  if (newCmdRes.code !== 0) {
+    console.error('New command on processed VLE failed:', newCmdRes.stderr);
+    process.exit(1);
+  }
+
+  const checkNewCmdSql = `
+    select
+      (select count(*) from public.command_receipts where command_id = '${newCmd}') || '|' ||
+      (select count(*) from public.mastery_state_revisions where child_id = '${childId}' and learning_node_id = 'b0000003-0000-0000-0000-000000000001');
+  `;
+  const checkNewCmdRes = await runPsql(checkNewCmdSql);
+  const [newCmdReceipts, totalRevs] = checkNewCmdRes.stdout.split('|');
+
+  if (newCmdReceipts !== '1' || totalRevs !== '2') {
+    console.error(`New command handling error: receipts=${newCmdReceipts}, revs=${totalRevs}`);
+    process.exit(1);
+  }
+  console.log('  -> PASS: New command bound receipt without duplicate revisions.');
+
+  const newCmdOutput = parseProcessingOutput(newCmdRes.stdout);
+
+  // Strict 9-field equality comparison between initial execution, same-command replay, and new-command replay
+  const fields9 = [
+    'processing_id',
+    'verified_learning_event_id',
+    'assessment_id',
+    'family_id',
+    'child_id',
+    'evidence_count',
+    'affected_node_ids',
+    'status',
+    'processed_at',
+  ];
+
+  for (const field of fields9) {
+    const vInit = typeof initOutput[field] === 'object' ? JSON.stringify(initOutput[field]) : String(initOutput[field]);
+    const vSame = typeof sameCmdOutput[field] === 'object' ? JSON.stringify(sameCmdOutput[field]) : String(sameCmdOutput[field]);
+    const vNew = typeof newCmdOutput[field] === 'object' ? JSON.stringify(newCmdOutput[field]) : String(newCmdOutput[field]);
+
+    if (vInit !== vSame || vSame !== vNew) {
+      console.error(`9-field equality mismatch on "${field}": init=${vInit}, same=${vSame}, new=${vNew}`);
+      process.exit(1);
+    }
+  }
+  console.log('  -> PASS: Strict 9-field equality verified between initial execution, same-command replay, and new-command replay.');
+
+  // -------------------------------------------------------------------------
+  // Scenario 4: Concurrent Catch-Up and Manual Process Convergence
+  // -------------------------------------------------------------------------
+  console.log('Scenario 4: Testing concurrent catch-up and manual process convergence...');
+
+  const assessId3 = crypto.randomUUID();
+  const vleId3 = crypto.randomUUID();
+  const manualCmd = crypto.randomUUID();
+  const revId3 = crypto.randomUUID();
+  const revCmd3 = crypto.randomUUID();
+
+  const addVle3Sql = `
+    insert into public.assessments (id, family_id, child_id, created_by_user_id, status, subject_key, subject, assessment_type, title, occurred_at, raw_score, max_score)
+    values ('${assessId3}', '${familyId}', '${childId}', '${ownerId}', 'verified', 'math', 'Mathematics', 'quiz', 'Quiz 3', now(), 95, 100);
+
+    insert into public.command_receipts (command_id, operation, actor_user_id, resource_id, family_id)
+    values ('${revCmd3}', 'verify', '${ownerId}', '${assessId3}', '${familyId}');
+
+    insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id)
+    values ('${revId3}', '${revCmd3}', '${familyId}', '${assessId3}', 'verified', 'pending_review', 'verified', '${ownerId}');
+
+    insert into public.verified_learning_events (id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_at, verified_by_user_id, review_event_id, grade_level_snapshot)
+    values ('${vleId3}', '${assessId3}', '${familyId}', '${childId}', 'math', 'Mathematics', 'Quiz 3', 'quiz', 'normal', 95, 100, 9.50, now(), now(), '${ownerId}', '${revId3}', 4);
+  `;
+  const addVle3Res = await runPsql(addVle3Sql);
+  if (addVle3Res.code !== 0) {
+    console.error('Failed to create VLE 3:', addVle3Res.stderr);
+    process.exit(1);
+  }
+
+  const catchUpSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.catch_up_unprocessed_learning('${familyId}'::uuid);
+  `;
+
+  const manualSql = `
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${manualCmd}'::uuid, '${vleId3}'::uuid);
+  `;
+
+  const [cuRes, manRes] = await Promise.all([runPsql(catchUpSql), runPsql(manualSql)]);
+  if (cuRes.code !== 0 || manRes.code !== 0) {
+    console.error('Concurrent catch-up / manual process failed:', cuRes.stderr, manRes.stderr);
+    process.exit(1);
+  }
+
+  const checkVle3Sql = `
+    select count(*) from public.learning_processing_events where verified_learning_event_id = '${vleId3}';
+  `;
+  const checkVle3Res = await runPsql(checkVle3Sql);
+  if (checkVle3Res.stdout !== '1') {
+    console.error(`Expected exactly 1 processing event for VLE 3, got ${checkVle3Res.stdout}`);
+    process.exit(1);
+  }
+  console.log('  -> PASS: Concurrent catch-up and manual process converged to exactly 1 event.');
+
+  // -------------------------------------------------------------------------
+  // Scenario 5: Real Two-Session Post-Lock Race (42501)
+  // -------------------------------------------------------------------------
+  console.log('Scenario 5: Testing real two-session post-lock race for process_learning_event...');
+
+  const raceCmd = crypto.randomUUID();
+  const raceVleId = vleId1;
+
+  // Session B starts an interactive psql process and acquires transaction-level advisory lock on the VLE
+  const sessionB = spawn(
+    'docker',
+    ['exec', '-i', 'supabase_db_learnward', 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-t', '-A'],
+    { stdio: ['pipe', 'pipe', 'pipe'] }
+  );
+
+  let bStdout = '';
+  let bStderr = '';
+  sessionB.stdout.on('data', (d) => { bStdout += d.toString(); });
+  sessionB.stderr.on('data', (d) => { bStderr += d.toString(); });
+
+  sessionB.stdin.write(`
+    BEGIN;
+    SELECT pg_advisory_xact_lock(hashtext('vle_${raceVleId}'));
+    SELECT 'LOCK_ACQUIRED';
+  `);
+
+  // Wait until Session B has acquired the advisory lock
+  for (let i = 0; i < 50; i++) {
+    if (bStdout.includes('LOCK_ACQUIRED')) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  if (!bStdout.includes('LOCK_ACQUIRED')) {
+    console.error('Session B failed to acquire advisory lock:', bStderr);
+    process.exit(1);
+  }
+
+  // Session A starts process_learning_event in the background:
+  // It passes the initial receipt check (receipt does not exist yet),
+  // then blocks trying to acquire pg_advisory_xact_lock on the VLE.
+  const sessionAPromise = runPsql(`
+    \\set VERBOSITY verbose
+    set role authenticated;
+    select set_config('request.jwt.claims', '{"sub": "${ownerId}", "role": "authenticated"}', false);
+    select public.process_learning_event('${raceCmd}'::uuid, '${raceVleId}'::uuid);
+  `);
+
+  // Wait until Session A is definitively blocked waiting for the advisory lock in pg_locks
+  let aBlocked = false;
+  for (let i = 0; i < 60; i++) {
+    const checkLock = await runPsql(`
+      select count(*) from pg_locks
+      where locktype = 'advisory'
+        and not granted;
+    `);
+    if (checkLock.stdout.trim() === '1') {
+      aBlocked = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  if (!aBlocked) {
+    console.error('Session A did not block on the advisory lock as expected');
+    process.exit(1);
+  }
+
+  // While Session A is blocked between initial receipt check and post-lock recheck,
+  // insert a mismatched command receipt for raceCmd
+  const insertMismatch = await runPsql(`
+    insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id)
+    values ('${raceCmd}', '${familyId}', '${ownerId}', 'verify', '${assessId1}');
+  `);
+  if (insertMismatch.code !== 0) {
+    console.error('Failed to bind mismatched receipt during race:', insertMismatch.stderr);
+    process.exit(1);
+  }
+
+  // Now release Session B's lock so Session A can unblock and run its post-lock recheck
+  sessionB.stdin.write('COMMIT;\n');
+  sessionB.stdin.end();
+
+  const aRes = await sessionAPromise;
+  if (aRes.code === 0 || (!aRes.stderr.includes('42501') && !aRes.stderr.includes('Invalid command replay'))) {
+    console.error('Expected Session A to fail post-lock recheck with 42501, got:', aRes);
+    process.exit(1);
+  }
+
+  console.log('  -> PASS: Session A blocked on advisory lock, Session B bound mismatched receipt, Session A failed post-lock recheck with 42501.');
+
+  console.log('\nAll Learning Concurrency Regression Tests PASSED!');
+}
+
+main().catch((err) => {
+  console.error('Unhandled failure:', err);
+  process.exit(1);
+});
