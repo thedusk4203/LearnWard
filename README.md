@@ -80,7 +80,9 @@ Level    │    Wheel   Store
 | [Phase 5.2 Detailed Design v0.1](docs/15-phase-5-2-skill-graph-recommendation-design-v0.1.md) | Proposed Phase 5.2 detailed design: Skill Graph traversal, Freshness, Recovery replay, Next Challenge engine, RPC schemas, and parity matrix |
 | [Phase 5.2 Skill Graph & Recommendation ADR](docs/adr/0007-phase-5-2-skill-graph-recommendation.md) | Accepted architectural decisions for Phase 5.2 read-time projections, disjoint priority partition, and deterministic comparator |
 | [Phase 5.2 Freeze Receipt](docs/freezes/phase-5-2-skill-graph-recommendation-foundation-freeze.md) | Frozen Phase 5.2 baseline, CI receipt, Skill Graph traversal, Freshness, Recovery, Next Challenge candidate engine, and Dart/Postgres parity |
-| [Phase 6 Dependency & Readiness Review](docs/16-phase-6-pilot-hardening-dependency-readiness-review.md) | Phase 6 pilot hardening dependency audit against sealed Phase 5 baseline (RECOMMENDED VERDICT: PASS FOR DESIGN PENDING INDEPENDENT READINESS AUDIT + REQUIRED CI; implementation not started) |
+| [Phase 6 Dependency & Readiness Review](docs/16-phase-6-pilot-hardening-dependency-readiness-review.md) | Phase 6 pilot hardening dependency audit against sealed Phase 5 baseline (PASS / COMPLETE / FROZEN) |
+| [Phase 6 Pilot Hardening Design](docs/17-phase-6-pilot-hardening-design-v0.1.md) | Proposed Phase 6 detailed design: offline bounded outbox, actor recovery, notifications, privacy telemetry, retention, accessibility, and release distribution |
+| [Phase 6 Pilot Hardening ADR](docs/adr/0008-phase-6-pilot-hardening.md) | Proposed architectural decisions for Phase 6 pilot hardening (PROPOSED) |
 | [Toolchain Baseline](docs/toolchain-baseline.md) | Detected Flutter/Dart/Supabase versions and platform floors |
 
 ## Engineering
@@ -282,13 +284,13 @@ Run `node scripts/test_last_owner_concurrency.mjs` to execute the multi-session 
 - **Phase 5 — Mastery Engine, Skill Trees & Recommendation Foundation:** **COMPLETE / FROZEN**  
   - **Phase 5.1 — Learning Engine, Mastery & Confidence Foundation:** **COMPLETE / FROZEN** (Merge `6bb663286746851993d9c66c551e85fe3b9b41a4`, Post-merge CI `41558681324`)  
   - **Phase 5.2 — Skill Graph + Recommendation Foundation:** **COMPLETE / FROZEN** (Merge `6dd00177b0d760bd77a34ec702ae34089adc4253`, Post-merge CI `41630504285`)  
-- **Phase 6:** **NOT STARTED**  
+- **Phase 6:** **NOT STARTED** (Detailed Design PROPOSED)  
 **Frozen code baseline:** `6dd00177b0d760bd77a34ec702ae34089adc4253`  
 **Post-merge CI:** `41630504285` — **SUCCESS**  
 **Code:** Domain entities, pure Dart Growth Engine v0.1, integer minor unit representation, immutable append-only economic ledgers (`xp_ledger`, `rp_ledger`), cached balance projections (`child_balances`), single-snapshot read-only reconciliation (`reconcile_child_balance`), fail-closed immutable grade snapshots, recoverable Growth delivery (`catch_up_unprocessed_growth`), cross-language canonical parity fixtures, reward catalog, store redemption RPC, celebration wheel RPC with server-authoritative pseudorandom tier selection, parent wheel controls, durable SQLite command journaling, Flutter presentation, learning catalog version registry, deterministic EWMA mastery engine, rolling 60-day confidence engine, sticky attainment, Skill Graph traversal, Freshness engine, Recovery engine, Next Challenge candidate engine, and coverage presentation  
 **Mobile target:** Flutter → Android + iOS  
 **Backend direction:** Supabase + Postgres + Storage  
-**Next gate:** Phase 6 readiness review and architectural alignment.
+**Next gate:** Phase 6 detailed design review and independent audit.
 
 ## Working rule
 
