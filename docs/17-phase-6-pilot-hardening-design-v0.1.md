@@ -424,7 +424,22 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
    ```
    A still-active device grant **cannot** expose archived learning records.
 2. **Indirect relationships:** `assessment_evidence` and `assessment_review_events` join same-family `assessments` and require active linked child; review events remain adult-only. Targeted `rewards` require an active `target_child_id`, while family-wide rewards retain their tenant conditions. `child_profiles_select` requires active profile for **both** adult and child device.
-3. **Grant-status exception:** Preserve the `child_device_grants` owner's *own-row* read (`auth_user_id=auth.uid()`) even when revoked or archived so positive `status='revoked'` evidence remains available. Restrict parent listing of other grant rows to active child profiles. Example:
+3. **Child profile direct UPDATE policy replacement:** The frozen Phase 1 migration granted broad UPDATE on `public.child_profiles` to authenticated adults. In a new Phase 6 migration, replace `child_profiles_update` to require active child status in both `USING` and `WITH CHECK`:
+   ```sql
+   drop policy if exists child_profiles_update on public.child_profiles;
+   create policy child_profiles_update on public.child_profiles
+     for update to authenticated
+     using (
+       private.is_active_family_adult(family_id)
+       and status = 'active'
+     )
+     with check (
+       private.is_active_family_adult(family_id)
+       and status = 'active'
+     );
+   ```
+   This prevents ordinary Data API clients from updating already-archived profiles. Combined with the trigger guard `trg_guard_child_profile_lifecycle` (§4.3.2.2.1), direct Data API callers are prohibited from modifying `status` or `archived_at` or reactivating archived profiles (`archived -> active`), while parents retain the ability to update standard editable fields (`display_name`, `avatar_key`, `school_grade`) on active profiles.
+4. **Grant-status exception:** Preserve the `child_device_grants` owner's *own-row* read (`auth_user_id=auth.uid()`) even when revoked or archived so positive `status='revoked'` evidence remains available. Restrict parent listing of other grant rows to active child profiles. Example:
    ```sql
    drop policy if exists child_device_grants_select on public.child_device_grants;
    create policy child_device_grants_select on public.child_device_grants
@@ -435,10 +450,10 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
      );
    ```
    This narrow status exception **does not grant archived assessment, reward or evidence reads**.
-4. **`command_receipts`:** There is no direct `child_id`. Keep adult-only SELECT; resolve `resource_id` by operation: `create_draft/submit/verify/reject` → `assessments.id`, `redeem_reward/fulfill_reward/cancel_reward` → `reward_redemptions.id`, `spin_wheel` → `wheel_spins.id`. Require active family adult **and** active child through the operation-specific resource + same family join; unknown operations or missing resources fail closed. Child devices still use server-side idempotent RPCs rather than SELECT on receipts.
-5. **Processing command receipts:** Frozen Phase 3 and Phase 5 RPCs also use operations `process_growth` and `process_learning` with `resource_id = verified_learning_events.id`. Their adult-only receipt visibility must be resolved through the VLE's active child/family; unknown operations fail closed. Include these exact operation codes in regression tests.
-6. **Private pairing and Storage:** Verify `private.child_pairing_requests` has no client-readable route or grants. The frozen `storage.objects` evidence SELECT policy calls `private.validate_storage_evidence_access(name,false)`, which currently checks actor and assessment **but not child archive status**. Harden that helper in a new Phase 6 migration by requiring `private.is_child_active_in_family(v_child_id,v_family_id)` for SELECT/INSERT/DELETE, while preserving tenant, assessment, draft-only mutation and no-UPDATE invariants. Audit other permissive Storage policies to prevent OR bypass; only authorized backend operations may purge archived evidence.
-7. **Required pgTAP:** Adults/paired children/siblings/foreign family; active/archived child with *both active and revoked grants*; every direct/indirect child-linked table, each command receipt operation, positive own-grant status after revocation, private pairing and Storage SELECT/INSERT/DELETE. Do not claim complete archived-child isolation without these checks.
+5. **`command_receipts`:** There is no direct `child_id`. Keep adult-only SELECT; resolve `resource_id` by operation: `create_draft/submit/verify/reject` → `assessments.id`, `redeem_reward/fulfill_reward/cancel_reward` → `reward_redemptions.id`, `spin_wheel` → `wheel_spins.id`. Require active family adult **and** active child through the operation-specific resource + same family join; unknown operations or missing resources fail closed. Child devices still use server-side idempotent RPCs rather than SELECT on receipts.
+6. **Processing command receipts:** Frozen Phase 3 and Phase 5 RPCs also use operations `process_growth` and `process_learning` with `resource_id = verified_learning_events.id`. Their adult-only receipt visibility must be resolved through the VLE's active child/family; unknown operations fail closed. Include these exact operation codes in regression tests.
+7. **Private pairing and Storage:** Verify `private.child_pairing_requests` has no client-readable route or grants. The frozen `storage.objects` evidence SELECT policy calls `private.validate_storage_evidence_access(name,false)`, which currently checks actor and assessment **but not child archive status**. Harden that helper in a new Phase 6 migration by requiring `private.is_child_active_in_family(v_child_id,v_family_id)` for SELECT/INSERT/DELETE, while preserving tenant, assessment, draft-only mutation and no-UPDATE invariants. Audit other permissive Storage policies to prevent OR bypass; only authorized backend operations may purge archived evidence.
+8. **Required pgTAP:** Adults/paired children/siblings/foreign family; active/archived child with *both active and revoked grants*; every direct/indirect child-linked table, each command receipt operation, positive own-grant status after revocation, private pairing, direct child profile update rejection, and Storage SELECT/INSERT/DELETE. Do not claim complete archived-child isolation without these checks.
 
 
 #### 4.3.2.1 Family-Wide SELECT and Read-Model Boundary
@@ -476,82 +491,180 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
 | Growth / Learning pipelines | `process_verified_learning_event`, `process_learning_event`, `catch_up_unprocessed_growth`, `catch_up_unprocessed_learning` and internal processing helpers | Exclude archived child from new processing, XP/RP ledgers and mastery writes; do not silently process archived historical events |
 | Read-only child-scoped RPCs | `reconcile_child_balance`, mastery, recommendation and family-scoped reader RPCs | Require active child on normal client calls; narrowly authorize approved archival data export separately |
 
-##### 4.3.2.2.1 Authoritative Child Identification & Tenant Verification
-1. **Authoritative Context Resolution:** Before acquiring any lock or evaluating child status, every child-scoped procedure derives the authoritative `child_id` and `family_id` directly from the server-persisted row (e.g. from `assessments` or `reward_redemptions`) or validates the provided parameter against tenant ownership. Procedures never trust client-asserted child status.
-2. **Actor Authorization:** Validate caller permissions (`private.is_active_family_adult(v_family_id)` or `private.is_active_child_device(v_family_id, v_child_id)`) before inspecting receipts or acquiring row locks.
-3. **Cross-Tenant Fail-Closed Isolation:** If the caller is not authorized for the family or device grant, fail immediately with `42501` without disclosing whether the child exists or is archived.
+##### 4.3.2.2.1 Canonical Child Archival Operation & Direct UPDATE Lifecycle Protection Contract
+1. **Preventing Direct Lifecycle Modification via Data API:**
+   - The frozen Phase 1 migration permitted authenticated adults direct `UPDATE` access to `public.child_profiles` without restricting column updates. This allowed ordinary Data API clients (`PATCH /rest/v1/child_profiles?id=eq.<id>`) to potentially manipulate `status` or `archived_at` directly, bypassing transactional archival invariants and risking uncoordinated reactivation (`archived -> active`).
+   - In a new Phase 6 migration, direct Data API lifecycle manipulation is blocked via a two-layer defense:
+     - **RLS Boundary:** The replacement `child_profiles_update` policy enforces `status = 'active'` on both existing rows (`USING`) and updated rows (`WITH CHECK`). Direct updates on already-archived profiles fail closed immediately.
+     - **Trigger Invariant Guard (`trg_guard_child_profile_lifecycle`):** A `BEFORE UPDATE` trigger on `public.child_profiles` validates all update operations:
+       ```sql
+       create or replace function private.guard_child_profile_lifecycle()
+       returns trigger
+       language plpgsql
+       security definer
+       set search_path = ''
+       as $$
+       declare
+         v_in_archive_rpc boolean;
+       begin
+         -- 1. Fail closed on already-archived profiles (no in-place edit, no reactivation)
+         if old.status = 'archived' then
+           raise exception 'Archived child profile is immutable' using errcode = 'LW011';
+         end if;
 
-##### 4.3.2.2.2 Canonical Transaction-Level Concurrency Protocol & Lock Acquisition Hierarchy
-To guarantee strict serializability, eliminate time-of-check/time-of-use (TOCTOU) races, and mathematically prevent deadlocks between concurrent profile archival and child mutations (assessments, rewards, ledgers, and processing pipelines), all transactions interacting with child-scoped resources **must strictly acquire locks in the following global monotonic hierarchy**:
+         -- 2. Detect lifecycle status transition or archived_at modification
+         if new.status is distinct from old.status or new.archived_at is distinct from old.archived_at then
+           -- Verify that update originates from authorized transactional procedure
+           v_in_archive_rpc := nullif(current_setting('learnward.in_archive_child_profile', true), '')::boolean;
+           if not coalesce(v_in_archive_rpc, false) then
+             raise exception 'Direct child profile lifecycle mutation is prohibited; call public.archive_child_profile()'
+               using errcode = '42501';
+           end if;
 
-```text
-Level 1: public.child_profiles (Row Lock: FOR UPDATE for archive, FOR SHARE for mutations)
-   │
-   ▼
-Level 2: Entity Resource Row Lock (public.assessments FOR UPDATE or public.reward_redemptions FOR UPDATE)
-   │
-   ▼
-Level 3: Transaction-Level Advisory Lock (pg_advisory_xact_lock for Growth or Learning pipeline)
-```
+           -- Strict state machine: only active -> archived is allowed
+           if old.status != 'active' or new.status != 'archived' or new.archived_at is null then
+             raise exception 'Invalid child profile lifecycle transition' using errcode = 'LW012';
+           end if;
+         end if;
 
-1. **Level 1 — Child Profile Row Lock (`public.child_profiles`):**
-   - **Child Archival Transaction (`archive_child_profile`):**
-     Acquires an exclusive row lock on the target child profile:
-     ```sql
-     select id, status into v_child
+         -- 3. Preserve parent editing of mutable profile fields (display_name, school_grade, avatar_key)
+         -- Core identity fields remain immutable
+         if new.id != old.id or new.family_id != old.family_id or new.created_at != old.created_at then
+           raise exception 'Core child profile fields are immutable' using errcode = 'LW005';
+         end if;
+
+         return new;
+       end;
+       $$;
+
+       create trigger trg_guard_child_profile_lifecycle
+         before update on public.child_profiles
+         for each row
+         execute function private.guard_child_profile_lifecycle();
+       ```
+2. **Authorized Transactional Archival Procedure (`archive_child_profile`):**
+   Archival is routed strictly through the authoritative procedure:
+   ```sql
+   create or replace function public.archive_child_profile(p_child_id uuid)
+   returns public.child_profiles
+   language plpgsql
+   security definer
+   set search_path = ''
+   as $$
+   declare
+     v_user_id uuid;
+     v_family_id uuid;
+     v_child public.child_profiles;
+   begin
+     v_user_id := auth.uid();
+     if v_user_id is null then
+       raise exception 'Unauthenticated' using errcode = '42501';
+     end if;
+
+     -- Derive authoritative family_id and check adult authorization
+     select family_id into v_family_id
+     from public.child_profiles
+     where id = p_child_id;
+
+     if not found or not private.is_active_family_adult(v_family_id) then
+       raise exception 'Unauthorized to archive child profile' using errcode = '42501';
+     end if;
+
+     -- Acquire Order 1 exclusive row lock to serialize against concurrent mutations
+     select * into v_child
      from public.child_profiles
      where id = p_child_id and family_id = v_family_id
      for update;
-     ```
-     Verifies `v_child.status = 'active'`. If already archived, raises `42501: Child profile is already archived`. Then executes `update public.child_profiles set status = 'archived', archived_at = now() where id = p_child_id`.
-   - **Child Mutation Transactions (Draft Update, Submission, Verification, Rejection, Reward Redeem, Fulfill, Cancel):**
-     Acquires a shared row lock on the target child profile *before* touching any child-linked table:
-     ```sql
-     select id, status into v_child
-     from public.child_profiles
-     where id = v_child_id and family_id = v_family_id
-     for share;
-     ```
-     Verifies `v_child.status = 'active'`. If `v_child.status != 'active'`, immediately aborts with `raise exception 'Child profile is archived' using errcode = '42501'`.
-     *Note on `FOR SHARE`:* Concurrent mutations for the same child can acquire `FOR SHARE` simultaneously without blocking each other. However, a concurrent archival transaction (`FOR UPDATE`) is blocked until all currently running mutation transactions release their `FOR SHARE` lock upon commit or rollback. Conversely, if an archival transaction acquires `FOR UPDATE` first, any incoming mutation transaction requesting `FOR SHARE` blocks until archival commits; upon unblocking, it immediately reads `status = 'archived'` and aborts cleanly.
-2. **Level 2 — Entity Resource Row Lock (`public.assessments` / `public.reward_redemptions`):**
-   Only after Level 1 is acquired and child status confirmed active, acquire the resource row lock:
-   - For assessment review/submission:
-     ```sql
-     select * into v_assessment
-     from public.assessments
-     where id = p_assessment_id and family_id = v_family_id
-     for update;
-     ```
-   - For reward redemption fulfillment/cancellation:
-     ```sql
-     select * into v_redemption
-     from public.reward_redemptions
-     where id = p_redemption_id and family_id = v_family_id
-     for update;
-     ```
-3. **Level 3 — Pipeline Transaction-Level Advisory Lock (`growth_events` / `learning_processing_events`):**
-   Only after Level 1 (and Level 2 if applicable) locks are held, acquire the deterministic transaction-level advisory locks:
-   - Growth processing: `perform pg_advisory_xact_lock(hashtext('child_growth_' || v_child_id::text));`
-   - Learning processing: `perform pg_advisory_xact_lock(hashtext('child_learning_' || v_child_id::text));`
 
-##### 4.3.2.2.3 Mathematical Proof of Deadlock Prevention
-Deadlock (`40P01`) occurs if and only if there is a cycle in the transaction dependency lock graph. Because every transaction—whether archiving a child, submitting/verifying an assessment, redeeming a reward, or running growth/learning pipelines—strictly acquires locks in the monotonic sequence `Level 1 -> Level 2 -> Level 3`:
-- No transaction holds a Level 2 or Level 3 lock while requesting a Level 1 lock.
-- No transaction holds a Level 3 lock while requesting a Level 2 lock.
-Therefore, the wait-for graph of locks across concurrent transactions is guaranteed to be a Directed Acyclic Graph (DAG). Deadlocks are mathematically impossible.
+     if v_child.status = 'archived' then
+       raise exception 'Child profile is already archived' using errcode = '42501';
+     end if;
+
+     -- Set transaction-local flag to authorize trigger transition
+     set local learnward.in_archive_child_profile = 'true';
+
+     -- Execute profile archival
+     update public.child_profiles
+     set status = 'archived',
+         archived_at = now()
+     where id = p_child_id
+     returning * into v_child;
+
+     -- Automatic cascade revocation: revoke all active device grants for this child
+     update public.child_device_grants
+     set status = 'revoked',
+         revoked_at = now()
+     where child_id = p_child_id
+       and family_id = v_family_id
+       and status = 'active';
+
+     return v_child;
+   end;
+   $$;
+   ```
+3. **Preserving Ordinary Parent Profile Editing:**
+   Parents retain normal Data API capability to update non-lifecycle fields (`display_name`, `avatar_key`, `school_grade`) on active profiles. When an active adult issues `PATCH /rest/v1/child_profiles?id=eq.<id>` with `{"display_name": "New Name"}`, RLS `child_profiles_update` permits the update and `trg_guard_child_profile_lifecycle` confirms `status` is unchanged, allowing the update to commit normally.
+
+##### 4.3.2.2.2 Reconciled System-Wide Concurrency Protocol & Total Lock Acquisition Hierarchy
+To guarantee strict serializability, eliminate time-of-check/time-of-use (TOCTOU) races, and prevent deadlocks across all Phase 1–5 subsystems (assessments, rewards catalog, reward redemptions, celebration wheel, integer balances, and mastery pipelines), child-scoped operations **must acquire locks in the following global monotonic hierarchy**:
+
+```text
+Order 1: Child Profile Row Lock (public.child_profiles)
+   │     - Archival: FOR UPDATE
+   │     - Child Mutations (draft, submit, review, redeem, fulfill, spin): FOR SHARE
+   ▼
+Order 2: Domain Entity & Catalog Locks
+   │     - Assessment mutations (submit_assessment, verify_assessment, reject_assessment): public.assessments FOR UPDATE
+   │     - Reward store redemption (redeem_store_reward): public.rewards FOR SHARE -> public.reward_redemptions FOR UPDATE
+   │     - Reward fulfillment/cancellation (fulfill/cancel_reward_redemption): public.reward_redemptions FOR UPDATE
+   │     - Celebration wheel (spin_reward_wheel): LOCK TABLE public.rewards IN SHARE MODE -> public.family_wheel_settings FOR SHARE
+   ▼
+Order 3: Economic Balance & Mastery Projections
+   │     - Economic balance: public.child_balances FOR UPDATE (always locked by target child_id)
+   │     - Mastery state: public.child_mastery_states FOR UPDATE (by child_id, learning_node_id)
+   ▼
+Order 4: Transaction-Level Advisory Locks (Pipelines)
+         - Per-VLE serialization: pg_advisory_xact_lock(hashtext('vle_' || v_vle_id::text))
+         - Per-child-node serialization: pg_advisory_xact_lock(hashtext('child_node_' || v_child_id::text || '_' || v_node_id::text))
+```
+
+1. **Order 1 — Child Profile Row Lock (`public.child_profiles`):**
+   - **Child Archival Transaction (`archive_child_profile`):** Acquires `SELECT id, status FROM public.child_profiles WHERE id = p_child_id AND family_id = v_family_id FOR UPDATE`.
+   - **Child Mutation Transactions (Draft Update, Submission, Verification, Rejection, Reward Redeem, Fulfill, Cancel, Wheel Spin):** Acquires `SELECT id, status FROM public.child_profiles WHERE id = v_child_id AND family_id = v_family_id FOR SHARE`. If `status != 'active'`, immediately aborts with `42501` before requesting Order 2, 3, or 4 locks.
+   - *Concurrency property:* Multiple concurrent mutations on the same child hold `FOR SHARE` simultaneously without mutual contention. Archival (`FOR UPDATE`) waits until all active mutating transactions commit. If archival acquires `FOR UPDATE` first, any incoming mutation blocks on `FOR SHARE` and, upon unblocking, reads `status = 'archived'` and aborts cleanly.
+2. **Order 2 — Domain Entity & Catalog Locks:**
+   - Acquired only after Order 1 is held and child active status is verified:
+     - Assessment review/submission: `SELECT * FROM public.assessments WHERE id = p_assessment_id FOR UPDATE`.
+     - Reward store redemption: `SELECT * FROM public.rewards WHERE id = p_reward_id FOR SHARE`, then `INSERT INTO public.reward_redemptions ...`.
+     - Reward fulfillment/cancellation: `SELECT * FROM public.reward_redemptions WHERE id = p_redemption_id FOR UPDATE`.
+     - Celebration wheel: `LOCK TABLE public.rewards IN SHARE MODE`, then `SELECT * FROM public.family_wheel_settings WHERE family_id = v_family_id FOR SHARE`.
+3. **Order 3 — Economic Balance & Mastery Projections:**
+   - Acquired after Order 2 locks:
+     - `SELECT * FROM public.child_balances WHERE child_id = v_child_id FOR UPDATE`.
+     - `SELECT * FROM public.child_mastery_states WHERE child_id = v_child_id AND learning_node_id = v_node_id FOR UPDATE`.
+   - Invariant: When locking multiple balance or mastery rows, rows must be acquired in ascending primary key order (`child_id ASC, learning_node_id ASC`).
+4. **Order 4 — Transaction-Level Advisory Locks (Pipelines):**
+   - Growth Engine: `pg_advisory_xact_lock(hashtext('vle_' || v_vle_id::text))`.
+   - Learning Engine: `pg_advisory_xact_lock(hashtext('vle_' || v_vle_id::text))` strictly followed by `pg_advisory_xact_lock(hashtext('child_node_' || v_child_id::text || '_' || v_node_id::text))`.
+   - Chained/nested pipeline calls (e.g., synchronous invocation of `process_verified_learning_event` during assessment verification) inherit the transaction's existing Order 1/2 row locks and proceed downward to Order 4 without acquiring locks in reverse order.
+   - Total ordering rule: No procedure holding an Order 4 advisory lock is permitted to request an Order 1, 2, or 3 lock.
+
+##### 4.3.2.2.3 Deadlock Freedom Guarantees & Architectural Boundaries
+1. **Total Order Invariant:** No transaction holding an Order N lock is permitted to request an Order M lock where M < N.
+2. **Acyclic Lock Dependency Graph:** Within the scope of child profile archival versus child-scoped operations, deadlocks between profile lifecycle management and operational mutations are eliminated because all operations acquire Order 1 locks prior to taking Order 2, 3, or 4 locks.
+3. **Precise, Testable Engineering Guarantees (Replacing Absolute Claims):** The architecture provides the precise, testable guarantee that *all sanctioned child-scoped transactions strictly adhering to the Order 1 -> Order 2 -> Order 3 -> Order 4 sequence are provably cycle-free*. Concurrency regression tests in pgTAP execute parallel interleaved workloads under load to verify the empirical absence of PostgreSQL error `40P01` (`deadlock_detected`).
 
 ##### 4.3.2.2.4 Concurrent Archive and Commit Ordering Guarantees
 1. **Case A: Mutation Transaction Commits Before Archival:**
-   - Transaction TM (mutation) acquires `FOR SHARE` on `child_profiles` (active) -> acquires `FOR UPDATE` on entity -> commits.
-   - Transaction TA (archival) attempts `FOR UPDATE` on `child_profiles`, blocks until TM commits -> unblocks, reads child, archives profile, commits.
+   - Transaction TM (mutation) acquires `FOR SHARE` on `child_profiles` (active) -> acquires Order 2/3 locks -> commits.
+   - Transaction TA (archival) attempts `FOR UPDATE` on `child_profiles`, blocks until TM commits -> unblocks, reads active child, archives profile, revokes device grants, commits.
    - *Outcome:* Mutation cleanly committed and recorded in immutable history; subsequent archival succeeds.
 2. **Case B: Archival Transaction Commits Before Mutation:**
-   - Transaction TA (archival) acquires `FOR UPDATE` on `child_profiles` -> sets `status = 'archived'` -> commits.
+   - Transaction TA (archival) acquires `FOR UPDATE` on `child_profiles` -> sets `status = 'archived'`, revokes grants -> commits.
    - Transaction TB (mutation) attempts `FOR SHARE` on `child_profiles`, blocks until TA commits -> unblocks, reads `status = 'archived'` -> fails closed with `42501` without taking entity locks or modifying data.
    - *Outcome:* Zero late mutations commit after child archival.
 3. **Unprocessed VLEs:**
-   - If an assessment was verified before archival, generating a VLE, but Growth or Learning pipeline processing has not completed, background catch-up jobs (`catch_up_unprocessed_growth`, `catch_up_unprocessed_learning`) check `child_profiles.status = 'active'` at Level 1 before processing.
+   - If an assessment was verified before archival, generating a VLE, but Growth or Learning pipeline processing has not completed, background catch-up jobs (`catch_up_unprocessed_growth`, `catch_up_unprocessed_learning`) check `child_profiles.status = 'active'` at Order 1 before processing.
    - Unprocessed events for archived children remain frozen in their pending state without executing late XP/RP ledger credits or mastery mutations.
 
 ##### 4.3.2.2.5 Post-Archive Outbox Command Reconciliation (Explicit Deferral Contract)
@@ -563,26 +676,35 @@ Therefore, the wait-for graph of locks across concurrent transactions is guarant
    - Local assessment drafts and evidence photos for the archived child are preserved locally in quarantine and are not silently deleted.
 4. **Parental Historical Audit & Export:** Parents retain the ability to inspect and export all historical data for archived children through the authorized, schema-verified `export_family_data_json` RPC (§4.3.4) and adult historical reporting views.
 
-##### 4.3.2.2.6 PostgreSQL Two-Session Concurrency Regression Test Suite
-A formal pgTAP / two-session concurrency test suite (`supabase/tests/database/`) verifies the locking protocol using two asynchronous database connections (Session 1: S1, Session 2: S2):
+##### 4.3.2.2.6 Executable PostgreSQL Concurrency & Lifecycle Regression Test Suite
+A formal pgTAP / two-session concurrency test suite (`supabase/tests/database/`) verifies the locking protocol and lifecycle guards using two asynchronous database connections (Session 1: S1, Session 2: S2):
 1. **Concurrent Submit vs. Archive:**
-   - S1: `BEGIN; SELECT * FROM public.child_profiles WHERE id = :child_id FOR UPDATE; UPDATE public.child_profiles SET status = 'archived';` (holds open transaction).
-   - S2: Attempts `SELECT public.submit_assessment(:assessment_id)`. Verifies S2 blocks waiting for Level 1 lock.
+   - S1 (Archival): `BEGIN; SELECT public.archive_child_profile(v_child_id);` (holds transaction open before COMMIT).
+   - S2 (Submission): Attempts `SELECT public.submit_assessment(p_assessment_id => v_assessment_id, p_expected_version => 1, p_command_id => gen_random_uuid());`. Verifies S2 blocks waiting for Order 1 lock.
    - S1: `COMMIT;`
-   - S2: Unblocks. Verifies S2 raises `42501` ('Child profile is archived'). Verifies assessment remains `draft` with zero side effects.
+   - S2: Unblocks. Verifies S2 raises SQLSTATE `42501` ('Child profile is archived'). Verifies assessment row remains `status = 'draft'` with zero side effects.
 2. **Concurrent Verify vs. Archive:**
-   - S1: `BEGIN; SELECT public.verify_assessment(:assessment_id);` (acquires `FOR SHARE` on child, `FOR UPDATE` on assessment).
-   - S2: Attempts `SELECT public.archive_child_profile(:child_id)`. Verifies S2 blocks waiting for Level 1 exclusive lock.
+   - S1 (Verification): `BEGIN; SELECT public.verify_assessment(p_assessment_id => v_assessment_id, p_expected_version => 1, p_command_id => gen_random_uuid(), p_notes => 'Verified by parent');` (acquires Order 1 `FOR SHARE`, Order 2 `FOR UPDATE`).
+   - S2 (Archival): Attempts `SELECT public.archive_child_profile(v_child_id);`. Verifies S2 blocks waiting for Order 1 exclusive lock.
    - S1: `COMMIT;`
-   - S2: Unblocks, successfully archives profile. Verifies VLE and ledger entries exist from S1, but subsequent mutations are rejected.
+   - S2: Unblocks, successfully archives profile. Verifies VLE, growth event, and ledger entry from S1 exist, but subsequent mutations are rejected.
 3. **Concurrent Reward Redeem vs. Archive:**
-   - S1: Archives child and commits.
-   - S2: Attempts `SELECT public.redeem_store_reward(:command_id, :child_id, :reward_id)`. Verifies immediate failure closed with `42501`, no RP balance change, and no row created in `reward_redemptions`.
-4. **Deadlock Absence Under High Concurrency:**
-   - 100 interleaved concurrent executions of archival and mutations executed via parallel runners; verifies zero occurrences of PostgreSQL error `40P01` (`deadlock_detected`).
+   - S1: `SELECT public.archive_child_profile(v_child_id);` (commits).
+   - S2: Attempts `SELECT public.redeem_store_reward(p_reward_id => v_reward_id, p_command_id => gen_random_uuid(), p_child_id => v_child_id);`.
+   - Verifies immediate failure closed with SQLSTATE `42501` ('Child profile is archived'), no RP balance change, and no row created in `reward_redemptions`.
+4. **Concurrent Celebration Wheel Spin vs. Archive:**
+   - S1: `SELECT public.archive_child_profile(v_child_id);` (commits).
+   - S2: Attempts `SELECT public.spin_reward_wheel(p_command_id => gen_random_uuid(), p_child_id => v_child_id);`.
+   - Verifies immediate failure closed with SQLSTATE `42501` ('Child profile is archived'), no RP balance change, and zero rows inserted into `wheel_spins`.
+5. **Direct UPDATE Lifecycle Bypass Rejection & Field Edit Preservation:**
+   - S1 (Adult direct status edit): Attempts direct SQL `UPDATE public.child_profiles SET status = 'archived' WHERE id = v_child_id;`. Verifies failure closed with SQLSTATE `42501` ('Direct child profile lifecycle mutation is prohibited; call public.archive_child_profile()').
+   - S2 (Adult direct reactivation edit): Attempts direct SQL `UPDATE public.child_profiles SET status = 'active' WHERE id = v_child_id;` on an archived profile. Verifies failure closed with SQLSTATE `LW011` / `42501` ('Archived child profile is immutable').
+   - S3 (Adult valid profile edit): Attempts direct SQL `UPDATE public.child_profiles SET display_name = 'Updated Name' WHERE id = v_child_id;` on an active profile. Verifies successful update and updated `display_name`.
+6. **High-Concurrency Deadlock Absence Verification:**
+   - 100 interleaved concurrent executions of archival and operational mutations (submissions, verifications, redemptions, wheel spins) executed via parallel runners; verifies zero occurrences of PostgreSQL error `40P01` (`deadlock_detected`).
 
 ##### 4.3.2.2.7 Phase 6 Implementation Scope Notice
-The transaction-level lock ordering hierarchy, RLS policy replacements, and SECURITY DEFINER RPC hardening described in §4.3 are **formal design specifications for implementation during Phase 6.1 and 6.2 migrations**. They are not present in the frozen Phase 0–5 database migrations. PR #13 is strictly documentation-only.
+The transaction-level lock ordering hierarchy, RLS policy replacements, lifecycle trigger guards, and SECURITY DEFINER RPC hardening described in §4.3 are **formal design specifications for implementation during Phase 6.1 and 6.2 migrations**. They are not present in the frozen Phase 0–5 database migrations. PR #13 is strictly documentation-only.
 
 ---
 
