@@ -196,34 +196,6 @@ create policy rewards_select on public.rewards
     )
   );
 
-drop policy if exists rewards_insert on public.rewards;
-create policy rewards_insert on public.rewards
-  for insert to authenticated
-  with check (
-    private.is_active_family_adult(family_id)
-    and (target_child_id is null or private.is_child_active_in_family(target_child_id, family_id))
-  );
-
-drop policy if exists rewards_update on public.rewards;
-create policy rewards_update on public.rewards
-  for update to authenticated
-  using (
-    private.is_active_family_adult(family_id)
-    and (target_child_id is null or private.is_child_active_in_family(target_child_id, family_id))
-  )
-  with check (
-    private.is_active_family_adult(family_id)
-    and (target_child_id is null or private.is_child_active_in_family(target_child_id, family_id))
-  );
-
-drop policy if exists rewards_delete on public.rewards;
-create policy rewards_delete on public.rewards
-  for delete to authenticated
-  using (
-    private.is_active_family_adult(family_id)
-    and (target_child_id is null or private.is_child_active_in_family(target_child_id, family_id))
-  );
-
 -- ---------------------------------------------------------------------------
 -- 5. CHILD-SCOPED DOMAIN TABLES RLS HARDENING
 -- ---------------------------------------------------------------------------
@@ -291,7 +263,7 @@ create policy command_receipts_select on public.command_receipts
     private.is_active_family_adult(family_id)
     and (
       case
-        when operation in ('create_draft', 'submit_assessment', 'verify_assessment', 'reject_assessment') then
+        when operation in ('create_draft', 'submit', 'verify', 'reject', 'submit_assessment', 'verify_assessment', 'reject_assessment') then
           exists (
             select 1 from public.assessments a
             where a.id = command_receipts.resource_id
