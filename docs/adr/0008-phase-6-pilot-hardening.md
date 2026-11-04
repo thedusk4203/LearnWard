@@ -1,6 +1,6 @@
 # ADR 0008 — Phase 6 Pilot Hardening Decisions
 
-- **Status:** PROPOSED
+- **Status:** ACCEPTED
 - **Date:** 2026-11-04
 - **Target:** Phase 6 — Pilot Hardening
 - **Reviewed Baseline:** `main` @ `462a17e603b69456b9eb2e000cfa7a7424e0c719`
@@ -16,7 +16,7 @@
 - **Metrics Contract:** [Metrics & Hypotheses v0.1](../06-metrics-and-hypotheses.md) (`FROZEN`)
 - **Detailed Design Document:** [Phase 6 Detailed Design v0.1](../17-phase-6-pilot-hardening-design-v0.1.md)
 
-This ADR is **`PROPOSED`**. Implementation remains **NOT AUTHORIZED** until this detailed design passes independent audit and merge review.
+This ADR is **`ACCEPTED`**. Implementation of Phase 6 is authorized following the dependency sequence defined in the Phase 6 Detailed Design and implementation plan. (Implementation remains **NOT STARTED**).
 
 ---
 
@@ -116,8 +116,8 @@ For the 4-week pilot:
 6. **Family-wide reads:** Replace `family_wheel_settings_select` and `rewards_select` child branches to require an active grant **and** an active, same-family child profile, including untargeted rewards. Other active children remain eligible; an archived child's still-active grant does not. Audit `reconcile_child_balance` and every SECURITY DEFINER read RPC. The grant-holder's own status read remains a narrow operational exception, not a family-data permission.
 7. **Archived-child mutations:** Through new Phase 6 migrations, add authoritative child-active checks inside the existing SECURITY DEFINER assessment, evidence, parent-review, RP redemption/fulfillment/cancellation, Growth/Learning processing and catch-up RPCs. Retain already-present checks in `create_assessment_draft` and `spin_reward_wheel`; preserve all frozen signatures, actor-bound command receipts, immutable ledgers and error contracts.
 8. **Concurrent Archive, Monotonic Lock Hierarchy & Replay:** Child profile archival is serialized against all child mutations using a strict monotonic lock hierarchy (`Order 1: public.child_profiles FOR SHARE/UPDATE` -> `Order 2: public.assessments / public.rewards / public.reward_redemptions` -> `Order 3: public.child_balances / public.child_mastery_states` -> `Order 4: VLE and child-node advisory locks`). Archival requests `FOR UPDATE` while mutations request `FOR SHARE` at Order 1, guaranteeing that no mutation commits after archival and providing testable cycle-free concurrency guarantees without deadlock exceptions (`40P01`). Unprocessed VLEs remain frozen pending controlled resolution. Mutating replays after archive fail closed; custom read-only reconciliation RPCs are explicitly deferred post-pilot while commands remain quarantined in client SQLite.
-9. Audit `pg_policies`, read RPCs, indirect tables, private Storage and all mutation paths. Add pgTAP and real-PostgreSQL tests for active/archived with active/revoked grants, foreign families, processing receipts, response-lost evidence, archive races and zero late ledger/mastery side effects. ADR remains PROPOSED pending independent approval.
-10. **Implementation Scope Notice:** The locking protocols, RLS policy replacements, lifecycle trigger guards, and RPC hardening in this ADR and Detailed Design §4.3 are design specifications for implementation in Phase 6.1/6.2 migrations. They do not alter frozen Phase 0–5 migrations. ADR 0008 remains PROPOSED.
+9. Audit `pg_policies`, read RPCs, indirect tables, private Storage and all mutation paths. Add pgTAP and real-PostgreSQL tests for active/archived with active/revoked grants, foreign families, processing receipts, response-lost evidence, archive races and zero late ledger/mastery side effects.
+10. **Implementation Scope Notice:** The locking protocols, RLS policy replacements, lifecycle trigger guards, and RPC hardening in this ADR and Detailed Design §4.3 are design specifications for implementation in Phase 6.1/6.2 migrations. They do not alter frozen Phase 0–5 migrations. ADR 0008 is ACCEPTED; implementation is pending.
 
 ---
 

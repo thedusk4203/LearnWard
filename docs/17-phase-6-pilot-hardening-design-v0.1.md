@@ -2,11 +2,11 @@
 
 - **Target Phase:** Phase 6 — Pilot Hardening
 - **Reviewed Baseline:** `main` @ `462a17e603b69456b9eb2e000cfa7a7424e0c719`
-- **Associated ADR:** [ADR 0008 — Phase 6 Pilot Hardening Decisions](adr/0008-phase-6-pilot-hardening.md) (`PROPOSED`)
+- **Associated ADR:** [ADR 0008 — Phase 6 Pilot Hardening Decisions](adr/0008-phase-6-pilot-hardening.md) (`ACCEPTED`)
 - **Readiness Authority:** [Phase 6 Dependency & Readiness Review](16-phase-6-pilot-hardening-dependency-readiness-review.md) (`FROZEN`)
 - **Metrics Contract:** [Metrics & Hypotheses v0.1](06-metrics-and-hypotheses.md) (`FROZEN`)
 - **Author:** LearnWard Agentic Engineering Team
-- **Status:** DRAFT / PROPOSED FOR AUDIT (Implementation **NOT AUTHORIZED** until audit pass and merge)
+- **Status:** ACCEPTED (PR #13 merged at `fd0584cc01dcf0a36b5cc651455f6b33d20372b8`; implementation **NOT STARTED**)
 
 ---
 
@@ -726,7 +726,7 @@ A formal pgTAP / two-session concurrency test suite (`supabase/tests/database/`)
     - 100 interleaved concurrent executions of archival and operational mutations (submissions, verifications, redemptions, wheel spins) executed via parallel runners; verifies zero occurrences of PostgreSQL error `40P01` (`deadlock_detected`).
 
 ##### 4.3.2.2.7 Phase 6 Implementation Scope Notice
-The transaction-level lock ordering hierarchy, RLS policy replacements, lifecycle trigger guards, and SECURITY DEFINER RPC hardening described in §4.3 are **formal design specifications for implementation during Phase 6.1 and 6.2 migrations**. They are not present in the frozen Phase 0–5 database migrations. PR #13 is strictly documentation-only.
+The transaction-level lock ordering hierarchy, RLS policy replacements, lifecycle trigger guards, and SECURITY DEFINER RPC hardening described in §4.3 are **formal design specifications for implementation during Phase 6.1 and 6.2 migrations**. They are not present in the frozen Phase 0–5 database migrations. Detailed design is ACCEPTED; implementation is pending.
 
 ---
 
