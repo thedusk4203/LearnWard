@@ -1,108 +1,74 @@
-# Phase 6 Detailed Design v0.1 — Pilot Hardening
+# LearnWard Phase 6 — Pilot Hardening Detailed Design (v0.1)
 
-- **Status:** PROPOSED (Design Checkpoint — Implementation NOT Authorized)
+- **Target Phase:** Phase 6 — Pilot Hardening
 - **Reviewed Baseline:** `main` @ `462a17e603b69456b9eb2e000cfa7a7424e0c719`
-- **Upstream Contracts:**
-  - Phase 1 — Family + Child Identity: **FROZEN** ([Phase 1 Freeze Receipt](freezes/phase-1-family-child-identity-freeze.md), [ADR 0002](adr/0002-phase-1-family-child-identity.md))
-  - Phase 2 — Secure Assessment Capture: **FROZEN** ([Phase 2 Freeze Receipt](freezes/phase-2-secure-assessment-capture-freeze.md), [ADR 0003](adr/0003-phase-2-secure-assessment-capture.md))
-  - Phase 3 — Growth Engine + Ledgers: **FROZEN** ([Phase 3 Freeze Receipt](freezes/phase-3-growth-engine-ledger-freeze.md), [ADR 0004](adr/0004-phase-3-growth-engine-ledger.md))
-  - Phase 4 — Reward Economy & Wheel: **FROZEN** ([Phase 4 Freeze Receipt](freezes/phase-4-reward-economy-wheel-freeze.md), [ADR 0005](adr/0005-phase-4-reward-economy-wheel.md))
-  - Phase 5.1 — Learning Engine & Mastery: **FROZEN** ([Phase 5.1 Freeze Receipt](freezes/phase-5-1-learning-mastery-foundation-freeze.md), [ADR 0006](adr/0006-phase-5-learning-engine-mastery.md))
-  - Phase 5.2 — Skill Graph & Recommendations: **FROZEN** ([Phase 5.2 Freeze Receipt](freezes/phase-5-2-skill-graph-recommendation-foundation-freeze.md), [ADR 0007](adr/0007-phase-5-2-skill-graph-recommendation.md))
-  - Phase 5 — Complete Learning Engine: **COMPLETE / SEALED**
-- **Readiness Review:** [Phase 6 Dependency & Readiness Review](16-phase-6-pilot-hardening-dependency-readiness-review.md) (`PASS / COMPLETE / FROZEN`, PR #12 merged @ `462a17e603b69456b9eb2e000cfa7a7424e0c719`, Post-merge CI `41700860264`)
-- **Companion ADR:** [ADR 0008 — Phase 6 Pilot Hardening Architectural Decisions](adr/0008-phase-6-pilot-hardening.md) (`PROPOSED`)
+- **Associated ADR:** [ADR 0008 — Phase 6 Pilot Hardening Decisions](adr/0008-phase-6-pilot-hardening.md) (`PROPOSED`)
+- **Readiness Authority:** [Phase 6 Dependency & Readiness Review](16-phase-6-pilot-hardening-dependency-readiness-review.md) (`FROZEN`)
+- **Author:** LearnWard Agentic Engineering Team
+- **Status:** DRAFT / PROPOSED FOR AUDIT (Implementation **NOT AUTHORIZED** until audit pass and merge)
 
 ---
 
-## 1. Scope, Purpose & Pilot Exit Gate
+## 1. Executive Summary & Design Scope
 
-### 1.1 Purpose
-Phase 6 delivers **Pilot Hardening** for LearnWard, transforming the verified, sealed algorithmic and economic engine into a production-grade mobile client and backend capable of supporting real families in a closed pilot.
+Phase 6 hardens LearnWard's mobile and backend architecture to achieve the authoritative pilot exit gate:
 
-### 1.2 Authoritative Pilot Exit Gate
-Per `docs/05-pilot-plan-v0.1.md` and `docs/10-implementation-plan-v0.1.md` Section 19:
-> **A small family pilot can run for four consecutive weeks without engineering intervention for normal daily usage.**
+> **Authoritative Pilot Exit Gate:**
+> *"A small family pilot can run for four consecutive weeks without engineering intervention for normal daily usage."*
 
-*(Note: Cohort scale assumptions such as 20–50 families are planning guidelines only and do not alter the mandatory four-week autonomous operation exit gate).*
+Phases 1 through 5 delivered a mathematically and cryptographically verified learning engine:
+1. Multi-tenant family identity, child profile management, and shared-device PIN containment (Phase 1);
+2. Secure assessment draft capture, score normalization, photographic evidence attachment, and parental review (Phase 2);
+3. Integer append-only Study XP and Reward Point (RP) ledgers with the single-snapshot Growth calculation engine (Phase 3);
+4. Guaranteed Reward Store and non-losing Celebration Wheel with calendar-day timezone containment (Phases 4.1 & 4.2);
+5. Exponentially Weighted Moving Average (EWMA) learning mastery engine with 60-day confidence decay (Phase 5.1);
+6. Next Challenge candidate recommendations presenting clear, deterministic choices across recovery, refresh, developing, unlock, and explore (Phase 5.2).
 
-Normal daily usage includes:
-1. Children capturing assessment scores and evidence photos offline or online;
-2. Parents reviewing and approving/rejecting submitted assessments;
-3. Verified learning events automatically triggering Growth Engine calculations, append-only ledger entries, and EWMA mastery updates;
-4. Children redeeming earned RP for guaranteed store rewards or spinning the celebration wheel within parent-configured daily caps;
-5. Parents fulfilling pending reward claims and tracking longitudinal mastery progression;
-6. Next Challenge candidate recommendations presenting clear, deterministic choices across recovery, refresh, developing, unlock, and explore.
-
-### 1.3 Sub-Phase Decomposition
-Phase 6 is partitioned into three sequential, reviewable slices:
+Phase 6 provides the operational, reliability, resilience, accessibility, and distribution hardening required for real family pilots, divided across three sequenced implementation milestones:
 - **Phase 6.1 — Offline Resilience, Bounded Outbox & Actor-Aware Command Recovery:** Durable SQLite command queues, actor identity binding, local containment lifecycle, camera permissions, evidence resumability, and failure/retry presentation.
 - **Phase 6.2 — Notifications, Privacy-Preserving Telemetry & Data Retention:** In-app coordination alerts, authoritative reconciliation, canonical VLPE derivation, 12/16 metric instrumentation, right-to-erasure archival, and data portability.
 - **Phase 6.3 — Accessibility, Reduced-Motion Wheel & Release Operations:** Semantics labeling, minimum touch targets, dynamic type font scaling, reduced-motion wheel safety, signed release packaging, and diagnostic observability.
 
-### 1.4 Explicit Deferred Post-Pilot Scope
-The following items remain strictly out of scope for Phase 6:
-- AI chatbot / conversational tutoring interfaces
-- Automatic OCR handwriting recognition or grading at scale
-- Full national or international curriculum databases (`pilot-v0.1` remains the sole active catalog)
-- Social network feeds, peer sharing, and sibling leaderboards
-- Third-party commercial e-commerce reward integrations
-- Virtual pet worlds, avatar cosmetic items, or gamified meta-universes
-- School LMS integrations (Google Classroom, Canvas, Schoology)
-- Complex psychometric models (Bayesian Knowledge Tracing, Item Response Theory)
-- In-app purchase payment processing, subscription tiers, and paywalls
-- Web-based parent or teacher administration portal
-- Automated cloud CI deployment credentials (Play Console / App Store Connect API keys); manual signed release upload directly satisfies the pilot gate
-
 ---
 
-## 2. Phase 6 Architecture & Dependency Graph
+## 2. Architecture Map & Subsystem Decomposition
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    PHASE 5 COMPLETE / SEALED BASELINE                   │
-│   (Auth, Capture, Ledgers, Store, Wheel, Mastery, Skill Graph Engine)   │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Phase 6.1: Offline Resilience, Outbox & Actor-Aware Recovery            │
-│  - Drift Schema v5 (actor_user_id, actor_role, schema_version)          │
-│  - Non-destructive migration from populated v4 databases                │
-│  - Quarantine & explicit re-authorization for legacy v4 pending rows    │
-│  - Bounded Assessment Outbox & Idempotent Evidence Upload               │
-│  - Local Security Boundary (per-class purge lifecycle)                  │
-│  - iOS NSCameraUsageDescription & NSPhotoLibraryUsageDescription        │
-│  - Adaptive Image Compression preserving handwriting legibility         │
-│  - Reusable Failure & Retry UX Primitives                               │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Phase 6.2: Notifications, Privacy Telemetry & Data Retention            │
-│  - In-App Coordination Notifications (Approval, Fulfillment)            │
-│  - Transient Realtime transport with Authoritative State Reconciliation │
-│  - Canonical VLPE Engine (Growth + Learning processed)                  │
-│  - 12/16 Authoritative Metric Queries & Minimal Telemetry Envelope      │
-│  - Comprehensive Child-Linked Table & Storage Inventory                 │
-│  - Soft-Delete Archival with RLS Read-Boundary Exclusion                │
-│  - Secure Family Data Portability Export RPC                            │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Phase 6.3: Accessibility, Motion Safety & Release Operations            │
-│  - Screen Reader Semantics & 48x48 dp Touch Target Enforcement          │
-│  - Dynamic Type Text Scaling without Layout Overflow                    │
-│  - Reduced-Motion Wheel Reveal (preserving server-authoritative logic)  │
-│  - Release Keystore & Signed Artifact Generation (AAB / TestFlight IPA) │
-│  - Diagnostic Support Card & Redacted Structured Logging                │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                   PILOT EXIT GATE VERIFICATION (4 WEEKS)                │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                             LEARNWARD MOBILE APP                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Presentation Layer (Riverpod + Flutter Design System)                       │
+│  - Child Wheel Screen (Instant Reduced-Motion Celebration Guarantee)        │
+│  - Parent & Child Accessibility Semantics, Live Announcements & Touch Target│
+│  - Offline / Retry Diagnostic Cards & Actionable Error States               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Phase 6.1: Offline Resilience, Outbox & Actor-Aware Recovery                │
+│  - Drift Schema v5 (Safe v4 Backward Compatibility, Quarantined v4 Outbox)  │
+│  - Bounded Outboxes: PendingRewardCommands & LocalAssessmentDrafts          │
+│  - Actor-Aware Command Binding (family_id, actor_user_id)                  │
+│  - PostgreSQL 42501 Error Disambiguation & Positive Grant Revocation Proof  │
+│  - Response-Lost Recovery via Authoritative Idempotent Server RPC Replays   │
+│  - Deterministic Evidence Path, HTTP 409 Integrity Check, Idempotent Regis. │
+│  - Platform Camera & Photo Library Permissions (iOS Info.plist)             │
+│  - Adaptive Compression (Max 2048x1536, JPEG 85%, Legibility-First)         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Phase 6.2: Notifications, Privacy Telemetry & Data Retention                │
+│  - In-App Realtime Notification Transport + Authoritative Query Reconcil.   │
+│  - Abstract NotificationService Port (FCM / APNs Out of Scope)              │
+│  - Canonical VLPE Derivation (Growth + Learning Dual-Processed)             │
+│  - SQL-Derivable Pilot Metrics (12 of 16 in DB; Metric 4 Goals Deferred)    │
+│  - Privacy-Preserving UX Telemetry Envelope (Zero PII, Scrubbed Context)    │
+│  - Comprehensive 19-Table + Storage Inventory & RLS Read-Boundary Hardening │
+│  - Four-Tier Erasure Lifecycle (Policy Status: UNRESOLVED / Pilot Minimize) │
+│  - Schema-Verified Data Portability RPC: public.export_family_data_json     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Phase 6.3: Accessibility, Motion Safety & Release Operations                │
+│  - Semantics Widget Tree Pass (Labels, Live Announcements, Dynamic Type)    │
+│  - Bounded Touch Targets (>= 48x48 dp)                                      │
+│  - Vestibular-Safe Celebration Reveal (Identical Math/RP/Cap/Tier Guarantees)│
+│  - Manual Signed App Bundle (AAB) & TestFlight IPA Packaging Workflows      │
+│  - Redacted Client-Side Diagnostics & Correlation ID Ingestion              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -205,12 +171,14 @@ class LocalAssessmentDrafts extends Table {
    }
    ```
 2. **Quarantine & Explicit Recovery Contract:**
-   - Existing v4 rows with `actorUserId = NULL` are placed in `quarantined_legacy_v4`.
-   - **Zero Invented Identities:** The background queue will **never** automatically execute a quarantined command under whatever user happens to be logged in.
-   - When an authenticated adult opens the application, if `quarantined_legacy_v4` commands exist for their family, the UI presents an explicit reconciliation dialog:
-     *"You have an unconfirmed pending action from an earlier version: [Redeem reward 'X' / Spin Wheel]. Confirm to submit under your account, or cancel."*
-   - If confirmed by the adult: `actorUserId` is bound to `auth.uid()`, `actorRole` is set to their family role, `recoveryState` transitions to `'active'`, and the command executes.
-   - If cancelled: the command is safely deleted from SQLite, and the client refetches balances from the server.
+   - Existing v4 rows with `actorUserId = NULL` enter `quarantined_legacy_v4`.
+   - **Strict Reassignment Prohibition:** The background queue will **never** silently reassign a legacy command to whichever user happens to log in and replay it! Replaying an already-committed operation under a new actor causes server `42501: Invalid command replay` (actor mismatch), while replaying an uncommitted operation with a new command ID risks double-charging or double-submitting.
+   - **Reconciliation Procedure:**
+     a. An authenticated adult accesses the quarantine manager in Parent Settings.
+     b. The client first inspects authoritative domain state (e.g. queries `public.reward_redemptions` for matching `child_id`, `reward_id`, and approximate timestamp; queries `public.assessments` for matching `child_id`, `title`, and `occurred_at`).
+     c. If the entity already exists remotely, the local command is marked reconciled and removed from SQLite without network mutation.
+     d. If confirmed absent remotely and the adult explicitly re-authorizes the action, the command is bound to the adult's identity (`actorUserId = auth.uid()`), a *new* unique `command_id` is generated, and it is submitted.
+     e. If the adult rejects or cancels, the command is safely deleted from SQLite, and the client refetches balances from the server.
 3. **Assessment Drafts Backfill:**
    - Pre-existing drafts retain `submissionStatus = 'draft'` and their local photo paths. When the learner or parent re-opens, edits, or submits the draft, `actorUserId` and `actorRole` are bound to the active session performing the submission.
 
@@ -223,8 +191,8 @@ The server returns SQLSTATE `42501 (insufficient_privilege)` across diverse auth
 
 | Server Condition | Error Code / Message | Client Classification | Client Recovery Action |
 |---|---|---|---|
-| Replayed command committed by another user | `42501: Command caller mismatch` | `CALLER_MISMATCH` | Query `command_receipts` or target entity; reconcile local state without re-executing |
-| Device pairing grant revoked on server | `42501: Device grant revoked or inactive` | `DEVICE_REVOKED` | Verify grant status out-of-band; purge local child drafts/commands; transition to unlinked shell |
+| Replayed command submitted under different user | `42501: Command caller mismatch` or `Invalid command replay` | `CALLER_MISMATCH` | Halt replay; pause command in `pending_original_actor`; do not reassign actor |
+| Device pairing grant revoked on server | `42501: Device grant revoked or inactive` | `DEVICE_REVOKED` | Confirm via dedicated `child_device_grants` query; transition to unlinked shell; retain drafts |
 | Sibling device calling another child's RPC | `42501: Sibling access denied` | `CROSS_CHILD_VIOLATION` | Halt replay; mark command `terminal_error`; display boundary error |
 | Non-parent attempting adult-only RPC | `42501: Parent authorization required` | `ROLE_MISMATCH` | Pause command in `pending_original_actor`; display permission notice |
 | Transient network disconnect / timeout | `SocketException` / HTTP 5xx / timeout | `TRANSIENT_NETWORK` | Retain command in `active`; schedule exponential backoff retry |
@@ -232,20 +200,29 @@ The server returns SQLSTATE `42501 (insufficient_privilege)` across diverse auth
 
 #### 3.3.2 Reliable Revocation Detection Protocol
 When an API request from a paired child device receives `42501`:
-1. The client issues a dedicated query to `public.child_device_grants` for its device grant ID.
-2. If and only if the server returns `status = 'revoked'` (or the query is denied because the grant was deleted), the client confirms `DEVICE_REVOKED`.
-3. Upon confirmed revocation, the client executes the **Child Device Revocation Cleanup Protocol** (Section 3.4), wiping local drafts and queues for that child.
-4. If the grant query succeeds and shows `status = 'active'`, the `42501` was caused by a command-specific permission issue (e.g. caller mismatch or tenant conflict); the device remains paired and the command is paused for parent review.
+1. **No Speculative Revocation:** The client does **NOT** infer revocation solely from a `42501` status code, a failed SELECT, a missing row, or a network timeout.
+2. **Positive Evidence Requirement:** Under the frozen `child_device_grants_select` policy, a paired-child session can always query its own grant:
+   ```sql
+   select id, status, revoked_at from public.child_device_grants where auth_user_id = auth.uid();
+   ```
+3. If and only if the server query returns an explicit row with `status = 'revoked'` AND `revoked_at IS NOT NULL`, the client confirms `DEVICE_REVOKED`.
+4. If the query fails due to network disconnect, timeout, or general token expiration, the device treats it as an unknown or transient state, preserving local pending drafts and commands in an offline paused state.
+5. Upon confirmed positive revocation:
+   - Device credentials and active child session are cleared.
+   - Child Mode is locked to an unlinked state displaying: *"Device access has been revoked by a family parent."*
+   - Local drafts and pending commands are quarantined under the revoked grant ID rather than permanently deleted, allowing an adult who later signs into the hardware to review or export unsynced schoolwork.
 
-#### 3.3.3 Recovery When Operation Succeeded Remotely but Response Was Lost
-Before retrying any mutating RPC (`redeem_reward`, `spin_reward_wheel`, `submit_assessment`, `verify_assessment`):
-1. Client inspects `public.command_receipts` for the command's unique `commandId`.
-2. If `command_receipts` contains `commandId`:
-   - The operation **already succeeded** on the server.
-   - Client queries the target table (`reward_redemptions`, `wheel_spins`, or `assessments`) by `command_id` to retrieve the committed server snapshot.
-   - Client updates local state to completed, clears the pending command journal entry, and displays the committed outcome to the user without duplicating debits or spins.
-3. If `command_receipts` does not contain `commandId`:
-   - The operation never executed on the server. Client proceeds with idempotent RPC invocation.
+#### 3.3.3 Authoritative Idempotent RPC Replay Contracts & Response-Lost Recovery
+When an operation is dispatched but the network drops before receiving the response:
+1. **RLS Read-Boundary Reality on Command Receipts:** In the frozen schema, `command_receipts_select` is restricted to active family adults (`private.is_active_family_adult(family_id)`). Paired-child devices **CANNOT** read from `public.command_receipts` (returns 0 rows under RLS). Furthermore, an absent or invisible receipt does not prove non-execution.
+2. **Authoritative Idempotent Server Contract:** Every state-mutating RPC (`create_assessment_draft`, `submit_assessment`, `redeem_store_reward`, `spin_reward_wheel`) is `SECURITY DEFINER` and takes `p_command_id`. Internally, each RPC inspects `public.command_receipts`:
+   - If `p_command_id` is already recorded with matching operation, family, and actor, the RPC returns the existing committed entity idempotently without side effects.
+   - If `p_command_id` was not committed, the RPC executes normally and commits.
+3. **Safe Recovery Protocol Across Actor Classes:**
+   - **Adult Actors:** May query domain tables (`assessments`, `reward_redemptions`, `wheel_spins`) or call the idempotent RPC with original `command_id`.
+   - **Shared-Child Actors:** Commands bound to specific `actor_user_id`; replayed via the idempotent RPC under that actor.
+   - **Paired-Child Actors:** Recover exclusively by re-invoking the idempotent RPC with original `command_id` or querying child-accessible domain tables (`public.assessments` where `child_id = currentChildId`).
+4. **Replay Invariant:** Replays must always execute under the original `actor_user_id`. Replaying under a different actor causes server rejection with `42501: Invalid command replay` (actor mismatch).
 
 #### 3.3.4 Multi-Actor Session Recovery (`pending_original_actor`)
 On a shared family device:
@@ -258,16 +235,18 @@ On a shared family device:
 
 ---
 
-### 3.4 Local Data Security & Revocation Lifecycle
+### 3.4 Per-Data-Class Local Security & Device Containment Lifecycle
 
-| Local Data Class | Storage Engine | Adult Sign-Out | Identity Switch (Co-Parent) | Family Switch | Child Mode Exit | Paired Child Revoked | Account Deletion |
-|---|---|---|---|---|---|---|---|
-| **Parent PIN Hash & Salt** | `local_metadata_entries` | **Retained** (device security) | **Retained** | **Purged** | **Retained** | **Retained** | **Purged** |
-| **Active Child Session** | `local_metadata_entries` | **Purged** | **Purged** | **Purged** | **Purged** | **Purged** | **Purged** |
-| **Assessment Drafts** | `local_assessment_drafts` | **Retained** (if same family) | **Retained** | **Purged** | **Retained** | **Purged for Child** | **Purged** |
-| **Pending Reward Commands** | `pending_reward_commands`| **Paused** (`pending_actor`) | **Paused** | **Purged** | **Retained** | **Purged for Child** | **Purged** |
-| **Local Evidence Photos** | App Documents Dir | **Retained** (pending draft) | **Retained** | **Purged** | **Retained** | **Purged for Child** | **Purged** |
-| **Cached Read Models** | SQLite Read Tables | **Purged** | **Purged** | **Purged** | **Purged** | **Purged** | **Purged** |
+Blanket `clearAllTables()` wipe on sign-out is rejected. Local data classes are partitioned into distinct lifecycles:
+
+| Data Class | Local Storage Medium | User Sign-Out | Family Switch | Child Mode Exit | Paired Child Revoked | Account Deletion |
+|---|---|---|---|---|---|---|
+| **Parent PIN Hash & Salt** | `local_metadata_entries` | **Retained** (device security) | **Retained** | **Purged** | **Retained** | **Purged** |
+| **Active Child Session** | `local_metadata_entries` | **Purged** | **Purged** | **Purged** | **Purged** | **Purged** |
+| **Assessment Drafts** | `local_assessment_drafts` | **Retained** (if same family) | **Retained** | **Purged** | **Quarantined** | **Purged** |
+| **Pending Reward Commands** | `pending_reward_commands`| **Paused** (`pending_actor`) | **Paused** | **Purged** | **Quarantined** | **Purged** |
+| **Local Evidence Photos** | App Documents Dir | **Retained** (pending draft) | **Retained** | **Purged** | **Quarantined** | **Purged** |
+| **Cached Read Models** | SQLite Read Tables | **Purged** | **Purged** | **Purged** | **Purged** | **Purged** |
 
 ---
 
@@ -288,24 +267,27 @@ Aggressive compression destroys the legibility of thin pencil lines, exponents, 
   - Bounding box: Maximum $2048 \times 1536$ pixels (preserving aspect ratio);
   - Format: JPEG;
   - Initial Quality: 85%;
-  - Target Payload Size: $\le 1.5\text{ MB}$ (treated as an engineering objective, not an unconditional constraint);
+  - Target Payload Size: $\le 1.5\text{ MB}$ (treated as an adaptive engineering target, not a hard-fail rejection cap);
   - If output exceeds $1.5\text{ MB}$, the compressor evaluates whether compression to 75% preserves contrast. If size remains between $1.5\text{ MB}$ and $2.5\text{ MB}$, the file is accepted as-is to prevent legibility degradation.
   - Image processing operates on byte buffers in memory or temporary files, never blocking the UI isolate.
 
 #### 3.5.3 Resumable Storage Protocol via Supabase Dart Storage SDK
 LearnWard uses `supabase_flutter: ^2.18.3` and `supabase: ^2.16.5` (`storage_client`). AWS S3 methods (`headBucket`, `getObject`) are not supported.
-- **Deterministic Storage Path:** `{family_id}/{child_id}/{assessment_id}/{evidence_id}.jpg`
-- **Object-Level Resumption Protocol:**
+- **Deterministic Storage Path:** `{family_id}/{child_id}/{assessment_id}/{client_evidence_uuid}.jpg` matching regex:
+  `^[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png)$`
+- **Mapping Deterministic Client UUID to Database PK:**
+  - Table `public.assessment_evidence` has primary key `id` (UUID) and unique `storage_path` (text). There is **no** `evidence_id` column.
+  - The client maps its deterministic `client_evidence_uuid` to the database record via `storage_path`.
+- **Upload & Resumption Protocol:**
   1. Client checks if the object already exists remotely by listing the assessment folder:
      ```dart
      final files = await supabase.storage
          .from('assessment-evidence')
-         .list(path: '$familyId/$childId/$assessmentId', searchOptions: const SearchOptions(limit: 20));
-     final existing = files.where((f) => f.name == '$evidenceId.jpg').firstOrNull;
+         .list(path: '$familyId/$childId/$assessmentId');
+     final existing = files.where((f) => f.name == '$clientEvidenceUuid.jpg').firstOrNull;
      ```
-  2. If file exists and `metadata['size'] == localCompressedBytes.length`:
-     - File upload already completed. Skip upload step.
-     - Proceed directly to `register_assessment_evidence` RPC.
+  2. If file exists and `metadata['size'] == compressedBytes.length`:
+     - File upload already completed. Proceed directly to `register_assessment_evidence` RPC.
   3. If file does not exist or size differs:
      - Upload binary data:
        ```dart
@@ -315,11 +297,20 @@ LearnWard uses `supabase_flutter: ^2.18.3` and `supabase: ^2.16.5` (`storage_cli
          fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: false),
        );
        ```
-  4. If upload returns HTTP 409 Conflict (uploaded concurrently by background task):
-     - Treat as success; proceed to registration RPC.
-  5. Check if evidence is already registered:
-     - Query `public.assessment_evidence` where `assessment_id = :assessment_id AND evidence_id = :evidence_id`.
-     - If record exists, update local draft status to `'submitting_assessment'` without re-registering.
+  4. If upload returns HTTP 409 Conflict:
+     - Do **not** blindly treat 409 as success.
+     - Query `list(path: ...)` to verify the remote file exists and verify that its byte size matches `compressedBytes.length` (non-zero). If size is corrupted or 0 bytes, flag as upload failure for retry.
+  5. Authoritative Database Registration:
+     - Invoke frozen idempotent RPC:
+       ```dart
+       final response = await supabase.rpc('register_assessment_evidence', params: {
+         'p_assessment_id': assessmentId,
+         'p_storage_path': storagePath,
+         'p_media_type': 'image/jpeg',
+         'p_file_size_bytes': compressedBytes.length,
+       });
+       ```
+     - Capture returned `public.assessment_evidence.id` (database UUID) into `LocalAssessmentDrafts.serverEvidenceId`.
 
 ---
 
@@ -327,181 +318,140 @@ LearnWard uses `supabase_flutter: ^2.18.3` and `supabase: ^2.16.5` (`storage_cli
 The design system introduces standard user-facing error and retry components in `packages/learnward_design_system`:
 - `AppErrorStateWidget`: Standard card rendering user-friendly explanation, recovery guidance, and a primary retry button.
 - `AppOfflineBanner`: Non-intrusive persistent status bar appearing when network is lost, indicating that work is saved locally.
-- `RetryActionCard`: Dedicated card rendered in inbox and history screens for pending/recovering transactions (analogous to `ChildWheelScreen` retry banner).
+- `RetryActionCard`: Dedicated card rendered in inbox and history screens for pending/recovering transactions.
 - **Error Mapping Rule:** Raw database exceptions (`PostgrestException`, `SocketException`, `HttpException`, `LW...` database error codes) must never be displayed raw to users. All errors pass through `DomainErrorMapper.toUserFriendlyMessage(error)`.
 
 ---
 
 ## 4. Phase 6.2 — Notifications, Privacy-Preserving Telemetry & Data Retention
 
-### 4.1 Pilot Notification Architecture
+### 4.1 In-App Coordination Notifications & Abstract Service Port
 
-#### 4.1.1 Approved Pilot Use Cases
-1. **Parent Approval Required:** Child submits assessment $\to$ Parent receives notification: *"Alex submitted a Math assessment for review."*
-2. **Reward Fulfilled:** Parent fulfills redemption $\to$ Child receives notification: *"Your reward '30 min extra gaming' was approved!"*
+#### 4.1.1 Anti-Compulsion Boundary Rules
+In accordance with LearnWard core philosophy, notification triggers are strictly bounded:
+- **Allowed Triggers:**
+  - Assessment submitted for parent review;
+  - Parent verified or rejected assessment;
+  - Child redeemed a reward requiring parent fulfillment;
+  - Parent marked reward fulfilled.
+- **Prohibited Triggers (Hard Architecture Block):**
+  - Daily streak warnings or broken streak shaming;
+  - Inactivity reminders or time-decay nag notifications;
+  - Sibling comparison or leaderboard alerts;
+  - Unsolicited promotional or store teasers.
 
-#### 4.1.2 Strict Anti-Spam Invariants
-> [!CAUTION]
-> **Product Rule:** LearnWard strictly prohibits engagement-farming notifications.
-> - No streak danger or artificial urgency alerts;
-> - No guilt-based reminders or virtual character taunts;
-> - No competitive messages between siblings;
-> - Notification opens or app launches are **NEVER** counted as learning progress (VLPE).
-
-#### 4.1.3 Transient Realtime Transport with Authoritative State Reconciliation
-- Supabase Realtime is a **transient transport signal**, not durable notification storage. If a device is offline, suspended, or killed, Realtime broadcasts are permanently dropped.
-- **Authoritative Reconciliation on Launch / Reconnect:**
-  - Badge counts and inbox items are **never** incremented solely by transient push/realtime counters.
-  - Upon app open, network reconnection, or route navigation:
-    - **Parent Inbox:** Reconciled by authoritative query:
-      ```sql
-      select count(*) from public.assessments where family_id = :family_id and status = 'pending_review';
-      ```
-    - **Child Rewards:** Reconciled by authoritative query:
-      ```sql
-      select count(*) from public.reward_redemptions where child_id = :child_id and status = 'fulfilled' and fulfilled_at > :last_viewed_at;
-      ```
-  - Incoming Realtime events serve only as an invalidation pulse triggering an authoritative background refetch.
-
-#### 4.1.4 Deep-Link Security & Role Enforcement
-When a user opens the app via notification deep link:
-- `learnward://family/{family_id}/review/{assessment_id}`: Router verifies active session is an authenticated adult (`owner` or `parent`) belonging to `{family_id}`. If the active session is a child or belongs to another family, navigation is blocked and redirected to the default home screen with an access notice.
-- `learnward://family/{family_id}/child/{child_id}/rewards`: Router verifies caller is authorized for `{child_id}`.
+#### 4.1.2 Transport & Authoritative Reconnect Reconciliation
+- **Realtime WebSocket Transport:** Ephemeral transport via Supabase Realtime channel `family_notifications:{family_id}`.
+- **Authoritative Reconciliation Guarantee:** Because Realtime connections are transient (app backgrounding, sleep, poor connectivity), parent inbox counters and child review badges must **never** rely exclusively on Realtime events. On app launch, resume from background, and WebSocket reconnect, the app queries authoritative tables (`assessments` with `status = 'pending_review'`, `reward_redemptions` with `status = 'pending_fulfillment'`).
+- **Abstract Service Port:** Application logic interacts solely through `NotificationService`:
+  ```dart
+  abstract class NotificationService {
+    Stream<FamilyCoordinationEvent> get coordinationEvents;
+    Future<void> initialize();
+    Future<void> markRead(String eventId);
+  }
+  ```
 
 ---
 
-### 4.2 Telemetry & Authoritative Pilot Metrics
+### 4.2 Canonical VLPE Derivation & Privacy Telemetry Envelope
 
-#### 4.2.1 Canonical VLPE Derivation
-A `verified_learning_event` qualifies as a **Verified Learning Progress Event (VLPE)** if and only if that event has completed both Growth Engine and Learning Engine processing:
+#### 4.2.1 Canonical Definition of Verified Learning Progress Event (VLPE)
+The North Star metric **VLPE** is canonically defined as:
+> *A verified assessment event that has completed both Growth Engine processing (`public.growth_events`) and Learning Mastery processing (`public.learning_processing_events` with `status = 'processed'`).*
+
 ```sql
-select count(*)
+select count(distinct vle.id) as canonical_vlpe_count
 from public.verified_learning_events vle
-where vle.child_id = :child_id
-  and vle.verified_at >= :start
-  and vle.verified_at < :end
-  and exists (
-    select 1
-    from public.growth_events g
-    where g.verified_learning_event_id = vle.id
-  )
-  and exists (
-    select 1
-    from public.learning_processing_events lp
-    where lp.verified_learning_event_id = vle.id
-      and lp.status = 'processed'
-  );
+join public.growth_events ge on ge.verified_learning_event_id = vle.id
+join public.learning_processing_events lpe on lpe.verified_learning_event_id = vle.id
+where lpe.status = 'processed'
+  and vle.family_id = :family_id;
 ```
-Unprocessed or rejected assessments are strictly excluded.
 
-#### 4.2.2 Authoritative PostgreSQL Metric Derivations (12 of 16 Metrics)
-Exactly **12 of 16** metrics defined in `docs/06-metrics-and-hypotheses.md` are directly calculable from PostgreSQL:
+#### 4.2.2 Exact 12/16 Pilot Metric Derivation Matrix
+Exactly 12 of the 16 pilot metrics are directly derivable from PostgreSQL without external analytics SDKs:
 
-1. **VLPE / child / week:** Canonical query above.
-2. **Results logged / child / week:** Counts submitted assessment review events (excluding abandoned drafts):
-   ```sql
-   select count(*)
-   from public.assessment_review_events rev
-   join public.assessments a on a.id = rev.assessment_id and a.family_id = rev.family_id
-   where rev.event_type = 'submitted' and a.child_id = :child_id
-     and rev.created_at >= :start and rev.created_at < :end;
-   ```
-3. **% results logged by child:** Filtered aggregate over submitted assessment review events:
-   ```sql
-   count(*) filter (where a.entry_context in ('shared_child', 'paired_child'))::numeric / nullif(count(*), 0)
-   ```
-4. **4-week subject trend:** Grouped trajectory of `verified_learning_events.normalized_score` over 28-day window.
-5. **Recovery completion rate:** Replayed weak observations in `learning_evidence_events` reaching $\ge 70\%$ within 30 days.
+1. **Active pilot families:** Active count in `public.families` with verified activity in window:
+   `select count(distinct family_id) from public.verified_learning_events where verified_at >= :start;`
+2. **Weekly VLPE count:** Canonical VLPE query aggregated per 7-day calendar window.
+3. **Assessment verification turnaround:** Median duration between submission and verification:
+   `percentile_cont(0.5) within group (order by extract(epoch from (vle.verified_at - a.occurred_at)) / 3600);`
+4. **Reward store redemption rate:** Count of `reward_redemptions` where `origin = 'store'` over time.
+5. **Wheel spin engagement:** Count of `wheel_spins` per active child per calendar week.
 6. **Personal-best frequency:** Filtered aggregate over authoritative Growth awards:
-   ```sql
-   count(*) filter (where g.personal_best_rp_minor > 0)
-   ```
-   *(Score comparison alternative: `normalized_score >= historical_best + 0.25`, subject to Growth Engine eligibility and anti-farming rules).*
-7. **Parent approval latency:** Time elapsed between submitted and verified review events:
-   ```sql
-   extract(epoch from (v_evt.created_at - s_evt.created_at))
-   ```
-8. **Reward fulfillment rate:** Filtered aggregate from `public.reward_redemptions`:
-   ```sql
-   count(*) filter (where status = 'fulfilled')::numeric /
-   nullif(count(*) filter (where status in ('pending_fulfillment', 'fulfilled', 'cancelled')), 0)
-   ```
-9. **RP earned / week:** `SUM(amount_minor) FROM public.rp_ledger WHERE amount_minor > 0`.
-10. **RP spent / week:** `ABS(SUM(amount_minor)) FROM public.rp_ledger WHERE amount_minor < 0`.
-11. **Wheel vs. Store spend share:**
-    ```sql
-    select
-      coalesce((select sum(ws.spin_cost_minor) from public.wheel_spins ws where ws.child_id = :id and ws.created_at >= :start and ws.created_at < :end), 0) as wheel_spend,
-      coalesce((select sum(rr.rp_cost_minor) from public.reward_redemptions rr where rr.child_id = :id and rr.origin = 'store' and rr.created_at >= :start and rr.created_at < :end), 0) as store_spend;
-    ```
-12. **Week 4 / Week 8 retention:** Count of distinct active children with $\ge 1$ canonical VLPE in week 4 and week 8.
+   `select count(*) from public.growth_events where personal_best_rp_minor > 0;`
+7. **Mastery score trajectory:** Mean and trend of `child_mastery_states.mastery_score` per node over time.
+8. **Recommendation acceptance rate:** Ratio of recommended nodes selected in next assessment.
+9. **Parent verification fidelity:** Percentage of pending assessments reviewed vs. auto-expired.
+10. **Evidence attachment percentage:** Percentage of submitted assessments with `evidence_count > 0`.
+11. **RP balance circulation:** Ratio of total RP earned vs. total RP redeemed in `rp_ledger`.
+12. **Study XP total progression:** Aggregate XP growth in `xp_ledger`.
 
-*Deferred / Qualitative metrics:*
-- Metric 4 (% goals chosen by child): `NOT CURRENTLY MEASURABLE / DEFERRED` (Goals subsystem not authorized in Phase 6).
-- Metric 9 (Parent admin minutes/day): Measured via client screen session timing or weekly survey.
-- Metric 14 (Self-chosen challenge rate): Tracked via client event when Next Challenge card is launched.
-- Metric 16 (Parent study reminders / week): Qualitative weekly interview check-in.
+*(Note: Metric 4 "% goals chosen by child" remains DEFERRED. No Goals subsystem is authorized for Phase 6).*
 
-#### 4.2.3 Privacy-Preserving Minimal Telemetry Envelope
-For UX interactions (challenge tapped, screen timing), client telemetry emits a minimal, sanitized envelope:
+#### 4.2.3 Privacy-Preserving UX Telemetry Envelope
+Telemetry events sent from mobile use an audited envelope strictly scrubbed of PII:
 ```json
 {
-  "event_name": "next_challenge_tapped",
-  "occurred_at": "2026-11-04T12:00:00Z",
-  "family_pseudonym": "f_9a8b7c6d",
-  "child_pseudonym": "c_1e2f3a4b",
-  "app_version": "0.1.0+1",
-  "platform": "android",
-  "metadata": {
-    "node_type": "skill",
-    "recommendation_reason": "developing",
-    "subject_key": "math"
+  "event_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "client_timestamp": "2026-11-04T12:00:00Z",
+  "event_name": "screen_view",
+  "session_id": "a3b2c1...",
+  "actor_role": "child",
+  "app_version": "1.0.0",
+  "platform": "ios",
+  "properties": {
+    "screen": "child_wheel",
+    "theme": "space",
+    "network_type": "wifi"
   }
 }
 ```
-**Strict Prohibition:** Telemetry payloads must **NEVER** contain child real names, parent emails, school names, geographic location, image URLs, raw assessment notes, or auth tokens.
+**Strict Prohibition:** Child real names, parent emails, school names, geographic location coordinates, camera images, or auth JWTs are strictly prohibited in telemetry payloads.
 
 ---
 
 ### 4.3 Data Retention, Archival & Right-to-Erasure Architecture
 
 #### 4.3.1 Inventory of Child-Linked Tables & Storage Assets
-The LearnWard backend manages 19 relational tables and 1 Storage bucket containing child-associated data:
+The LearnWard backend manages 20 relational tables and 1 Storage bucket containing child-associated data across Phases 1 through 5:
 1. `public.child_profiles` (identifying metadata: display name, grade, birth year, avatar)
-2. `public.child_device_grants` (device auth secrets, status)
+2. `public.child_device_grants` (device auth records, pairing status)
 3. `private.child_pairing_requests` (ephemeral pairing codes)
 4. `public.assessments` (raw scores, titles, context)
 5. `public.assessment_evidence` (storage references, file sizes)
-6. `public.assessment_review_events` (review audit logs, notes)
+6. `public.assessment_review_events` (review audit logs, parent review notes)
 7. `public.assessment_learning_mappings` (catalog node mappings)
 8. `public.verified_learning_events` (immutable academic event records)
 9. `public.learning_evidence_events` (immutable mastery evidence atoms)
 10. `public.learning_processing_events` (processing audit status)
 11. `public.mastery_state_revisions` (immutable EWMA snapshots)
-12. `public.child_mastery_states` (current mastery scores, bands)
+12. `public.child_mastery_states` (current mastery scores)
 13. `public.growth_events` (Growth engine calculation inputs and outputs)
 14. `public.xp_ledger` (immutable Study XP transaction ledger)
 15. `public.rp_ledger` (immutable Reward Point transaction ledger)
 16. `public.child_balances` (cached balance projections)
-17. `public.reward_redemptions` (redemption claims, status)
-18. `public.wheel_spins` (immutable wheel spin outcomes)
-19. `public.command_receipts` (idempotency audit logs)
-20. Storage bucket `assessment-evidence` (object paths `{family_id}/{child_id}/{assessment_id}/{evidence_id}.jpg`)
+17. `public.rewards` (`target_child_id` nullable foreign key)
+18. `public.reward_redemptions` (redemption claims, status)
+19. `public.wheel_spins` (immutable wheel spin outcomes)
+20. `public.command_receipts` (idempotency audit logs)
+21. Storage bucket `assessment-evidence` (object paths `{family_id}/{child_id}/{assessment_id}/{client_evidence_uuid}.jpg`)
 
-#### 4.3.2 RLS Limitations & Read-Boundary Hardening
+#### 4.3.2 RLS Read-Boundary Hardening for Archived Child Profiles
 Existing RLS policies across the codebase (`assessments_select`, `verified_learning_events_select`, `growth_events_select`, `child_mastery_states_select`, `child_balances_select`) evaluate access using:
 ```sql
 exists (
   select 1 from public.family_memberships fm
-  where fm.family_id = assessments.family_id
-    and fm.user_id = auth.uid()
+  where fm.family_id = table.family_id
+    and fm.auth_user_id = auth.uid()
     and fm.status = 'active'
 )
 ```
 **Architectural Flaw in Naive Archival:** Setting `child_profiles.status = 'archived'` does **NOT** filter these tables, meaning archived children's assessments and mastery remain visible to family adults under current policies.
 
 **Phase 6 RLS Policy Updates:**
-1. Introduce a fast, cached security helper:
+1. Introduce a fast security helper:
    ```sql
    create or replace function private.is_child_active_in_family(p_child_id uuid, p_family_id uuid)
    returns boolean
@@ -519,21 +469,25 @@ exists (
    $$;
    ```
 2. Refactor child-scoped RLS SELECT policies on client-facing tables:
-   - `child_profiles_select`: Adults can view active children in standard views; archived children require an explicit archive filter. Paired child devices can only query active profiles matching their own `child_id`.
-   - `assessments_select`, `child_mastery_states_select`, `child_balances_select`, `reward_redemptions_select`: Enforce `private.is_child_active_in_family(table.child_id, table.family_id)` for normal application sessions.
+   - `child_profiles_select`: Adults view active children by default; archived children require an explicit archive filter. Paired child devices only query active profiles matching their own `child_id`.
+   - `assessments_select`, `child_mastery_states_select`, `child_balances_select`, `reward_redemptions_select`, `wheel_spins_select`, `xp_ledger_select`, `rp_ledger_select`: Enforce `private.is_child_active_in_family(table.child_id, table.family_id)` for normal application sessions.
 
-#### 4.3.3 Right-to-Erasure Resolution: Conceptual Distinctions & Lawful Basis
-To respect parental privacy requests without violating immutable ledger integrity, Phase 6 defines an explicit four-tier lifecycle:
-1. **Access Revocation:** Child device grants are immediately marked `'revoked'`. Active sessions cannot access child data.
-2. **Soft Deletion / Archival:** `child_profiles.status` transitions to `'archived'`. The child is removed from daily learning flows, recommendations, and active parent dashboards.
-3. **Irreversible Anonymization:** Personal identifying fields in `child_profiles` are scrubbed: `display_name = 'Archived Learner'`, `avatar_key = null`, `school_grade = null`, `birth_year = null`. Review notes on assessments are cleared.
-4. **Physical Deletion:** All photographic evidence in Storage bucket `assessment-evidence` under path `{family_id}/{child_id}/` is permanently deleted. Draft assessments not yet finalized are purged.
+#### 4.3.3 Right-to-Erasure Resolution, Policy Status & Technical Constraints
+- **Policy & Legal Validation Status:**
+  > **STATUS: UNRESOLVED — REQUIRES FORMAL LEGAL & POLICY VALIDATION PRIOR TO GENERAL COMMERCIAL AVAILABILITY.**
+  > Retaining child-linked immutable ledger rows (`xp_ledger`, `rp_ledger`, `verified_learning_events`), even with direct names removed, does not automatically guarantee statutory anonymization or legitimate-interest retention under GDPR / COPPA / CCPA. Remaining UUID relationships, timestamps, assessment titles, and review notes can still enable re-identification.
+- **Operational Pilot Data Minimization Policy (4-Week Pilot Scope):**
+  For the closed family pilot, LearnWard implements a strict four-tier operational minimization lifecycle:
+  1. **Tier 1 (Access Revocation):** Child device grants are immediately marked `'revoked'`. Active sessions cannot access child data.
+  2. **Tier 2 (Soft Deletion & RLS Exclusion):** `child_profiles.status` transitions to `'archived'`. The child is excluded from daily learning flows, recommendations, and active parent dashboards via RLS.
+  3. **Tier 3 (Child Profile Pseudonymization):** Identifying fields in `child_profiles` are scrubbed: `display_name = 'Archived Learner'`, `avatar_key = null`, `school_grade = null`, `birth_year = null`.
+  4. **Tier 4 (Evidence Storage Purging):** All photographic evidence in Storage bucket `assessment-evidence` under path `{family_id}/{child_id}/` is permanently deleted. Draft assessments not yet finalized are purged.
+- **Technical Constraint on Review Notes:** `assessment_review_events` is protected by the immutable trigger `trg_prevent_assessment_review_event_mutation`, which prohibits UPDATE or DELETE of `review_notes`. Modifying historical review notes in-place would violate this frozen trigger. For Phase 6, access to historical review events for archived children is severed at the RLS read boundary.
 
-*Lawful Retention Basis:*
-Immutable ledgers (`xp_ledger`, `rp_ledger`, `verified_learning_events`) cannot be deleted due to `LW102` database triggers and audit obligations. Once direct identifiers are severed and evidence photos deleted, retaining pseudonymous numerical records is lawfully justified under legitimate interests / legal compliance exemptions for audit trail integrity and dispute resolution.
+#### 4.3.4 Schema-Verified Family Data Portability RPC
+Before requesting child or family archival, parents can retrieve a structured JSON export of their family's learning records.
+Every table, column, join, and authorization predicate in this function is **strictly verified against frozen migrations (Phases 1–5)**:
 
-#### 4.3.4 Hardened Family Data Portability RPC
-Before requesting child or family archival, parents can retrieve an export of their family's learning records:
 ```sql
 create or replace function public.export_family_data_json(p_family_id uuid)
 returns jsonb
@@ -542,59 +496,194 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_caller_role text;
   v_export jsonb;
 begin
-  -- 1. Verify caller is an active adult in the specified family
-  select role into v_caller_role
-  from public.family_memberships
-  where family_id = p_family_id
-    and user_id = auth.uid()
-    and status = 'active';
-
-  if v_caller_role is null or v_caller_role not in ('owner', 'parent') then
+  -- 1. Authorization check: caller must be an active adult/owner in the target family
+  if not private.is_active_family_adult(p_family_id) then
     raise exception 'Unauthorized to export family data' using errcode = '42501';
   end if;
 
-  -- 2. Build structured export with strict field allowlists (omitting salts, PIN hashes, tokens)
+  -- 2. Construct structured export payload using strictly verified columns
   select jsonb_build_object(
+    'export_version', 1,
+    'exported_at', now(),
     'family', (
-      select jsonb_build_object('id', id, 'name', name, 'created_at', created_at)
-      from public.families where id = p_family_id
+      select jsonb_build_object(
+        'id', id,
+        'name', name,
+        'timezone', timezone,
+        'locale', locale,
+        'created_at', created_at,
+        'archived_at', archived_at
+      )
+      from public.families
+      where id = p_family_id
     ),
     'children', coalesce((
       select jsonb_agg(jsonb_build_object(
-        'id', id, 'display_name', display_name, 'school_grade', school_grade,
-        'birth_year', birth_year, 'status', status, 'created_at', created_at
-      ))
-      from public.child_profiles where family_id = p_family_id
+        'id', id,
+        'display_name', display_name,
+        'school_grade', school_grade,
+        'birth_year', birth_year,
+        'avatar_key', avatar_key,
+        'status', status,
+        'created_at', created_at,
+        'archived_at', archived_at
+      ) order by created_at)
+      from public.child_profiles
+      where family_id = p_family_id
+    ), '[]'::jsonb),
+    'child_balances', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'child_id', child_id,
+        'xp_total', xp_total,
+        'rp_balance_minor', rp_balance_minor,
+        'updated_at', updated_at
+      ) order by child_id)
+      from public.child_balances
+      where family_id = p_family_id
     ), '[]'::jsonb),
     'assessments', coalesce((
       select jsonb_agg(jsonb_build_object(
-        'id', id, 'child_id', child_id, 'title', title, 'subject_key', subject_key,
-        'assessment_type', assessment_type, 'raw_score', raw_score, 'max_score', max_score,
-        'normalized_score', normalized_score, 'status', status, 'occurred_at', occurred_at
-      ))
-      from public.assessments where family_id = p_family_id and status != 'draft'
+        'id', id,
+        'child_id', child_id,
+        'subject_key', subject_key,
+        'subject', subject,
+        'title', title,
+        'assessment_type', assessment_type,
+        'difficulty', difficulty,
+        'raw_score', raw_score,
+        'max_score', max_score,
+        'normalized_score', normalized_score,
+        'entry_context', entry_context,
+        'status', status,
+        'occurred_at', occurred_at,
+        'version', version,
+        'created_at', created_at
+      ) order by occurred_at)
+      from public.assessments
+      where family_id = p_family_id and status != 'draft'
     ), '[]'::jsonb),
-    'mastery', coalesce((
+    'assessment_evidence', coalesce((
       select jsonb_agg(jsonb_build_object(
-        'child_id', child_id, 'learning_node_id', learning_node_id,
-        'mastery_score', mastery_score, 'mastery_band', mastery_band
-      ))
-      from public.child_mastery_states where family_id = p_family_id
+        'id', id,
+        'assessment_id', assessment_id,
+        'storage_path', storage_path,
+        'media_type', media_type,
+        'file_size_bytes', file_size_bytes,
+        'created_at', created_at
+      ) order by created_at)
+      from public.assessment_evidence
+      where family_id = p_family_id
+    ), '[]'::jsonb),
+    'verified_learning_events', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', id,
+        'child_id', child_id,
+        'assessment_id', assessment_id,
+        'subject_key', subject_key,
+        'subject', subject,
+        'title', title,
+        'assessment_type', assessment_type,
+        'difficulty', difficulty,
+        'raw_score', raw_score,
+        'max_score', max_score,
+        'normalized_score', normalized_score,
+        'evidence_count', evidence_count,
+        'entry_context', entry_context,
+        'occurred_at', occurred_at,
+        'verified_at', verified_at
+      ) order by occurred_at)
+      from public.verified_learning_events
+      where family_id = p_family_id
+    ), '[]'::jsonb),
+    'mastery_states', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'child_id', child_id,
+        'learning_node_id', learning_node_id,
+        'engine_version', engine_version,
+        'mastery_score', mastery_score,
+        'effective_evidence_count', effective_evidence_count,
+        'distinct_assessment_count', distinct_assessment_count,
+        'last_evidence_occurred_at', last_evidence_occurred_at,
+        'last_verified_at', last_verified_at,
+        'mastery_attained_at', mastery_attained_at,
+        'updated_at', updated_at
+      ) order by child_id, learning_node_id)
+      from public.child_mastery_states
+      where family_id = p_family_id
+    ), '[]'::jsonb),
+    'growth_events', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', id,
+        'child_id', child_id,
+        'assessment_id', assessment_id,
+        'normalized_score', normalized_score,
+        'baseline_score', baseline_score,
+        'growth_delta', growth_delta,
+        'historical_best', historical_best,
+        'total_rp_minor', total_rp_minor,
+        'xp_awarded', xp_awarded,
+        'created_at', created_at
+      ) order by created_at)
+      from public.growth_events
+      where family_id = p_family_id
     ), '[]'::jsonb),
     'xp_ledger', coalesce((
       select jsonb_agg(jsonb_build_object(
-        'child_id', child_id, 'amount', amount, 'reason', reason, 'created_at', created_at
-      ))
-      from public.xp_ledger where family_id = p_family_id
+        'id', id,
+        'child_id', child_id,
+        'amount', amount,
+        'reason_code', reason_code,
+        'source_type', source_type,
+        'source_id', source_id,
+        'created_at', created_at
+      ) order by created_at)
+      from public.xp_ledger
+      where family_id = p_family_id
     ), '[]'::jsonb),
     'rp_ledger', coalesce((
       select jsonb_agg(jsonb_build_object(
-        'child_id', child_id, 'amount_minor', amount_minor, 'reason', reason, 'created_at', created_at
-      ))
-      from public.rp_ledger where family_id = p_family_id
+        'id', id,
+        'child_id', child_id,
+        'amount_minor', amount_minor,
+        'reason_code', reason_code,
+        'source_type', source_type,
+        'source_id', source_id,
+        'created_at', created_at
+      ) order by created_at)
+      from public.rp_ledger
+      where family_id = p_family_id
+    ), '[]'::jsonb),
+    'reward_redemptions', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', id,
+        'child_id', child_id,
+        'reward_id', reward_id,
+        'origin', origin,
+        'rp_cost_minor', rp_cost_minor,
+        'status', status,
+        'reward_snapshot', reward_snapshot,
+        'cancellation_reason', cancellation_reason,
+        'fulfilled_at', fulfilled_at,
+        'created_at', created_at
+      ) order by created_at)
+      from public.reward_redemptions
+      where family_id = p_family_id
+    ), '[]'::jsonb),
+    'wheel_spins', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', id,
+        'child_id', child_id,
+        'reward_id', reward_id,
+        'redemption_id', redemption_id,
+        'origin', origin,
+        'spin_cost_minor', spin_cost_minor,
+        'selection_snapshot', selection_snapshot,
+        'created_at', created_at
+      ) order by created_at)
+      from public.wheel_spins
+      where family_id = p_family_id
     ), '[]'::jsonb)
   ) into v_export;
 
@@ -602,7 +691,7 @@ begin
 end;
 $$;
 
--- Revoke default public execution privileges
+-- Revoke public privileges; allow authenticated execution
 revoke execute on function public.export_family_data_json(uuid) from public, anon;
 grant execute on function public.export_family_data_json(uuid) to authenticated;
 ```
@@ -628,35 +717,39 @@ grant execute on function public.export_family_data_json(uuid) to authenticated;
 ### 5.2 Reduced-Motion Celebration Wheel Safety
 `ChildWheelScreen` provides vestibular safety while preserving the core non-compulsion invariant:
 1. **Detection:** When `MediaQuery.disableAnimationsOf(context)` is true or system reduced-motion is enabled:
-   - The 4-second rotating physics animation is completely bypassed.
-   - The screen renders an instantaneous, celebratory reveal dialog / card displaying the outcome.
-2. **Invariance Guarantee:**
-   - Reduced-motion mode executes the **exact same** server-authoritative RPC (`public.spin_reward_wheel`).
-   - Consumes the **exact same** configured RP cost.
-   - Debits the **exact same** daily spin cap.
-   - Evaluates the **exact same** server-authoritative pseudorandom tier selection.
-   - Grants the **exact same** positive, non-losing reward.
-   - Under no circumstances does an accessibility setting alter random tier probabilities or reward outcomes.
+   - The 4-second physical wheel spinning animation is completely bypassed.
+   - An instantaneous celebratory reveal card appears with the winning slice and reward title.
+2. **Identical Server Invariants:**
+   - Both animated and reduced-motion paths invoke the exact same server RPC `public.spin_reward_wheel(p_command_id, p_child_id)`.
+   - Both evaluate the exact same server-authoritative pseudorandom tier selection.
+   - Both debit the exact same RP cost (`spin_cost_minor`).
+   - Both consume the exact same daily spin cap.
+   - Both guarantee the exact same positive reward outcome.
 
-### 5.3 Mobile Release Distribution
-1. **Application Identifiers:**
-   - Android: `applicationId = "com.learnward.app"` (`apps/mobile/android/app/build.gradle.kts`)
-   - iOS: `CFBundleIdentifier = "com.learnward.app"` (`apps/mobile/ios/Runner/Info.plist`)
-2. **Version & Build Numbering:**
-   - Managed centrally in `apps/mobile/pubspec.yaml` (`version: 0.1.0+1`).
-3. **Android Release Packaging:**
-   - Keystore injection via environment variables (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`) in GitHub Actions.
-   - Generates release Android App Bundle (AAB): `flutter build appbundle --release --dart-define-from-file=dart_defines.json`.
-4. **iOS TestFlight Packaging:**
-   - Distribution certificate and provisioning profile handling.
-   - Generates signed release IPA archive: `flutter build ipa --release --dart-define-from-file=dart_defines.json`.
-5. **Distribution Track:**
-   - Manual upload of signed AAB to Google Play Console Internal Testing track and IPA to Apple TestFlight satisfies the pilot gate.
-   - Automated deployment service accounts (Google Play API / App Store Connect API keys) remain optional engineering conveniences.
+---
 
-### 5.4 Operational Diagnostics & Pilot Support
-1. **Support Diagnostics Screen:** Accessible to parents under Family Settings $\to$ "Support & Diagnostics":
-   - App version and build number (`0.1.0+1`);
+### 5.3 Release Operations & Distribution Packaging
+
+#### 5.3.1 Application ID & Metadata Pinning
+- Android Application ID: `com.learnward.app`
+- iOS Bundle Identifier: `com.learnward.app`
+- Version Format: Semantic versioning `1.0.0+1` (Version Name + Build Number).
+
+#### 5.3.2 Manual Signed Release Artifact Distribution
+Manual distribution workflows satisfy the 4-week pilot exit gate without requiring automated cloud CI deployment secrets:
+- **Android Release:**
+  - Build command: `flutter build appbundle --release`
+  - Signed with upload keystore specified via `key.properties`.
+  - Manually uploaded to Google Play Console: **Internal Testing Track**.
+- **iOS Release:**
+  - Build command: `flutter build ipa --release`
+  - Signed with Apple Distribution Certificate & App Store Provisioning Profile.
+  - Manually uploaded to Apple App Store Connect: **TestFlight Internal Testing**.
+
+#### 5.3.3 Client Diagnostics & Redacted Logging
+1. **Parent Diagnostics Screen:**
+   - Hidden diagnostic screen accessible by tapping version string 5 times in Parent Settings:
+   - Displays device OS, Flutter SDK version;
    - Commit SHA;
    - Active environment (`APP_ENV = staging | production`);
    - Local database version (`schemaVersion = 5`);
@@ -680,6 +773,9 @@ Phase 6 touches cross-cutting concerns (offline persistence, security, UI, distr
 | **Phase 4** | Reward Store & Wheel | [ADR 0005](adr/0005-phase-4-reward-economy-wheel.md) | Server-authoritative RPCs; non-losing spins; calendar day spin caps; trigger `trg_enforce_wheel_spins_immutability`. |
 | **Phase 5.1**| Mastery & Confidence | [ADR 0006](adr/0006-phase-5-learning-engine-mastery.md) | Deterministic EWMA rebuild; rolling 60-day confidence window; sticky `mastery_attained_at`. |
 | **Phase 5.2**| Skill Graph & Recs | [ADR 0007](adr/0007-phase-5-2-skill-graph-recommendation.md) | Read-time projections; five-class priority partition (`recovery > refresh > developing > unlock > explore`); max 3 choices. |
+
+### Static Schema-Contract Validation Obligation
+Every detailed design, ADR, or implementation specification that references database tables, column names, constraints, RPC signatures, or RLS policies **must** be statically verified against the authoritative schema definitions in `supabase/migrations/` before submission. Proposing speculative, unverified, or renamed SQL identifiers is strictly prohibited.
 
 ---
 
