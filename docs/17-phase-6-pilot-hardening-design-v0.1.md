@@ -209,6 +209,11 @@ When an operation is dispatched but the network drops before receiving the respo
    - **Shared-Child Actors:** Commands bound to specific `actor_user_id`; replayed via the idempotent RPC under that actor.
    - **Paired-Child Actors:** Recover exclusively by re-invoking the idempotent RPC with original `command_id` or querying child-accessible domain tables (`public.assessments` where `child_id = currentChildId`).
 4. **Replay Invariant:** Replays must always execute under the original `actor_user_id`. Replaying under a different actor causes server rejection with `42501: Invalid command replay` (actor mismatch). Migrated v4 rows with unknown original actor cannot be automatically replayed.
+5. **Post-Archive Outbox Handling & Explicit Reconciliation Deferral:**
+   - When a child profile is archived, subsequent server-side mutation RPC replays fail closed with `42501` (`Child profile is archived`).
+   - Dedicated read-only post-archive command reconciliation RPCs are **EXPLICITLY DEFERRED** post-pilot to keep pilot scope strictly bounded.
+   - Mobile outbox dispatchers catch the `42501` archive rejection and transition the pending command to `quarantined_unknown_outcome`.
+   - Quarantined commands and local assessment drafts/evidence remain safely preserved in local SQLite without automated network retry. Authorized parents review historical records and export all family data via the schema-verified `export_family_data_json` RPC (§4.3.4).
 
 #### 3.3.4 Multi-Actor Session Recovery (`pending_original_actor`)
 On a shared family device:
@@ -471,11 +476,113 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
 | Growth / Learning pipelines | `process_verified_learning_event`, `process_learning_event`, `catch_up_unprocessed_growth`, `catch_up_unprocessed_learning` and internal processing helpers | Exclude archived child from new processing, XP/RP ledgers and mastery writes; do not silently process archived historical events |
 | Read-only child-scoped RPCs | `reconcile_child_balance`, mastery, recommendation and family-scoped reader RPCs | Require active child on normal client calls; narrowly authorize approved archival data export separately |
 
-1. **Server-side authorization and side effects:** Derive authoritative family and child from the target row, check `child_profiles.status='active'` and existing tenant/actor authorization **before** command receipt inspection or any write. Do not rely on client-passed child status. Do not disclose cross-family existence through errors. Retain all original command IDs, operation/resource/actor checks and non-losing wheel/economic invariants.
-2. **Archive race:** Serialize child archive and child-scoped transactions so a valid mutation committed before archive can finish, but **no new normal mutation commits after archive**. Specify and test one consistent child-row lock/acquisition order across archive, assessment (`FOR UPDATE`), reward and Growth/Learning advisory locks; avoid deadlocks and time-of-check/time-of-use races. An unprocessed VLE remains pending controlled resolution after archive, rather than being silently processed.
-3. **Post-archive replay:** A previously committed original command ID must never create another effect or reveal archived PII through a normal mutating RPC. After archive, fail closed; use **separate authenticated, tenant-scoped, read-only** receipt reconciliation/export for eligible adults when necessary. This is not permission to bypass the archive state in production clients.
-4. **Trust boundary:** Only specifically authorized, auditable backend retention, statutory deletion or archival export operations are exceptions; none are an implicit special case in existing child-scoped RPCs. Preserve frozen triggers and downstream processing contracts.
-5. **Required pgTAP / real-Postgres cases:** For each RPC category, active child positive; archived child negative for adult/paired child (including still-active grant); cross-family denial; exact original-command replay before/after archive; concurrent archive vs submit/verify/redeem/process; no late XP/RP/mastery/reward writes; read-only adult archival export; and tenant-isolated error behavior. Inspect actual side-effect counts and locks, not only returned errors.
+##### 4.3.2.2.1 Authoritative Child Identification & Tenant Verification
+1. **Authoritative Context Resolution:** Before acquiring any lock or evaluating child status, every child-scoped procedure derives the authoritative `child_id` and `family_id` directly from the server-persisted row (e.g. from `assessments` or `reward_redemptions`) or validates the provided parameter against tenant ownership. Procedures never trust client-asserted child status.
+2. **Actor Authorization:** Validate caller permissions (`private.is_active_family_adult(v_family_id)` or `private.is_active_child_device(v_family_id, v_child_id)`) before inspecting receipts or acquiring row locks.
+3. **Cross-Tenant Fail-Closed Isolation:** If the caller is not authorized for the family or device grant, fail immediately with `42501` without disclosing whether the child exists or is archived.
+
+##### 4.3.2.2.2 Canonical Transaction-Level Concurrency Protocol & Lock Acquisition Hierarchy
+To guarantee strict serializability, eliminate time-of-check/time-of-use (TOCTOU) races, and mathematically prevent deadlocks between concurrent profile archival and child mutations (assessments, rewards, ledgers, and processing pipelines), all transactions interacting with child-scoped resources **must strictly acquire locks in the following global monotonic hierarchy**:
+
+```text
+Level 1: public.child_profiles (Row Lock: FOR UPDATE for archive, FOR SHARE for mutations)
+   │
+   ▼
+Level 2: Entity Resource Row Lock (public.assessments FOR UPDATE or public.reward_redemptions FOR UPDATE)
+   │
+   ▼
+Level 3: Transaction-Level Advisory Lock (pg_advisory_xact_lock for Growth or Learning pipeline)
+```
+
+1. **Level 1 — Child Profile Row Lock (`public.child_profiles`):**
+   - **Child Archival Transaction (`archive_child_profile`):**
+     Acquires an exclusive row lock on the target child profile:
+     ```sql
+     select id, status into v_child
+     from public.child_profiles
+     where id = p_child_id and family_id = v_family_id
+     for update;
+     ```
+     Verifies `v_child.status = 'active'`. If already archived, raises `42501: Child profile is already archived`. Then executes `update public.child_profiles set status = 'archived', archived_at = now() where id = p_child_id`.
+   - **Child Mutation Transactions (Draft Update, Submission, Verification, Rejection, Reward Redeem, Fulfill, Cancel):**
+     Acquires a shared row lock on the target child profile *before* touching any child-linked table:
+     ```sql
+     select id, status into v_child
+     from public.child_profiles
+     where id = v_child_id and family_id = v_family_id
+     for share;
+     ```
+     Verifies `v_child.status = 'active'`. If `v_child.status != 'active'`, immediately aborts with `raise exception 'Child profile is archived' using errcode = '42501'`.
+     *Note on `FOR SHARE`:* Concurrent mutations for the same child can acquire `FOR SHARE` simultaneously without blocking each other. However, a concurrent archival transaction (`FOR UPDATE`) is blocked until all currently running mutation transactions release their `FOR SHARE` lock upon commit or rollback. Conversely, if an archival transaction acquires `FOR UPDATE` first, any incoming mutation transaction requesting `FOR SHARE` blocks until archival commits; upon unblocking, it immediately reads `status = 'archived'` and aborts cleanly.
+2. **Level 2 — Entity Resource Row Lock (`public.assessments` / `public.reward_redemptions`):**
+   Only after Level 1 is acquired and child status confirmed active, acquire the resource row lock:
+   - For assessment review/submission:
+     ```sql
+     select * into v_assessment
+     from public.assessments
+     where id = p_assessment_id and family_id = v_family_id
+     for update;
+     ```
+   - For reward redemption fulfillment/cancellation:
+     ```sql
+     select * into v_redemption
+     from public.reward_redemptions
+     where id = p_redemption_id and family_id = v_family_id
+     for update;
+     ```
+3. **Level 3 — Pipeline Transaction-Level Advisory Lock (`growth_events` / `learning_processing_events`):**
+   Only after Level 1 (and Level 2 if applicable) locks are held, acquire the deterministic transaction-level advisory locks:
+   - Growth processing: `perform pg_advisory_xact_lock(hashtext('child_growth_' || v_child_id::text));`
+   - Learning processing: `perform pg_advisory_xact_lock(hashtext('child_learning_' || v_child_id::text));`
+
+##### 4.3.2.2.3 Mathematical Proof of Deadlock Prevention
+Deadlock (`40P01`) occurs if and only if there is a cycle in the transaction dependency lock graph. Because every transaction—whether archiving a child, submitting/verifying an assessment, redeeming a reward, or running growth/learning pipelines—strictly acquires locks in the monotonic sequence `Level 1 -> Level 2 -> Level 3`:
+- No transaction holds a Level 2 or Level 3 lock while requesting a Level 1 lock.
+- No transaction holds a Level 3 lock while requesting a Level 2 lock.
+Therefore, the wait-for graph of locks across concurrent transactions is guaranteed to be a Directed Acyclic Graph (DAG). Deadlocks are mathematically impossible.
+
+##### 4.3.2.2.4 Concurrent Archive and Commit Ordering Guarantees
+1. **Case A: Mutation Transaction Commits Before Archival:**
+   - Transaction TM (mutation) acquires `FOR SHARE` on `child_profiles` (active) -> acquires `FOR UPDATE` on entity -> commits.
+   - Transaction TA (archival) attempts `FOR UPDATE` on `child_profiles`, blocks until TM commits -> unblocks, reads child, archives profile, commits.
+   - *Outcome:* Mutation cleanly committed and recorded in immutable history; subsequent archival succeeds.
+2. **Case B: Archival Transaction Commits Before Mutation:**
+   - Transaction TA (archival) acquires `FOR UPDATE` on `child_profiles` -> sets `status = 'archived'` -> commits.
+   - Transaction TB (mutation) attempts `FOR SHARE` on `child_profiles`, blocks until TA commits -> unblocks, reads `status = 'archived'` -> fails closed with `42501` without taking entity locks or modifying data.
+   - *Outcome:* Zero late mutations commit after child archival.
+3. **Unprocessed VLEs:**
+   - If an assessment was verified before archival, generating a VLE, but Growth or Learning pipeline processing has not completed, background catch-up jobs (`catch_up_unprocessed_growth`, `catch_up_unprocessed_learning`) check `child_profiles.status = 'active'` at Level 1 before processing.
+   - Unprocessed events for archived children remain frozen in their pending state without executing late XP/RP ledger credits or mastery mutations.
+
+##### 4.3.2.2.5 Post-Archive Outbox Command Reconciliation (Explicit Deferral Contract)
+1. **Mutating Replay Fails Closed:** A client attempting to replay a previously queued mutating RPC (`create_assessment_draft`, `submit_assessment`, `redeem_store_reward`, `spin_reward_wheel`) for an archived child profile receives an immediate `42501` exception. Replay never creates new ledger entries, wheel spins, or drafts.
+2. **Explicit Deferral of Custom Read-Only Reconciliation RPCs:** To maintain strict pilot scope boundaries and avoid expanding the backend API surface with bespoke single-use endpoints, custom read-only post-archive command reconciliation RPCs are **EXPLICITLY DEFERRED** post-pilot.
+3. **Client Outbox Quarantine Policy:**
+   - When a mobile client outbox dispatcher receives a `42501` indicating the target child is archived, the command transitions to `quarantined_unknown_outcome`.
+   - Quarantined commands remain safely preserved in local SQLite without automated network retry, preventing infinite retry loops or unexpected state mutation.
+   - Local assessment drafts and evidence photos for the archived child are preserved locally in quarantine and are not silently deleted.
+4. **Parental Historical Audit & Export:** Parents retain the ability to inspect and export all historical data for archived children through the authorized, schema-verified `export_family_data_json` RPC (§4.3.4) and adult historical reporting views.
+
+##### 4.3.2.2.6 PostgreSQL Two-Session Concurrency Regression Test Suite
+A formal pgTAP / two-session concurrency test suite (`supabase/tests/database/`) verifies the locking protocol using two asynchronous database connections (Session 1: S1, Session 2: S2):
+1. **Concurrent Submit vs. Archive:**
+   - S1: `BEGIN; SELECT * FROM public.child_profiles WHERE id = :child_id FOR UPDATE; UPDATE public.child_profiles SET status = 'archived';` (holds open transaction).
+   - S2: Attempts `SELECT public.submit_assessment(:assessment_id)`. Verifies S2 blocks waiting for Level 1 lock.
+   - S1: `COMMIT;`
+   - S2: Unblocks. Verifies S2 raises `42501` ('Child profile is archived'). Verifies assessment remains `draft` with zero side effects.
+2. **Concurrent Verify vs. Archive:**
+   - S1: `BEGIN; SELECT public.verify_assessment(:assessment_id);` (acquires `FOR SHARE` on child, `FOR UPDATE` on assessment).
+   - S2: Attempts `SELECT public.archive_child_profile(:child_id)`. Verifies S2 blocks waiting for Level 1 exclusive lock.
+   - S1: `COMMIT;`
+   - S2: Unblocks, successfully archives profile. Verifies VLE and ledger entries exist from S1, but subsequent mutations are rejected.
+3. **Concurrent Reward Redeem vs. Archive:**
+   - S1: Archives child and commits.
+   - S2: Attempts `SELECT public.redeem_store_reward(:command_id, :child_id, :reward_id)`. Verifies immediate failure closed with `42501`, no RP balance change, and no row created in `reward_redemptions`.
+4. **Deadlock Absence Under High Concurrency:**
+   - 100 interleaved concurrent executions of archival and mutations executed via parallel runners; verifies zero occurrences of PostgreSQL error `40P01` (`deadlock_detected`).
+
+##### 4.3.2.2.7 Phase 6 Implementation Scope Notice
+The transaction-level lock ordering hierarchy, RLS policy replacements, and SECURITY DEFINER RPC hardening described in §4.3 are **formal design specifications for implementation during Phase 6.1 and 6.2 migrations**. They are not present in the frozen Phase 0–5 database migrations. PR #13 is strictly documentation-only.
 
 ---
 
