@@ -424,8 +424,13 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
    ```
    A still-active device grant **cannot** expose archived learning records.
 2. **Indirect relationships:** `assessment_evidence` and `assessment_review_events` join same-family `assessments` and require active linked child; review events remain adult-only. Targeted `rewards` require an active `target_child_id`, while family-wide rewards retain their tenant conditions. `child_profiles_select` requires active profile for **both** adult and child device.
-3. **Child profile direct UPDATE policy replacement:** The frozen Phase 1 migration granted broad UPDATE on `public.child_profiles` to authenticated adults. In a new Phase 6 migration, replace `child_profiles_update` to require active child status in both `USING` and `WITH CHECK`:
+3. **Child profile direct UPDATE policy replacement & column privilege hardening:** The frozen Phase 1 migration granted broad UPDATE on `public.child_profiles` to authenticated adults. In a new Phase 6 migration, harden both column privileges and RLS:
    ```sql
+   -- Column-level privilege hardening: revoke table-wide update, permit only safe profile fields
+   revoke update on public.child_profiles from authenticated;
+   grant update (display_name, avatar_key, school_grade) on public.child_profiles to authenticated;
+
+   -- RLS replacement: restrict updates to active child profiles in the caller's family
    drop policy if exists child_profiles_update on public.child_profiles;
    create policy child_profiles_update on public.child_profiles
      for update to authenticated
@@ -438,7 +443,7 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
        and status = 'active'
      );
    ```
-   This prevents ordinary Data API clients from updating already-archived profiles. Combined with the trigger guard `trg_guard_child_profile_lifecycle` (§4.3.2.2.1), direct Data API callers are prohibited from modifying `status` or `archived_at` or reactivating archived profiles (`archived -> active`), while parents retain the ability to update standard editable fields (`display_name`, `avatar_key`, `school_grade`) on active profiles.
+   This prevents ordinary Data API clients from updating `status`, `archived_at`, `birth_year`, or immutable identifiers at the database engine level (SQLSTATE `42501: permission denied for column`), while completely blocking updates to already-archived profiles via RLS. Combined with the trigger guard `trg_guard_child_profile_lifecycle` (§4.3.2.2.1), direct Data API callers cannot bypass canonical archival or reactivate archived profiles (`archived -> active`), while parents retain full ability to update standard editable fields (`display_name`, `avatar_key`, `school_grade`) on active profiles. The trusted `archive_child_profile()` RPC runs as `SECURITY DEFINER` (owner `postgres`), retaining full table-level privileges to perform atomic lifecycle transitions and PII pseudonymization.
 4. **Grant-status exception:** Preserve the `child_device_grants` owner's *own-row* read (`auth_user_id=auth.uid()`) even when revoked or archived so positive `status='revoked'` evidence remains available. Restrict parent listing of other grant rows to active child profiles. Example:
    ```sql
    drop policy if exists child_device_grants_select on public.child_device_grants;
@@ -491,12 +496,13 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
 | Growth / Learning pipelines | `process_verified_learning_event`, `process_learning_event`, `catch_up_unprocessed_growth`, `catch_up_unprocessed_learning` and internal processing helpers | Exclude archived child from new processing, XP/RP ledgers and mastery writes; do not silently process archived historical events |
 | Read-only child-scoped RPCs | `reconcile_child_balance`, mastery, recommendation and family-scoped reader RPCs | Require active child on normal client calls; narrowly authorize approved archival data export separately |
 
-##### 4.3.2.2.1 Canonical Child Archival Operation & Direct UPDATE Lifecycle Protection Contract
-1. **Preventing Direct Lifecycle Modification via Data API:**
-   - The frozen Phase 1 migration permitted authenticated adults direct `UPDATE` access to `public.child_profiles` without restricting column updates. This allowed ordinary Data API clients (`PATCH /rest/v1/child_profiles?id=eq.<id>`) to potentially manipulate `status` or `archived_at` directly, bypassing transactional archival invariants and risking uncoordinated reactivation (`archived -> active`).
-   - In a new Phase 6 migration, direct Data API lifecycle manipulation is blocked via a two-layer defense:
-     - **RLS Boundary:** The replacement `child_profiles_update` policy enforces `status = 'active'` on both existing rows (`USING`) and updated rows (`WITH CHECK`). Direct updates on already-archived profiles fail closed immediately.
-     - **Trigger Invariant Guard (`trg_guard_child_profile_lifecycle`):** A `BEFORE UPDATE` trigger on `public.child_profiles` validates all update operations:
+##### 4.3.2.2.1 Canonical Child Archival Operation, Column Privilege Hardening & Atomic Tier 3 Pseudonymization
+1. **Preventing Direct Lifecycle Modification via PostgreSQL Column-Level Privileges & RLS:**
+   - The frozen Phase 1 migration permitted authenticated adults direct table-wide `UPDATE` on `public.child_profiles`. This allowed ordinary Data API clients (`PATCH /rest/v1/child_profiles?id=eq.<id>`) to potentially manipulate `status` or `archived_at` directly, bypassing transactional archival invariants and risking uncoordinated reactivation (`archived -> active`).
+   - Rather than relying solely on session variables or convention, Phase 6 hardens the authorization boundary using native PostgreSQL column privileges, RLS, and trigger defenses:
+     - **Column-Level Privileges (Engine Boundary):** Table-wide `UPDATE` on `public.child_profiles` is revoked from `authenticated`. `UPDATE` is granted strictly on permitted profile fields (`display_name`, `avatar_key`, `school_grade`). Any direct Data API attempt by an authenticated user to modify `status`, `archived_at`, `birth_year`, `id`, `family_id`, or `created_at` is rejected immediately by the PostgreSQL query planner with SQLSTATE `42501` (`permission denied for column`).
+     - **Row-Level Security Boundary:** The replacement `child_profiles_update` policy enforces `private.is_active_family_adult(family_id) AND status = 'active'` in both `USING` and `WITH CHECK`. Direct updates on already-archived profiles return 0 rows under RLS.
+     - **Trigger Invariant Guard (`trg_guard_child_profile_lifecycle`):** A `BEFORE UPDATE` trigger on `public.child_profiles` enforces irrevocable immutability for archived profiles and guarantees atomic Tier 3 pseudonymization:
        ```sql
        create or replace function private.guard_child_profile_lifecycle()
        returns trigger
@@ -504,31 +510,32 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
        security definer
        set search_path = ''
        as $$
-       declare
-         v_in_archive_rpc boolean;
        begin
-         -- 1. Fail closed on already-archived profiles (no in-place edit, no reactivation)
+         -- 1. Irrevocable immutability for already-archived profiles
+         -- Rejects all subsequent in-place edits and prevents any reactivation (archived -> active)
          if old.status = 'archived' then
            raise exception 'Archived child profile is immutable' using errcode = 'LW011';
          end if;
 
-         -- 2. Detect lifecycle status transition or archived_at modification
+         -- 2. State transition & atomic Tier 3 pseudonymization enforcement
          if new.status is distinct from old.status or new.archived_at is distinct from old.archived_at then
-           -- Verify that update originates from authorized transactional procedure
-           v_in_archive_rpc := nullif(current_setting('learnward.in_archive_child_profile', true), '')::boolean;
-           if not coalesce(v_in_archive_rpc, false) then
-             raise exception 'Direct child profile lifecycle mutation is prohibited; call public.archive_child_profile()'
-               using errcode = '42501';
-           end if;
-
-           -- Strict state machine: only active -> archived is allowed
+           -- Transition must be strictly active -> archived
            if old.status != 'active' or new.status != 'archived' or new.archived_at is null then
              raise exception 'Invalid child profile lifecycle transition' using errcode = 'LW012';
            end if;
+
+           -- Atomic Tier 3 pseudonymization requirement:
+           -- Identifying attributes must be scrubbed in this exact same transition update
+           if new.display_name != '[Archived Learner]'
+              or new.avatar_key is not null
+              or new.school_grade is not null
+              or new.birth_year is not null then
+             raise exception 'Archival transition requires atomic pseudonymization of identifying attributes'
+               using errcode = 'LW013';
+           end if;
          end if;
 
-         -- 3. Preserve parent editing of mutable profile fields (display_name, school_grade, avatar_key)
-         -- Core identity fields remain immutable
+         -- 3. Core identity immutability (id, family_id, created_at)
          if new.id != old.id or new.family_id != old.family_id or new.created_at != old.created_at then
            raise exception 'Core child profile fields are immutable' using errcode = 'LW005';
          end if;
@@ -542,8 +549,8 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
          for each row
          execute function private.guard_child_profile_lifecycle();
        ```
-2. **Authorized Transactional Archival Procedure (`archive_child_profile`):**
-   Archival is routed strictly through the authoritative procedure:
+2. **Authorized Transactional Archival Procedure with Atomic Tier 1–3 Execution (`archive_child_profile`):**
+   Archival is executed strictly through the authorized procedure. Because it is defined with `SECURITY DEFINER set search_path = ''`, it executes with function owner (`postgres`) privileges, possessing table-wide column UPDATE rights. It executes **Tier 1 (grant revocation), Tier 2 (soft archival), and Tier 3 (PII pseudonymization) atomically in a single transaction**:
    ```sql
    create or replace function public.archive_child_profile(p_child_id uuid)
    returns public.child_profiles
@@ -561,7 +568,7 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
        raise exception 'Unauthenticated' using errcode = '42501';
      end if;
 
-     -- Derive authoritative family_id and check adult authorization
+     -- Derive authoritative family_id and verify caller is an active adult in the child's family
      select family_id into v_family_id
      from public.child_profiles
      where id = p_child_id;
@@ -580,17 +587,7 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
        raise exception 'Child profile is already archived' using errcode = '42501';
      end if;
 
-     -- Set transaction-local flag to authorize trigger transition
-     set local learnward.in_archive_child_profile = 'true';
-
-     -- Execute profile archival
-     update public.child_profiles
-     set status = 'archived',
-         archived_at = now()
-     where id = p_child_id
-     returning * into v_child;
-
-     -- Automatic cascade revocation: revoke all active device grants for this child
+     -- Tier 1: Revoke all active paired device grants for this child
      update public.child_device_grants
      set status = 'revoked',
          revoked_at = now()
@@ -598,12 +595,25 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
        and family_id = v_family_id
        and status = 'active';
 
+     -- Tier 2 & Tier 3: Atomically archive profile and scrub all identifying attributes
+     update public.child_profiles
+     set status = 'archived',
+         archived_at = now(),
+         display_name = '[Archived Learner]',
+         avatar_key = null,
+         school_grade = null,
+         birth_year = null
+     where id = p_child_id
+     returning * into v_child;
+
      return v_child;
    end;
    $$;
    ```
-3. **Preserving Ordinary Parent Profile Editing:**
-   Parents retain normal Data API capability to update non-lifecycle fields (`display_name`, `avatar_key`, `school_grade`) on active profiles. When an active adult issues `PATCH /rest/v1/child_profiles?id=eq.<id>` with `{"display_name": "New Name"}`, RLS `child_profiles_update` permits the update and `trg_guard_child_profile_lifecycle` confirms `status` is unchanged, allowing the update to commit normally.
+3. **Resolving the Archived Immutability Contradiction:**
+   Because Tier 3 pseudonymization executes **in the exact same UPDATE** that transitions the profile from `active` to `archived`, the profile enters the archived state already scrubbed of PII. Subsequent updates on the archived profile are strictly rejected by `old.status = 'archived'` (`LW011`). There is no window of vulnerability, no need for secondary updates on archived rows, and no conflict with trigger immutability.
+4. **Preserving Ordinary Parent Profile Editing:**
+   Parents retain normal Data API capability to update non-lifecycle fields (`display_name`, `avatar_key`, `school_grade`) on active profiles. When an active adult issues `PATCH /rest/v1/child_profiles?id=eq.<id>` with `{"display_name": "New Name"}`, PostgreSQL column privileges allow the statement, RLS `child_profiles_update` permits the row, and `trg_guard_child_profile_lifecycle` confirms `status` is unchanged, allowing the update to commit normally.
 
 ##### 4.3.2.2.2 Reconciled System-Wide Concurrency Protocol & Total Lock Acquisition Hierarchy
 To guarantee strict serializability, eliminate time-of-check/time-of-use (TOCTOU) races, and prevent deadlocks across all Phase 1–5 subsystems (assessments, rewards catalog, reward redemptions, celebration wheel, integer balances, and mastery pipelines), child-scoped operations **must acquire locks in the following global monotonic hierarchy**:
@@ -677,7 +687,7 @@ Order 4: Transaction-Level Advisory Locks (Pipelines)
 4. **Parental Historical Audit & Export:** Parents retain the ability to inspect and export all historical data for archived children through the authorized, schema-verified `export_family_data_json` RPC (§4.3.4) and adult historical reporting views.
 
 ##### 4.3.2.2.6 Executable PostgreSQL Concurrency & Lifecycle Regression Test Suite
-A formal pgTAP / two-session concurrency test suite (`supabase/tests/database/`) verifies the locking protocol and lifecycle guards using two asynchronous database connections (Session 1: S1, Session 2: S2):
+A formal pgTAP / two-session concurrency test suite (`supabase/tests/database/`) verifies the locking protocol, column privileges, lifecycle guards, and atomic pseudonymization using two asynchronous database connections (Session 1: S1, Session 2: S2):
 1. **Concurrent Submit vs. Archive:**
    - S1 (Archival): `BEGIN; SELECT public.archive_child_profile(v_child_id);` (holds transaction open before COMMIT).
    - S2 (Submission): Attempts `SELECT public.submit_assessment(p_assessment_id => v_assessment_id, p_expected_version => 1, p_command_id => gen_random_uuid());`. Verifies S2 blocks waiting for Order 1 lock.
@@ -687,7 +697,7 @@ A formal pgTAP / two-session concurrency test suite (`supabase/tests/database/`)
    - S1 (Verification): `BEGIN; SELECT public.verify_assessment(p_assessment_id => v_assessment_id, p_expected_version => 1, p_command_id => gen_random_uuid(), p_notes => 'Verified by parent');` (acquires Order 1 `FOR SHARE`, Order 2 `FOR UPDATE`).
    - S2 (Archival): Attempts `SELECT public.archive_child_profile(v_child_id);`. Verifies S2 blocks waiting for Order 1 exclusive lock.
    - S1: `COMMIT;`
-   - S2: Unblocks, successfully archives profile. Verifies VLE, growth event, and ledger entry from S1 exist, but subsequent mutations are rejected.
+   - S2: Unblocks, successfully archives and pseudonymizes profile. Verifies VLE, growth event, and ledger entry from S1 exist, but subsequent mutations are rejected.
 3. **Concurrent Reward Redeem vs. Archive:**
    - S1: `SELECT public.archive_child_profile(v_child_id);` (commits).
    - S2: Attempts `SELECT public.redeem_store_reward(p_reward_id => v_reward_id, p_command_id => gen_random_uuid(), p_child_id => v_child_id);`.
@@ -696,12 +706,24 @@ A formal pgTAP / two-session concurrency test suite (`supabase/tests/database/`)
    - S1: `SELECT public.archive_child_profile(v_child_id);` (commits).
    - S2: Attempts `SELECT public.spin_reward_wheel(p_command_id => gen_random_uuid(), p_child_id => v_child_id);`.
    - Verifies immediate failure closed with SQLSTATE `42501` ('Child profile is archived'), no RP balance change, and zero rows inserted into `wheel_spins`.
-5. **Direct UPDATE Lifecycle Bypass Rejection & Field Edit Preservation:**
-   - S1 (Adult direct status edit): Attempts direct SQL `UPDATE public.child_profiles SET status = 'archived' WHERE id = v_child_id;`. Verifies failure closed with SQLSTATE `42501` ('Direct child profile lifecycle mutation is prohibited; call public.archive_child_profile()').
-   - S2 (Adult direct reactivation edit): Attempts direct SQL `UPDATE public.child_profiles SET status = 'active' WHERE id = v_child_id;` on an archived profile. Verifies failure closed with SQLSTATE `LW011` / `42501` ('Archived child profile is immutable').
-   - S3 (Adult valid profile edit): Attempts direct SQL `UPDATE public.child_profiles SET display_name = 'Updated Name' WHERE id = v_child_id;` on an active profile. Verifies successful update and updated `display_name`.
-6. **High-Concurrency Deadlock Absence Verification:**
-   - 100 interleaved concurrent executions of archival and operational mutations (submissions, verifications, redemptions, wheel spins) executed via parallel runners; verifies zero occurrences of PostgreSQL error `40P01` (`deadlock_detected`).
+5. **Column Privilege Rejection of Direct Status & Lifecycle Mutation:**
+   - S1 (Direct status edit by authenticated): Attempts direct SQL `UPDATE public.child_profiles SET status = 'archived' WHERE id = v_child_id;`. Verifies failure closed with SQLSTATE `42501` ('permission denied for column status').
+   - S2 (Direct archived_at mutation): Attempts direct SQL `UPDATE public.child_profiles SET archived_at = now() WHERE id = v_child_id;`. Verifies failure closed with SQLSTATE `42501` ('permission denied for column archived_at').
+   - S3 (Direct birth_year mutation): Attempts direct SQL `UPDATE public.child_profiles SET birth_year = null WHERE id = v_child_id;`. Verifies failure closed with SQLSTATE `42501` ('permission denied for column birth_year').
+6. **Attempted Reactivation & Archived Child Edit Rejection:**
+   - S1 (Reactivation attempt): Attempts direct SQL `UPDATE public.child_profiles SET status = 'active' WHERE id = v_child_id;` on an archived profile. Verifies failure closed with SQLSTATE `42501` (column privilege denied).
+   - S2 (Direct edit on archived profile): Attempts direct SQL `UPDATE public.child_profiles SET display_name = 'Alex Hacked' WHERE id = v_child_id;` on an archived profile. Verifies 0 rows updated under RLS `child_profiles_update` and rejection via trigger `LW011` ('Archived child profile is immutable').
+7. **Normal Parent Profile Edits on Active Profiles:**
+   - S1 (Valid parent edit): Adult executes `UPDATE public.child_profiles SET display_name = 'Alex Updated', avatar_key = 'star_blue', school_grade = '5' WHERE id = v_child_id;` on an active profile. Verifies update succeeds and updated values persist.
+8. **Atomic Pseudonymization & Historical Export Verification:**
+   - S1 (Archival execution): Adult calls `SELECT public.archive_child_profile(v_child_id);`.
+   - Verifies child profile fields: `status = 'archived'`, `archived_at IS NOT NULL`, `display_name = '[Archived Learner]'`, `avatar_key IS NULL`, `school_grade IS NULL`, `birth_year IS NULL`.
+   - Verifies device grants: all grants for child in `child_device_grants` have `status = 'revoked'`, `revoked_at IS NOT NULL`.
+   - Verifies data portability: Adult calls `SELECT public.export_family_data_json(v_family_id);`, verifying complete JSON structure with pseudonymized child profile and intact historical learning records.
+9. **Archival Transactional Rollback Integrity:**
+   - S1: Simulates failure during device grant revocation or profile update within `archive_child_profile()`. Verifies entire transaction rolls back: child profile remains `status = 'active'`, original `display_name`, `avatar_key`, `school_grade`, and `birth_year` are unchanged, and device grants remain active.
+10. **High-Concurrency Deadlock Absence Verification:**
+    - 100 interleaved concurrent executions of archival and operational mutations (submissions, verifications, redemptions, wheel spins) executed via parallel runners; verifies zero occurrences of PostgreSQL error `40P01` (`deadlock_detected`).
 
 ##### 4.3.2.2.7 Phase 6 Implementation Scope Notice
 The transaction-level lock ordering hierarchy, RLS policy replacements, lifecycle trigger guards, and SECURITY DEFINER RPC hardening described in §4.3 are **formal design specifications for implementation during Phase 6.1 and 6.2 migrations**. They are not present in the frozen Phase 0–5 database migrations. PR #13 is strictly documentation-only.
@@ -718,6 +740,7 @@ The transaction-level lock ordering hierarchy, RLS policy replacements, lifecycl
     2. **Tier 2 (Soft Archival & RLS Exclusion):** `child_profiles.status = 'archived'`. RLS hides all child-linked records from normal adult and child queries.
     3. **Tier 3 (Child Profile Pseudonymization):** Identifying attributes in `child_profiles` are scrubbed (`display_name = '[Archived Learner]'`, `avatar_key = null`, `school_grade = null`, `birth_year = null`).
     4. **Tier 4 (Evidence Storage Purging):** All photographic evidence in Storage bucket `assessment-evidence` under `{family_id}/{child_id}/*` is permanently deleted.
+  - *Atomic Execution Contract:* Tiers 1, 2, and 3 are executed **atomically in a single transaction** inside `archive_child_profile()`. The profile enters the archived state already scrubbed of PII, satisfying Tier 3 immediately upon archival. Once archived, the profile is permanently immutable under `trg_guard_child_profile_lifecycle` (`LW011`). Tier 4 (Storage evidence purging) is executed asynchronously by an authorized backend batch job or parent export/deletion confirmation.
   - *Statutory Erasure Posture:* Retaining child-linked immutable ledger rows (`xp_ledger`, `rp_ledger`, `verified_learning_events`), even with direct names removed, does NOT automatically guarantee statutory anonymization or legitimate-interest retention. Remaining UUID relationships, timestamps, and review notes can still enable re-identification.
 - **Technical Constraint on Review Notes:** `assessment_review_events` is protected by the immutable trigger `trg_prevent_assessment_review_event_mutation`, prohibiting in-place UPDATE or DELETE of `review_notes`. Modifying historical notes is blocked by the frozen trigger; access is severed at the RLS read boundary.
 
