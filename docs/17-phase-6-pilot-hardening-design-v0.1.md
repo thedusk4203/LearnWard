@@ -264,13 +264,26 @@ Keep `evidenceId` (client UUID in deterministic storage path), `serverEvidenceId
 **A matching path, file size or custom metadata from `storage.list()` is not proof of byte equality.** Supabase Storage [issue #759](https://github.com/supabase/storage/issues/759) documents that user-defined metadata can be missing from `list()`. On HTTP 409, an unknown response or an object already present:
 
 1. With the *original authorized actor*, download the private object using the supported Dart method `supabase.storage.from('assessment-evidence').download(storagePath)`. Calculate SHA-256 from the **downloaded bytes** and compare digest **and** length to the persisted local JPEG. Verify SDK methods and private-bucket RLS behavior in integration tests.
-2. **Exact match:** Reuse the original object path; call the frozen idempotent `register_assessment_evidence(p_assessment_id,p_storage_path,p_media_type,p_file_size_bytes)` RPC. Persist returned database `id` in `serverEvidenceId`; a lost registration response retries the **same path**.
+2. **Exact match:** Reuse the object path, but do not assume that a frozen registration RPC can be repeated after assessment submission. Reconcile the authoritative evidence row and assessment status under `3.5.4; call the same-path registration RPC only while assessment is still draft and the original actor remains authorized.
 3. **Different SHA-256 or size:** Enter `evidence_conflict` (recovery classification) and preserve original bytes, UUID and path. Do not overwrite, rotate UUIDs or register another file automatically. Investigate DB linkage before manual resolution.
 4. **Download forbidden, unavailable, incomplete, or result uncertain:** Enter `verification_pending`, retain all local data and retry with bounded backoff after authorization returns. A failed list/read is not proof that an upload is absent. Only a definitive, authorized object-not-found response permits reattempting the original `upsert:false` upload.
 5. **Acceptance tests:** Same-size/different-bytes object, missing custom metadata, 409 exact match, upload-committed/response-lost, registration-committed/response-lost, app restart, revoked/archived actor and private Storage RLS. Never include a service-role credential or grant Storage UPDATE/upsert to the mobile client.
 
 References: [Supabase Dart upload](https://supabase.com/docs/reference/dart/file-buckets-upload), [private Storage buckets](https://supabase.com/docs/guides/storage/buckets/fundamentals), [custom metadata issue](https://github.com/supabase/storage/issues/759).
 
+
+---
+
+#### 3.5.4 Reconciliation After Evidence Registration Response Loss
+
+**Frozen RPC reality:** `public.register_assessment_evidence(p_assessment_id,p_storage_path,p_media_type,p_file_size_bytes)` checks `assessments.status='draft'` **before** looking up an already-registered `assessment_evidence.storage_path`. If registration committed but its response was lost, and another device then submitted the assessment, a repeat RPC returns `LW109` even for the same path. A successful Storage upload never proves the database registration completed.
+
+1. Preserve original `assessmentId`, client evidence UUID, `storagePath`, stable compressed bytes/checksum and `serverEvidenceId` across restarts. On response loss, use only existing authenticated, same-family **authorized SELECT** on `assessments.id` and `assessment_evidence.storage_path`, also checking linked `assessment_id`, `family_id`, media type and file size. Never infer absence from an RLS-filtered zero-row result.
+2. **Matching authoritative row exists:** After `3.5.3` remote-byte integrity checks, store the returned `assessment_evidence.id` as `serverEvidenceId` and mark registration reconciled **without a mutation**, even if assessment is now `pending_review`, `verified` or `rejected`.
+3. **No visible row and assessment remains draft:** If authorization and remote bytes have been verified, retry the exact original registration RPC/path. On timeout or `LW109`, re-read authoritative state; do not automatically change UUID, actor or assessment version.
+4. **No visible row and assessment is non-draft:** Enter `registration_unresolved` and retain the local photo/UUID. Do not call the frozen registration RPC, reopen terminal assessments, attach evidence after submission or replace the path. An authorized parent can export locally retained evidence and inspect the recorded assessment before any separate remedial decision.
+5. **Archived child, changed/revoked actor, or inaccessible record:** Quarantine pending data. Never bypass RLS or expose service-role credentials; only a separately authorized archival/export process may handle archived content.
+6. **Acceptance:** Test registration-committed/response-lost followed by remote submission; not-committed before submission; pending_review/verified/rejected; RLS-hidden row; mismatched metadata; same/different SHA-256; actor changes; archived child; and app restart. Require zero duplicate evidence rows, no post-submission evidence attachment and no immutable assessment mutation.
 
 ---
 
@@ -418,16 +431,60 @@ PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate 
    ```
    This narrow status exception **does not grant archived assessment, reward or evidence reads**.
 4. **`command_receipts`:** There is no direct `child_id`. Keep adult-only SELECT; resolve `resource_id` by operation: `create_draft/submit/verify/reject` → `assessments.id`, `redeem_reward/fulfill_reward/cancel_reward` → `reward_redemptions.id`, `spin_wheel` → `wheel_spins.id`. Require active family adult **and** active child through the operation-specific resource + same family join; unknown operations or missing resources fail closed. Child devices still use server-side idempotent RPCs rather than SELECT on receipts.
-5. **Private pairing and Storage:** Verify `private.child_pairing_requests` has no client-readable route or grants. The frozen `storage.objects` evidence SELECT policy calls `private.validate_storage_evidence_access(name,false)`, which currently checks actor and assessment **but not child archive status**. Harden that helper in a new Phase 6 migration by requiring `private.is_child_active_in_family(v_child_id,v_family_id)` for SELECT/INSERT/DELETE, while preserving tenant, assessment, draft-only mutation and no-UPDATE invariants. Audit other permissive Storage policies to prevent OR bypass; only authorized backend operations may purge archived evidence.
-6. **Required pgTAP:** Adults/paired children/siblings/foreign family; active/archived child with *both active and revoked grants*; every direct/indirect child-linked table, each command receipt operation, positive own-grant status after revocation, private pairing and Storage SELECT/INSERT/DELETE. Do not claim complete archived-child isolation without these checks.
+5. **Processing command receipts:** Frozen Phase 3 and Phase 5 RPCs also use operations `process_growth` and `process_learning` with `resource_id = verified_learning_events.id`. Their adult-only receipt visibility must be resolved through the VLE's active child/family; unknown operations fail closed. Include these exact operation codes in regression tests.
+6. **Private pairing and Storage:** Verify `private.child_pairing_requests` has no client-readable route or grants. The frozen `storage.objects` evidence SELECT policy calls `private.validate_storage_evidence_access(name,false)`, which currently checks actor and assessment **but not child archive status**. Harden that helper in a new Phase 6 migration by requiring `private.is_child_active_in_family(v_child_id,v_family_id)` for SELECT/INSERT/DELETE, while preserving tenant, assessment, draft-only mutation and no-UPDATE invariants. Audit other permissive Storage policies to prevent OR bypass; only authorized backend operations may purge archived evidence.
+7. **Required pgTAP:** Adults/paired children/siblings/foreign family; active/archived child with *both active and revoked grants*; every direct/indirect child-linked table, each command receipt operation, positive own-grant status after revocation, private pairing and Storage SELECT/INSERT/DELETE. Do not claim complete archived-child isolation without these checks.
 
+
+#### 4.3.2.1 Family-Wide SELECT and Read-Model Boundary
+
+**Verified existing gap:** Phase 4.2 `family_wheel_settings_select` and the untargeted-reward branch of `rewards_select` allow a device with `child_device_grants.status='active'` to read family-wide content even if its linked `child_profiles.status='archived'`. RLS changes to directly child-linked tables do not close these paths.
+
+1. In a **new Phase 6 migration**, drop/replace those exact policies. Retain adult family authorization; require paired-child sessions to have `cdg.auth_user_id=auth.uid()`, `cdg.status='active'`, same-family matching profile `cp.id=cdg.child_id AND cp.family_id=cdg.family_id` and **`cp.status='active'`**. For targeted rewards additionally require `target_child_id=cdg.child_id`; untargeted rewards may remain available to other active children, never an archived child's grant. Preserve `rewards.is_active` and Store/Wheel eligibility constraints.
+2. Illustrative family settings policy (verify current table grants and all competing permissive policies):
+   ~~~sql
+   drop policy if exists family_wheel_settings_select on public.family_wheel_settings;
+   create policy family_wheel_settings_select on public.family_wheel_settings
+     for select to authenticated using (
+       private.is_active_family_adult(family_id)
+       or exists (
+         select 1 from public.child_device_grants cdg
+         join public.child_profiles cp on cp.id=cdg.child_id and cp.family_id=cdg.family_id
+         where cdg.family_id=family_wheel_settings.family_id
+           and cdg.auth_user_id=auth.uid() and cdg.status='active' and cp.status='active'
+       )
+     );
+   ~~~
+3. Audit every family-wide SELECT policy and **SECURITY DEFINER read RPC**. `get_wheel_status` already checks child active, whereas `reconcile_child_balance` resolves child by ID and checks adult/grant without child status. Require active child for normal paired-client economy/mastery/recommendation reads. Approved parent archival/export access is a distinct explicit allowlisted pathway.
+4. Keep `child_device_grants` own-row status introspection to confirm revocation, but do not treat it as permission to read family-wide content. RLS grants **rows, not only selected columns**; verify which grant columns are visible and use a limited status projection if required. Test archived child with active grant, active sibling grant, adult, foreign family and revoked grant across rewards, wheel settings, read RPCs and grant status.
+
+#### 4.3.2.2 Archive Barrier for SECURITY DEFINER Mutations and Catch-up
+
+**Verified existing gap:** SECURITY DEFINER bypasses ordinary RLS. Several frozen RPCs authorize family adult or paired device, but do not check archived child status. A new Phase 6 migration must harden their bodies using the **same existing signatures, domain errors, actor-bound idempotency and immutable event/ledger guarantees**, without changing Phase 0–5 migration files.
+
+| RPC category | Existing authoritative functions | Required Phase 6 behavior |
+|---|---|---|
+| Assessment create / wheel | `create_assessment_draft`, `spin_reward_wheel` already check child active | Preserve checks and test archive race |
+| Assessment draft/evidence | `update_assessment_draft`, `register_assessment_evidence`, `remove_draft_assessment_evidence`, `submit_assessment` | Fail closed on archived child; retain draft-only, version and original actor guards |
+| Parent review / mapping | `verify_assessment`, `reject_assessment`, `set_assessment_learning_mappings` | No new review, VLE, mapping rewrite or other downstream mutation for archived child |
+| RP economy | `redeem_store_reward` (child lookup currently lacks status filter), `fulfill_reward_redemption`, `cancel_reward_redemption` | No new RP debit/refund, redemption or fulfillment for archived child; preserve existing receipts and ledger immutability |
+| Growth / Learning pipelines | `process_verified_learning_event`, `process_learning_event`, `catch_up_unprocessed_growth`, `catch_up_unprocessed_learning` and internal processing helpers | Exclude archived child from new processing, XP/RP ledgers and mastery writes; do not silently process archived historical events |
+| Read-only child-scoped RPCs | `reconcile_child_balance`, mastery, recommendation and family-scoped reader RPCs | Require active child on normal client calls; narrowly authorize approved archival data export separately |
+
+1. **Server-side authorization and side effects:** Derive authoritative family and child from the target row, check `child_profiles.status='active'` and existing tenant/actor authorization **before** command receipt inspection or any write. Do not rely on client-passed child status. Do not disclose cross-family existence through errors. Retain all original command IDs, operation/resource/actor checks and non-losing wheel/economic invariants.
+2. **Archive race:** Serialize child archive and child-scoped transactions so a valid mutation committed before archive can finish, but **no new normal mutation commits after archive**. Specify and test one consistent child-row lock/acquisition order across archive, assessment (`FOR UPDATE`), reward and Growth/Learning advisory locks; avoid deadlocks and time-of-check/time-of-use races. An unprocessed VLE remains pending controlled resolution after archive, rather than being silently processed.
+3. **Post-archive replay:** A previously committed original command ID must never create another effect or reveal archived PII through a normal mutating RPC. After archive, fail closed; use **separate authenticated, tenant-scoped, read-only** receipt reconciliation/export for eligible adults when necessary. This is not permission to bypass the archive state in production clients.
+4. **Trust boundary:** Only specifically authorized, auditable backend retention, statutory deletion or archival export operations are exceptions; none are an implicit special case in existing child-scoped RPCs. Preserve frozen triggers and downstream processing contracts.
+5. **Required pgTAP / real-Postgres cases:** For each RPC category, active child positive; archived child negative for adult/paired child (including still-active grant); cross-family denial; exact original-command replay before/after archive; concurrent archive vs submit/verify/redeem/process; no late XP/RP/mastery/reward writes; read-only adult archival export; and tenant-isolated error behavior. Inspect actual side-effect counts and locks, not only returned errors.
+
+---
 
 #### 4.3.3 Operational Minimization, Legal Validation & Technical Constraints
 - **Legal & Privacy Review Obligation:**
   > **MANDATORY LEGAL / PRIVACY REVIEW OBLIGATION:**
   > A formal legal and privacy review (covering COPPA verifiable parental consent, GDPR/CCPA data minimization, and lawful bases) **MUST be completed prior to onboarding external pilot families** and processing real children's personal data. Legal compliance cannot be deferred to commercial launch.
 - **Distinction Between Operational Minimization and Statutory Erasure:**
-  - *Internal Operational Minimization:* The 4-tier technical lifecycle implemented in application code and PostgreSQL RLS:
+  - *Internal Operational Minimization:* The 4-tier lifecycle **planned for Phase 6 implementation** (not yet in frozen runtime/RLS):
     1. **Tier 1 (Access Revocation):** `child_device_grants.status = 'revoked'`.
     2. **Tier 2 (Soft Archival & RLS Exclusion):** `child_profiles.status = 'archived'`. RLS hides all child-linked records from normal adult and child queries.
     3. **Tier 3 (Child Profile Pseudonymization):** Identifying attributes in `child_profiles` are scrubbed (`display_name = '[Archived Learner]'`, `avatar_key = null`, `school_grade = null`, `birth_year = null`).
@@ -739,11 +796,11 @@ Every detailed design, ADR, or implementation specification that references data
 2. **Application Use Case Tests (`packages/learnward_application`):**
    - Outbox queue dispatching, actor identity verification, notification routing.
 3. **Data Infrastructure Tests (`packages/learnward_data`):**
-   - Drift schema v4 $\to$ v5 migration tests covering populated databases with drafts and pending commands; file-backed SQLite restart recovery tests for outbox queues.
+   - Drift schema v4 $\to$ v5 migration tests covering populated databases with drafts and pending commands; file-backed SQLite restart recovery plus evidence registration lost-response/concurrent submission, active/archived actor and RLS-hidden reconciliation tests.
 4. **Design System & Widget Tests (`apps/mobile`):**
    - Semantics widget tree verification; minimum touch target size checks ($48 \times 48\text{ dp}$); dynamic type font scaling tests (200% scaling); reduced-motion instant wheel reveal tests.
 5. **Database pgTAP Tests (`supabase/tests/database/`):**
-   - Comprehensive RLS test suite verifying positive adult access on active children, negative adult access on archived children across all 20 tables, cross-tenant denial, and export RPC security. All 438 existing pgTAP assertions must remain green.
+   - Archived-child SELECT and SECURITY DEFINER RPC matrix tests: family-wide rewards/wheel settings, every child mutation, Growth/Learning catch-up, original-command replay, archive-vs-mutation concurrency and export. Verify side-effect counts and ensure all 438 existing pgTAP assertions remain green.
 
 ### 7.2 Real-Device Validation Matrix
 Before rolling out builds to pilot families, the following real-device matrix must be executed:
