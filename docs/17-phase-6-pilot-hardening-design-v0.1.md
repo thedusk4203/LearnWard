@@ -113,8 +113,9 @@ class PendingRewardCommands extends Table {
   TextColumn get actorUserId => text().nullable()();
   TextColumn get actorRole => text().nullable()();
   IntColumn get schemaVersion => integer().withDefault(const Constant(1))();
-  TextColumn get recoveryState => text().withDefault(const Constant('active'))();
-  // Valid states: 'active', 'quarantined_legacy_v4', 'quarantined_unknown_outcome', 'pending_original_actor'
+  TextColumn get recoveryState => text().withDefault(const Constant('quarantined_legacy_v4'))();
+  TextColumn get dispatchState => text().withDefault(const Constant('unknown_legacy'))();
+  // dispatch: unknown_legacy / never_dispatched / possibly_dispatched / confirmed_committed
 }
 
 // packages/learnward_data/lib/src/database/local_assessment_drafts.dart
@@ -145,7 +146,8 @@ class LocalAssessmentDrafts extends Table {
   TextColumn get localCompressedPhotoPath => text().nullable()(); // Path to stably compressed JPEG
   TextColumn get submissionStatus => text().withDefault(const Constant('draft'))();
   // 'draft' | 'uploading_evidence' | 'submitting_assessment' | 'failed_retryable' | 'terminal_error'
-  IntColumn get retryCount => integer().withDefault(const Constant(0))();
+  IntColumn get retryCount => integer().withDefault(const Constant(0))(); // Not evidence of non-dispatch
+  TextColumn get dispatchState => text().withDefault(const Constant('unknown_legacy'))();
   TextColumn get lastErrorMessage => text().nullable()();
   TextColumn get actorUserId => text().nullable()();
   TextColumn get actorRole => text().nullable()();
@@ -155,48 +157,16 @@ class LocalAssessmentDrafts extends Table {
 }
 ```
 
-#### 3.2.3 Provably Safe Migration & Backfill Strategy
-1. **Migration Execution (`onUpgrade`):**
-   ```dart
-   if (from < 5) {
-     await migrator.addColumn(pendingRewardCommands, pendingRewardCommands.actorUserId);
-     await migrator.addColumn(pendingRewardCommands, pendingRewardCommands.actorRole);
-     await migrator.addColumn(pendingRewardCommands, pendingRewardCommands.schemaVersion);
-     await migrator.addColumn(pendingRewardCommands, pendingRewardCommands.recoveryState);
-     await migrator.addColumn(localAssessmentDrafts, localAssessmentDrafts.serverEvidenceId);
-     await migrator.addColumn(localAssessmentDrafts, localAssessmentDrafts.sha256Checksum);
-     await migrator.addColumn(localAssessmentDrafts, localAssessmentDrafts.localCompressedPhotoPath);
-     await migrator.addColumn(localAssessmentDrafts, localAssessmentDrafts.submissionStatus);
-     await migrator.addColumn(localAssessmentDrafts, localAssessmentDrafts.retryCount);
-     await migrator.addColumn(localAssessmentDrafts, localAssessmentDrafts.lastErrorMessage);
-     await migrator.addColumn(localAssessmentDrafts, localAssessmentDrafts.actorUserId);
-     await migrator.addColumn(localAssessmentDrafts, localAssessmentDrafts.actorRole);
+#### 3.2.3 Non-Destructive Drift v4 → v5 Upgrade and Legacy Dispatch Provenance
 
-     // Quarantine existing v4 pending commands without invented identities:
-     await customStatement(
-       "UPDATE pending_reward_commands SET recovery_state = 'quarantined_legacy_v4', schema_version = 1 WHERE actor_user_id IS NULL"
-     );
-   }
-   ```
+**Critical historical limit:** Frozen Drift v4 has no `retryCount` nor any persisted dispatch flag on `local_assessment_drafts` or `pending_reward_commands`. A newly added zero-default `retryCount` is **not evidence a historical operation was unsent**. All migrated v4 commands and possibly submitted drafts start with `dispatchState='unknown_legacy'` and remain quarantined until exact server-authorized reconciliation. Preserve original UUIDs, server IDs, drafts and photo files; never invent actor identity or network outcome.
 
-2. **Provably Safe Legacy v4 Command Recovery:**
-   - **Distinguish Unsent Actions from Dispatched Commands:**
-     * *Unsent Local Actions:* Local drafts created offline that have never been dispatched (`retryCount == 0`). These contain no ambiguity regarding server outcome and can safely have `actorUserId` assigned upon explicit submission by the current active user.
-     * *Dispatched Commands with Unknown Outcomes:* Commands dispatched under v4 that may have reached the server before a crash, disconnect, or upgrade (`retryCount > 0`).
-   - **Strict Invariants for Dispatched Commands:**
-     1. **Preserve Original Command IDs:** The unique `command_id` generated under v4 MUST NEVER be discarded or replaced. Idempotency on PostgreSQL is keyed strictly on `command_id`.
-     2. **Preserve Unknown Outcomes:** The command is assigned `recoveryState = 'quarantined_unknown_outcome'`. It is never assumed to be absent or failed based on heuristic searches.
-     3. **No Automatic Command ID Regeneration:** The client will **never** automatically generate a new command ID merely because an approximate search (by child, title, timestamp) yields no result. Doing so would bypass server idempotency and risk duplicate RP spending, duplicate wheel spins, or duplicate assessment submissions if the original command commits late or was in flight.
-     4. **Exact Server-Authoritative Reconciliation:**
-        - *Adult Commands:* An authenticated family adult has RLS access to query `select * from public.command_receipts where command_id = :original_command_id`. If found, the command definitively committed, and the client reconciles local state from the target entity (`reward_redemptions`, `wheel_spins`, `assessments`) without network re-execution.
-        - *Paired Child Commands:* Paired child devices cannot read `command_receipts` directly due to RLS. However, replaying the authoritative mutation RPC with the **EXACT SAME `original_command_id`** executes server-side lookup in `command_receipts`. If already committed, the RPC returns the existing row idempotently.
-     5. **Safe Manual Resolution Path:**
-        - When the original actor or outcome cannot be determined programmatically (e.g. shared device where original actor is unknown):
-        - The Parent Settings UI provides a dedicated "Legacy Outbox Reconciliation" screen.
-        - The parent inspects the command details (child, reward, cost, timestamp) alongside recent authoritative family history.
-        - If the parent confirms the action is already reflected in history, they tap **"Mark Resolved"** (purges local outbox entry without network calls).
-        - If the parent verifies it was never applied and chooses to re-issue, they select **"Re-authorize as [Parent Name]"**. Only then does the parent's action explicitly authorize creating an intentional new command under the parent's authenticated identity.
-        - If the parent chooses to abandon, they select **"Discard"** (purges local outbox entry, refreshes remote balances).
+1. **New v5 columns and migration:** In the proposed Drift declarations above, add `dispatchState => text().withDefault(const Constant('unknown_legacy'))()` to **both** journal tables. The v4→v5 `onUpgrade` must add these two columns, together with all already-declared actor/evidence and status columns using `migrator.addColumn`, preserving old column nullability. Mark existing pending commands with unknown actor `recoveryState='quarantined_unknown_outcome'`; do not rewrite original `commandId`, `createCommandId`, `submitCommandId`, `serverAssessmentId` or evidence file paths. An existing server assessment ID proves partial prior server work, not successful or failed submission.
+2. **New v5 entries only:** Explicitly insert fresh commands/drafts with `dispatchState='never_dispatched'`. **Before any remote mutating RPC**, atomically commit `dispatchState='possibly_dispatched'` to SQLite. A crash after committing that marker but before the actual network request still counts as unknown, intentionally. Only an authoritative success or exact permitted server receipt advances `confirmed_committed`; retries merely count attempts and cannot prove non-dispatch.
+3. **Reconciliation:** For an adult, a matching `command_receipts.command_id` confirms a committed original operation where RLS permits access. A missing/hidden receipt, approximate match by title/reward/timestamp or client timeout **never proves absence**. Same-ID idempotent replay is permitted only when the original authenticated actor is positively established and satisfies the frozen RPC's family/actor/operation authorization. Unknown-actor v4 entries must **never** replay automatically as a different adult or paired child.
+4. **Manual fallback:** Present `Keep quarantined`, `Export unsynced work`, and `Abandon local copy` (explicitly warn that a remote effect, if it happened, remains). Do not regenerate command IDs or present another wheel spin/RP debit as safe recovery. A genuinely new operation requires a separate, clearly identified user request and duplicate-risk safeguards.
+5. **Migration tests:** Populate real v4 SQLite databases with offline-only drafts, potentially dispatched drafts, committed-before-timeout commands, unknown actors and photo paths. Verify no data loss, all old dispatch states remain UNKNOWN, no automatic legacy replay, and new v5 pre-send state is durable across forced process death. Verify zero double ledger/reward effects.
+
 
 ---
 
@@ -238,7 +208,7 @@ When an operation is dispatched but the network drops before receiving the respo
    - **Adult Actors:** May query domain tables (`assessments`, `reward_redemptions`, `wheel_spins`) or call the idempotent RPC with original `command_id`.
    - **Shared-Child Actors:** Commands bound to specific `actor_user_id`; replayed via the idempotent RPC under that actor.
    - **Paired-Child Actors:** Recover exclusively by re-invoking the idempotent RPC with original `command_id` or querying child-accessible domain tables (`public.assessments` where `child_id = currentChildId`).
-4. **Replay Invariant:** Replays must always execute under the original `actor_user_id`. Replaying under a different actor causes server rejection with `42501: Invalid command replay` (actor mismatch).
+4. **Replay Invariant:** Replays must always execute under the original `actor_user_id`. Replaying under a different actor causes server rejection with `42501: Invalid command replay` (actor mismatch). Migrated v4 rows with unknown original actor cannot be automatically replayed.
 
 #### 3.3.4 Multi-Actor Session Recovery (`pending_original_actor`)
 On a shared family device:
@@ -287,57 +257,20 @@ Aggressive compression destroys the legibility of thin pencil lines, exponents, 
   - If output exceeds $1.5\text{ MB}$, the compressor evaluates whether compression to 75% preserves contrast. If size remains between $1.5\text{ MB}$ and $2.5\text{ MB}$, the file is accepted as-is to prevent legibility degradation.
   - Image processing operates on byte buffers in memory or temporary files, never blocking the UI isolate.
 
-#### 3.5.3 Resumable Storage Protocol, Content Hash & Safe HTTP 409 Conflict Policy
-LearnWard uses `supabase_flutter: ^2.18.3` and `supabase: ^2.16.5` (`storage_client`). AWS S3 methods (`headBucket`, `getObject`) are not supported.
-- **Persistent Evidence Identity Model:**
-  - `evidenceId`: The client-generated deterministic UUID (`clientEvidenceUuid`) stored in `LocalAssessmentDrafts.evidenceId`.
-  - `serverEvidenceId`: The authoritative primary key UUID (`id`) in `public.assessment_evidence` returned upon registration, stored in `LocalAssessmentDrafts.serverEvidenceId`.
-  - `sha256Checksum`: Cryptographic content hash of the compressed JPEG bytes stored in `LocalAssessmentDrafts.sha256Checksum`.
-  - `localCompressedPhotoPath`: Path to the stably compressed image stored in `LocalAssessmentDrafts.localCompressedPhotoPath`.
-- **Stable Compression & Deterministic Hash:**
-  - When evidence is captured, it is compressed once and saved to `localCompressedPhotoPath`. Its SHA-256 hash is computed and persisted.
-  - Across all retries and app restarts, the compressor is **NEVER re-invoked**. Re-compressing produces byte drift, hash divergence, and progressive generation loss.
-- **Deterministic Storage Hierarchy:**
-  Path: `{family_id}/{child_id}/{assessment_id}/{clientEvidenceUuid}.jpg` matching regex:
-  `^[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png)$`
-- **Safe HTTP 409 Conflict Policy & Content-Integrity Verification:**
-  1. Client uploads binary data with custom metadata:
-     ```dart
-     await supabase.storage.from('assessment-evidence').uploadBinary(
-       storagePath,
-       compressedBytes,
-       fileOptions: FileOptions(
-         contentType: 'image/jpeg',
-         upsert: false,
-         metadata: {'sha256': sha256Checksum, 'client_uuid': clientEvidenceUuid},
-       ),
-     );
-     ```
-  2. If upload returns HTTP 409 Conflict (remote object exists at path):
-     - The client does **NOT** blindly treat 409 as success!
-     - The client lists the directory via `supabase.storage.from('assessment-evidence').list(path: '$familyId/$childId/$assessmentId')` and locates `$clientEvidenceUuid.jpg`.
-     - The client verifies content equality:
-       * Remote byte size == `compressedBytes.length`;
-       * Remote `metadata['sha256']` == `sha256Checksum`.
-     - **Conflict Resolution Decision Tree:**
-       * **Content Matches (Equal Hash & Size):** The previous upload attempt succeeded before the client received the HTTP response. The upload step is marked complete; proceed to `register_assessment_evidence` RPC.
-       * **Content Differs (Mismatched Hash/Size or Corrupted 0-Byte File):**
-         The remote object does not match the intended evidence.
-         To avoid overwriting unrelated evidence or corrupting data:
-         The client generates a fresh, unique `clientEvidenceUuid`, recalculates `storagePath`, updates `LocalAssessmentDrafts.evidenceId`, and uploads to the new distinct path without overwriting.
-  3. Authoritative Database Registration:
-     - The client invokes the frozen idempotent RPC:
-       ```dart
-       final response = await supabase.rpc('register_assessment_evidence', params: {
-         'p_assessment_id': assessmentId,
-         'p_storage_path': storagePath,
-         'p_media_type': 'image/jpeg',
-         'p_file_size_bytes': compressedBytes.length,
-       });
-       ```
-     - The server returns the authoritative `public.assessment_evidence` record.
-     - The client stores the returned database UUID (`id`) into `LocalAssessmentDrafts.serverEvidenceId`.
-     - If the app restarts during any stage, Drift SQLite retains `submissionStatus`, `serverEvidenceId`, `localCompressedPhotoPath`, and `sha256Checksum`, allowing seamless resumption without re-compression.
+#### 3.5.3 Byte-Verified Remote Evidence and HTTP 409 Resolution
+
+Keep `evidenceId` (client UUID in deterministic storage path), `serverEvidenceId` (separate `assessment_evidence.id`), `sha256Checksum` and `localCompressedPhotoPath`. Compress the JPEG once for legibility, persist its bytes and SHA-256, and **never recompress on retry**. Use `uploadBinary` with `upsert: false` and an authenticated client against the existing private `assessment-evidence` bucket.
+
+**A matching path, file size or custom metadata from `storage.list()` is not proof of byte equality.** Supabase Storage [issue #759](https://github.com/supabase/storage/issues/759) documents that user-defined metadata can be missing from `list()`. On HTTP 409, an unknown response or an object already present:
+
+1. With the *original authorized actor*, download the private object using the supported Dart method `supabase.storage.from('assessment-evidence').download(storagePath)`. Calculate SHA-256 from the **downloaded bytes** and compare digest **and** length to the persisted local JPEG. Verify SDK methods and private-bucket RLS behavior in integration tests.
+2. **Exact match:** Reuse the original object path; call the frozen idempotent `register_assessment_evidence(p_assessment_id,p_storage_path,p_media_type,p_file_size_bytes)` RPC. Persist returned database `id` in `serverEvidenceId`; a lost registration response retries the **same path**.
+3. **Different SHA-256 or size:** Enter `evidence_conflict` (recovery classification) and preserve original bytes, UUID and path. Do not overwrite, rotate UUIDs or register another file automatically. Investigate DB linkage before manual resolution.
+4. **Download forbidden, unavailable, incomplete, or result uncertain:** Enter `verification_pending`, retain all local data and retry with bounded backoff after authorization returns. A failed list/read is not proof that an upload is absent. Only a definitive, authorized object-not-found response permits reattempting the original `upsert:false` upload.
+5. **Acceptance tests:** Same-size/different-bytes object, missing custom metadata, 409 exact match, upload-committed/response-lost, registration-committed/response-lost, app restart, revoked/archived actor and private Storage RLS. Never include a service-role credential or grant Storage UPDATE/upsert to the mobile client.
+
+References: [Supabase Dart upload](https://supabase.com/docs/reference/dart/file-buckets-upload), [private Storage buckets](https://supabase.com/docs/guides/storage/buckets/fundamentals), [custom metadata issue](https://github.com/supabase/storage/issues/759).
+
 
 ---
 
@@ -458,129 +391,36 @@ The LearnWard backend manages 20 relational tables and 1 Storage bucket containi
 20. `public.command_receipts` (operational idempotency audit logs; `family_id`, `resource_id`)
 21. Storage bucket `assessment-evidence` (object paths `{family_id}/{child_id}/{assessment_id}/{clientEvidenceUuid}.jpg`)
 
-#### 4.3.2 Complete RLS Read-Boundary Policy Overhaul
-In PostgreSQL, multiple permissive policies on the same table combine with `OR`. Merely adding a new policy does **NOT** restrict access if an existing permissive policy (`using (private.is_active_family_adult(family_id))`) remains active!
-Therefore, Phase 6 **drops and replaces** the existing SELECT policies on every child-linked table.
+#### 4.3.2 Active-Child RLS for Both Roles, Plus Explicit Operational Exceptions
 
-1. **Security Helper:**
+PostgreSQL permissive SELECT policies combine with `OR`. Phase 6 must enumerate `pg_policies` and replace affected policies in **new** migrations without editing frozen Phase 0–5 files. The predicates below are design contracts; use verified real policy names and privileges during implementation.
+
+1. **Required child-state predicate:** `private.is_child_active_in_family(child_id,family_id)` verifies the exact child/family and `child_profiles.status='active'`. It is a narrowly granted, fixed-`search_path` SECURITY DEFINER helper, not itself caller authorization. Across `assessments`, `verified_learning_events`, `learning_evidence_events`, `learning_processing_events`, `mastery_state_revisions`, `child_mastery_states`, `assessment_learning_mappings`, `growth_events`, `xp_ledger`, `rp_ledger`, `child_balances`, `reward_redemptions` and `wheel_spins`, the **active-child condition must be outside the adult/child-device OR**:
    ```sql
-   create or replace function private.is_child_active_in_family(p_child_id uuid, p_family_id uuid)
-   returns boolean
-   language sql
-   stable
-   security definer
-   set search_path = ''
-   as $$
-     select exists (
-       select 1 from public.child_profiles cp
-       where cp.id = p_child_id
-         and cp.family_id = p_family_id
-         and cp.status = 'active'
-     );
-   $$;
+   -- Conceptual USING; preserve any stricter frozen role restriction.
+   private.is_child_active_in_family(child_id, family_id)
+   AND (
+     private.is_active_family_adult(family_id)
+     OR private.is_active_child_device(family_id, child_id)
+   )
    ```
-
-2. **Policy Replacement for Tables With Direct `child_id`:**
-   Applied across: `assessments`, `verified_learning_events`, `learning_evidence_events`, `learning_processing_events`, `mastery_state_revisions`, `child_mastery_states`, `assessment_learning_mappings`, `growth_events`, `xp_ledger`, `rp_ledger`, `child_balances`, `reward_redemptions`, `wheel_spins`:
+   A still-active device grant **cannot** expose archived learning records.
+2. **Indirect relationships:** `assessment_evidence` and `assessment_review_events` join same-family `assessments` and require active linked child; review events remain adult-only. Targeted `rewards` require an active `target_child_id`, while family-wide rewards retain their tenant conditions. `child_profiles_select` requires active profile for **both** adult and child device.
+3. **Grant-status exception:** Preserve the `child_device_grants` owner's *own-row* read (`auth_user_id=auth.uid()`) even when revoked or archived so positive `status='revoked'` evidence remains available. Restrict parent listing of other grant rows to active child profiles. Example:
    ```sql
-   drop policy if exists <table_name>_select on public.<table_name>;
-   create policy <table_name>_select on public.<table_name>
-     for select to authenticated
-     using (
-       (
-         private.is_active_family_adult(family_id)
-         and private.is_child_active_in_family(child_id, family_id)
-       )
-       or private.is_active_child_device(family_id, child_id)
+   drop policy if exists child_device_grants_select on public.child_device_grants;
+   create policy child_device_grants_select on public.child_device_grants
+     for select to authenticated using (
+       (private.is_active_family_adult(family_id)
+        AND private.is_child_active_in_family(child_id,family_id))
+       OR auth_user_id = auth.uid()
      );
    ```
+   This narrow status exception **does not grant archived assessment, reward or evidence reads**.
+4. **`command_receipts`:** There is no direct `child_id`. Keep adult-only SELECT; resolve `resource_id` by operation: `create_draft/submit/verify/reject` → `assessments.id`, `redeem_reward/fulfill_reward/cancel_reward` → `reward_redemptions.id`, `spin_wheel` → `wheel_spins.id`. Require active family adult **and** active child through the operation-specific resource + same family join; unknown operations or missing resources fail closed. Child devices still use server-side idempotent RPCs rather than SELECT on receipts.
+5. **Private pairing and Storage:** Verify `private.child_pairing_requests` has no client-readable route or grants. The frozen `storage.objects` evidence SELECT policy calls `private.validate_storage_evidence_access(name,false)`, which currently checks actor and assessment **but not child archive status**. Harden that helper in a new Phase 6 migration by requiring `private.is_child_active_in_family(v_child_id,v_family_id)` for SELECT/INSERT/DELETE, while preserving tenant, assessment, draft-only mutation and no-UPDATE invariants. Audit other permissive Storage policies to prevent OR bypass; only authorized backend operations may purge archived evidence.
+6. **Required pgTAP:** Adults/paired children/siblings/foreign family; active/archived child with *both active and revoked grants*; every direct/indirect child-linked table, each command receipt operation, positive own-grant status after revocation, private pairing and Storage SELECT/INSERT/DELETE. Do not claim complete archived-child isolation without these checks.
 
-3. **Policy Replacement for Tables Without Direct `child_id`:**
-   - **`assessment_evidence`** (authoritative join path through `public.assessments`):
-     ```sql
-     drop policy if exists assessment_evidence_select on public.assessment_evidence;
-     create policy assessment_evidence_select on public.assessment_evidence
-       for select to authenticated
-       using (
-         exists (
-           select 1 from public.assessments a
-           where a.id = assessment_evidence.assessment_id
-             and a.family_id = assessment_evidence.family_id
-             and (
-               (
-                 private.is_active_family_adult(assessment_evidence.family_id)
-                 and private.is_child_active_in_family(a.child_id, assessment_evidence.family_id)
-               )
-               or private.is_active_child_device(assessment_evidence.family_id, a.child_id)
-             )
-         )
-       );
-     ```
-   - **`assessment_review_events`** (authoritative join path through `public.assessments`):
-     ```sql
-     drop policy if exists assessment_review_events_select on public.assessment_review_events;
-     create policy assessment_review_events_select on public.assessment_review_events
-       for select to authenticated
-       using (
-         exists (
-           select 1 from public.assessments a
-           where a.id = assessment_review_events.assessment_id
-             and a.family_id = assessment_review_events.family_id
-             and private.is_active_family_adult(assessment_review_events.family_id)
-             and private.is_child_active_in_family(a.child_id, assessment_review_events.family_id)
-         )
-       );
-     ```
-   - **`rewards`** (authoritative check on `target_child_id`):
-     ```sql
-     drop policy if exists rewards_select on public.rewards;
-     create policy rewards_select on public.rewards
-       for select to authenticated
-       using (
-         (
-           private.is_active_family_adult(family_id)
-           and (target_child_id is null or private.is_child_active_in_family(target_child_id, family_id))
-         )
-         or (
-           is_active = true
-           and (store_enabled = true or wheel_enabled = true)
-           and (
-             (target_child_id is null and exists (
-               select 1 from public.child_device_grants cdg
-               where cdg.family_id = rewards.family_id
-                 and cdg.auth_user_id = auth.uid()
-                 and cdg.status = 'active'
-                 and private.is_child_active_in_family(cdg.child_id, rewards.family_id)
-             ))
-             or (target_child_id is not null and private.is_active_child_device(family_id, target_child_id)
-                 and private.is_child_active_in_family(target_child_id, family_id))
-           )
-         )
-       );
-     ```
-   - **`child_profiles`**:
-     ```sql
-     drop policy if exists child_profiles_select on public.child_profiles;
-     create policy child_profiles_select on public.child_profiles
-       for select to authenticated
-       using (
-         (private.is_active_family_adult(family_id) and status = 'active')
-         or (id = (
-           select cdg.child_id from public.child_device_grants cdg
-           where cdg.auth_user_id = auth.uid()
-             and cdg.status = 'active'
-         ) and status = 'active')
-       );
-     ```
-
-4. **Positive & Negative RLS Regression Obligations:**
-   - *Positive adult check on active child:* Adult in Family A CAN select records for active Child A1.
-   - *Negative adult check on archived child:* Adult in Family A CANNOT select records for archived Child A2 in standard daily queries (returns 0 rows).
-   - *Negative adult check on foreign family:* Adult in Family B CANNOT select records for any child in Family A (returns 0 rows).
-   - *Positive child device check on own active record:* Paired child device for Child A1 CAN select its own active records.
-   - *Negative child device check on sibling/foreign child:* Paired child device for Child A1 CANNOT select records for Child A2 or any foreign child.
-   - *Negative child device check on revoked grant:* Paired child device with `status = 'revoked'` CANNOT select any child records (returns 0 rows).
-   - *Negative child device check on archived profile:* Even if a grant row was not explicitly revoked, if child profile is archived, child device is denied access.
 
 #### 4.3.3 Operational Minimization, Legal Validation & Technical Constraints
 - **Legal & Privacy Review Obligation:**
