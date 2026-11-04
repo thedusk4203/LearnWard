@@ -13,6 +13,7 @@
   - [ADR 0006 — Learning Engine & Mastery](0006-phase-5-learning-engine-mastery.md) (`ACCEPTED`)
   - [ADR 0007 — Skill Graph & Recommendations](0007-phase-5-2-skill-graph-recommendation.md) (`ACCEPTED`)
 - **Readiness Review:** [Phase 6 Dependency & Readiness Review](../16-phase-6-pilot-hardening-dependency-readiness-review.md) (`FROZEN`)
+- **Metrics Contract:** [Metrics & Hypotheses v0.1](../06-metrics-and-hypotheses.md) (`FROZEN`)
 - **Detailed Design Document:** [Phase 6 Detailed Design v0.1](../17-phase-6-pilot-hardening-design-v0.1.md)
 
 This ADR is **`PROPOSED`**. Implementation remains **NOT AUTHORIZED** until this detailed design passes independent audit and merge review.
@@ -23,22 +24,24 @@ This ADR is **`PROPOSED`**. Implementation remains **NOT AUTHORIZED** until this
 
 Phases 1 through 5 established the complete core learning and economic engine of LearnWard: family identity, secure assessment capture, integer append-only economic ledgers, guaranteed reward store, celebration wheel, EWMA mastery engine, and the 5-class Next Challenge recommendation model.
 
-Phase 6 provides the operational, reliability, accessibility, and release hardening necessary to execute a successful 4-week closed family pilot without engineering intervention. Following the authoritative findings of the [Phase 6 Readiness Review](../16-phase-6-pilot-hardening-dependency-readiness-review.md) and independent detailed design audits, the architectural decisions below formally resolve all identified readiness dependencies and audit findings.
+Phase 6 provides the operational, reliability, accessibility, and release hardening necessary to execute a successful 4-week closed family pilot without engineering intervention. Following the authoritative findings of the [Phase 6 Readiness Review](../16-phase-6-pilot-hardening-dependency-readiness-review.md), the frozen [Metrics Contract](../06-metrics-and-hypotheses.md), and independent detailed design audits, the architectural decisions below formally resolve all identified readiness dependencies and audit findings.
 
 ---
 
-## Decision 1 — Bounded Feature Outboxes & Drift Schema v5 Actor Binding
+## Decision 1 — Bounded Feature Outboxes, Drift Schema v5 & Provably Safe Command Recovery
 
 Rather than implementing a complex, dynamically polymorphic offline sync queue, LearnWard adopts **bounded, domain-specific command journals** with strict Drift v4-to-v5 backward compatibility:
 1. Retains and hardens `pending_reward_commands` for reward redemptions and wheel spins.
 2. Extends `local_assessment_drafts` with an explicit submission lifecycle (`draft -> uploading_evidence -> submitting_assessment -> failed_retryable -> terminal_error`).
 3. Local database schema migrates to `schemaVersion = 5` in Drift:
-   - Existing v4 nullable columns (`pending_reward_commands.childId`, `local_assessment_drafts.createCommandId`, `local_assessment_drafts.submitCommandId`) remain strictly nullable to guarantee zero migration regressions on existing client rows.
-   - Newly added columns (`actor_user_id` UUID, `actor_role` text, and `schema_version` integer) are declared nullable in Drift/SQLite table definitions so that SQLite `ALTER TABLE ADD COLUMN` statements succeed on existing v4 local databases without requiring non-null constant defaults.
-4. Legacy v4 rows where `actor_user_id IS NULL` enter a safe `quarantined_legacy_v4` state:
-   - The engine does NOT fabricate dummy or guessed actor identities.
-   - **Strict Reassignment Prohibition:** Legacy commands must never be silently reassigned to an active user and replayed without first checking remote domain state. Replaying an already-committed command under a new actor causes server `42501: Invalid command replay` (actor mismatch), while replaying with a new command ID risks double-charging RP or duplicating records.
-   - Adults reconcile quarantined commands by inspecting remote domain state (e.g. `reward_redemptions`, `assessments`). If already committed, the local entry is purged without network calls; if confirmed absent, the adult can explicitly re-authorize with a newly generated command ID.
+   - Existing v4 nullable columns (`pending_reward_commands.childId`, `local_assessment_drafts.createCommandId`, `local_assessment_drafts.submitCommandId`, `local_assessment_drafts.evidenceId`, `local_assessment_drafts.serverAssessmentId`, `local_assessment_drafts.localPhotoPath`) remain strictly nullable to guarantee zero migration regressions on existing client rows.
+   - Newly added columns (`server_evidence_id`, `sha256_checksum`, `local_compressed_photo_path`, `actor_user_id`, `actor_role`, `schema_version`, `recovery_state`) are declared nullable in Drift/SQLite table definitions so that SQLite `ALTER TABLE ADD COLUMN` statements succeed on existing v4 databases without requiring non-null constant defaults.
+4. **Provably Safe Legacy v4 Command Recovery:**
+   - Unsent local actions (`retry_count == 0`) are distinguished from dispatched commands with unknown outcomes (`retry_count > 0`).
+   - Legacy v4 rows where `actor_user_id IS NULL` enter `quarantined_legacy_v4` or `quarantined_unknown_outcome`.
+   - **Original Command IDs are Preserved:** The unique `command_id` is never discarded or regenerated automatically merely because an approximate search finds no match.
+   - **Exact Server-Authoritative Reconciliation:** Adults query `public.command_receipts` to determine if a command committed; paired child commands rely on server-side idempotent RPC replay contracts with the exact same `original_command_id`.
+   - **Safe Manual Resolution:** When outcome cannot be established, the command remains in quarantine for parent review in Parent Settings (choice to mark resolved from history, cancel/discard, or explicitly re-authorize under the active parent).
    - Automated migration tests must execute against pre-populated v4 SQLite database fixtures to verify that zero drafts, pending commands, or local evidence photo paths are lost or corrupted.
 5. On shared family devices, if a queued command's `actor_user_id` does not match the active authenticated session, re-execution is paused in a `pending_original_actor` state until the matching user logs in, preventing identity drift and server caller mismatch errors.
 
@@ -49,7 +52,7 @@ Rather than implementing a complex, dynamically polymorphic offline sync queue, 
 A blanket `clearAllTables()` wipe on sign-out is rejected because it destroys device-level security containment. Local data classes are governed by explicit lifecycle policies:
 - **Parent PIN Hash & Salt:** Retained across adult logout to ensure device containment remains locked if the device is shared with children.
 - **Active Child Session:** Immediately purged on sign-out, family switch, or Child Mode exit.
-- **Assessment Drafts & Pending Commands:** Segregated by `family_id` and `actor_user_id`.
+- **Assessment Drafts & Pending Commands:** Segregated by `family_id` and `actor_user_id`. State normalized to `pending_original_actor`.
 - **Positive Revocation Proof & Error Disambiguation (`42501`):** PostgreSQL code `42501` (`insufficient_privilege`) is NOT treated as a blanket signal for device revocation. The client differentiates:
   1. *Caller mismatch:* Current authenticated user is not authorized for the row or operation. Action: pause command execution in `pending_original_actor` state.
   2. *Positive device grant revocation:* Revocation is confirmed ONLY upon positive proof from `public.child_device_grants` (`status = 'revoked'` AND `revoked_at IS NOT NULL`). A failed query or general `42501` does not infer revocation. When confirmed, active child session is cleared, but local drafts are preserved in quarantine for parental recovery.
@@ -60,17 +63,20 @@ A blanket `clearAllTables()` wipe on sign-out is rejected because it destroys de
 
 ---
 
-## Decision 3 — Client-Side Evidence Compression & Idempotent Resumption
+## Decision 3 — Evidence Persistence, Content-Integrity Hashing & Resumable Storage
 
 To ensure evidence capture reliability over poor mobile network connections without external AWS dependencies:
 1. `NSCameraUsageDescription` and `NSPhotoLibraryUsageDescription` are added to iOS `Info.plist`.
 2. Raw camera images are resized client-side to a maximum resolution of `2048 x 1536` pixels with adaptive JPEG compression (target quality 85%, minimum 70%). Compression strictly prioritizes handwriting and diagram legibility over file size; the 1.5 MB threshold is an adaptive compression target, not a hard-fail rejection cap.
-3. Storage upload uses deterministic paths (`{family_id}/{child_id}/{assessment_id}/{client_evidence_uuid}.jpg`) via the official Supabase Dart Storage SDK:
-   - Maps deterministic `client_evidence_uuid` to database table `public.assessment_evidence` (primary key `id`, unique `storage_path`; there is no `evidence_id` column).
-   - Uses `supabase.storage.from('assessment-evidence').list(path: ...)` to verify pre-existing uploads prior to re-upload.
-   - Uploads via `uploadBinary(...)` with `FileOptions(upsert: false)`.
-   - On HTTP 409 Conflict: checks remote file existence and byte size integrity before treating upload as successful.
-   - Registers evidence via frozen idempotent RPC `public.register_assessment_evidence(p_assessment_id, p_storage_path, p_media_type, p_file_size_bytes)`.
+3. **Content-Integrity Hashing & Stable Compression:**
+   - Image is compressed once upon capture and saved to `localCompressedPhotoPath`; its SHA-256 hash is computed and stored in `sha256Checksum`.
+   - Across retries and restarts, the compressor is NEVER re-invoked, preventing byte drift or generation loss.
+4. **Safe Storage Upload & HTTP 409 Conflict Policy:**
+   - Uploads via Supabase Dart Storage SDK to deterministic path `{family_id}/{child_id}/{assessment_id}/{clientEvidenceUuid}.jpg` with custom metadata containing the SHA-256 hash.
+   - On HTTP 409 Conflict: Client verifies remote file existence, byte size, and SHA-256 hash.
+     * If content matches: Upload is verified; proceed to registration RPC.
+     * If content differs (mismatched hash/size or corrupted 0-byte file): Client generates a fresh unique `clientEvidenceUuid`, updates the local draft path, and uploads to the new path to prevent overwriting unrelated evidence.
+   - Authoritative database registration calls `public.register_assessment_evidence(...)`, and the returned database primary key UUID (`id`) is stored in `LocalAssessmentDrafts.serverEvidenceId`.
 
 ---
 
@@ -79,33 +85,51 @@ To ensure evidence capture reliability over poor mobile network connections with
 For the 4-week pilot:
 1. Notifications support family coordination only (pending parent review, reward fulfilled). Engagement farming (streaks, guilt, sibling taunts) is strictly prohibited.
 2. In-app realtime notifications via Supabase Realtime provide immediate UI updates. However, because Realtime connections are transient, parent inbox badges and child review states must be backed by authoritative PostgreSQL queries on app launch, resume, and network reconnection.
-3. A provider-agnostic `NotificationService` interface isolates application logic from future external push platforms (FCM/APNs), which remain deferred.
-4. Deep link navigation routes through strict role authorization checks: child accounts attempting to navigate to adult review URLs are redirected to Child Mode home with an access notice.
+3. Coordination badges clear naturally upon underlying PostgreSQL state transitions (`verified`, `rejected`, `fulfilled`); `markRead(eventId)` is omitted for the pilot.
+4. A provider-agnostic `NotificationService` interface isolates application logic from future external push platforms (FCM/APNs), which remain deferred.
+5. Deep link navigation routes through strict role authorization checks: child accounts attempting to navigate to adult review URLs are redirected to Child Mode home with an access notice.
 
 ---
 
-## Decision 5 — Canonical VLPE Enforcement & Zero-PII Minimal Telemetry Envelope
+## Decision 5 — Restored Canonical 16-Metric Contract & Canonical VLPE
 
-1. The North Star metric **VLPE** is canonically defined as a verified event that has completed both **Growth processing** (`public.growth_events`) and **Learning processing** (`public.learning_processing_events` with `status = 'processed'`).
-2. Exactly **12 of 16** pilot metrics are directly derivable from PostgreSQL without third-party analytics SDKs.
-3. Metric 4 (% goals chosen by child) remains deferred; no Goals subsystem is authorized for Phase 6.
-4. Client UX telemetry uses a minimal, privacy-preserving envelope strictly scrubbed of child real names, parent emails, school names, geographic location, image URLs, or auth tokens.
+1. **Restoration of Canonical Metric Contract:** The authoritative 16-metric inventory from [Metrics & Hypotheses v0.1](../06-metrics-and-hypotheses.md) and the Phase 6 Readiness Review is restored verbatim:
+   - Exactly **12 of 16** metrics are directly derivable from PostgreSQL without third-party analytics SDKs:
+     1. `VLPE / child / week`
+     2. `Results logged / child / week`
+     3. `% results logged by child`
+     5. `4-week subject trend`
+     6. `Recovery completion rate`
+     7. `Personal-best frequency`
+     8. `Parent approval latency`
+     10. `Reward fulfillment rate`
+     11. `RP earned / week`
+     12. `RP spent / week`
+     13. `Wheel vs Store spend share`
+     15. `Week 4 / Week 8 retention`
+   - Exactly **4 of 16** metrics are deferred or require client/qualitative inputs:
+     4. `% goals chosen by child` (`NOT CURRENTLY MEASURABLE / DEFERRED`)
+     9. `Parent admin minutes/day` (`NOT CURRENTLY MEASURABLE`)
+     14. `Self-chosen challenge rate` (`NEEDS NEW CLIENT/UX EVENT`)
+     16. `Parent study reminders / week` (`NEEDS NEW PRODUCT INPUT / SURVEY`)
+2. **Canonical VLPE Definition:** The North Star metric **VLPE** is canonically defined as Verified Learning Progress Events per active child per calendar week, requiring that each event has completed both **Growth processing** (`public.growth_events`) and **Learning processing** (`public.learning_processing_events` with `status = 'processed'`).
+3. Client UX telemetry uses a minimal, privacy-preserving envelope strictly scrubbed of child real names, parent emails, school names, geographic location, image URLs, or auth tokens.
 
 ---
 
-## Decision 6 — Four-Tier Erasure Lifecycle, Legal Status & Schema-Verified Data Portability
+## Decision 6 — Complete RLS Read-Boundary Overhaul, Pre-Pilot Legal Review & Data Portability
 
 To resolve the tension between immutable database triggers and parental right-to-erasure requests across all 20 child-linked database tables and Supabase Storage:
-1. **Legal & Policy Validation Status:**
-   - **`STATUS: UNRESOLVED — REQUIRES FORMAL LEGAL & POLICY VALIDATION PRIOR TO GENERAL COMMERCIAL AVAILABILITY.`**
-   - Retaining child-linked immutable ledger rows (`xp_ledger`, `rp_ledger`, `verified_learning_events`), even with direct names removed, does not automatically guarantee statutory anonymization or legitimate-interest retention under GDPR / COPPA / CCPA.
-   - For the 4-week closed family pilot, LearnWard enforces an internal operational data minimization policy:
-     - **Tier 1 (Access Revocation):** Setting `child_device_grants.status = 'revoked'` immediately revokes device tokens.
-     - **Tier 2 (Soft Archival & RLS Boundary Hardening):** Setting `child_profiles.status = 'archived'`. RLS read policies for active family adults are updated with an explicit check (`private.is_child_active_in_family(child_id, family_id)`) ensuring archived child records are completely excluded from active adult daily dashboard queries.
-     - **Tier 3 (Child Profile Pseudonymization):** Child identifying details in `child_profiles` (`display_name`, `avatar_key`, `birth_year`, `school_grade`) are scrubbed to pseudonymous values (`[Archived Learner]`, `null`).
-     - **Tier 4 (Evidence Storage Purging):** All uploaded assessment evidence photos in the `assessment-evidence` Supabase Storage bucket under `{family_id}/{child_id}/` are permanently deleted.
-2. **Technical Constraint on Review Notes:** `assessment_review_events` is protected by the immutable trigger `trg_prevent_assessment_review_event_mutation`, prohibiting in-place UPDATE or DELETE of `review_notes`. Modifying historical notes is blocked by frozen trigger; access is severed at the RLS read boundary.
-3. **Schema-Verified Data Portability RPC `public.export_family_data_json(p_family_id uuid)`:**
+1. **Mandatory Legal & Privacy Review Obligation:**
+   - A formal legal and privacy review (covering COPPA verifiable parental consent, GDPR/CCPA data minimization, and lawful bases) **MUST be completed prior to onboarding external pilot families** and processing real children's personal data.
+   - Internal operational minimization (the 4-tier technical lifecycle) is explicitly distinguished from statutory regulatory compliance.
+2. **Complete RLS Read-Boundary Overhaul:**
+   - In PostgreSQL, multiple permissive policies combine with `OR`. To prevent existing permissive policies from bypassing archived-child restrictions, Phase 6 **drops and replaces** existing SELECT policies across all child-linked tables.
+   - For tables with direct `child_id`: Normal adult access requires `(private.is_active_family_adult(family_id) AND private.is_child_active_in_family(child_id, family_id))`.
+   - For tables without direct `child_id` (`assessment_evidence`, `assessment_review_events`, `rewards`): Access follows the authoritative join path through `public.assessments.child_id` or `rewards.target_child_id` with active child verification.
+   - Paired child device access is strictly restricted to active devices matching the child's own profile: `private.is_active_child_device(family_id, child_id)`.
+3. **Technical Constraint on Review Notes:** `assessment_review_events` is protected by the immutable trigger `trg_prevent_assessment_review_event_mutation`, prohibiting in-place UPDATE or DELETE of `review_notes`. Historical review notes remain protected by the trigger; access is severed at the RLS read boundary.
+4. **Schema-Verified Data Portability RPC `public.export_family_data_json(p_family_id uuid)`:**
    - Strictly verified against all frozen migrations (Phases 1–5).
    - Enforces adult authorization using existing security definer helper: `private.is_active_family_adult(p_family_id)`.
    - Uses verified schema columns: `family_memberships.auth_user_id`, `xp_ledger.reason_code`, `rp_ledger.reason_code`; excludes nonexistent `child_mastery_states.mastery_band`.
