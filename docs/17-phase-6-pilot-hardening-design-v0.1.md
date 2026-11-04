@@ -113,7 +113,7 @@ class PendingRewardCommands extends Table {
   TextColumn get actorUserId => text().nullable()();
   TextColumn get actorRole => text().nullable()();
   IntColumn get schemaVersion => integer().withDefault(const Constant(1))();
-  TextColumn get recoveryState => text().withDefault(const Constant('quarantined_legacy_v4'))();
+  TextColumn get recoveryState => text().withDefault(const Constant('active'))();
   TextColumn get dispatchState => text().withDefault(const Constant('unknown_legacy'))();
   // dispatch: unknown_legacy / never_dispatched / possibly_dispatched / confirmed_committed
 }
