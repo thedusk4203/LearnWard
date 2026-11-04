@@ -28,24 +28,16 @@ Phase 6 provides the operational, reliability, accessibility, and release harden
 
 ---
 
-## Decision 1 — Bounded Feature Outboxes, Drift Schema v5 & Provably Safe Command Recovery
+## Decision 1 — Bounded Outboxes and Conservative Drift v4 Recovery
 
-Rather than implementing a complex, dynamically polymorphic offline sync queue, LearnWard adopts **bounded, domain-specific command journals** with strict Drift v4-to-v5 backward compatibility:
-1. Retains and hardens `pending_reward_commands` for reward redemptions and wheel spins.
-2. Extends `local_assessment_drafts` with an explicit submission lifecycle (`draft -> uploading_evidence -> submitting_assessment -> failed_retryable -> terminal_error`).
-3. Local database schema migrates to `schemaVersion = 5` in Drift:
-   - Existing v4 nullable columns (`pending_reward_commands.childId`, `local_assessment_drafts.createCommandId`, `local_assessment_drafts.submitCommandId`, `local_assessment_drafts.evidenceId`, `local_assessment_drafts.serverAssessmentId`, `local_assessment_drafts.localPhotoPath`) remain strictly nullable to guarantee zero migration regressions on existing client rows.
-   - Newly added columns (`server_evidence_id`, `sha256_checksum`, `local_compressed_photo_path`, `actor_user_id`, `actor_role`, `schema_version`, `recovery_state`) are declared nullable in Drift/SQLite table definitions so that SQLite `ALTER TABLE ADD COLUMN` statements succeed on existing v4 databases without requiring non-null constant defaults.
-4. **Provably Safe Legacy v4 Command Recovery:**
-   - Unsent local actions (`retry_count == 0`) are distinguished from dispatched commands with unknown outcomes (`retry_count > 0`).
-   - Legacy v4 rows where `actor_user_id IS NULL` enter `quarantined_legacy_v4` or `quarantined_unknown_outcome`.
-   - **Original Command IDs are Preserved:** The unique `command_id` is never discarded or regenerated automatically merely because an approximate search finds no match.
-   - **Exact Server-Authoritative Reconciliation:** Adults query `public.command_receipts` to determine if a command committed; paired child commands rely on server-side idempotent RPC replay contracts with the exact same `original_command_id`.
-   - **Safe Manual Resolution:** When outcome cannot be established, the command remains in quarantine for parent review in Parent Settings (choice to mark resolved from history, cancel/discard, or explicitly re-authorize under the active parent).
-   - Automated migration tests must execute against pre-populated v4 SQLite database fixtures to verify that zero drafts, pending commands, or local evidence photo paths are lost or corrupted.
-5. On shared family devices, if a queued command's `actor_user_id` does not match the active authenticated session, re-execution is paused in a `pending_original_actor` state until the matching user logs in, preventing identity drift and server caller mismatch errors.
+1. Preserve all v4 nullable columns, original command UUIDs, existing server references and local photos. Add a durable `dispatchState` to **both** v5 journals: `unknown_legacy`, `never_dispatched`, `possibly_dispatched`, `confirmed_committed`.
+2. Frozen v4 has **no** dispatch marker or retry counter; the newly added default `retryCount==0` cannot prove a migrated action was never sent. All legacy network outcomes are UNKNOWN/quarantined pending exact authorized reconciliation.
+3. Explicitly insert new v5 entries as `never_dispatched`; persist `possibly_dispatched` to SQLite **before** remote RPC dispatch. Crashes and lost replies are unknown until authoritative confirmation.
+4. Same-ID idempotent replay requires positively verified original authenticated actor and existing RPC guards. Missing receipts and approximate matches never prove absence. Unknown actor/outcome causes a hold, **not** auto-replay, regenerated ID or an economic reissue.
+5. Parent may hold, export unsynced schoolwork or abandon local copy (warning: remote effects remain). Required migration tests use populated v4 databases and prove no data loss, no automatic replay and no double debit/spin/submission.
 
 ---
+
 
 ## Decision 2 — Per-Data-Class Local Security, Positive Revocation Proof & Authoritative RPC Replay
 
@@ -63,22 +55,15 @@ A blanket `clearAllTables()` wipe on sign-out is rejected because it destroys de
 
 ---
 
-## Decision 3 — Evidence Persistence, Content-Integrity Hashing & Resumable Storage
+## Decision 3 — Byte-Verified Private Evidence Storage
 
-To ensure evidence capture reliability over poor mobile network connections without external AWS dependencies:
-1. `NSCameraUsageDescription` and `NSPhotoLibraryUsageDescription` are added to iOS `Info.plist`.
-2. Raw camera images are resized client-side to a maximum resolution of `2048 x 1536` pixels with adaptive JPEG compression (target quality 85%, minimum 70%). Compression strictly prioritizes handwriting and diagram legibility over file size; the 1.5 MB threshold is an adaptive compression target, not a hard-fail rejection cap.
-3. **Content-Integrity Hashing & Stable Compression:**
-   - Image is compressed once upon capture and saved to `localCompressedPhotoPath`; its SHA-256 hash is computed and stored in `sha256Checksum`.
-   - Across retries and restarts, the compressor is NEVER re-invoked, preventing byte drift or generation loss.
-4. **Safe Storage Upload & HTTP 409 Conflict Policy:**
-   - Uploads via Supabase Dart Storage SDK to deterministic path `{family_id}/{child_id}/{assessment_id}/{clientEvidenceUuid}.jpg` with custom metadata containing the SHA-256 hash.
-   - On HTTP 409 Conflict: Client verifies remote file existence, byte size, and SHA-256 hash.
-     * If content matches: Upload is verified; proceed to registration RPC.
-     * If content differs (mismatched hash/size or corrupted 0-byte file): Client generates a fresh unique `clientEvidenceUuid`, updates the local draft path, and uploads to the new path to prevent overwriting unrelated evidence.
-   - Authoritative database registration calls `public.register_assessment_evidence(...)`, and the returned database primary key UUID (`id`) is stored in `LocalAssessmentDrafts.serverEvidenceId`.
+1. Compress once and persist stable JPEG bytes, SHA-256, client UUID, separate authoritative evidence-row UUID and path across restarts.
+2. Upload via Dart `uploadBinary` with `upsert:false`. After HTTP 409 or response loss, `storage.list()` custom metadata and matching size **do not prove equality** ([Supabase Storage #759](https://github.com/supabase/storage/issues/759)).
+3. Download the remote object with the **authorized actor**, hash its **actual bytes**, and require matching SHA-256 plus size before registering via the frozen same-path idempotent RPC. On mismatch use `evidence_conflict` without overwrite or UUID rotation; on unauthorized/unknown read use `verification_pending` and retain local data.
+4. Test same-size/different-bytes, missing metadata, response-lost upload and registration, restart, private RLS, and archived/revoked actor scenarios. Never bypass Storage with client service-role credentials.
 
 ---
+
 
 ## Decision 4 — In-App Coordination Notifications & Authoritative Query Reconciliation
 
@@ -117,25 +102,16 @@ For the 4-week pilot:
 
 ---
 
-## Decision 6 — Complete RLS Read-Boundary Overhaul, Pre-Pilot Legal Review & Data Portability
+## Decision 6 — Archived Child Isolation and Privacy Governance
 
-To resolve the tension between immutable database triggers and parental right-to-erasure requests across all 20 child-linked database tables and Supabase Storage:
-1. **Mandatory Legal & Privacy Review Obligation:**
-   - A formal legal and privacy review (covering COPPA verifiable parental consent, GDPR/CCPA data minimization, and lawful bases) **MUST be completed prior to onboarding external pilot families** and processing real children's personal data.
-   - Internal operational minimization (the 4-tier technical lifecycle) is explicitly distinguished from statutory regulatory compliance.
-2. **Complete RLS Read-Boundary Overhaul:**
-   - In PostgreSQL, multiple permissive policies combine with `OR`. To prevent existing permissive policies from bypassing archived-child restrictions, Phase 6 **drops and replaces** existing SELECT policies across all child-linked tables.
-   - For tables with direct `child_id`: Normal adult access requires `(private.is_active_family_adult(family_id) AND private.is_child_active_in_family(child_id, family_id))`.
-   - For tables without direct `child_id` (`assessment_evidence`, `assessment_review_events`, `rewards`): Access follows the authoritative join path through `public.assessments.child_id` or `rewards.target_child_id` with active child verification.
-   - Paired child device access is strictly restricted to active devices matching the child's own profile: `private.is_active_child_device(family_id, child_id)`.
-3. **Technical Constraint on Review Notes:** `assessment_review_events` is protected by the immutable trigger `trg_prevent_assessment_review_event_mutation`, prohibiting in-place UPDATE or DELETE of `review_notes`. Historical review notes remain protected by the trigger; access is severed at the RLS read boundary.
-4. **Schema-Verified Data Portability RPC `public.export_family_data_json(p_family_id uuid)`:**
-   - Strictly verified against all frozen migrations (Phases 1–5).
-   - Enforces adult authorization using existing security definer helper: `private.is_active_family_adult(p_family_id)`.
-   - Uses verified schema columns: `family_memberships.auth_user_id`, `xp_ledger.reason_code`, `rp_ledger.reason_code`; excludes nonexistent `child_mastery_states.mastery_band`.
-   - Revokes execution from `public, anon`; grants execution to `authenticated`.
+1. A legal/privacy review is mandatory before external pilot families' child personal data is processed. Technical minimization is **not** proof of statutory erasure; historic immutable UUID-linked data may remain re-identifiable.
+2. In new Phase 6 migrations, replace affected permissive SELECT policies without editing frozen SQL. Require `private.is_child_active_in_family(child_id,family_id)` **outside** adult/child-device authorization OR. A grant left active must never allow archived learning data.
+3. For evidence and review events, join to active child through assessments, preserving review's adult-only restriction. For targeted rewards, check active target child. For `command_receipts`, enforce adult-only access plus active child through the operation-specific resource join.
+4. Preserve the narrowly scoped own-grant `child_device_grants` status read to prove positive revocation without exposing archived learning records. Keep `private.child_pairing_requests` client-inaccessible. Harden `private.validate_storage_evidence_access` with active-child condition on Storage SELECT/INSERT/DELETE while preserving draft/tenant restrictions and no-UPDATE.
+5. Audit `pg_policies`, indirect tables, private Storage and RPC paths; regression-test active/archived children with active/revoked grants, all actor classes, receipt mapping, and the grant status exception. ADR remains PROPOSED until independent approval.
 
 ---
+
 
 ## Decision 7 — Accessible Semantic Tree, Touch Targets & Reduced-Motion Wheel Guarantee
 
