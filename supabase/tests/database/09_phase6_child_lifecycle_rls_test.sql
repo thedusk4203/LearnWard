@@ -15,118 +15,118 @@ on conflict (id) do nothing;
 
 -- Families
 insert into public.families (id, name, timezone, locale, created_by_user_id) values
-  ('f9000000-0000-0000-0000-000000000001'::uuid, 'Phase 6 Family A', 'America/New_York', 'en_US', '90000000-0000-0000-0000-000000000001'::uuid),
-  ('f9000000-0000-0000-0000-000000000002'::uuid, 'Phase 6 Family B', 'America/Chicago', 'en_US', '90000000-0000-0000-0000-000000000004'::uuid)
+  ('90000001-0000-0000-0000-000000000001'::uuid, 'Phase 6 Family A', 'America/New_York', 'en_US', '90000000-0000-0000-0000-000000000001'::uuid),
+  ('90000001-0000-0000-0000-000000000002'::uuid, 'Phase 6 Family B', 'America/Chicago', 'en_US', '90000000-0000-0000-0000-000000000004'::uuid)
 on conflict (id) do nothing;
 
 -- Memberships
 insert into public.family_memberships (family_id, auth_user_id, role, status) values
-  ('f9000000-0000-0000-0000-000000000001'::uuid, '90000000-0000-0000-0000-000000000001'::uuid, 'owner', 'active'),
-  ('f9000000-0000-0000-0000-000000000002'::uuid, '90000000-0000-0000-0000-000000000004'::uuid, 'owner', 'active')
+  ('90000001-0000-0000-0000-000000000001'::uuid, '90000000-0000-0000-0000-000000000001'::uuid, 'owner', 'active'),
+  ('90000001-0000-0000-0000-000000000002'::uuid, '90000000-0000-0000-0000-000000000004'::uuid, 'owner', 'active')
 on conflict (family_id, auth_user_id) do nothing;
 
 -- Children: One Active, One Archived (Pseudonymized per Tier 3), One Foreign
 insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year, avatar_key, status, archived_at) values
-  ('c9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'Active Child', 4, 2016, 'star_gold', 'active', null),
-  ('c9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, '[Archived Learner]', null, null, null, 'archived', now() - interval '1 day'),
-  ('c9000000-0000-0000-0000-000000000003'::uuid, 'f9000000-0000-0000-0000-000000000002'::uuid, 'Foreign Child', 5, 2015, 'shield_blue', 'active', null)
+  ('90000002-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Active Child', 4, 2016, 'star_gold', 'active', null),
+  ('90000002-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '[Archived Learner]', null, null, null, 'archived', now() - interval '1 day'),
+  ('90000002-0000-0000-0000-000000000003'::uuid, '90000001-0000-0000-0000-000000000002'::uuid, 'Foreign Child', 5, 2015, 'shield_blue', 'active', null)
 on conflict (id) do nothing;
 
 -- Device Grants: Active grant for active child, active grant for archived child
 insert into public.child_device_grants (id, family_id, child_id, auth_user_id, status, paired_by_user_id) values
-  ('d9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, '90000000-0000-0000-0000-000000000002'::uuid, 'active', '90000000-0000-0000-0000-000000000001'::uuid),
-  ('d9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, '90000000-0000-0000-0000-000000000003'::uuid, 'active', '90000000-0000-0000-0000-000000000001'::uuid)
+  ('90000003-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, '90000000-0000-0000-0000-000000000002'::uuid, 'active', '90000000-0000-0000-0000-000000000001'::uuid),
+  ('90000003-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, '90000000-0000-0000-0000-000000000003'::uuid, 'active', '90000000-0000-0000-0000-000000000001'::uuid)
 on conflict (id) do nothing;
 
 -- Wheel Settings for Family A
 insert into public.family_wheel_settings (family_id, spin_cost_minor, daily_spin_cap, is_enabled) values
-  ('f9000000-0000-0000-0000-000000000001'::uuid, 1000, 3, true)
+  ('90000001-0000-0000-0000-000000000001'::uuid, 1000, 3, true)
 on conflict (family_id) do nothing;
 
 -- Rewards: One Family-wide, One targeted to Active Child, One targeted to Archived Child
 insert into public.rewards (id, family_id, title, category, store_cost_minor, is_active, store_enabled, wheel_enabled, target_child_id) values
-  ('r9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'Family Pizza Night', 'treat', 1000, true, true, true, null),
-  ('r9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'Active Child Book', 'item', 500, true, true, true, 'c9000000-0000-0000-0000-000000000001'::uuid),
-  ('r9000000-0000-0000-0000-000000000003'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'Archived Child Legacy Reward', 'treat', 750, true, true, true, 'c9000000-0000-0000-0000-000000000002'::uuid)
+  ('90000005-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Family Pizza Night', 'treat', 1000, true, true, true, null),
+  ('90000005-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Active Child Book', 'item', 500, true, true, true, '90000002-0000-0000-0000-000000000001'::uuid),
+  ('90000005-0000-0000-0000-000000000003'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Archived Child Legacy Reward', 'treat', 750, true, true, true, '90000002-0000-0000-0000-000000000002'::uuid)
 on conflict (id) do nothing;
 
 -- Assessments: One for Active Child, One for Archived Child, plus Drafts
 insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id) values
-  ('a9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'Active Quiz', 'quiz', 'normal', 10, 10, 'verified', '90000000-0000-0000-0000-000000000001'::uuid),
-  ('a9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Archived Quiz', 'quiz', 'normal', 10, 10, 'verified', '90000000-0000-0000-0000-000000000001'::uuid),
-  ('a9000000-0000-0000-0000-000000000003'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'Active Draft', 'quiz', 'normal', 8, 10, 'draft', '90000000-0000-0000-0000-000000000001'::uuid),
-  ('a9000000-0000-0000-0000-000000000004'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Archived Draft', 'quiz', 'normal', 8, 10, 'draft', '90000000-0000-0000-0000-000000000001'::uuid)
+  ('90000006-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'Active Quiz', 'quiz', 'normal', 10, 10, 'verified', '90000000-0000-0000-0000-000000000001'::uuid),
+  ('90000006-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Archived Quiz', 'quiz', 'normal', 10, 10, 'verified', '90000000-0000-0000-0000-000000000001'::uuid),
+  ('90000006-0000-0000-0000-000000000003'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'Active Draft', 'quiz', 'normal', 8, 10, 'draft', '90000000-0000-0000-0000-000000000001'::uuid),
+  ('90000006-0000-0000-0000-000000000004'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Archived Draft', 'quiz', 'normal', 8, 10, 'draft', '90000000-0000-0000-0000-000000000001'::uuid)
 on conflict (id) do nothing;
 
 -- Assessment Evidence
 insert into public.assessment_evidence (id, assessment_id, family_id, storage_path, media_type, file_size_bytes, sha256_checksum) values
-  ('e9000000-0000-0000-0000-000000000001'::uuid, 'a9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001/c9000000-0000-0000-0000-000000000001/a9000000-0000-0000-0000-000000000001/ev1.jpg', 'image/jpeg', 1024, 'sha256_1'),
-  ('e9000000-0000-0000-0000-000000000002'::uuid, 'a9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001/c9000000-0000-0000-0000-000000000002/a9000000-0000-0000-0000-000000000002/ev2.jpg', 'image/jpeg', 1024, 'sha256_2')
+  ('90000007-0000-0000-0000-000000000001'::uuid, '90000006-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001/90000002-0000-0000-0000-000000000001/90000006-0000-0000-0000-000000000001/ev1.jpg', 'image/jpeg', 1024, 'sha256_1'),
+  ('90000007-0000-0000-0000-000000000002'::uuid, '90000006-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001/90000002-0000-0000-0000-000000000002/90000006-0000-0000-0000-000000000002/ev2.jpg', 'image/jpeg', 1024, 'sha256_2')
 on conflict (id) do nothing;
 
 -- Command Receipts
 insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id) values
-  ('cmd90000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, '90000000-0000-0000-0000-000000000001'::uuid, 'verify', 'a9000000-0000-0000-0000-000000000001'::uuid),
-  ('cmd90000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, '90000000-0000-0000-0000-000000000001'::uuid, 'verify', 'a9000000-0000-0000-0000-000000000002'::uuid)
+  ('90000008-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000000-0000-0000-0000-000000000001'::uuid, 'verify', '90000006-0000-0000-0000-000000000001'::uuid),
+  ('90000008-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000000-0000-0000-0000-000000000001'::uuid, 'verify', '90000006-0000-0000-0000-000000000002'::uuid)
 on conflict (command_id) do nothing;
 
 -- Assessment Review Events
 insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id, review_notes) values
-  ('v9000000-0000-0000-0000-000000000001'::uuid, 'cmd90000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'a9000000-0000-0000-0000-000000000001'::uuid, 'verified', 'submitted', 'verified', '90000000-0000-0000-0000-000000000001'::uuid, 'Great job!'),
-  ('v9000000-0000-0000-0000-000000000002'::uuid, 'cmd90000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'a9000000-0000-0000-0000-000000000002'::uuid, 'verified', 'submitted', 'verified', '90000000-0000-0000-0000-000000000001'::uuid, 'Archived historical review')
+  ('90000009-0000-0000-0000-000000000001'::uuid, '90000008-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000006-0000-0000-0000-000000000001'::uuid, 'verified', 'submitted', 'verified', '90000000-0000-0000-0000-000000000001'::uuid, 'Great job!'),
+  ('90000009-0000-0000-0000-000000000002'::uuid, '90000008-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000006-0000-0000-0000-000000000002'::uuid, 'verified', 'submitted', 'verified', '90000000-0000-0000-0000-000000000001'::uuid, 'Archived historical review')
 on conflict (id) do nothing;
 
 -- Verified Learning Events (VLE)
 insert into public.verified_learning_events (id, assessment_id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, occurred_at, verified_by_user_id, review_event_id) values
-  ('l9000000-0000-0000-0000-000000000001'::uuid, 'a9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'Active Quiz', 'quiz', 'normal', 10, 10, 10.0, now(), '90000000-0000-0000-0000-000000000001'::uuid, 'v9000000-0000-0000-0000-000000000001'::uuid),
-  ('l9000000-0000-0000-0000-000000000002'::uuid, 'a9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Archived Quiz', 'quiz', 'normal', 10, 10, 10.0, now(), '90000000-0000-0000-0000-000000000001'::uuid, 'v9000000-0000-0000-0000-000000000002'::uuid)
+  ('9000000a-0000-0000-0000-000000000001'::uuid, '90000006-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'Active Quiz', 'quiz', 'normal', 10, 10, 10.0, now(), '90000000-0000-0000-0000-000000000001'::uuid, '90000009-0000-0000-0000-000000000001'::uuid),
+  ('9000000a-0000-0000-0000-000000000002'::uuid, '90000006-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Archived Quiz', 'quiz', 'normal', 10, 10, 10.0, now(), '90000000-0000-0000-0000-000000000001'::uuid, '90000009-0000-0000-0000-000000000002'::uuid)
 on conflict (id) do nothing;
 
 -- Growth Events & Ledgers
 insert into public.growth_events (id, family_id, child_id, verified_learning_event_id, assessment_id, engine_version, normalized_score, score_rp_minor, total_rp_minor, xp_awarded, inputs_snapshot) values
-  ('g9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 'l9000000-0000-0000-0000-000000000001'::uuid, 'a9000000-0000-0000-0000-000000000001'::uuid, 'growth-v0.1', 10.0, 100, 100, 50, '{}'::jsonb),
-  ('g9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 'l9000000-0000-0000-0000-000000000002'::uuid, 'a9000000-0000-0000-0000-000000000002'::uuid, 'growth-v0.1', 10.0, 100, 100, 50, '{}'::jsonb)
+  ('9000000b-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, '9000000a-0000-0000-0000-000000000001'::uuid, '90000006-0000-0000-0000-000000000001'::uuid, 'growth-v0.1', 10.0, 100, 100, 50, '{}'::jsonb),
+  ('9000000b-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, '9000000a-0000-0000-0000-000000000002'::uuid, '90000006-0000-0000-0000-000000000002'::uuid, 'growth-v0.1', 10.0, 100, 100, 50, '{}'::jsonb)
 on conflict (id) do nothing;
 
 insert into public.xp_ledger (id, family_id, child_id, amount, reason_code, source_type, idempotency_key) values
-  ('x9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 50, 'assessment_earned', 'growth_event', 'xp_key_1'),
-  ('x9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 50, 'assessment_earned', 'growth_event', 'xp_key_2')
+  ('9000000c-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 50, 'assessment_earned', 'growth_event', 'xp_key_1'),
+  ('9000000c-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 50, 'assessment_earned', 'growth_event', 'xp_key_2')
 on conflict (id) do nothing;
 
 insert into public.rp_ledger (id, family_id, child_id, amount_minor, reason_code, source_type, idempotency_key) values
-  ('p9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 100, 'assessment_earned', 'growth_event', 'rp_key_1'),
-  ('p9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 100, 'assessment_earned', 'growth_event', 'rp_key_2')
+  ('9000000d-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 100, 'assessment_earned', 'growth_event', 'rp_key_1'),
+  ('9000000d-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 100, 'assessment_earned', 'growth_event', 'rp_key_2')
 on conflict (id) do nothing;
 
 insert into public.child_balances (family_id, child_id, xp_total, rp_balance_minor) values
-  ('f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 50, 100),
-  ('f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 50, 100)
+  ('90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 50, 100),
+  ('90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 50, 100)
 on conflict (child_id) do nothing;
 
 insert into public.reward_redemptions (id, family_id, child_id, reward_id, origin, rp_cost_minor, status, reward_snapshot) values
-  ('m9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 'r9000000-0000-0000-0000-000000000001'::uuid, 'wheel', 1000, 'pending_fulfillment', '{"title": "Pizza"}'::jsonb),
-  ('m9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 'r9000000-0000-0000-0000-000000000001'::uuid, 'wheel', 1000, 'pending_fulfillment', '{"title": "Pizza"}'::jsonb)
+  ('9000000e-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, '90000005-0000-0000-0000-000000000001'::uuid, 'wheel', 1000, 'pending_fulfillment', '{"title": "Pizza"}'::jsonb),
+  ('9000000e-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, '90000005-0000-0000-0000-000000000001'::uuid, 'wheel', 1000, 'pending_fulfillment', '{"title": "Pizza"}'::jsonb)
 on conflict (id) do nothing;
 
 insert into public.wheel_spins (id, family_id, child_id, reward_id, redemption_id, origin, spin_cost_minor, selection_snapshot) values
-  ('w9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 'r9000000-0000-0000-0000-000000000001'::uuid, 'm9000000-0000-0000-0000-000000000001'::uuid, 'wheel', 1000, '{"result": "reward"}'::jsonb),
-  ('w9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 'r9000000-0000-0000-0000-000000000001'::uuid, 'm9000000-0000-0000-0000-000000000002'::uuid, 'wheel', 1000, '{"result": "reward"}'::jsonb)
+  ('9000000f-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, '90000005-0000-0000-0000-000000000001'::uuid, '9000000e-0000-0000-0000-000000000001'::uuid, 'wheel', 1000, '{"result": "reward"}'::jsonb),
+  ('9000000f-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, '90000005-0000-0000-0000-000000000001'::uuid, '9000000e-0000-0000-0000-000000000002'::uuid, 'wheel', 1000, '{"result": "reward"}'::jsonb)
 on conflict (id) do nothing;
 
 -- Learning Mastery fixtures
 insert into public.child_mastery_states (family_id, child_id, learning_node_id, mastery_score, status) values
-  ('f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0, 'mastered'),
-  ('f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0, 'mastered')
+  ('90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0, 'mastered'),
+  ('90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0, 'mastered')
 on conflict (child_id, learning_node_id) do nothing;
 
 insert into public.assessment_learning_mappings (assessment_id, learning_node_id, family_id, weight) values
-  ('a9000000-0000-0000-0000-000000000001'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 1.0),
-  ('a9000000-0000-0000-0000-000000000002'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 1.0)
+  ('90000006-0000-0000-0000-000000000001'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 1.0),
+  ('90000006-0000-0000-0000-000000000002'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 1.0)
 on conflict (assessment_id, learning_node_id) do nothing;
 
 insert into public.learning_evidence_events (id, assessment_id, family_id, child_id, learning_node_id, score) values
-  ('k9000000-0000-0000-0000-000000000001'::uuid, 'a9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000001'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0),
-  ('k9000000-0000-0000-0000-000000000002'::uuid, 'a9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'c9000000-0000-0000-0000-000000000002'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0)
+  ('90000010-0000-0000-0000-000000000001'::uuid, '90000006-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0),
+  ('90000010-0000-0000-0000-000000000002'::uuid, '90000006-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0)
 on conflict (id) do nothing;
 
 
@@ -139,14 +139,14 @@ select has_function('private', 'is_child_active_in_family', ARRAY['uuid', 'uuid'
 
 -- Test 2: Helper private.is_child_active_in_family reports active child true
 select is(
-  private.is_child_active_in_family('c9000000-0000-0000-0000-000000000001'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid),
+  private.is_child_active_in_family('90000002-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid),
   true,
   'is_child_active_in_family returns true for active child'
 );
 
 -- Test 3: Helper private.is_child_active_in_family reports archived child false
 select is(
-  private.is_child_active_in_family('c9000000-0000-0000-0000-000000000002'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid),
+  private.is_child_active_in_family('90000002-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid),
   false,
   'is_child_active_in_family returns false for archived child'
 );
@@ -199,7 +199,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 prepare attempt_update_status as
   update public.child_profiles
   set status = 'archived'
-  where id = 'c9000000-0000-0000-0000-000000000001'::uuid;
+  where id = '90000002-0000-0000-0000-000000000001'::uuid;
 
 select throws_ok(
   'attempt_update_status',
@@ -212,7 +212,7 @@ select throws_ok(
 prepare attempt_update_archived_at as
   update public.child_profiles
   set archived_at = now()
-  where id = 'c9000000-0000-0000-0000-000000000001'::uuid;
+  where id = '90000002-0000-0000-0000-000000000001'::uuid;
 
 select throws_ok(
   'attempt_update_archived_at',
@@ -225,7 +225,7 @@ select throws_ok(
 prepare attempt_update_birth_year as
   update public.child_profiles
   set birth_year = 2020
-  where id = 'c9000000-0000-0000-0000-000000000001'::uuid;
+  where id = '90000002-0000-0000-0000-000000000001'::uuid;
 
 select throws_ok(
   'attempt_update_birth_year',
@@ -239,17 +239,17 @@ update public.child_profiles
 set display_name = 'Active Child Updated',
     avatar_key = 'star_silver',
     school_grade = 5
-where id = 'c9000000-0000-0000-0000-000000000001'::uuid;
+where id = '90000002-0000-0000-0000-000000000001'::uuid;
 
 select is(
-  (select display_name from public.child_profiles where id = 'c9000000-0000-0000-0000-000000000001'::uuid),
+  (select display_name from public.child_profiles where id = '90000002-0000-0000-0000-000000000001'::uuid),
   'Active Child Updated',
   'Parent can update permitted fields on active profile'
 );
 
 -- Test 13: Value persistence
 select is(
-  (select school_grade from public.child_profiles where id = 'c9000000-0000-0000-0000-000000000001'::uuid),
+  (select school_grade from public.child_profiles where id = '90000002-0000-0000-0000-000000000001'::uuid),
   5::smallint,
   'Updated school_grade persists correctly on active child profile'
 );
@@ -262,8 +262,8 @@ select is(
 -- Test 14: Core identity immutability (attempting to update family_id throws LW005)
 prepare attempt_change_family as
   update public.child_profiles
-  set family_id = 'f9000000-0000-0000-0000-000000000002'::uuid
-  where id = 'c9000000-0000-0000-0000-000000000001'::uuid;
+  set family_id = '90000001-0000-0000-0000-000000000002'::uuid
+  where id = '90000002-0000-0000-0000-000000000001'::uuid;
 
 select throws_ok(
   'attempt_change_family',
@@ -282,7 +282,7 @@ select has_trigger('public', 'child_profiles', 'trg_guard_child_profile_lifecycl
 prepare attempt_update_archived as
   update public.child_profiles
   set display_name = 'Hacked Archived Name'
-  where id = 'c9000000-0000-0000-0000-000000000002'::uuid;
+  where id = '90000002-0000-0000-0000-000000000002'::uuid;
 
 select throws_ok(
   'attempt_update_archived',
@@ -300,7 +300,7 @@ prepare attempt_invalid_transition as
       avatar_key = null,
       school_grade = null,
       birth_year = null
-  where id = 'c9000000-0000-0000-0000-000000000001'::uuid;
+  where id = '90000002-0000-0000-0000-000000000001'::uuid;
 
 select throws_ok(
   'attempt_invalid_transition',
@@ -315,7 +315,7 @@ prepare attempt_non_pseudonymized_archive as
   set status = 'archived',
       archived_at = now(),
       display_name = 'Still Real Name'
-  where id = 'c9000000-0000-0000-0000-000000000001'::uuid;
+  where id = '90000002-0000-0000-0000-000000000001'::uuid;
 
 select throws_ok(
   'attempt_non_pseudonymized_archive',
@@ -333,7 +333,7 @@ prepare valid_atomic_archive as
       avatar_key = null,
       school_grade = null,
       birth_year = null
-  where id = 'c9000000-0000-0000-0000-000000000001'::uuid;
+  where id = '90000002-0000-0000-0000-000000000001'::uuid;
 
 select lives_ok(
   'valid_atomic_archive',
@@ -348,7 +348,7 @@ set status = 'active',
     school_grade = 4,
     birth_year = 2016,
     avatar_key = 'star_gold'
-where id = 'c9000000-0000-0000-0000-000000000001'::uuid;
+where id = '90000002-0000-0000-0000-000000000001'::uuid;
 
 
 -- ===========================================================================
@@ -361,7 +361,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 20: Adult sees active child, does NOT see archived child in child_profiles
 select is(
-  (select count(*)::int from public.child_profiles where family_id = 'f9000000-0000-0000-0000-000000000001'::uuid),
+  (select count(*)::int from public.child_profiles where family_id = '90000001-0000-0000-0000-000000000001'::uuid),
   1,
   'Family adult sees only active child profile (archived child excluded from SELECT)'
 );
@@ -371,7 +371,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 21: Active child device sees own active profile
 select is(
-  (select count(*)::int from public.child_profiles where id = 'c9000000-0000-0000-0000-000000000001'::uuid),
+  (select count(*)::int from public.child_profiles where id = '90000002-0000-0000-0000-000000000001'::uuid),
   1,
   'Active child device can read own child profile'
 );
@@ -381,7 +381,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 22: Archived child device CANNOT read archived child profile
 select is(
-  (select count(*)::int from public.child_profiles where id = 'c9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.child_profiles where id = '90000002-0000-0000-0000-000000000002'::uuid),
   0,
   'Archived child device cannot read archived child profile'
 );
@@ -391,7 +391,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 23: Adult sees only active child device grants
 select is(
-  (select count(*)::int from public.child_device_grants where family_id = 'f9000000-0000-0000-0000-000000000001'::uuid),
+  (select count(*)::int from public.child_device_grants where family_id = '90000001-0000-0000-0000-000000000001'::uuid),
   1,
   'Family adult sees only grants belonging to active children'
 );
@@ -412,7 +412,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 -- Test 25: Attempt to insert child profile with status = 'archived' fails RLS with check
 prepare insert_archived_child as
   insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year, status)
-  values ('c9000000-0000-0000-0000-000000000099'::uuid, 'f9000000-0000-0000-0000-000000000001'::uuid, 'Direct Archived', 3, 2017, 'archived');
+  values ('90000002-0000-0000-0000-000000000099'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Direct Archived', 3, 2017, 'archived');
 
 select throws_ok(
   'insert_archived_child',
@@ -431,7 +431,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 26: Active child device can read family_wheel_settings
 select is(
-  (select count(*)::int from public.family_wheel_settings where family_id = 'f9000000-0000-0000-0000-000000000001'::uuid),
+  (select count(*)::int from public.family_wheel_settings where family_id = '90000001-0000-0000-0000-000000000001'::uuid),
   1,
   'Active child device can read family wheel settings'
 );
@@ -441,7 +441,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 27: Archived child device CANNOT read family_wheel_settings
 select is(
-  (select count(*)::int from public.family_wheel_settings where family_id = 'f9000000-0000-0000-0000-000000000001'::uuid),
+  (select count(*)::int from public.family_wheel_settings where family_id = '90000001-0000-0000-0000-000000000001'::uuid),
   0,
   'Archived child device cannot read family wheel settings'
 );
@@ -451,7 +451,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 28: Active child device can read untargeted family rewards
 select is(
-  (select count(*)::int from public.rewards where id = 'r9000000-0000-0000-0000-000000000001'::uuid),
+  (select count(*)::int from public.rewards where id = '90000005-0000-0000-0000-000000000001'::uuid),
   1,
   'Active child device can read untargeted family rewards'
 );
@@ -461,7 +461,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 29: Archived child device CANNOT read untargeted family rewards
 select is(
-  (select count(*)::int from public.rewards where id = 'r9000000-0000-0000-0000-000000000001'::uuid),
+  (select count(*)::int from public.rewards where id = '90000005-0000-0000-0000-000000000001'::uuid),
   0,
   'Archived child device cannot read untargeted family rewards'
 );
@@ -476,14 +476,14 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 30: Adult sees reward targeted to active child
 select is(
-  (select count(*)::int from public.rewards where id = 'r9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.rewards where id = '90000005-0000-0000-0000-000000000002'::uuid),
   1,
   'Family adult can read reward targeted to active child'
 );
 
 -- Test 31: Adult CANNOT see reward targeted to archived child
 select is(
-  (select count(*)::int from public.rewards where id = 'r9000000-0000-0000-0000-000000000003'::uuid),
+  (select count(*)::int from public.rewards where id = '90000005-0000-0000-0000-000000000003'::uuid),
   0,
   'Family adult cannot read reward targeted to archived child'
 );
@@ -493,7 +493,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 32: Active child device can read reward targeted to itself
 select is(
-  (select count(*)::int from public.rewards where id = 'r9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.rewards where id = '90000005-0000-0000-0000-000000000002'::uuid),
   1,
   'Active child device can read reward targeted to itself'
 );
@@ -503,7 +503,7 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 33: Archived child device CANNOT read reward targeted to itself
 select is(
-  (select count(*)::int from public.rewards where id = 'r9000000-0000-0000-0000-000000000003'::uuid),
+  (select count(*)::int from public.rewards where id = '90000005-0000-0000-0000-000000000003'::uuid),
   0,
   'Archived child device cannot read reward targeted to itself'
 );
@@ -519,98 +519,98 @@ select set_config('request.jwt.claims', '{"sub": "90000000-0000-0000-0000-000000
 
 -- Test 34: Adult cannot read assessment for archived child
 select is(
-  (select count(*)::int from public.assessments where id = 'a9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.assessments where id = '90000006-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read assessment for archived child'
 );
 
 -- Test 35: Adult cannot read evidence for archived child assessment
 select is(
-  (select count(*)::int from public.assessment_evidence where id = 'e9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.assessment_evidence where id = '90000007-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read assessment evidence for archived child'
 );
 
 -- Test 36: Adult cannot read review events for archived child assessment
 select is(
-  (select count(*)::int from public.assessment_review_events where id = 'v9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.assessment_review_events where id = '90000009-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read assessment review events for archived child'
 );
 
 -- Test 37: Adult cannot read verified learning events for archived child
 select is(
-  (select count(*)::int from public.verified_learning_events where id = 'l9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.verified_learning_events where id = '9000000a-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read verified learning events for archived child'
 );
 
 -- Test 38: Adult cannot read command receipts for archived child operations
 select is(
-  (select count(*)::int from public.command_receipts where command_id = 'cmd90000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.command_receipts where command_id = '90000008-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read command receipts for archived child'
 );
 
 -- Test 39: Adult cannot read growth events for archived child
 select is(
-  (select count(*)::int from public.growth_events where id = 'g9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.growth_events where id = '9000000b-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read growth events for archived child'
 );
 
 -- Test 40: Adult cannot read XP ledger for archived child
 select is(
-  (select count(*)::int from public.xp_ledger where id = 'x9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.xp_ledger where id = '9000000c-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read XP ledger for archived child'
 );
 
 -- Test 41: Adult cannot read RP ledger for archived child
 select is(
-  (select count(*)::int from public.rp_ledger where id = 'p9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.rp_ledger where id = '9000000d-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read RP ledger for archived child'
 );
 
 -- Test 42: Adult cannot read child balance for archived child
 select is(
-  (select count(*)::int from public.child_balances where child_id = 'c9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.child_balances where child_id = '90000002-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read child balance for archived child'
 );
 
 -- Test 43: Adult cannot read reward redemptions for archived child
 select is(
-  (select count(*)::int from public.reward_redemptions where id = 'm9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.reward_redemptions where id = '9000000e-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read reward redemptions for archived child'
 );
 
 -- Test 44: Adult cannot read wheel spins for archived child
 select is(
-  (select count(*)::int from public.wheel_spins where id = 'w9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.wheel_spins where id = '9000000f-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read wheel spins for archived child'
 );
 
 -- Test 45: Adult cannot read assessment learning mappings for archived child
 select is(
-  (select count(*)::int from public.assessment_learning_mappings where assessment_id = 'a9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.assessment_learning_mappings where assessment_id = '90000006-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read assessment learning mappings for archived child'
 );
 
 -- Test 46: Adult cannot read learning evidence events for archived child
 select is(
-  (select count(*)::int from public.learning_evidence_events where id = 'k9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.learning_evidence_events where id = '90000010-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read learning evidence events for archived child'
 );
 
 -- Test 47: Adult cannot read child mastery states for archived child
 select is(
-  (select count(*)::int from public.child_mastery_states where child_id = 'c9000000-0000-0000-0000-000000000002'::uuid),
+  (select count(*)::int from public.child_mastery_states where child_id = '90000002-0000-0000-0000-000000000002'::uuid),
   0,
   'Adult cannot read child mastery states for archived child'
 );
@@ -623,7 +623,7 @@ select is(
 -- Test 48: Storage helper permits draft assessment evidence for active child
 select is(
   private.validate_storage_evidence_access(
-    'f9000000-0000-0000-0000-000000000001/c9000000-0000-0000-0000-000000000001/a9000000-0000-0000-0000-000000000003/e0000000-0000-0000-0000-000000000001.jpg',
+    '90000001-0000-0000-0000-000000000001/90000002-0000-0000-0000-000000000001/90000006-0000-0000-0000-000000000003/e0000000-0000-0000-0000-000000000001.jpg',
     true
   ),
   true,
@@ -633,7 +633,7 @@ select is(
 -- Test 49: Storage helper denies draft assessment evidence for archived child
 select is(
   private.validate_storage_evidence_access(
-    'f9000000-0000-0000-0000-000000000001/c9000000-0000-0000-0000-000000000002/a9000000-0000-0000-0000-000000000004/e0000000-0000-0000-0000-000000000002.jpg',
+    '90000001-0000-0000-0000-000000000001/90000002-0000-0000-0000-000000000002/90000006-0000-0000-0000-000000000004/e0000000-0000-0000-0000-000000000002.jpg',
     true
   ),
   false,
