@@ -44,7 +44,7 @@ grant execute on function private.is_child_active_in_family(uuid, uuid) to authe
 
 -- Revoke table-wide update on child_profiles; grant only permitted mutable fields
 revoke update on public.child_profiles from authenticated;
-grant update (display_name, avatar_key, school_grade, family_id) on public.child_profiles to authenticated;
+grant update (display_name, avatar_key, school_grade) on public.child_profiles to authenticated;
 
 -- Lifecycle guard trigger enforcing irrevocable archival, active->archived transition,
 -- atomic Tier 3 pseudonymization, and core field immutability
