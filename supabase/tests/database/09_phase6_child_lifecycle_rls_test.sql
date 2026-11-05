@@ -119,20 +119,94 @@ insert into public.wheel_spins (id, family_id, child_id, reward_id, redemption_i
 on conflict (id) do nothing;
 
 -- Learning Mastery fixtures
-insert into public.child_mastery_states (family_id, child_id, learning_node_id, mastery_score, status) values
-  ('90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0, 'mastered'),
-  ('90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0, 'mastered')
-on conflict (child_id, learning_node_id) do nothing;
+insert into public.assessment_learning_mappings (
+  assessment_id, learning_node_id, component_key, family_id, child_id, score_source, confirmed_by_user_id
+) values (
+  '90000006-0000-0000-0000-000000000001'::uuid,
+  'b0000001-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  '90000001-0000-0000-0000-000000000001'::uuid,
+  '90000002-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  '90000000-0000-0000-0000-000000000001'::uuid
+), (
+  '90000006-0000-0000-0000-000000000002'::uuid,
+  'b0000001-0000-0000-0000-000000000001'::uuid,
+  'assessment_total',
+  '90000001-0000-0000-0000-000000000001'::uuid,
+  '90000002-0000-0000-0000-000000000002'::uuid,
+  'assessment_total',
+  '90000000-0000-0000-0000-000000000001'::uuid
+) on conflict (assessment_id, learning_node_id, component_key) do nothing;
 
-insert into public.assessment_learning_mappings (assessment_id, learning_node_id, family_id, weight) values
-  ('90000006-0000-0000-0000-000000000001'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 1.0),
-  ('90000006-0000-0000-0000-000000000002'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 1.0)
-on conflict (assessment_id, learning_node_id) do nothing;
+insert into public.learning_evidence_events (
+  id, family_id, child_id, verified_learning_event_id, assessment_id, learning_node_id,
+  catalog_version, node_type, subject_key, grade_level_snapshot, assessment_type,
+  difficulty, score_source, performance_pct, specificity_weight, level_weight,
+  item_count, correct_count, occurred_at, effective_occurred_at, verified_at
+) values (
+  '90000010-0000-0000-0000-000000000001'::uuid,
+  '90000001-0000-0000-0000-000000000001'::uuid,
+  '90000002-0000-0000-0000-000000000001'::uuid,
+  '9000000a-0000-0000-0000-000000000001'::uuid,
+  '90000006-0000-0000-0000-000000000001'::uuid,
+  'b0000001-0000-0000-0000-000000000001'::uuid,
+  'pilot-v0.1', 'domain', 'math', 4, 'quiz',
+  'normal', 'assessment_total', 100.00, 1.00, 1.00,
+  null, null,
+  now(), now(), now()
+), (
+  '90000010-0000-0000-0000-000000000002'::uuid,
+  '90000001-0000-0000-0000-000000000001'::uuid,
+  '90000002-0000-0000-0000-000000000002'::uuid,
+  '9000000a-0000-0000-0000-000000000002'::uuid,
+  '90000006-0000-0000-0000-000000000002'::uuid,
+  'b0000001-0000-0000-0000-000000000001'::uuid,
+  'pilot-v0.1', 'domain', 'math', 4, 'quiz',
+  'normal', 'assessment_total', 100.00, 1.00, 1.00,
+  null, null,
+  now(), now(), now()
+) on conflict (id) do nothing;
 
-insert into public.learning_evidence_events (id, assessment_id, family_id, child_id, learning_node_id, score) values
-  ('90000010-0000-0000-0000-000000000001'::uuid, '90000006-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0),
-  ('90000010-0000-0000-0000-000000000002'::uuid, '90000006-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'b0000001-0000-0000-0000-000000000001'::uuid, 85.0)
-on conflict (id) do nothing;
+insert into public.mastery_state_revisions (
+  id, family_id, child_id, learning_node_id, trigger_verified_learning_event_id, engine_version,
+  previous_mastery_score, new_mastery_score, effective_evidence_count,
+  latest_evidence_at, mastery_attained_at, calculation_snapshot, created_at
+) values (
+  '90000011-0000-0000-0000-000000000001'::uuid,
+  '90000001-0000-0000-0000-000000000001'::uuid,
+  '90000002-0000-0000-0000-000000000001'::uuid,
+  'b0000001-0000-0000-0000-000000000001'::uuid,
+  '9000000a-0000-0000-0000-000000000001'::uuid,
+  'mastery-v0.1', null, 85.00, 1,
+  now(), null, '{}'::jsonb, now()
+), (
+  '90000011-0000-0000-0000-000000000002'::uuid,
+  '90000001-0000-0000-0000-000000000001'::uuid,
+  '90000002-0000-0000-0000-000000000002'::uuid,
+  'b0000001-0000-0000-0000-000000000001'::uuid,
+  '9000000a-0000-0000-0000-000000000002'::uuid,
+  'mastery-v0.1', null, 85.00, 1,
+  now(), null, '{}'::jsonb, now()
+) on conflict (id) do nothing;
+
+insert into public.child_mastery_states (
+  child_id, learning_node_id, family_id, engine_version, mastery_score,
+  effective_evidence_count, distinct_assessment_count, last_evidence_event_id,
+  last_evidence_occurred_at, last_verified_at, latest_revision_id, mastery_attained_at, updated_at
+) values (
+  '90000002-0000-0000-0000-000000000001'::uuid,
+  'b0000001-0000-0000-0000-000000000001'::uuid,
+  '90000001-0000-0000-0000-000000000001'::uuid,
+  'mastery-v0.1', 85.00, 1, 1, '90000010-0000-0000-0000-000000000001'::uuid,
+  now(), now(), '90000011-0000-0000-0000-000000000001'::uuid, null, now()
+), (
+  '90000002-0000-0000-0000-000000000002'::uuid,
+  'b0000001-0000-0000-0000-000000000001'::uuid,
+  '90000001-0000-0000-0000-000000000001'::uuid,
+  'mastery-v0.1', 85.00, 1, 1, '90000010-0000-0000-0000-000000000002'::uuid,
+  now(), now(), '90000011-0000-0000-0000-000000000002'::uuid, null, now()
+) on conflict (child_id, learning_node_id) do nothing;
 
 
 -- ===========================================================================
