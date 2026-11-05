@@ -54,6 +54,7 @@ async function main() {
   const REWARD_3 = crypto.randomUUID();
   const ASSESSMENT_DRAFT = crypto.randomUUID();
   const ASSESSMENT_PENDING = crypto.randomUUID();
+  const REVIEW_EVENT_1 = crypto.randomUUID();
   const VLE_1 = crypto.randomUUID();
 
   console.log('Setting up base fixture...');
@@ -201,13 +202,20 @@ async function main() {
   console.log('Test 4: Running Catch-up Exclusion on Archived Child...');
   // Insert an unprocessed VLE for archived Child 1
   await runPsql(`
+    insert into public.assessment_review_events (
+      id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id, review_notes
+    ) values (
+      '${REVIEW_EVENT_1}', gen_random_uuid(), '${FAMILY_ID}', '${ASSESSMENT_PENDING}', 'verified', 'pending_review', 'verified',
+      '${OWNER_ID}', 'Review notes'
+    ) on conflict (id) do nothing;
+
     insert into public.verified_learning_events (
       id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty,
       raw_score, max_score, normalized_score, evidence_count, entry_context, occurred_at, verified_at,
-      verified_by_user_id, learning_catalog_version, grade_level_snapshot
+      verified_by_user_id, review_event_id, learning_catalog_version, grade_level_snapshot
     ) values (
       '${VLE_1}', '${FAMILY_ID}', '${CHILD_1}', '${ASSESSMENT_PENDING}', 'math', 'Math', 'Pending 1', 'quiz', 'normal',
-      9, 10, 90.00, 0, 'adult', now(), now(), '${OWNER_ID}', 'pilot-v0.1', 4
+      9, 10, 90.00, 0, 'adult', now(), now(), '${OWNER_ID}', '${REVIEW_EVENT_1}', 'pilot-v0.1', 4
     );
   `);
 

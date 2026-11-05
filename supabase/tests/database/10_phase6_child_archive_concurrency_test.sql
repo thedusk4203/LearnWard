@@ -73,21 +73,30 @@ insert into public.assessment_evidence (id, family_id, assessment_id, storage_pa
   ('f1000000-0000-0000-0000-000000000001'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid, 'e1000000-0000-0000-0000-000000000001'::uuid, 'a0000000-0000-0000-0000-000000000001/a1000000-0000-0000-0000-000000000001/e1000000-0000-0000-0000-000000000001/f1000000-0000-0000-0000-000000000001.jpg', 'image/jpeg', 1024, '10000000-0000-0000-0000-000000000001'::uuid)
 on conflict (id) do nothing;
 
+-- Assessment Review Event for A1 Pending
+insert into public.assessment_review_events (
+  id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id, review_notes
+) values (
+  '80000001-0000-0000-0000-000000000001'::uuid, gen_random_uuid(), 'a0000000-0000-0000-0000-000000000001'::uuid,
+  'e2000000-0000-0000-0000-000000000002'::uuid, 'verified', 'pending_review', 'verified',
+  '10000000-0000-0000-0000-000000000001'::uuid, 'Review notes'
+) on conflict (id) do nothing;
+
 -- Verified Learning Event for A1 (to test Growth/Learning catch-up on archived child)
 insert into public.verified_learning_events (
   id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty,
   raw_score, max_score, normalized_score, evidence_count, entry_context, occurred_at, verified_at,
-  verified_by_user_id, learning_catalog_version, grade_level_snapshot
+  verified_by_user_id, review_event_id, learning_catalog_version, grade_level_snapshot
 ) values (
   '90000001-0000-0000-0000-000000000001'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid, 'a1000000-0000-0000-0000-000000000001'::uuid,
   'e2000000-0000-0000-0000-000000000002'::uuid, 'english', 'English', 'A1 Pending', 'quiz', 'normal',
   9, 10, 90.00, 0, 'adult', now() - interval '1 hour', now() - interval '30 minutes',
-  '10000000-0000-0000-0000-000000000001'::uuid, 'pilot-v0.1', 4
+  '10000000-0000-0000-0000-000000000001'::uuid, '80000001-0000-0000-0000-000000000001'::uuid, 'pilot-v0.1', 4
 ) on conflict (id) do nothing;
 
 -- Pending redemption for A1
 insert into public.reward_redemptions (
-  id, family_id, child_id, reward_id, origin, cost_minor, reward_snapshot, status
+  id, family_id, child_id, reward_id, origin, rp_cost_minor, reward_snapshot, status
 ) values (
   '90000002-0000-0000-0000-000000000001'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid, 'a1000000-0000-0000-0000-000000000001'::uuid,
   'd1000000-0000-0000-0000-000000000001'::uuid, 'store', 1000, '{"title": "Reward 1"}'::jsonb, 'pending_fulfillment'
