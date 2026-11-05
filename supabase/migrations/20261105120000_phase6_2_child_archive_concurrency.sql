@@ -2705,10 +2705,12 @@ $$;
 -- 5. HARDENED CHILD READER RPCS
 -- ---------------------------------------------------------------------------
 
+drop function if exists public.reconcile_child_balance(uuid);
+
 create or replace function public.reconcile_child_balance(p_child_id uuid)
 returns table (
-  child_id uuid,
-  family_id uuid,
+  out_child_id uuid,
+  out_family_id uuid,
   is_reconciled boolean,
   projected_xp bigint,
   ledger_xp bigint,
