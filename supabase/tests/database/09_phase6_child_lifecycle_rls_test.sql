@@ -44,10 +44,10 @@ insert into public.family_wheel_settings (family_id, spin_cost_minor, daily_spin
 on conflict (family_id) do nothing;
 
 -- Rewards: One Family-wide, One targeted to Active Child, One targeted to Archived Child
-insert into public.rewards (id, family_id, title, category, store_cost_minor, is_active, store_enabled, wheel_enabled, target_child_id) values
-  ('90000005-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Family Pizza Night', 'treat', 1000, true, true, true, null),
-  ('90000005-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Active Child Book', 'item', 500, true, true, true, '90000002-0000-0000-0000-000000000001'::uuid),
-  ('90000005-0000-0000-0000-000000000003'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Archived Child Legacy Reward', 'treat', 750, true, true, true, '90000002-0000-0000-0000-000000000002'::uuid)
+insert into public.rewards (id, family_id, title, category, store_cost_minor, is_active, store_enabled, wheel_enabled, wheel_tier, target_child_id) values
+  ('90000005-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Family Pizza Night', 'treat', 1000, true, true, true, 'common', null),
+  ('90000005-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Active Child Book', 'item', 500, true, true, true, 'common', '90000002-0000-0000-0000-000000000001'::uuid),
+  ('90000005-0000-0000-0000-000000000003'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Archived Child Legacy Reward', 'treat', 750, true, true, true, 'common', '90000002-0000-0000-0000-000000000002'::uuid)
 on conflict (id) do nothing;
 
 -- Assessments: One for Active Child, One for Archived Child, plus Drafts
@@ -325,6 +325,9 @@ select throws_ok(
 );
 
 -- Test 19: Full atomic archival transition succeeds when all invariants are satisfied
+insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year, avatar_key, status, archived_at)
+values ('90000002-0000-0000-0000-000000000004'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'To Be Archived', 3, 2017, 'star_gold', 'active', null);
+
 prepare valid_atomic_archive as
   update public.child_profiles
   set status = 'archived',
@@ -333,22 +336,14 @@ prepare valid_atomic_archive as
       avatar_key = null,
       school_grade = null,
       birth_year = null
-  where id = '90000002-0000-0000-0000-000000000001'::uuid;
+  where id = '90000002-0000-0000-0000-000000000004'::uuid;
 
 select lives_ok(
   'valid_atomic_archive',
   'Atomic archival update satisfying all trigger invariants succeeds under superuser'
 );
 
--- Rollback child 1 back to active for subsequent RLS tests
-update public.child_profiles
-set status = 'active',
-    archived_at = null,
-    display_name = 'Active Child',
-    school_grade = 4,
-    birth_year = 2016,
-    avatar_key = 'star_gold'
-where id = '90000002-0000-0000-0000-000000000001'::uuid;
+delete from public.child_profiles where id = '90000002-0000-0000-0000-000000000004'::uuid;
 
 
 -- ===========================================================================
