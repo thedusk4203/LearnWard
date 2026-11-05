@@ -1386,19 +1386,17 @@ begin
     reason_code,
     source_type,
     source_id,
-    engine_version,
     idempotency_key,
     metadata
   ) values (
     v_family_id,
     p_child_id,
     -v_cost_minor,
-    'store_purchase',
-    'reward_redemptions',
+    'store_redemption',
+    'reward_redemption',
     v_redemption_id,
-    'reward-store-v0.1',
-    'rp_debit_store_' || p_command_id::text,
-    jsonb_build_object('command_id', p_command_id, 'reward_id', p_reward_id)
+    'rp:redemption:' || v_redemption_id::text,
+    jsonb_build_object('reward_id', v_reward.id, 'title', v_reward.title)
   );
 
   update public.child_balances
@@ -1648,19 +1646,17 @@ begin
     reason_code,
     source_type,
     source_id,
-    engine_version,
     idempotency_key,
     metadata
   ) values (
     v_family_id,
     v_redemption.child_id,
     v_redemption.rp_cost_minor,
-    'cancellation_refund',
-    'reward_redemptions',
+    'redemption_refund',
+    'reward_redemption',
     p_redemption_id,
-    'reward-store-v0.1',
-    'rp_refund_cancel_' || p_command_id::text,
-    jsonb_build_object('command_id', p_command_id, 'redemption_id', p_redemption_id, 'reason', v_clean_reason)
+    'rp:refund:' || p_redemption_id::text,
+    jsonb_build_object('cancellation_reason', v_clean_reason, 'reward_id', v_redemption.reward_id)
   );
 
   update public.child_balances
@@ -1748,7 +1744,7 @@ begin
   where id = p_child_id;
 
   if not found then
-    raise exception 'Child profile not found' using errcode = 'P0002';
+    raise exception 'Child profile not found or inactive' using errcode = 'P0002';
   end if;
 
   -- 3. Authorize caller against resolved family (BEFORE any timezone or config checks)
@@ -1802,7 +1798,12 @@ begin
     where ws.id = v_receipt.resource_id;
 
     if not found then
-      raise exception 'Invalid command replay: spin record missing' using errcode = '42501';
+      raise exception 'Invalid command replay: spin not found' using errcode = '42501';
+    end if;
+
+    if v_existing_spin.family_id != v_family_id
+       or v_existing_spin.child_id != p_child_id then
+      raise exception 'Invalid command replay: resource mismatch' using errcode = '42501';
     end if;
 
     return jsonb_build_object(
@@ -1822,39 +1823,90 @@ begin
     );
   end if;
 
-  -- 6. Order 2: Acquire table-level SHARE lock on rewards and row lock on family_wheel_settings
-  lock table public.rewards in share mode;
+  -- 6. ONLY FOR A NEW SPIN:
+  -- Step 1: Validate family timezone (FAIL CLOSED on missing/corrupt timezone)
+  select timezone into v_family_tz
+  from public.families
+  where id = v_family_id;
 
-  select is_enabled, spin_cost_minor, daily_spin_cap
-  into v_is_enabled, v_spin_cost_minor, v_daily_spin_cap
+  if v_family_tz is null or trim(v_family_tz) = '' then
+    raise exception 'Family timezone is missing or invalid' using errcode = 'LW004';
+  end if;
+
+  begin
+    v_test_tz := now() at time zone v_family_tz;
+  exception when others then
+    raise exception 'Invalid family timezone: %', v_family_tz using errcode = 'LW004';
+  end;
+
+  -- Step 2: Lock/read family_wheel_settings FOR SHARE
+  select spin_cost_minor, daily_spin_cap, is_enabled
+  into v_spin_cost_minor, v_daily_spin_cap, v_is_enabled
   from public.family_wheel_settings
   where family_id = v_family_id
   for share;
 
   if not found then
-    v_is_enabled := true;
-    v_spin_cost_minor := 2500;
+    v_spin_cost_minor := 1000;
     v_daily_spin_cap := 3;
+    v_is_enabled := true;
   end if;
 
   if not v_is_enabled then
-    raise exception 'Celebration Wheel is disabled for this family' using errcode = 'LW206';
+    raise exception 'Wheel is currently disabled for this family' using errcode = 'LW206';
   end if;
 
-  -- Validate wheel pool has at least 2 active eligible rewards
-  select count(*) into v_candidate_count
-  from public.rewards
-  where family_id = v_family_id
-    and is_active = true
-    and wheel_enabled = true
-    and (target_child_id is null or target_child_id = p_child_id);
+  -- Step 3: Catalog stabilization table lock
+  -- Tradeoff: Table-level SHARE lock serializes concurrent reward catalog writes (INSERT/UPDATE/DELETE)
+  -- while taking the snapshot, avoiding hybrid states. Correctness now -> family-scoped optimization
+  -- later if real multi-tenant contention appears.
+  lock table public.rewards in share mode;
 
-  if v_candidate_count < 2 then
-    raise exception 'Celebration Wheel requires at least 2 eligible active items' using errcode = 'LW207';
+  -- Materialize eligible Wheel reward rows in ONE authoritative stabilized snapshot
+  -- Captured in deterministic order: id ASC FOR SHARE
+  for v_reward in
+    select
+      id,
+      title,
+      category,
+      icon_key,
+      wheel_tier,
+      case wheel_tier
+        when 'common' then 60
+        when 'special' then 30
+        when 'rare' then 10
+        else 60
+      end as weight
+    from public.rewards
+    where family_id = v_family_id
+      and is_active = true
+      and wheel_enabled = true
+      and wheel_tier is not null
+      and (target_child_id is null or target_child_id = p_child_id)
+    order by id asc
+    for share
+  loop
+    v_candidate_count := v_candidate_count + 1;
+    v_total_weight := v_total_weight + v_reward.weight;
+    v_captured_pool := v_captured_pool || jsonb_build_array(
+      jsonb_build_object(
+        'reward_id', v_reward.id,
+        'title', v_reward.title,
+        'category', v_reward.category,
+        'icon_key', coalesce(v_reward.icon_key, 'default_star'),
+        'tier', v_reward.wheel_tier,
+        'weight', v_reward.weight
+      )
+    );
+  end loop;
+
+  -- Enforce minimum eligible pool size using the locked snapshot
+  if v_candidate_count < 3 then
+    raise exception 'Wheel requires at least 3 active eligible rewards (found %)', v_candidate_count using errcode = 'LW203';
   end if;
 
-  -- 7. Order 3: Lock child_balances row FOR UPDATE
-  select rp_balance_minor into v_balance
+  -- Step 4: Lock child_balances FOR UPDATE
+  select * into v_balance
   from public.child_balances
   where child_id = p_child_id and family_id = v_family_id
   for update;
@@ -1864,27 +1916,13 @@ begin
   end if;
 
   if v_balance.rp_balance_minor < v_spin_cost_minor then
-    raise exception 'Insufficient RP balance for wheel spin' using errcode = 'LW201';
+    raise exception 'Insufficient RP balance' using errcode = 'LW201';
   end if;
 
-  -- 8. Enforce daily spin cap in family timezone
-  select timezone into v_family_tz
-  from public.families
-  where id = v_family_id;
-
-  if v_family_tz is null then
-    v_family_tz := 'UTC';
-  end if;
-
-  begin
-    v_test_tz := now() at time zone v_family_tz;
-  exception when others then
-    v_family_tz := 'UTC';
-  end;
-
+  -- Step 5: Evaluate family timezone and daily spin cap
   v_local_date := (now() at time zone v_family_tz)::date;
   v_today_start := v_local_date::timestamp at time zone v_family_tz;
-  v_today_end := (v_local_date + interval '1 day')::timestamp at time zone v_family_tz;
+  v_today_end := (v_local_date + 1)::timestamp at time zone v_family_tz;
 
   select count(*) into v_spins_today
   from public.wheel_spins
@@ -1893,99 +1931,64 @@ begin
     and created_at < v_today_end;
 
   if v_spins_today >= v_daily_spin_cap then
-    raise exception 'Daily wheel spin cap reached' using errcode = 'LW208';
+    raise exception 'Daily spin limit reached (%/%)', v_spins_today, v_daily_spin_cap using errcode = 'LW202';
   end if;
 
-  -- 9. Deterministic Pool Sorting & Weight Accumulation
-  for v_reward in
-    select
-      id,
-      title,
-      description,
-      icon_key,
-      category,
-      wheel_tier,
-      case wheel_tier
-        when 'common' then 70
-        when 'rare' then 25
-        when 'legendary' then 5
-        else 0
-      end as weight
-    from public.rewards
-    where family_id = v_family_id
-      and is_active = true
-      and wheel_enabled = true
-      and (target_child_id is null or target_child_id = p_child_id)
-    order by
-      case wheel_tier
-        when 'common' then 1
-        when 'rare' then 2
-        when 'legendary' then 3
-        else 4
-      end asc,
-      title asc,
-      id asc
-  loop
-    v_total_weight := v_total_weight + v_reward.weight;
-    v_pool_item := jsonb_build_object(
-      'reward_id', v_reward.id,
-      'title', v_reward.title,
-      'description', v_reward.description,
-      'icon_key', v_reward.icon_key,
-      'category', v_reward.category,
-      'wheel_tier', v_reward.wheel_tier,
-      'weight', v_reward.weight
-    );
-    v_ordered_pool := v_ordered_pool || v_pool_item;
-  end loop;
-
-  if v_total_weight <= 0 then
-    raise exception 'Invalid wheel configuration: total weight is zero' using errcode = 'LW207';
-  end if;
-
-  -- 10. Random Selection
+  -- 7. Server-authoritative pseudorandom selection using the CAPTURED IN-MEMORY POOL ONLY
+  -- (public.rewards is NOT queried again)
   v_random_draw := floor(random() * v_total_weight)::integer;
 
-  for v_elem in select * from jsonb_array_elements(v_ordered_pool)
+  v_cumulative := 0;
+  v_ordered_pool := '[]'::jsonb;
+  v_winning_reward := null;
+
+  for v_elem in select * from jsonb_array_elements(v_captured_pool)
   loop
     v_interval_start := v_cumulative;
-    v_cumulative := v_cumulative + (v_elem->>'weight')::integer;
-    v_interval_end := v_cumulative;
+    v_interval_end := v_cumulative + (v_elem ->> 'weight')::integer;
+    v_prob_pct := round(((v_elem ->> 'weight')::numeric / v_total_weight::numeric) * 100.0, 2);
 
-    v_prob_pct := round(((v_elem->>'weight')::numeric / v_total_weight::numeric) * 100, 2);
-
-    v_captured_pool := v_captured_pool || jsonb_build_object(
-      'reward_id', v_elem->>'reward_id',
-      'title', v_elem->>'title',
-      'wheel_tier', v_elem->>'wheel_tier',
-      'weight', (v_elem->>'weight')::integer,
-      'probability_pct', v_prob_pct,
+    v_pool_item := jsonb_build_object(
+      'reward_id', (v_elem ->> 'reward_id')::uuid,
+      'title', v_elem ->> 'title',
+      'category', v_elem ->> 'category',
+      'icon_key', v_elem ->> 'icon_key',
+      'tier', v_elem ->> 'tier',
+      'weight', (v_elem ->> 'weight')::integer,
       'interval_start', v_interval_start,
-      'interval_end', v_interval_end
+      'interval_end', v_interval_end,
+      'probability_pct', v_prob_pct
     );
+    v_ordered_pool := v_ordered_pool || jsonb_build_array(v_pool_item);
 
-    if v_winning_reward is null and v_random_draw >= v_interval_start and v_random_draw < v_interval_end then
-      v_winning_reward := v_elem;
+    if v_random_draw >= v_interval_start and v_random_draw < v_interval_end then
+      v_winning_reward := v_pool_item;
     end if;
+
+    v_cumulative := v_interval_end;
   end loop;
 
   if v_winning_reward is null then
-    v_winning_reward := v_ordered_pool->0;
+    -- Fail-safe boundary fallback
+    v_winning_reward := v_ordered_pool -> (jsonb_array_length(v_ordered_pool) - 1);
   end if;
 
   v_selection_snapshot := jsonb_build_object(
-    'drawn_number', v_random_draw,
+    'wheel_config_version', 'wheel-v0.1',
+    'spin_cost_minor', v_spin_cost_minor,
+    'deterministic_ordering', 'reward_id_asc',
     'total_weight', v_total_weight,
-    'pool_size', jsonb_array_length(v_ordered_pool),
-    'winning_interval_start', (v_winning_reward->>'weight')::integer,
-    'pool', v_captured_pool
+    'random_draw', v_random_draw,
+    'winning_reward_id', (v_winning_reward ->> 'reward_id')::uuid,
+    'ordered_pool', v_ordered_pool
   );
 
+  -- 8. Atomic transaction writes
   v_spin_id := gen_random_uuid();
   v_redemption_id := gen_random_uuid();
-  v_now := clock_timestamp();
+  v_now := now();
 
-  -- 11. Atomic Mutations: insert redemption, insert wheel spin, deduct balance, record receipt
+  -- A. reward_redemptions
   insert into public.reward_redemptions (
     id,
     family_id,
@@ -1993,36 +1996,38 @@ begin
     reward_id,
     origin,
     rp_cost_minor,
-    reward_snapshot,
     status,
+    reward_snapshot,
     created_at,
     updated_at
   ) values (
     v_redemption_id,
     v_family_id,
     p_child_id,
-    (v_winning_reward->>'reward_id')::uuid,
+    (v_winning_reward ->> 'reward_id')::uuid,
     'wheel',
     v_spin_cost_minor,
-    jsonb_build_object(
-      'title', v_winning_reward->>'title',
-      'description', v_winning_reward->>'description',
-      'icon_key', v_winning_reward->>'icon_key',
-      'category', v_winning_reward->>'category',
-      'wheel_tier', v_winning_reward->>'wheel_tier',
-      'cost_minor', v_spin_cost_minor
-    ),
     'pending_fulfillment',
+    jsonb_build_object(
+      'title', v_winning_reward ->> 'title',
+      'category', v_winning_reward ->> 'category',
+      'icon_key', v_winning_reward ->> 'icon_key',
+      'wheel_tier', v_winning_reward ->> 'tier',
+      'origin', 'wheel',
+      'spin_cost_minor', v_spin_cost_minor
+    ),
     v_now,
     v_now
   );
 
+  -- B. wheel_spins
   insert into public.wheel_spins (
     id,
     family_id,
     child_id,
-    redemption_id,
     reward_id,
+    redemption_id,
+    origin,
     spin_cost_minor,
     selection_snapshot,
     created_at
@@ -2030,13 +2035,15 @@ begin
     v_spin_id,
     v_family_id,
     p_child_id,
+    (v_winning_reward ->> 'reward_id')::uuid,
     v_redemption_id,
-    (v_winning_reward->>'reward_id')::uuid,
+    'wheel',
     v_spin_cost_minor,
     v_selection_snapshot,
     v_now
   );
 
+  -- C. rp_ledger
   insert into public.rp_ledger (
     family_id,
     child_id,
@@ -2044,59 +2051,59 @@ begin
     reason_code,
     source_type,
     source_id,
-    engine_version,
     idempotency_key,
-    metadata
+    metadata,
+    created_at
   ) values (
     v_family_id,
     p_child_id,
     -v_spin_cost_minor,
     'wheel_spin',
-    'wheel_spins',
-    v_spin_id,
-    'wheel-v0.1',
-    'wheel_spin_' || p_command_id::text,
-    jsonb_build_object(
-      'command_id', p_command_id,
-      'spin_id', v_spin_id,
-      'redemption_id', v_redemption_id,
-      'reward_id', v_winning_reward->>'reward_id'
-    )
+    'reward_redemption',
+    v_redemption_id,
+    'rp:wheel_spin:' || v_spin_id::text,
+    jsonb_build_object('command_id', p_command_id, 'spin_id', v_spin_id),
+    v_now
   );
 
+  -- D. child_balances
   update public.child_balances
   set rp_balance_minor = rp_balance_minor - v_spin_cost_minor,
       updated_at = v_now
   where child_id = p_child_id and family_id = v_family_id;
 
-  insert into public.command_receipts (
-    command_id,
-    operation,
-    actor_user_id,
-    resource_id,
-    family_id
-  ) values (
-    p_command_id,
-    'spin_wheel',
-    v_user_id,
-    v_spin_id,
-    v_family_id
-  );
-
+  -- E. Build result payload
   v_result := jsonb_build_object(
     'spin_id', v_spin_id,
     'redemption_id', v_redemption_id,
     'family_id', v_family_id,
     'child_id', p_child_id,
-    'reward_id', v_winning_reward->>'reward_id',
-    'reward_title', v_winning_reward->>'title',
-    'reward_category', v_winning_reward->>'category',
-    'reward_icon_key', v_winning_reward->>'icon_key',
-    'wheel_tier', v_winning_reward->>'wheel_tier',
+    'reward_id', (v_winning_reward ->> 'reward_id')::uuid,
+    'reward_title', v_winning_reward ->> 'title',
+    'reward_category', v_winning_reward ->> 'category',
+    'reward_icon_key', v_winning_reward ->> 'icon_key',
+    'wheel_tier', v_winning_reward ->> 'tier',
     'spin_cost_minor', v_spin_cost_minor,
     'new_balance_minor', v_balance.rp_balance_minor - v_spin_cost_minor,
     'selection_snapshot', v_selection_snapshot,
     'created_at', v_now
+  );
+
+  -- F. command_receipts
+  insert into public.command_receipts (
+    command_id,
+    family_id,
+    actor_user_id,
+    operation,
+    resource_id,
+    created_at
+  ) values (
+    p_command_id,
+    v_family_id,
+    v_user_id,
+    'spin_wheel',
+    v_spin_id,
+    v_now
   );
 
   return v_result;
@@ -2157,7 +2164,7 @@ begin
     raise exception 'Not authenticated' using errcode = '42501';
   end if;
 
-  -- 2. Resolve VLE tenancy
+  -- 2. Resolve VLE tenancy (without locking yet to follow canonical locking order)
   select id, family_id, child_id into v_event
   from public.verified_learning_events
   where id = p_verified_event_id;
@@ -2181,7 +2188,7 @@ begin
     raise exception 'Child profile is archived' using errcode = '42501';
   end if;
 
-  -- 5. Order 2: Target verification & Row lock
+  -- 5. Order 3: Resource row lock on verified_learning_events
   select * into v_event
   from public.verified_learning_events
   where id = p_verified_event_id
@@ -2223,8 +2230,17 @@ begin
   v_difficulty := v_event.difficulty;
   v_subject_key := v_event.subject_key;
   v_grade_level := v_event.grade_level_snapshot;
+  -- Fail-closed: NEVER query mutable child_profiles.school_grade when snapshot is null.
 
-  -- 8. Longitudinally comparable historical samples
+  -- 8. Retrieve strictly prior comparable records:
+  -- - Same child
+  -- - Same canonical subject_key
+  -- - Excludes current event
+  -- - Strictly occurred before current event (or verified earlier)
+  -- - Grade level comparability: both current event and candidate must have known matching grade level.
+  --   Unknown grades are fail-closed and never longitudinally comparable.
+  -- - Assessment type compatibility band (evaluative: quiz/exam, formative: homework/practice, other)
+  -- - Difficulty compatibility band (standard: normal/hard, challenge, below_level)
   if v_grade_level is not null then
     for v_comparables in
       select id, normalized_score, difficulty, assessment_type, grade_level_snapshot, occurred_at, verified_at
@@ -2233,144 +2249,194 @@ begin
         and subject_key = v_subject_key
         and id != v_event.id
         and (
-          occurred_at < v_event.occurred_at or
-          (occurred_at = v_event.occurred_at and verified_at < v_event.verified_at)
+          occurred_at < v_event.occurred_at
+          or (occurred_at = v_event.occurred_at and verified_at < v_event.verified_at)
         )
         and grade_level_snapshot = v_grade_level
         and (
-          (v_event.assessment_type in ('quiz', 'exam') and assessment_type in ('quiz', 'exam')) or
-          (v_event.assessment_type in ('homework', 'practice') and assessment_type in ('homework', 'practice')) or
-          (v_event.assessment_type not in ('quiz', 'exam', 'homework', 'practice') and assessment_type = v_event.assessment_type)
+          case
+            when v_event.assessment_type in ('quiz', 'exam') then assessment_type in ('quiz', 'exam')
+            when v_event.assessment_type in ('homework', 'practice') then assessment_type in ('homework', 'practice')
+            else assessment_type = v_event.assessment_type
+          end
         )
         and (
-          (v_event.difficulty in ('normal', 'hard') and difficulty in ('normal', 'hard')) or
-          (v_event.difficulty = 'challenge' and difficulty = 'challenge') or
-          (v_event.difficulty = 'below_level' and difficulty = 'below_level')
+          case
+            when v_difficulty in ('normal', 'hard') then difficulty in ('normal', 'hard')
+            when v_difficulty = 'challenge' then difficulty = 'challenge'
+            when v_difficulty = 'below_level' then difficulty = 'below_level'
+            else difficulty = v_difficulty
+          end
         )
       order by occurred_at desc, verified_at desc
     loop
-      if v_count < 5 then
+      -- Track historical best across all prior comparable records
+      if v_historical_best is null or v_comparables.normalized_score > v_historical_best then
+        v_historical_best := v_comparables.normalized_score;
+      end if;
+
+      -- Take first 3 for rolling baseline
+      if v_count < 3 then
         v_sum := v_sum + v_comparables.normalized_score;
         v_count := v_count + 1;
         v_samples_json := v_samples_json || jsonb_build_object(
           'id', v_comparables.id,
           'score', v_comparables.normalized_score,
-          'occurred_at', v_comparables.occurred_at
+          'occurred_at', v_comparables.occurred_at,
+          'assessment_type', v_comparables.assessment_type,
+          'difficulty', v_comparables.difficulty,
+          'grade_level', v_comparables.grade_level_snapshot
         );
-      end if;
-
-      if v_historical_best is null or v_comparables.normalized_score > v_historical_best then
-        v_historical_best := v_comparables.normalized_score;
       end if;
     end loop;
   end if;
 
-  if v_count > 0 then
-    v_baseline := round(v_sum / v_count, 2);
+  -- 9. Compute rolling baseline (requires 3 samples)
+  if v_count >= 3 then
+    v_baseline := round(v_sum / 3.0, 2);
+    v_baseline_count := 3;
+    v_growth_delta := round(v_normalized_score - v_baseline, 2);
+  else
+    v_baseline := null;
     v_baseline_count := v_count;
-    v_growth_delta := v_normalized_score - v_baseline;
+    v_growth_delta := null;
   end if;
 
-  -- 9. Award calculations
-  v_score_rp_minor := round(v_normalized_score * 100)::bigint;
-
-  if v_growth_delta is not null and v_growth_delta > 0 then
-    v_growth_rp_minor := round(v_growth_delta * 100)::bigint;
-  end if;
-
-  if v_normalized_score >= 90.00 then
-    v_high_performer_rp_minor := 2500;
-  elsif v_normalized_score >= 80.00 then
-    v_high_performer_rp_minor := 1500;
-  end if;
-
-  if v_growth_delta is not null and v_growth_delta >= 10.00 then
-    v_goal_rp_minor := 1000;
-  end if;
-
-  if v_historical_best is not null and v_normalized_score > v_historical_best then
-    v_personal_best_rp_minor := 1000;
-  end if;
-
-  if v_difficulty = 'challenge' then
-    v_difficulty_rp_minor := 1500;
-  elsif v_difficulty = 'below_level' then
-    v_difficulty_rp_minor := -1000;
+  -- 10. Compute economic components in integer minor units (100 minor = 1.00 RP)
+  if v_difficulty = 'below_level' then
     v_below_level := true;
+    -- 25% of base score RP, bonuses disabled
+    v_score_rp_minor := round((v_normalized_score * 100) * 0.25);
+    v_growth_rp_minor := 0;
+    v_high_performer_rp_minor := 0;
+    v_personal_best_rp_minor := 0;
+    v_difficulty_rp_minor := 0;
+  else
+    v_below_level := false;
+    v_score_rp_minor := round(v_normalized_score * 100);
+
+    -- Growth bonus
+    if v_growth_delta is not null then
+      if v_growth_delta >= 2.0 then
+        v_growth_rp_minor := 400;
+      elsif v_growth_delta >= 1.5 then
+        v_growth_rp_minor := 300;
+      elsif v_growth_delta >= 1.0 then
+        v_growth_rp_minor := 200;
+      elsif v_growth_delta >= 0.5 then
+        v_growth_rp_minor := 100;
+      else
+        v_growth_rp_minor := 0;
+      end if;
+    else
+      v_growth_rp_minor := 0;
+    end if;
+
+    -- High performer maintenance: baseline >= 8.5 AND current >= 8.5
+    if v_baseline is not null and v_baseline >= 8.50 and v_normalized_score >= 8.50 then
+      v_high_performer_rp_minor := 100;
+    else
+      v_high_performer_rp_minor := 0;
+    end if;
+
+    -- Personal best bonus: exceeds prior best by >= 0.25
+    if v_historical_best is not null and round(v_normalized_score - v_historical_best, 2) >= 0.25 then
+      v_personal_best_rp_minor := 100;
+    else
+      v_personal_best_rp_minor := 0;
+    end if;
+
+    -- Difficulty bonus
+    if v_difficulty = 'challenge' then
+      if v_normalized_score >= 5.00 then
+        v_difficulty_rp_minor := 200;
+      else
+        v_difficulty_rp_minor := 0;
+      end if;
+    elsif v_difficulty = 'hard' then
+      v_difficulty_rp_minor := 100;
+    else
+      v_difficulty_rp_minor := 0;
+    end if;
   end if;
 
-  if v_baseline is not null and v_baseline < 60.00 and v_normalized_score >= 70.00 then
-    v_recovery_rp_minor := 1500;
-  end if;
+  v_total_rp_minor := v_score_rp_minor +
+                      v_growth_rp_minor +
+                      v_high_performer_rp_minor +
+                      v_personal_best_rp_minor +
+                      v_difficulty_rp_minor +
+                      v_goal_rp_minor +
+                      v_recovery_rp_minor;
 
-  v_total_rp_minor := v_score_rp_minor
-                    + v_growth_rp_minor
-                    + v_high_performer_rp_minor
-                    + v_goal_rp_minor
-                    + v_personal_best_rp_minor
-                    + v_difficulty_rp_minor
-                    + v_recovery_rp_minor;
+  -- 11. Compute Study XP: XP = 10 + 2 * RP_awarded
+  v_xp_awarded := 10 + round(2.0 * v_total_rp_minor / 100.0)::int;
 
-  if v_total_rp_minor < 0 then
-    v_total_rp_minor := 0;
-  end if;
-
-  v_xp_awarded := round(v_normalized_score)::integer;
-  if v_below_level and v_xp_awarded > 50 then
-    v_xp_awarded := 50;
-  end if;
-
+  -- 12. Audit snapshot
   v_inputs_snapshot := jsonb_build_object(
+    'engine_version', v_engine_version,
+    'verified_event_id', v_event.id,
+    'assessment_id', v_event.assessment_id,
+    'child_id', v_event.child_id,
+    'subject_key', v_subject_key,
+    'grade_level', v_grade_level,
     'normalized_score', v_normalized_score,
     'difficulty', v_difficulty,
-    'subject_key', v_subject_key,
-    'grade_level_snapshot', v_grade_level,
+    'assessment_type', v_event.assessment_type,
+    'baseline_score', v_baseline,
     'baseline_count', v_baseline_count,
-    'comparables', v_samples_json
+    'growth_delta', v_growth_delta,
+    'historical_best', v_historical_best,
+    'samples_used', v_samples_json
   );
 
-  -- 10. Order 4: Advisory Lock per VLE for pipeline coordination
-  perform pg_advisory_xact_lock(hashtext('vle_' || p_verified_event_id::text));
-
-  -- 11. State Mutations
+  -- 13. Insert immutable growth_event
   insert into public.growth_events (
     family_id,
     child_id,
     verified_learning_event_id,
+    assessment_id,
     engine_version,
-    inputs_snapshot,
+    normalized_score,
     baseline_score,
+    baseline_sample_count,
     growth_delta,
+    historical_best,
     score_rp_minor,
     growth_rp_minor,
-    streak_rp_minor,
     high_performer_rp_minor,
     goal_rp_minor,
     personal_best_rp_minor,
     difficulty_rp_minor,
     recovery_rp_minor,
+    below_level_adjustment,
     total_rp_minor,
-    xp_awarded
+    xp_awarded,
+    inputs_snapshot
   ) values (
     v_event.family_id,
     v_event.child_id,
     v_event.id,
+    v_event.assessment_id,
     v_engine_version,
-    v_inputs_snapshot,
+    v_normalized_score,
     v_baseline,
+    v_baseline_count,
     v_growth_delta,
+    v_historical_best,
     v_score_rp_minor,
     v_growth_rp_minor,
-    0,
     v_high_performer_rp_minor,
     v_goal_rp_minor,
     v_personal_best_rp_minor,
     v_difficulty_rp_minor,
     v_recovery_rp_minor,
+    v_below_level,
     v_total_rp_minor,
-    v_xp_awarded
+    v_xp_awarded,
+    v_inputs_snapshot
   ) returning * into v_new_growth;
 
+  -- 14. Append to authoritative XP ledger
   insert into public.xp_ledger (
     family_id,
     child_id,
@@ -2385,14 +2451,19 @@ begin
     v_event.family_id,
     v_event.child_id,
     v_xp_awarded,
-    'verified_assessment',
-    'growth_events',
+    'growth_award',
+    'growth_event',
     v_new_growth.id,
     v_engine_version,
-    'xp_growth_' || v_new_growth.id::text,
-    jsonb_build_object('vle_id', v_event.id)
+    'xp:growth_event:' || v_new_growth.id,
+    jsonb_build_object(
+      'verified_learning_event_id', v_event.id,
+      'assessment_id', v_event.assessment_id,
+      'normalized_score', v_normalized_score
+    )
   );
 
+  -- 15. Append to authoritative RP ledger
   insert into public.rp_ledger (
     family_id,
     child_id,
@@ -2408,21 +2479,36 @@ begin
     v_event.child_id,
     v_total_rp_minor,
     'growth_award',
-    'growth_events',
+    'growth_event',
     v_new_growth.id,
     v_engine_version,
-    'rp_growth_' || v_new_growth.id::text,
-    jsonb_build_object('vle_id', v_event.id)
+    'rp:growth_event:' || v_new_growth.id,
+    jsonb_build_object(
+      'verified_learning_event_id', v_event.id,
+      'assessment_id', v_event.assessment_id,
+      'normalized_score', v_normalized_score
+    )
   );
 
-  -- 12. Order 3: Lock child_balances FOR UPDATE
-  insert into public.child_balances (family_id, child_id, xp_total, rp_balance_minor, updated_at)
-  values (v_event.family_id, v_event.child_id, v_xp_awarded, v_total_rp_minor, now())
-  on conflict (child_id) do update
-  set xp_total = child_balances.xp_total + excluded.xp_total,
-      rp_balance_minor = child_balances.rp_balance_minor + excluded.rp_balance_minor,
-      updated_at = now();
+  -- 16. Update child_balances projection
+  insert into public.child_balances (
+    family_id,
+    child_id,
+    xp_total,
+    rp_balance_minor,
+    updated_at
+  ) values (
+    v_event.family_id,
+    v_event.child_id,
+    v_xp_awarded,
+    v_total_rp_minor,
+    now()
+  ) on conflict (child_id) do update set
+    xp_total = public.child_balances.xp_total + excluded.xp_total,
+    rp_balance_minor = public.child_balances.rp_balance_minor + excluded.rp_balance_minor,
+    updated_at = now();
 
+  -- 17. Record command receipt if command_id provided
   if p_command_id is not null then
     insert into public.command_receipts (
       command_id,

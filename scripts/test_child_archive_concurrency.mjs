@@ -51,6 +51,7 @@ async function main() {
   const GRANT_1 = crypto.randomUUID();
   const REWARD_1 = crypto.randomUUID();
   const REWARD_2 = crypto.randomUUID();
+  const REWARD_3 = crypto.randomUUID();
   const ASSESSMENT_DRAFT = crypto.randomUUID();
   const ASSESSMENT_PENDING = crypto.randomUUID();
   const VLE_1 = crypto.randomUUID();
@@ -91,7 +92,8 @@ async function main() {
     insert into public.rewards (id, family_id, title, description, icon_key, category, store_cost_minor, store_enabled, wheel_enabled, wheel_tier, is_active)
     values
       ('${REWARD_1}', '${FAMILY_ID}', 'Store Toy', 'Toy description', 'toy', 'treat', 2000, true, true, 'common', true),
-      ('${REWARD_2}', '${FAMILY_ID}', 'Wheel Game', 'Game description', 'game', 'activity', 3000, true, true, 'rare', true)
+      ('${REWARD_2}', '${FAMILY_ID}', 'Wheel Game', 'Game description', 'game', 'privilege', 3000, true, true, 'rare', true),
+      ('${REWARD_3}', '${FAMILY_ID}', 'Wheel Trip', 'Trip description', 'trip', 'experience', 4000, true, true, 'special', true)
     on conflict (id) do nothing;
 
     insert into public.assessments (

@@ -54,10 +54,11 @@ insert into public.family_wheel_settings (family_id, is_enabled, spin_cost_minor
   ('a0000000-0000-0000-0000-000000000001'::uuid, true, 2500, 5)
 on conflict (family_id) do nothing;
 
--- Store Rewards (2 rewards with wheel_enabled = true to satisfy wheel minimum pool)
+-- Store Rewards (3 rewards with wheel_enabled = true to satisfy wheel minimum pool)
 insert into public.rewards (id, family_id, title, description, icon_key, category, store_cost_minor, store_enabled, wheel_enabled, wheel_tier, is_active) values
   ('d1000000-0000-0000-0000-000000000001'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid, 'Reward 1', 'Desc 1', 'icon_1', 'treat', 1000, true, true, 'common', true),
-  ('d2000000-0000-0000-0000-000000000002'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid, 'Reward 2', 'Desc 2', 'icon_2', 'activity', 2000, true, true, 'rare', true)
+  ('d2000000-0000-0000-0000-000000000002'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid, 'Reward 2', 'Desc 2', 'icon_2', 'privilege', 2000, true, true, 'rare', true),
+  ('d3000000-0000-0000-0000-000000000003'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid, 'Reward 3', 'Desc 3', 'icon_3', 'experience', 3000, true, true, 'special', true)
 on conflict (id) do nothing;
 
 -- Initial Draft Assessments for A1 and A2
