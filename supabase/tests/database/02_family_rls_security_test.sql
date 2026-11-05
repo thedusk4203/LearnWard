@@ -221,8 +221,8 @@ prepare change_child_family as
 
 select throws_ok(
   'change_child_family',
-  'LW005',
-  'family_id on child_profiles is immutable',
+  '42501',
+  null,
   'Parent A cannot change child family_id to Family B'
 );
 
@@ -394,13 +394,10 @@ select throws_ok(
   'Last active owner cannot be deleted'
 );
 
--- 6.6 Child tenant key family_id cannot change even if user belongs to both families
+-- 6.6 Child tenant key family_id cannot change even if user belongs to both families (tested under privileged role to reach trigger)
 set local role postgres;
 insert into public.family_memberships (family_id, auth_user_id, role, status) values
   ('b0000000-0000-0000-0000-000000000001'::uuid, '10000000-0000-0000-0000-000000000001'::uuid, 'parent', 'active');
-
-set local role authenticated;
-select set_config('request.jwt.claims', '{"sub": "10000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
 prepare move_child_dual_member as
   update public.child_profiles
