@@ -54,6 +54,7 @@ async function main() {
   const REWARD_3 = crypto.randomUUID();
   const ASSESSMENT_DRAFT = crypto.randomUUID();
   const ASSESSMENT_PENDING = crypto.randomUUID();
+  const CMD_REVIEW_1 = crypto.randomUUID();
   const REVIEW_EVENT_1 = crypto.randomUUID();
   const VLE_1 = crypto.randomUUID();
 
@@ -202,10 +203,16 @@ async function main() {
   console.log('Test 4: Running Catch-up Exclusion on Archived Child...');
   // Insert an unprocessed VLE for archived Child 1
   await runPsql(`
+    insert into public.command_receipts (
+      command_id, family_id, actor_user_id, operation, resource_id
+    ) values (
+      '${CMD_REVIEW_1}', '${FAMILY_ID}', '${OWNER_ID}', 'verify', '${ASSESSMENT_PENDING}'
+    ) on conflict (command_id) do nothing;
+
     insert into public.assessment_review_events (
       id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id, review_notes
     ) values (
-      '${REVIEW_EVENT_1}', gen_random_uuid(), '${FAMILY_ID}', '${ASSESSMENT_PENDING}', 'verified', 'pending_review', 'verified',
+      '${REVIEW_EVENT_1}', '${CMD_REVIEW_1}', '${FAMILY_ID}', '${ASSESSMENT_PENDING}', 'verified', 'pending_review', 'verified',
       '${OWNER_ID}', 'Review notes'
     ) on conflict (id) do nothing;
 

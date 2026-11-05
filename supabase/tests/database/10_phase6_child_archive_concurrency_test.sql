@@ -73,11 +73,16 @@ insert into public.assessment_evidence (id, family_id, assessment_id, storage_pa
   ('f1000000-0000-0000-0000-000000000001'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid, 'e1000000-0000-0000-0000-000000000001'::uuid, 'a0000000-0000-0000-0000-000000000001/a1000000-0000-0000-0000-000000000001/e1000000-0000-0000-0000-000000000001/f1000000-0000-0000-0000-000000000001.jpg', 'image/jpeg', 1024, '10000000-0000-0000-0000-000000000001'::uuid)
 on conflict (id) do nothing;
 
+-- Command Receipt for Review Event
+insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id) values
+  ('80000000-0000-0000-0000-000000000001'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid, '10000000-0000-0000-0000-000000000001'::uuid, 'verify', 'e2000000-0000-0000-0000-000000000002'::uuid)
+on conflict (command_id) do nothing;
+
 -- Assessment Review Event for A1 Pending
 insert into public.assessment_review_events (
   id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id, review_notes
 ) values (
-  '80000001-0000-0000-0000-000000000001'::uuid, gen_random_uuid(), 'a0000000-0000-0000-0000-000000000001'::uuid,
+  '80000001-0000-0000-0000-000000000001'::uuid, '80000000-0000-0000-0000-000000000001'::uuid, 'a0000000-0000-0000-0000-000000000001'::uuid,
   'e2000000-0000-0000-0000-000000000002'::uuid, 'verified', 'pending_review', 'verified',
   '10000000-0000-0000-0000-000000000001'::uuid, 'Review notes'
 ) on conflict (id) do nothing;
