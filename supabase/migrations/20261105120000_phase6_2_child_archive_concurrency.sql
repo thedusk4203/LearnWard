@@ -778,10 +778,7 @@ begin
     v_assessment.occurred_at,
     v_user_id,
     v_review_event.id
-  ) returning * into v_vle;
-
-  -- 15. Automatically trigger downstream growth calculation
-  perform public.process_verified_learning_event(v_vle.id, p_command_id);
+  );
 
   return v_assessment;
 end;
@@ -1038,67 +1035,99 @@ begin
       end if;
       v_node_sources := jsonb_set(v_node_sources, array[v_node.id::text], to_jsonb(v_score_source));
 
+      -- Parse component fields
       v_comp_key := v_mapping ->> 'component_key';
+      v_raw := coalesce((v_mapping ->> 'component_raw_score')::numeric, (v_mapping ->> 'raw_score')::numeric);
+      v_max := coalesce((v_mapping ->> 'component_max_score')::numeric, (v_mapping ->> 'max_score')::numeric);
+      v_items := (v_mapping ->> 'item_count')::integer;
+      v_correct := (v_mapping ->> 'correct_count')::integer;
+
       if v_score_source = 'assessment_total' then
+        if v_comp_key is not null and trim(v_comp_key) != '' and trim(v_comp_key) != 'assessment_total' then
+          raise exception 'assessment_total component_key must be assessment_total' using errcode = 'LW004';
+        end if;
         v_comp_key := 'assessment_total';
         v_raw := null;
         v_max := null;
         v_items := null;
         v_correct := null;
-      elsif v_score_source = 'component_score' then
-        if v_comp_key is null or trim(v_comp_key) = '' or v_comp_key = 'assessment_total' then
-          raise exception 'component_score requires non-empty component_key distinct from assessment_total' using errcode = 'LW004';
+
+        if v_comp_keys ? (v_node.id::text || ':' || v_comp_key) then
+          raise exception 'Duplicate component_key % for node %', v_comp_key, v_node.id using errcode = 'LW004';
         end if;
-        v_raw := (v_mapping ->> 'component_raw_score')::numeric;
-        v_max := (v_mapping ->> 'component_max_score')::numeric;
+        v_comp_keys := jsonb_set(v_comp_keys, array[v_node.id::text || ':' || v_comp_key], 'true'::jsonb);
+      elsif v_score_source = 'component_score' then
+        v_comp_key := trim(coalesce(v_comp_key, ''));
+        if v_comp_key = '' or v_comp_key = 'assessment_total' then
+          raise exception 'component_key is required and cannot be assessment_total for component_score' using errcode = 'LW004';
+        end if;
+        -- Check component_key uniqueness per assessment/node
+        if v_comp_keys ? (v_node.id::text || ':' || v_comp_key) then
+          raise exception 'Duplicate component_key % for node %', v_comp_key, v_node.id using errcode = 'LW004';
+        end if;
+        v_comp_keys := jsonb_set(v_comp_keys, array[v_node.id::text || ':' || v_comp_key], 'true'::jsonb);
+
+        if v_raw is null or v_raw < 0 or v_max is null or v_max <= 0 or v_raw > v_max then
+          raise exception 'Invalid component score values: raw=%, max=%', v_raw, v_max using errcode = 'LW004';
+        end if;
         v_items := null;
         v_correct := null;
-
-        if v_raw is null or v_max is null or v_raw < 0 or v_max <= 0 or v_raw > v_max then
-          raise exception 'Invalid component score bounds: raw=%, max=%', v_raw, v_max using errcode = 'LW004';
-        end if;
       elsif v_score_source = 'item_group' then
-        if v_comp_key is null or trim(v_comp_key) = '' or v_comp_key = 'assessment_total' then
-          raise exception 'item_group requires non-empty component_key distinct from assessment_total' using errcode = 'LW004';
+        v_comp_key := trim(coalesce(v_comp_key, ''));
+        if v_comp_key = '' or v_comp_key = 'assessment_total' then
+          raise exception 'component_key is required and cannot be assessment_total for item_group' using errcode = 'LW004';
         end if;
-        v_items := (v_mapping ->> 'item_count')::integer;
-        v_correct := (v_mapping ->> 'correct_count')::integer;
-        v_raw := null;
-        v_max := null;
+        -- Check component_key uniqueness per assessment/node
+        if v_comp_keys ? (v_node.id::text || ':' || v_comp_key) then
+          raise exception 'Duplicate component_key % for node %', v_comp_key, v_node.id using errcode = 'LW004';
+        end if;
+        v_comp_keys := jsonb_set(v_comp_keys, array[v_node.id::text || ':' || v_comp_key], 'true'::jsonb);
 
         if v_items is null or v_items <= 0 or v_correct is null or v_correct < 0 or v_correct > v_items then
-          raise exception 'Invalid item group counts: items=%, correct=%', v_items, v_correct using errcode = 'LW004';
+          raise exception 'Invalid item group values: items=%, correct=%', v_items, v_correct using errcode = 'LW004';
         end if;
+        v_raw := null;
+        v_max := null;
       end if;
-
-      if v_comp_keys ? (v_node.id::text || ':' || v_comp_key) then
-        raise exception 'Duplicate mapping for node % and component %', v_node.id, v_comp_key using errcode = 'LW004';
-      end if;
-      v_comp_keys := jsonb_set(v_comp_keys, array[v_node.id::text || ':' || v_comp_key], 'true'::jsonb);
 
       insert into public.assessment_learning_mappings (
         family_id, child_id, assessment_id, learning_node_id,
-        component_key, score_source, component_raw_score, component_max_score,
-        item_count, correct_count, confirmed_by_user_id
+        component_key, score_source,
+        component_raw_score, component_max_score, item_count, correct_count,
+        confirmed_by_user_id, created_at, updated_at
       ) values (
         v_assessment.family_id, v_assessment.child_id, p_assessment_id, v_node.id,
-        v_comp_key, v_score_source, v_raw, v_max,
-        v_items, v_correct, v_user_id
-      );
-
-      v_result := v_result || jsonb_build_object(
-        'learning_node_id', v_node.id,
-        'component_key', v_comp_key,
-        'score_source', v_score_source
+        v_comp_key, v_score_source,
+        v_raw, v_max, v_items, v_correct,
+        v_user_id, clock_timestamp(), clock_timestamp()
       );
     end loop;
   end if;
 
-  return jsonb_build_object(
-    'assessment_id', p_assessment_id,
-    'mappings_count', jsonb_array_length(v_result),
-    'mappings', v_result
-  );
+  -- Return updated mappings in exact 16-field shape
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'id', m.id,
+    'family_id', m.family_id,
+    'child_id', m.child_id,
+    'assessment_id', m.assessment_id,
+    'learning_node_id', m.learning_node_id,
+    'node_title', n.title,
+    'node_type', n.node_type,
+    'score_source', m.score_source,
+    'component_key', m.component_key,
+    'component_raw_score', m.component_raw_score,
+    'component_max_score', m.component_max_score,
+    'item_count', m.item_count,
+    'correct_count', m.correct_count,
+    'confirmed_by_user_id', m.confirmed_by_user_id,
+    'created_at', m.created_at,
+    'updated_at', m.updated_at
+  ) order by m.created_at asc, m.id asc), '[]'::jsonb) into v_result
+  from public.assessment_learning_mappings m
+  join public.learning_nodes n on n.id = m.learning_node_id
+  where m.assessment_id = p_assessment_id;
+
+  return v_result;
 end;
 $$;
 
@@ -1146,19 +1175,18 @@ begin
     'child_id', m.child_id,
     'assessment_id', m.assessment_id,
     'learning_node_id', m.learning_node_id,
-    'node_canonical_key', n.canonical_key,
     'node_title', n.title,
     'node_type', n.node_type,
-    'component_key', m.component_key,
     'score_source', m.score_source,
+    'component_key', m.component_key,
     'component_raw_score', m.component_raw_score,
     'component_max_score', m.component_max_score,
     'item_count', m.item_count,
     'correct_count', m.correct_count,
     'confirmed_by_user_id', m.confirmed_by_user_id,
-    'created_at', m.created_at
-  ) order by n.sort_order, m.component_key), '[]'::jsonb)
-  into v_result
+    'created_at', m.created_at,
+    'updated_at', m.updated_at
+  ) order by m.created_at asc, m.id asc), '[]'::jsonb) into v_result
   from public.assessment_learning_mappings m
   join public.learning_nodes n on n.id = m.learning_node_id
   where m.assessment_id = p_assessment_id;
@@ -1333,7 +1361,7 @@ begin
     child_id,
     reward_id,
     origin,
-    cost_minor,
+    rp_cost_minor,
     reward_snapshot,
     status,
     created_at,
@@ -1626,7 +1654,7 @@ begin
   ) values (
     v_family_id,
     v_redemption.child_id,
-    v_redemption.cost_minor,
+    v_redemption.rp_cost_minor,
     'cancellation_refund',
     'reward_redemptions',
     p_redemption_id,
@@ -1636,7 +1664,7 @@ begin
   );
 
   update public.child_balances
-  set rp_balance_minor = rp_balance_minor + v_redemption.cost_minor,
+  set rp_balance_minor = rp_balance_minor + v_redemption.rp_cost_minor,
       updated_at = now()
   where child_id = v_redemption.child_id;
 
@@ -1964,7 +1992,7 @@ begin
     child_id,
     reward_id,
     origin,
-    cost_minor,
+    rp_cost_minor,
     reward_snapshot,
     status,
     created_at,
@@ -2695,8 +2723,7 @@ begin
 
   return jsonb_build_object(
     'family_id', p_family_id,
-    'processed_count', v_count,
-    'completed_at', clock_timestamp()
+    'processed_count', v_count
   );
 end;
 $$;
@@ -2779,242 +2806,4 @@ begin
 end;
 $$;
 
-create or replace function public.get_child_mastery(
-  p_child_id uuid
-)
-returns jsonb
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  v_user_id uuid;
-  v_child record;
-  v_as_of timestamptz;
-begin
-  if p_child_id is null then
-    raise exception 'Child ID is required' using errcode = '22000';
-  end if;
-
-  v_user_id := auth.uid();
-  if v_user_id is null then
-    raise exception 'Authentication required' using errcode = '42501';
-  end if;
-
-  select id, family_id, status into v_child
-  from public.child_profiles
-  where id = p_child_id;
-
-  if not found then
-    raise exception 'Child profile not found' using errcode = 'P0002';
-  end if;
-
-  if not (
-    private.is_active_family_adult(v_child.family_id) or
-    private.is_active_child_device(v_child.family_id, p_child_id)
-  ) then
-    raise exception 'Permission denied' using errcode = '42501';
-  end if;
-
-  if v_child.status != 'active' then
-    raise exception 'Child profile is archived' using errcode = '42501';
-  end if;
-
-  v_as_of := transaction_timestamp();
-  return private.get_child_mastery_at(p_child_id, v_as_of);
-end;
-$$;
-
-create or replace function public.get_child_learning_overview(
-  p_child_id uuid
-)
-returns jsonb
-language plpgsql
-stable
-security definer
-set search_path = ''
-as $$
-declare
-  v_user_id uuid;
-  v_child record;
-  v_active_version text;
-  v_as_of timestamptz;
-begin
-  if p_child_id is null then
-    raise exception 'Child ID is required' using errcode = '22000';
-  end if;
-
-  v_user_id := auth.uid();
-  if v_user_id is null then
-    raise exception 'Authentication required' using errcode = '42501';
-  end if;
-
-  select id, family_id, school_grade, status
-  into v_child
-  from public.child_profiles
-  where id = p_child_id;
-
-  if not found then
-    raise exception 'Child profile not found' using errcode = 'P0002';
-  end if;
-
-  if not (
-    private.is_active_family_adult(v_child.family_id) or
-    private.is_active_child_device(v_child.family_id, p_child_id)
-  ) then
-    raise exception 'Permission denied' using errcode = '42501';
-  end if;
-
-  if v_child.status != 'active' then
-    raise exception 'Child profile is archived' using errcode = '42501';
-  end if;
-
-  select version into v_active_version
-  from public.learning_catalog_versions
-  where status = 'active';
-
-  if v_active_version is null then
-    raise exception 'No active learning catalog' using errcode = 'LW501';
-  end if;
-
-  v_as_of := transaction_timestamp();
-  return private.get_child_learning_overview_at(p_child_id, v_as_of);
-end;
-$$;
-
-create or replace function public.get_node_learning_state(
-  p_child_id uuid,
-  p_learning_node_id uuid
-)
-returns jsonb
-language plpgsql
-stable
-security definer
-set search_path = ''
-as $$
-declare
-  v_user_id uuid;
-  v_child record;
-  v_active_version text;
-  v_as_of timestamptz;
-begin
-  if p_child_id is null then
-    raise exception 'Child ID is required' using errcode = '22000';
-  end if;
-
-  if p_learning_node_id is null then
-    raise exception 'Learning Node ID is required' using errcode = '22000';
-  end if;
-
-  v_user_id := auth.uid();
-  if v_user_id is null then
-    raise exception 'Authentication required' using errcode = '42501';
-  end if;
-
-  select id, family_id, status
-  into v_child
-  from public.child_profiles
-  where id = p_child_id;
-
-  if not found then
-    raise exception 'Child profile not found' using errcode = 'P0002';
-  end if;
-
-  if not (
-    private.is_active_family_adult(v_child.family_id) or
-    private.is_active_child_device(v_child.family_id, p_child_id)
-  ) then
-    raise exception 'Permission denied' using errcode = '42501';
-  end if;
-
-  if v_child.status != 'active' then
-    raise exception 'Child profile is archived' using errcode = '42501';
-  end if;
-
-  select version into v_active_version
-  from public.learning_catalog_versions
-  where status = 'active';
-
-  if v_active_version is null then
-    raise exception 'No active learning catalog' using errcode = 'LW501';
-  end if;
-
-  if not exists (
-    select 1 from public.learning_nodes
-    where id = p_learning_node_id
-      and catalog_version = v_active_version
-  ) then
-    raise exception 'Learning node not found in active catalog' using errcode = 'LW004';
-  end if;
-
-  v_as_of := transaction_timestamp();
-  return private.get_node_learning_state_at(p_child_id, p_learning_node_id, v_as_of);
-end;
-$$;
-
-create or replace function public.get_next_challenge_candidates(
-  p_child_id uuid,
-  p_subject_key text default null,
-  p_limit integer default 3
-)
-returns jsonb
-language plpgsql
-stable
-security definer
-set search_path = ''
-as $$
-declare
-  v_user_id uuid;
-  v_child record;
-  v_active_version text;
-  v_as_of timestamptz;
-begin
-  if p_child_id is null then
-    raise exception 'Child ID is required' using errcode = '22000';
-  end if;
-
-  if p_limit is null or p_limit < 1 or p_limit > 20 then
-    raise exception 'Limit must be between 1 and 20' using errcode = '22000';
-  end if;
-
-  if p_subject_key is not null and p_subject_key not in ('math', 'english', 'literature', 'science', 'other') then
-    raise exception 'Invalid subject key: %', p_subject_key using errcode = 'LW104';
-  end if;
-
-  v_user_id := auth.uid();
-  if v_user_id is null then
-    raise exception 'Authentication required' using errcode = '42501';
-  end if;
-
-  select id, family_id, school_grade, status
-  into v_child
-  from public.child_profiles
-  where id = p_child_id;
-
-  if not found then
-    raise exception 'Child profile not found' using errcode = 'P0002';
-  end if;
-
-  if not (
-    private.is_active_family_adult(v_child.family_id) or
-    private.is_active_child_device(v_child.family_id, p_child_id)
-  ) then
-    raise exception 'Permission denied' using errcode = '42501';
-  end if;
-
-  if v_child.status != 'active' then
-    raise exception 'Child profile is archived' using errcode = '42501';
-  end if;
-
-  select version into v_active_version
-  from public.learning_catalog_versions
-  where status = 'active';
-
-  if v_active_version is null then
-    raise exception 'No active learning catalog' using errcode = 'LW501';
-  end if;
-
-  v_as_of := transaction_timestamp();
-  return private.get_next_challenge_candidates_at(p_child_id, p_subject_key, p_limit, v_as_of);
-end;
-$$;
+grant execute on function public.reconcile_child_balance(uuid) to authenticated;

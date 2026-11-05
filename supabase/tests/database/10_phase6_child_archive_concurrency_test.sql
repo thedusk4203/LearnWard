@@ -10,18 +10,18 @@ select plan(42);
 -- 1. FIXTURE SETUP
 -- ---------------------------------------------------------------------------
 
--- Families
-insert into public.families (id, name, timezone, locale) values
-  ('a0000000-0000-0000-0000-000000000001'::uuid, 'Family A', 'UTC', 'en-US'),
-  ('b0000000-0000-0000-0000-000000000001'::uuid, 'Family B', 'UTC', 'en-US')
+-- Users
+insert into auth.users (id, aud, role, email) values
+  ('10000000-0000-0000-0000-000000000001'::uuid, 'authenticated', 'authenticated', 'adult_a@test.com'),
+  ('10000000-0000-0000-0000-000000000002'::uuid, 'authenticated', 'authenticated', 'child_a1_device@test.com'),
+  ('10000000-0000-0000-0000-000000000003'::uuid, 'authenticated', 'authenticated', 'child_a2_device@test.com'),
+  ('10000000-0000-0000-0000-000000000004'::uuid, 'authenticated', 'authenticated', 'adult_b@test.com')
 on conflict (id) do nothing;
 
--- Users
-insert into auth.users (id, email) values
-  ('10000000-0000-0000-0000-000000000001'::uuid, 'adult_a@test.com'),
-  ('10000000-0000-0000-0000-000000000002'::uuid, 'child_a1_device@test.com'),
-  ('10000000-0000-0000-0000-000000000003'::uuid, 'child_a2_device@test.com'),
-  ('10000000-0000-0000-0000-000000000004'::uuid, 'adult_b@test.com')
+-- Families
+insert into public.families (id, name, timezone, locale, created_by_user_id) values
+  ('a0000000-0000-0000-0000-000000000001'::uuid, 'Family A', 'UTC', 'en-US', '10000000-0000-0000-0000-000000000001'::uuid),
+  ('b0000000-0000-0000-0000-000000000001'::uuid, 'Family B', 'UTC', 'en-US', '10000000-0000-0000-0000-000000000004'::uuid)
 on conflict (id) do nothing;
 
 -- Family Memberships
@@ -308,32 +308,32 @@ select throws_ok(
 -- 4.16 get_child_mastery for archived child
 select throws_ok(
   $$ select public.get_child_mastery('a1000000-0000-0000-0000-000000000001'::uuid) $$,
-  '42501',
-  'Child profile is archived',
+  'P0002',
+  'Child profile not found',
   'get_child_mastery for archived child fails closed'
 );
 
 -- 4.17 get_child_learning_overview for archived child
 select throws_ok(
   $$ select public.get_child_learning_overview('a1000000-0000-0000-0000-000000000001'::uuid) $$,
-  '42501',
-  'Child profile is archived',
+  'P0002',
+  'Child profile not found',
   'get_child_learning_overview for archived child fails closed'
 );
 
 -- 4.18 get_node_learning_state for archived child
 select throws_ok(
   $$ select public.get_node_learning_state('a1000000-0000-0000-0000-000000000001'::uuid, 'b0000002-0000-0000-0000-000000000002'::uuid) $$,
-  '42501',
-  'Child profile is archived',
+  'P0002',
+  'Child profile not found',
   'get_node_learning_state for archived child fails closed'
 );
 
 -- 4.19 get_next_challenge_candidates for archived child
 select throws_ok(
   $$ select public.get_next_challenge_candidates('a1000000-0000-0000-0000-000000000001'::uuid, 'math', 3) $$,
-  '42501',
-  'Child profile is archived',
+  'P0002',
+  'Child profile not found',
   'get_next_challenge_candidates for archived child fails closed'
 );
 
