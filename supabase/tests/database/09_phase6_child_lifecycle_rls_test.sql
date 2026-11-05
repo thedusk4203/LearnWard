@@ -50,19 +50,24 @@ insert into public.rewards (id, family_id, title, category, store_cost_minor, is
   ('90000005-0000-0000-0000-000000000003'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, 'Archived Child Legacy Reward', 'treat', 750, true, true, true, 'common', '90000002-0000-0000-0000-000000000002'::uuid)
 on conflict (id) do nothing;
 
--- Assessments: One for Active Child, One for Archived Child, plus Drafts
+-- Assessments: Insert in draft status so evidence can be attached before terminal transition
 insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, created_by_user_id) values
-  ('90000006-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'Active Quiz', 'quiz', 'normal', 10, 10, 'verified', '90000000-0000-0000-0000-000000000001'::uuid),
-  ('90000006-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Archived Quiz', 'quiz', 'normal', 10, 10, 'verified', '90000000-0000-0000-0000-000000000001'::uuid),
+  ('90000006-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'Active Quiz', 'quiz', 'normal', 10, 10, 'draft', '90000000-0000-0000-0000-000000000001'::uuid),
+  ('90000006-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Archived Quiz', 'quiz', 'normal', 10, 10, 'draft', '90000000-0000-0000-0000-000000000001'::uuid),
   ('90000006-0000-0000-0000-000000000003'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'Active Draft', 'quiz', 'normal', 8, 10, 'draft', '90000000-0000-0000-0000-000000000001'::uuid),
   ('90000006-0000-0000-0000-000000000004'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000002-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'Archived Draft', 'quiz', 'normal', 8, 10, 'draft', '90000000-0000-0000-0000-000000000001'::uuid)
 on conflict (id) do nothing;
 
--- Assessment Evidence
+-- Assessment Evidence (attached while assessments 1 & 2 are in draft)
 insert into public.assessment_evidence (id, assessment_id, family_id, storage_path, media_type, file_size_bytes, uploaded_by_user_id) values
   ('90000007-0000-0000-0000-000000000001'::uuid, '90000006-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001/90000002-0000-0000-0000-000000000001/90000006-0000-0000-0000-000000000001/e0000000-0000-0000-0000-000000000001.jpg', 'image/jpeg', 1024, '90000000-0000-0000-0000-000000000001'::uuid),
   ('90000007-0000-0000-0000-000000000002'::uuid, '90000006-0000-0000-0000-000000000002'::uuid, '90000001-0000-0000-0000-000000000001'::uuid, '90000001-0000-0000-0000-000000000001/90000002-0000-0000-0000-000000000002/90000006-0000-0000-0000-000000000002/e0000000-0000-0000-0000-000000000002.jpg', 'image/jpeg', 1024, '90000000-0000-0000-0000-000000000001'::uuid)
 on conflict (id) do nothing;
+
+-- Transition assessments 1 & 2 to verified status
+update public.assessments
+set status = 'verified'
+where id in ('90000006-0000-0000-0000-000000000001'::uuid, '90000006-0000-0000-0000-000000000002'::uuid);
 
 -- Command Receipts
 insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id, status) values
