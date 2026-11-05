@@ -694,6 +694,9 @@ select is(
 -- SECTION 8: STORAGE EVIDENCE ACCESS HELPER HARDENING (Tests 48-49)
 -- ===========================================================================
 
+-- Switch to postgres role to test private helper directly (claims remain active adult)
+set local role postgres;
+
 -- Test 48: Storage helper permits draft assessment evidence for active child
 select is(
   private.validate_storage_evidence_access(
