@@ -87,6 +87,16 @@ async function main() {
       ('${FAMILY_ID}', '${CHILD_2}', 500, 10000)
     on conflict (child_id) do nothing;
 
+    insert into public.xp_ledger (id, family_id, child_id, amount, reason_code, source_type, idempotency_key) values
+      (gen_random_uuid(), '${FAMILY_ID}', '${CHILD_1}', 500, 'initial_grant', 'growth_event', 'init:xp:${CHILD_1}'),
+      (gen_random_uuid(), '${FAMILY_ID}', '${CHILD_2}', 500, 'initial_grant', 'growth_event', 'init:xp:${CHILD_2}')
+    on conflict (idempotency_key) do nothing;
+
+    insert into public.rp_ledger (id, family_id, child_id, amount_minor, reason_code, source_type, idempotency_key) values
+      (gen_random_uuid(), '${FAMILY_ID}', '${CHILD_1}', 10000, 'initial_grant', 'growth_event', 'init:rp:${CHILD_1}'),
+      (gen_random_uuid(), '${FAMILY_ID}', '${CHILD_2}', 10000, 'initial_grant', 'growth_event', 'init:rp:${CHILD_2}')
+    on conflict (idempotency_key) do nothing;
+
     insert into public.family_wheel_settings (family_id, is_enabled, spin_cost_minor, daily_spin_cap)
     values ('${FAMILY_ID}', true, 2500, 5)
     on conflict (family_id) do nothing;

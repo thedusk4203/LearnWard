@@ -49,6 +49,16 @@ insert into public.child_balances (family_id, child_id, xp_total, rp_balance_min
   ('a0000000-0000-0000-0000-000000000001'::uuid, 'a2000000-0000-0000-0000-000000000002'::uuid, 200, 10000)
 on conflict (child_id) do nothing;
 
+insert into public.xp_ledger (id, family_id, child_id, amount, reason_code, source_type, idempotency_key) values
+  (gen_random_uuid(), 'a0000000-0000-0000-0000-000000000001'::uuid, 'a1000000-0000-0000-0000-000000000001'::uuid, 100, 'initial_grant', 'growth_event', 'init:xp:a1'),
+  (gen_random_uuid(), 'a0000000-0000-0000-0000-000000000001'::uuid, 'a2000000-0000-0000-0000-000000000002'::uuid, 200, 'initial_grant', 'growth_event', 'init:xp:a2')
+on conflict (idempotency_key) do nothing;
+
+insert into public.rp_ledger (id, family_id, child_id, amount_minor, reason_code, source_type, idempotency_key) values
+  (gen_random_uuid(), 'a0000000-0000-0000-0000-000000000001'::uuid, 'a1000000-0000-0000-0000-000000000001'::uuid, 5000, 'initial_grant', 'growth_event', 'init:rp:a1'),
+  (gen_random_uuid(), 'a0000000-0000-0000-0000-000000000001'::uuid, 'a2000000-0000-0000-0000-000000000002'::uuid, 10000, 'initial_grant', 'growth_event', 'init:rp:a2')
+on conflict (idempotency_key) do nothing;
+
 -- Family Wheel Settings
 insert into public.family_wheel_settings (family_id, is_enabled, spin_cost_minor, daily_spin_cap) values
   ('a0000000-0000-0000-0000-000000000001'::uuid, true, 2500, 5)
