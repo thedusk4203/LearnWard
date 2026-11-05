@@ -145,6 +145,9 @@ jobs:
       - name: Run Learning Mastery Dart/Postgres parity test
         run: node scripts/test_learning_parity.mjs
 
+      - name: Run Child Archival concurrency & mutation barrier regression test
+        run: node scripts/test_child_archive_concurrency.mjs
+
   android:
     name: Android debug build
     needs: [quality, database]
