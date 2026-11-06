@@ -508,13 +508,13 @@ async function main() {
     on conflict (idempotency_key) do nothing;
 
     insert into public.family_wheel_settings (family_id, is_enabled, spin_cost_minor, daily_spin_cap)
-    values ('${T8_FAMILY_ID}', true, 100, 5)
+    values ('${T8_FAMILY_ID}', true, 1000, 5)
     on conflict (family_id) do nothing;
 
     insert into public.rewards (id, family_id, title, description, icon_key, category, store_cost_minor, store_enabled, wheel_enabled, wheel_tier, is_active)
     values
-      ('${REWARD_1}', '${T8_FAMILY_ID}', 'Toy 1', 'Desc', 'toy', 'treat', 100, true, true, 'common', true),
-      ('${REWARD_2}', '${T8_FAMILY_ID}', 'Game 2', 'Desc', 'game', 'privilege', 100, true, true, 'rare', true)
+      ('${REWARD_1}', '${T8_FAMILY_ID}', 'Toy 1', 'Desc', 'toy', 'treat', 1000, true, true, 'common', true),
+      ('${REWARD_2}', '${T8_FAMILY_ID}', 'Game 2', 'Desc', 'game', 'privilege', 1000, true, true, 'rare', true)
     on conflict (id) do nothing;
   `;
 
