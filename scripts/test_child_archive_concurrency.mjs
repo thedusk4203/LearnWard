@@ -18,7 +18,7 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 
-function runPsql(sql) {
+function runPsql(sql, maxRetries = 3) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       'docker',
@@ -32,8 +32,14 @@ function runPsql(sql) {
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
 
-    child.on('close', (code) => {
-      resolve({ code, stdout: stdout.trim(), stderr: stderr.trim() });
+    child.on('close', async (code) => {
+      const trimmedErr = stderr.trim();
+      if (code !== 0 && maxRetries > 0 && trimmedErr.includes('remaining connection slots are reserved')) {
+        await new Promise((r) => setTimeout(r, 50 * (4 - maxRetries)));
+        resolve(runPsql(sql, maxRetries - 1));
+        return;
+      }
+      resolve({ code, stdout: stdout.trim(), stderr: trimmedErr });
     });
 
     child.on('error', reject);
@@ -564,8 +570,20 @@ async function main() {
     vlesC.push(vleC);
     vlesD.push(vleD);
 
-    const cmdRev = crypto.randomUUID();
-    const revEv = crypto.randomUUID();
+    // Dedicated verified assessments for pre-seeding historical VLE fixtures (distinct from pendingAssessments)
+    const vIdA = crypto.randomUUID();
+    const vIdB = crypto.randomUUID();
+    const vIdC = crypto.randomUUID();
+    const vIdD = crypto.randomUUID();
+
+    const cmdRevA = crypto.randomUUID();
+    const cmdRevB = crypto.randomUUID();
+    const cmdRevC = crypto.randomUUID();
+    const cmdRevD = crypto.randomUUID();
+    const revEvA = crypto.randomUUID();
+    const revEvB = crypto.randomUUID();
+    const revEvC = crypto.randomUUID();
+    const revEvD = crypto.randomUUID();
 
     t8SetupSql += `
       insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, version, learning_catalog_version, created_by_user_id)
@@ -577,20 +595,32 @@ async function main() {
         ('${pIdA}', '${T8_FAMILY_ID}', '${T8_CHILD_A}', 'math', 'Math', 'Pending A${i}', 'quiz', 'normal', 9, 10, 'pending_review', 1, 'pilot-v0.1', '${T8_OWNER_ID}'),
         ('${pIdB}', '${T8_FAMILY_ID}', '${T8_CHILD_B}', 'math', 'Math', 'Pending B${i}', 'quiz', 'normal', 9, 10, 'pending_review', 1, 'pilot-v0.1', '${T8_OWNER_ID}'),
         ('${pIdC}', '${T8_FAMILY_ID}', '${T8_CHILD_C}', 'math', 'Math', 'Pending C${i}', 'quiz', 'normal', 9, 10, 'pending_review', 1, 'pilot-v0.1', '${T8_OWNER_ID}'),
-        ('${pIdD}', '${T8_FAMILY_ID}', '${T8_CHILD_D}', 'math', 'Math', 'Pending D${i}', 'quiz', 'normal', 9, 10, 'pending_review', 1, 'pilot-v0.1', '${T8_OWNER_ID}');
+        ('${pIdD}', '${T8_FAMILY_ID}', '${T8_CHILD_D}', 'math', 'Math', 'Pending D${i}', 'quiz', 'normal', 9, 10, 'pending_review', 1, 'pilot-v0.1', '${T8_OWNER_ID}'),
+        ('${vIdA}', '${T8_FAMILY_ID}', '${T8_CHILD_A}', 'math', 'Math', 'Verified A${i}', 'quiz', 'normal', 9, 10, 'verified', 2, 'pilot-v0.1', '${T8_OWNER_ID}'),
+        ('${vIdB}', '${T8_FAMILY_ID}', '${T8_CHILD_B}', 'math', 'Math', 'Verified B${i}', 'quiz', 'normal', 9, 10, 'verified', 2, 'pilot-v0.1', '${T8_OWNER_ID}'),
+        ('${vIdC}', '${T8_FAMILY_ID}', '${T8_CHILD_C}', 'math', 'Math', 'Verified C${i}', 'quiz', 'normal', 9, 10, 'verified', 2, 'pilot-v0.1', '${T8_OWNER_ID}'),
+        ('${vIdD}', '${T8_FAMILY_ID}', '${T8_CHILD_D}', 'math', 'Math', 'Verified D${i}', 'quiz', 'normal', 9, 10, 'verified', 2, 'pilot-v0.1', '${T8_OWNER_ID}');
 
       insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id)
-      values ('${cmdRev}', '${T8_FAMILY_ID}', '${T8_OWNER_ID}', 'verify', '${pIdA}');
+      values
+        ('${cmdRevA}', '${T8_FAMILY_ID}', '${T8_OWNER_ID}', 'verify', '${vIdA}'),
+        ('${cmdRevB}', '${T8_FAMILY_ID}', '${T8_OWNER_ID}', 'verify', '${vIdB}'),
+        ('${cmdRevC}', '${T8_FAMILY_ID}', '${T8_OWNER_ID}', 'verify', '${vIdC}'),
+        ('${cmdRevD}', '${T8_FAMILY_ID}', '${T8_OWNER_ID}', 'verify', '${vIdD}');
 
       insert into public.assessment_review_events (id, command_id, family_id, assessment_id, event_type, from_status, to_status, actor_user_id, review_notes)
-      values ('${revEv}', '${cmdRev}', '${T8_FAMILY_ID}', '${pIdA}', 'verified', 'pending_review', 'verified', '${T8_OWNER_ID}', 'Notes');
+      values
+        ('${revEvA}', '${cmdRevA}', '${T8_FAMILY_ID}', '${vIdA}', 'verified', 'pending_review', 'verified', '${T8_OWNER_ID}', 'Notes A${i}'),
+        ('${revEvB}', '${cmdRevB}', '${T8_FAMILY_ID}', '${vIdB}', 'verified', 'pending_review', 'verified', '${T8_OWNER_ID}', 'Notes B${i}'),
+        ('${revEvC}', '${cmdRevC}', '${T8_FAMILY_ID}', '${vIdC}', 'verified', 'pending_review', 'verified', '${T8_OWNER_ID}', 'Notes C${i}'),
+        ('${revEvD}', '${cmdRevD}', '${T8_FAMILY_ID}', '${vIdD}', 'verified', 'pending_review', 'verified', '${T8_OWNER_ID}', 'Notes D${i}');
 
       insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, evidence_count, entry_context, occurred_at, verified_at, verified_by_user_id, review_event_id, learning_catalog_version, grade_level_snapshot)
       values
-        ('${vleA}', '${T8_FAMILY_ID}', '${T8_CHILD_A}', '${pIdA}', 'math', 'Math', 'VLE A${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 4),
-        ('${vleB}', '${T8_FAMILY_ID}', '${T8_CHILD_B}', '${pIdB}', 'math', 'Math', 'VLE B${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 5),
-        ('${vleC}', '${T8_FAMILY_ID}', '${T8_CHILD_C}', '${pIdC}', 'math', 'Math', 'VLE C${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 3),
-        ('${vleD}', '${T8_FAMILY_ID}', '${T8_CHILD_D}', '${pIdD}', 'math', 'Math', 'VLE D${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 6);
+        ('${vleA}', '${T8_FAMILY_ID}', '${T8_CHILD_A}', '${vIdA}', 'math', 'Math', 'VLE A${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEvA}', 'pilot-v0.1', 4),
+        ('${vleB}', '${T8_FAMILY_ID}', '${T8_CHILD_B}', '${vIdB}', 'math', 'Math', 'VLE B${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEvB}', 'pilot-v0.1', 5),
+        ('${vleC}', '${T8_FAMILY_ID}', '${T8_CHILD_C}', '${vIdC}', 'math', 'Math', 'VLE C${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEvC}', 'pilot-v0.1', 3),
+        ('${vleD}', '${T8_FAMILY_ID}', '${T8_CHILD_D}', '${vIdD}', 'math', 'Math', 'VLE D${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEvD}', 'pilot-v0.1', 6);
     `;
   }
 
