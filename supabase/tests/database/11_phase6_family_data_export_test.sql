@@ -58,22 +58,35 @@ insert into public.child_balances (family_id, child_id, xp_total, rp_balance_min
 on conflict (child_id) do nothing;
 
 -- Assessments:
+-- Insert all assessments in 'draft' status initially so evidence can be attached
 -- Ass 1: Draft for Child A1 (must be excluded from export)
 -- Ass 2: Verified for Child A1 (must be included)
 -- Ass 3: Pending review for Child A2 (archived child assessment, must be included)
 -- Ass 4: Verified for Child B1 (foreign family, must be isolated)
 insert into public.assessments (id, family_id, child_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, status, learning_catalog_version, created_by_user_id) values
   ('ea100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'A1 Draft Math', 'quiz', 'normal', 7, 10, 'draft', 'pilot-v0.1', '11000000-0000-0000-0000-000000000001'::uuid),
-  ('ea200000-0000-0000-0000-000000000002'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'A1 Verified Math', 'quiz', 'normal', 9, 10, 'verified', 'pilot-v0.1', '11000000-0000-0000-0000-000000000001'::uuid),
-  ('ea300000-0000-0000-0000-000000000003'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca200000-0000-0000-0000-000000000002'::uuid, 'english', 'English', 'A2 Pending English', 'quiz', 'normal', 8, 10, 'pending_review', 'pilot-v0.1', '11000000-0000-0000-0000-000000000001'::uuid),
-  ('eb100000-0000-0000-0000-000000000001'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'B1 Verified Math', 'quiz', 'normal', 10, 10, 'verified', 'pilot-v0.1', '11000000-0000-0000-0000-000000000003'::uuid)
+  ('ea200000-0000-0000-0000-000000000002'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'A1 Verified Math', 'quiz', 'normal', 9, 10, 'draft', 'pilot-v0.1', '11000000-0000-0000-0000-000000000001'::uuid),
+  ('ea300000-0000-0000-0000-000000000003'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca200000-0000-0000-0000-000000000002'::uuid, 'english', 'English', 'A2 Pending English', 'quiz', 'normal', 8, 10, 'draft', 'pilot-v0.1', '11000000-0000-0000-0000-000000000001'::uuid),
+  ('eb100000-0000-0000-0000-000000000001'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'B1 Verified Math', 'quiz', 'normal', 10, 10, 'draft', 'pilot-v0.1', '11000000-0000-0000-0000-000000000003'::uuid)
 on conflict (id) do nothing;
 
--- Assessment Evidence (metadata only, no raw bytes)
+-- Assessment Evidence (metadata only, no raw bytes) attached while assessments are in draft status
 insert into public.assessment_evidence (id, family_id, assessment_id, storage_path, media_type, file_size_bytes, uploaded_by_user_id) values
   ('0e100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ea200000-0000-0000-0000-000000000002'::uuid, 'fa000000-0000-0000-0000-000000000001/ca100000-0000-0000-0000-000000000001/ea200000-0000-0000-0000-000000000002/ev1.jpg', 'image/jpeg', 2048, '11000000-0000-0000-0000-000000000001'::uuid),
   ('0e200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'eb100000-0000-0000-0000-000000000001'::uuid, 'fb000000-0000-0000-0000-000000000001/cb100000-0000-0000-0000-000000000001/eb100000-0000-0000-0000-000000000001/ev2.jpg', 'image/jpeg', 4096, '11000000-0000-0000-0000-000000000003'::uuid)
 on conflict (id) do nothing;
+
+-- Advance assessments to their target statuses
+update public.assessments
+set status = 'verified'
+where id in (
+  'ea200000-0000-0000-0000-000000000002'::uuid,
+  'eb100000-0000-0000-0000-000000000001'::uuid
+);
+
+update public.assessments
+set status = 'pending_review'
+where id = 'ea300000-0000-0000-0000-000000000003'::uuid;
 
 -- Command receipts & review events for verified assessments
 insert into public.command_receipts (command_id, family_id, actor_user_id, operation, resource_id) values
@@ -118,7 +131,7 @@ on conflict (id) do nothing;
 
 -- Reward Redemptions
 insert into public.reward_redemptions (id, family_id, child_id, reward_id, origin, rp_cost_minor, status, reward_snapshot, created_at) values
-  ('ab100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'aa100000-0000-0000-0000-000000000001'::uuid, 'store', 1000, 'fulfilled', '{"title": "Family A Book"}'::jsonb, now() - interval '3 days'),
+  ('ab100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'aa100000-0000-0000-0000-000000000001'::uuid, 'wheel', 1000, 'fulfilled', '{"title": "Family A Book"}'::jsonb, now() - interval '3 days'),
   ('ab200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 'aa200000-0000-0000-0000-000000000002'::uuid, 'store', 1500, 'fulfilled', '{"title": "Family B Toy"}'::jsonb, now() - interval '2 days')
 on conflict (id) do nothing;
 
