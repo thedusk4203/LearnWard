@@ -37,18 +37,13 @@ begin
     raise exception 'Child ID is required' using errcode = '22000';
   end if;
 
-  -- 2. Derive authoritative family_id from DB
+  -- 2. Derive authoritative family_id and verify caller is an active adult in the child's family
   select family_id into v_family_id
   from public.child_profiles
   where id = p_child_id;
 
-  if not found then
-    raise exception 'Child profile not found' using errcode = 'P0002';
-  end if;
-
-  -- 3. Authorization check: Active adult in child family ONLY
-  if not private.is_active_family_adult(v_family_id) then
-    raise exception 'Permission denied: unauthorized to archive child profile' using errcode = '42501';
+  if not found or not private.is_active_family_adult(v_family_id) then
+    raise exception 'Unauthorized to archive child profile' using errcode = '42501';
   end if;
 
   -- 4. Order 1: Child Profile Row Lock FOR UPDATE (exclusive serialization)
@@ -2570,9 +2565,15 @@ set search_path = ''
 as $$
 declare
   v_user_id uuid;
+  v_child_row record;
+  v_active_child_ids uuid[] := '{}';
   v_event record;
   v_processed_count integer := 0;
 begin
+  if p_family_id is null then
+    raise exception 'Family ID is required' using errcode = '22000';
+  end if;
+
   v_user_id := auth.uid();
   if v_user_id is null then
     raise exception 'Authentication required' using errcode = '42501';
@@ -2582,12 +2583,28 @@ begin
     raise exception 'Permission denied: must be active family adult' using errcode = '42501';
   end if;
 
+  -- Order 1: Deterministic Child Profile Row Locks FOR SHARE
+  -- Prelock all candidate active child profiles for this family in deterministic order (id asc)
+  for v_child_row in
+    select id
+    from public.child_profiles
+    where family_id = p_family_id
+      and status = 'active'
+    order by id asc
+    for share
+  loop
+    v_active_child_ids := array_append(v_active_child_ids, v_child_row.id);
+  end loop;
+
+  if cardinality(v_active_child_ids) = 0 then
+    return 0;
+  end if;
+
   for v_event in
     select vle.id
     from public.verified_learning_events vle
-    join public.child_profiles cp on cp.id = vle.child_id and cp.family_id = vle.family_id
     where vle.family_id = p_family_id
-      and cp.status = 'active'
+      and vle.child_id = any(v_active_child_ids)
       and not exists (
         select 1
         from public.growth_events ge
@@ -2595,8 +2612,17 @@ begin
       )
     order by vle.occurred_at asc, vle.verified_at asc
   loop
-    perform public.process_verified_learning_event(v_event.id, null);
-    v_processed_count := v_processed_count + 1;
+    -- Recheck child status (Order 1 lock already held for share)
+    if exists (
+      select 1
+      from public.child_profiles
+      where id = (select child_id from public.verified_learning_events where id = v_event.id)
+        and family_id = p_family_id
+        and status = 'active'
+    ) then
+      perform public.process_verified_learning_event(v_event.id, null);
+      v_processed_count := v_processed_count + 1;
+    end if;
   end loop;
 
   return v_processed_count;
@@ -2769,6 +2795,8 @@ set search_path = ''
 as $$
 declare
   v_user_id uuid;
+  v_child_row record;
+  v_active_child_ids uuid[] := '{}';
   v_vle record;
   v_count integer := 0;
 begin
@@ -2785,25 +2813,55 @@ begin
     raise exception 'Permission denied: active family adult authorization required' using errcode = '42501';
   end if;
 
+  -- Order 1: Deterministic Child Profile Row Locks FOR SHARE
+  -- Prelock all candidate active child profiles for this family in deterministic order (id asc)
+  for v_child_row in
+    select id
+    from public.child_profiles
+    where family_id = p_family_id
+      and status = 'active'
+    order by id asc
+    for share
+  loop
+    v_active_child_ids := array_append(v_active_child_ids, v_child_row.id);
+  end loop;
+
+  if cardinality(v_active_child_ids) = 0 then
+    return jsonb_build_object(
+      'family_id', p_family_id,
+      'processed_count', 0
+    );
+  end if;
+
   for v_vle in
-    select vle.id
+    select vle.id, vle.child_id
     from public.verified_learning_events vle
-    join public.child_profiles cp on cp.id = vle.child_id and cp.family_id = vle.family_id
     where vle.family_id = p_family_id
-      and cp.status = 'active'
+      and vle.child_id = any(v_active_child_ids)
       and not exists (
         select 1 from public.learning_processing_events lpe
         where lpe.verified_learning_event_id = vle.id
       )
     order by vle.occurred_at asc, vle.id asc
   loop
+    -- Order 4: Advisory serialization lock per VLE
     perform pg_advisory_xact_lock(hashtext('vle_' || v_vle.id::text));
 
-    if not exists (
-      select 1 from public.learning_processing_events where verified_learning_event_id = v_vle.id
+    -- Recheck child lifecycle status (Order 1 lock already held for share)
+    if exists (
+      select 1
+      from public.child_profiles
+      where id = v_vle.child_id
+        and family_id = p_family_id
+        and status = 'active'
     ) then
-      perform private.execute_learning_event_processing(v_vle.id);
-      v_count := v_count + 1;
+      -- Recheck pending processing state after acquiring synchronization locks
+      if not exists (
+        select 1 from public.learning_processing_events where verified_learning_event_id = v_vle.id
+      ) then
+        perform private.execute_learning_event_processing(v_vle.id);
+        v_count := v_count + 1;
+      end if;
     end if;
   end loop;
 

@@ -4,7 +4,7 @@
 -- ===========================================================================
 
 begin;
-select plan(42);
+select plan(44);
 
 -- ---------------------------------------------------------------------------
 -- 1. FIXTURE SETUP
@@ -145,12 +145,30 @@ select set_config('request.jwt.claims', '{"sub": "10000000-0000-0000-0000-000000
 select throws_ok(
   $$ select public.archive_child_profile('a1000000-0000-0000-0000-000000000001'::uuid) $$,
   '42501',
-  'Permission denied: unauthorized to archive child profile',
+  'Unauthorized to archive child profile',
   'Foreign family adult cannot archive child profile'
 );
 
+-- Nonexistent child ID throws identical 42501 when called by Adult A (cannot determine child existence)
+select set_config('request.jwt.claims', '{"sub": "10000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.archive_child_profile('99999999-9999-9999-9999-999999999999'::uuid) $$,
+  '42501',
+  'Unauthorized to archive child profile',
+  'Adult A archiving nonexistent child ID fails with 42501 Unauthorized'
+);
+
+-- Nonexistent child ID throws identical 42501 when called by Foreign Adult B (cannot determine child existence)
+select set_config('request.jwt.claims', '{"sub": "10000000-0000-0000-0000-000000000004", "role": "authenticated"}', true);
+select throws_ok(
+  $$ select public.archive_child_profile('99999999-9999-9999-9999-999999999999'::uuid) $$,
+  '42501',
+  'Unauthorized to archive child profile',
+  'Foreign Adult B archiving nonexistent child ID fails with 42501 Unauthorized'
+);
+
 -- ---------------------------------------------------------------------------
--- 3. ARCHIVAL EXECUTION & ATOMIC TIER 1-3 AUDIT (Tests 5-11)
+-- 3. ARCHIVAL EXECUTION & ATOMIC TIER 1-3 AUDIT (Tests 7-13)
 -- ---------------------------------------------------------------------------
 
 -- Switch to Adult A
@@ -378,7 +396,7 @@ select is(
 );
 
 -- ---------------------------------------------------------------------------
--- 5. CATCH-UP EXCLUSION FOR ARCHIVED CHILDREN (Tests 33-34)
+-- 5. CATCH-UP EXCLUSION FOR ARCHIVED CHILDREN (Tests 35-36)
 -- ---------------------------------------------------------------------------
 
 select is(
@@ -394,7 +412,7 @@ select is(
 );
 
 -- ---------------------------------------------------------------------------
--- 6. ACTIVE SIBLING CHILD UNAFFECTED (Tests 35-42)
+-- 6. ACTIVE SIBLING CHILD UNAFFECTED (Tests 37-44)
 -- ---------------------------------------------------------------------------
 
 -- 6.1 update_assessment_draft on active sibling Child A2
