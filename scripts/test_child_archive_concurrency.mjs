@@ -745,20 +745,54 @@ async function main() {
     process.exit(1);
   }
 
-  // 4. Verify balance reconciliation passes for all 4 children
-  const reconFinalA = await runPsql(`set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.reconcile_child_balance('${T8_CHILD_A}'::uuid);`);
-  const reconFinalB = await runPsql(`set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.reconcile_child_balance('${T8_CHILD_B}'::uuid);`);
+  // 4. Verify balance reconciliation RPC behavior:
+  // - Active children C and D must successfully reconcile via RPC
   const reconFinalC = await runPsql(`set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.reconcile_child_balance('${T8_CHILD_C}'::uuid);`);
   const reconFinalD = await runPsql(`set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.reconcile_child_balance('${T8_CHILD_D}'::uuid);`);
 
   const isReconciled = (out) => out.includes('true') || out.includes(',t,');
-  if (
-    !isReconciled(reconFinalA.stdout) ||
-    !isReconciled(reconFinalB.stdout) ||
-    !isReconciled(reconFinalC.stdout) ||
-    !isReconciled(reconFinalD.stdout)
-  ) {
-    console.error('FAIL: Balance ledger reconciliation failed after concurrent writers workload!');
+  if (!isReconciled(reconFinalC.stdout) || !isReconciled(reconFinalD.stdout)) {
+    console.error('FAIL: Balance ledger reconciliation failed for active children C or D!', {
+      reconC: reconFinalC.stdout,
+      reconD: reconFinalD.stdout,
+    });
+    process.exit(1);
+  }
+
+  // - Archived children A and B must fail closed with SQLSTATE 42501 via authenticated RPC
+  const reconFinalA = await runPsql(`set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.reconcile_child_balance('${T8_CHILD_A}'::uuid);`);
+  const reconFinalB = await runPsql(`set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.reconcile_child_balance('${T8_CHILD_B}'::uuid);`);
+
+  if (!reconFinalA.stderr.includes('Child profile is archived') || !reconFinalB.stderr.includes('Child profile is archived')) {
+    console.error('FAIL: Balance reconciliation RPC did not fail closed on archived children A or B!', {
+      reconA: reconFinalA.stderr,
+      reconB: reconFinalB.stderr,
+    });
+    process.exit(1);
+  }
+
+  // 5. Verify direct database ledger consistency across all 4 children (A, B, C, D)
+  const ledgerAudit = await runPsql(`
+    select
+      bool_and(coalesce(cb.xp_total, 0) = coalesce(xl.xp_sum, 0) and coalesce(cb.rp_balance_minor, 0) = coalesce(rl.rp_sum, 0)) as all_reconciled,
+      count(*)::int as audited_count
+    from public.child_balances cb
+    cross join lateral (
+      select coalesce(sum(amount), 0)::bigint as xp_sum
+      from public.xp_ledger
+      where child_id = cb.child_id
+    ) xl
+    cross join lateral (
+      select coalesce(sum(amount_minor), 0)::bigint as rp_sum
+      from public.rp_ledger
+      where child_id = cb.child_id
+    ) rl
+    where cb.child_id in ('${T8_CHILD_A}', '${T8_CHILD_B}', '${T8_CHILD_C}', '${T8_CHILD_D}');
+  `);
+
+  const isDirectReconciled = ledgerAudit.stdout.match(/t\s*\|\s*4/) || ledgerAudit.stdout.includes('true | 4');
+  if (!isDirectReconciled) {
+    console.error('FAIL: Direct ledger audit failed! Balances and ledgers do not match for all 4 children:', ledgerAudit.stdout);
     process.exit(1);
   }
 
