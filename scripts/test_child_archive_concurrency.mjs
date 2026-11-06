@@ -450,12 +450,17 @@ async function main() {
   const T8_CHILD_B = crypto.randomUUID(); // Archive target 2
   const T8_CHILD_C = crypto.randomUUID(); // Active sibling 1
   const T8_CHILD_D = crypto.randomUUID(); // Active sibling 2
+  const T8_DEVICE_A = crypto.randomUUID();
+  const T8_DEVICE_B = crypto.randomUUID();
   const T8_GRANT_A = crypto.randomUUID();
   const T8_GRANT_B = crypto.randomUUID();
 
   // Setup Test 8 fixture with sufficient balances and items
   let t8SetupSql = `
-    insert into auth.users (id, email) values ('${T8_OWNER_ID}', 'owner_${T8_OWNER_ID}@example.com')
+    insert into auth.users (id, email) values
+      ('${T8_OWNER_ID}', 'owner_${T8_OWNER_ID}@example.com'),
+      ('${T8_DEVICE_A}', 'device_a_${T8_DEVICE_A}@example.com'),
+      ('${T8_DEVICE_B}', 'device_b_${T8_DEVICE_B}@example.com')
     on conflict (id) do nothing;
 
     insert into public.families (id, name, timezone, locale, created_by_user_id)
@@ -476,8 +481,8 @@ async function main() {
 
     insert into public.child_device_grants (id, family_id, child_id, auth_user_id, paired_by_user_id, status)
     values
-      ('${T8_GRANT_A}', '${T8_FAMILY_ID}', '${T8_CHILD_A}', '${T8_OWNER_ID}', '${T8_OWNER_ID}', 'active'),
-      ('${T8_GRANT_B}', '${T8_FAMILY_ID}', '${T8_CHILD_B}', '${T8_OWNER_ID}', '${T8_OWNER_ID}', 'active')
+      ('${T8_GRANT_A}', '${T8_FAMILY_ID}', '${T8_CHILD_A}', '${T8_DEVICE_A}', '${T8_OWNER_ID}', 'active'),
+      ('${T8_GRANT_B}', '${T8_FAMILY_ID}', '${T8_CHILD_B}', '${T8_DEVICE_B}', '${T8_OWNER_ID}', 'active')
     on conflict (id) do nothing;
 
     insert into public.child_balances (family_id, child_id, xp_total, rp_balance_minor)
@@ -759,7 +764,7 @@ async function main() {
   console.log('Cleaning up test fixtures...');
   await runPsql(`
     delete from public.families where id in ('${FAMILY_ID}', '${T8_FAMILY_ID}');
-    delete from auth.users where id in ('${OWNER_ID}', '${T8_OWNER_ID}');
+    delete from auth.users where id in ('${OWNER_ID}', '${T8_OWNER_ID}', '${T8_DEVICE_A}', '${T8_DEVICE_B}');
   `);
 
   console.log('=== All Concurrency & Lifecycle Tests PASSED Successfully ===\n');
