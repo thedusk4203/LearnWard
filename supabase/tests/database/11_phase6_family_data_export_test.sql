@@ -41,8 +41,8 @@ on conflict (id) do nothing;
 -- Family Memberships
 insert into public.family_memberships (family_id, auth_user_id, role, status) values
   ('fa000000-0000-0000-0000-000000000001'::uuid, '11000000-0000-0000-0000-000000000001'::uuid, 'owner', 'active'),
-  ('fa000000-0000-0000-0000-000000000004'::uuid, '11000000-0000-0000-0000-000000000004'::uuid, 'parent', 'active'),
-  ('fa000000-0000-0000-0000-000000000005'::uuid, '11000000-0000-0000-0000-000000000005'::uuid, 'parent', 'revoked'),
+  ('fa000000-0000-0000-0000-000000000001'::uuid, '11000000-0000-0000-0000-000000000004'::uuid, 'parent', 'active'),
+  ('fa000000-0000-0000-0000-000000000001'::uuid, '11000000-0000-0000-0000-000000000005'::uuid, 'parent', 'revoked'),
   ('fb000000-0000-0000-0000-000000000001'::uuid, '11000000-0000-0000-0000-000000000003'::uuid, 'owner', 'active'),
   ('fc000000-0000-0000-0000-000000000001'::uuid, '11000000-0000-0000-0000-000000000006'::uuid, 'owner', 'active')
 on conflict (family_id, auth_user_id) do nothing;
