@@ -47,7 +47,7 @@ on conflict (id) do nothing;
 
 -- Paired device grant for Child A1
 insert into public.child_device_grants (id, family_id, child_id, auth_user_id, paired_by_user_id, status) values
-  ('ga100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, '11000000-0000-0000-0000-000000000002'::uuid, '11000000-0000-0000-0000-000000000001'::uuid, 'active')
+  ('0a100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, '11000000-0000-0000-0000-000000000002'::uuid, '11000000-0000-0000-0000-000000000001'::uuid, 'active')
 on conflict (id) do nothing;
 
 -- Child Balances
@@ -71,8 +71,8 @@ on conflict (id) do nothing;
 
 -- Assessment Evidence (metadata only, no raw bytes)
 insert into public.assessment_evidence (id, family_id, assessment_id, storage_path, media_type, file_size_bytes, uploaded_by_user_id) values
-  ('ev100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ea200000-0000-0000-0000-000000000002'::uuid, 'fa000000-0000-0000-0000-000000000001/ca100000-0000-0000-0000-000000000001/ea200000-0000-0000-0000-000000000002/ev1.jpg', 'image/jpeg', 2048, '11000000-0000-0000-0000-000000000001'::uuid),
-  ('ev200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'eb100000-0000-0000-0000-000000000001'::uuid, 'fb000000-0000-0000-0000-000000000001/cb100000-0000-0000-0000-000000000001/eb100000-0000-0000-0000-000000000001/ev2.jpg', 'image/jpeg', 4096, '11000000-0000-0000-0000-000000000003'::uuid)
+  ('0e100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ea200000-0000-0000-0000-000000000002'::uuid, 'fa000000-0000-0000-0000-000000000001/ca100000-0000-0000-0000-000000000001/ea200000-0000-0000-0000-000000000002/ev1.jpg', 'image/jpeg', 2048, '11000000-0000-0000-0000-000000000001'::uuid),
+  ('0e200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'eb100000-0000-0000-0000-000000000001'::uuid, 'fb000000-0000-0000-0000-000000000001/cb100000-0000-0000-0000-000000000001/eb100000-0000-0000-0000-000000000001/ev2.jpg', 'image/jpeg', 4096, '11000000-0000-0000-0000-000000000003'::uuid)
 on conflict (id) do nothing;
 
 -- Command receipts & review events for verified assessments
@@ -88,43 +88,43 @@ on conflict (id) do nothing;
 
 -- Verified Learning Events
 insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, evidence_count, entry_context, occurred_at, verified_at, verified_by_user_id, review_event_id, learning_catalog_version, grade_level_snapshot) values
-  ('va100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'ea200000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'A1 Verified Math', 'quiz', 'normal', 9, 10, 9.00, 1, 'adult', now() - interval '2 days', now() - interval '2 days', '11000000-0000-0000-0000-000000000001'::uuid, '71000000-0000-0000-0000-000000000001'::uuid, 'pilot-v0.1', 4),
-  ('vb100000-0000-0000-0000-000000000001'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 'eb100000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'B1 Verified Math', 'quiz', 'normal', 10, 10, 10.00, 1, 'adult', now() - interval '1 day', now() - interval '1 day', '11000000-0000-0000-0000-000000000003'::uuid, '71000000-0000-0000-0000-000000000002'::uuid, 'pilot-v0.1', 5)
+  ('ba100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'ea200000-0000-0000-0000-000000000002'::uuid, 'math', 'Math', 'A1 Verified Math', 'quiz', 'normal', 9, 10, 9.00, 1, 'adult', now() - interval '2 days', now() - interval '2 days', '11000000-0000-0000-0000-000000000001'::uuid, '71000000-0000-0000-0000-000000000001'::uuid, 'pilot-v0.1', 4),
+  ('bb100000-0000-0000-0000-000000000001'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 'eb100000-0000-0000-0000-000000000001'::uuid, 'math', 'Math', 'B1 Verified Math', 'quiz', 'normal', 10, 10, 10.00, 1, 'adult', now() - interval '1 day', now() - interval '1 day', '11000000-0000-0000-0000-000000000003'::uuid, '71000000-0000-0000-0000-000000000002'::uuid, 'pilot-v0.1', 5)
 on conflict (id) do nothing;
 
 -- Growth Events
 insert into public.growth_events (id, family_id, child_id, verified_learning_event_id, assessment_id, engine_version, normalized_score, baseline_score, baseline_sample_count, growth_delta, historical_best, score_rp_minor, total_rp_minor, xp_awarded, inputs_snapshot, created_at) values
-  ('gr100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'va100000-0000-0000-0000-000000000001'::uuid, 'ea200000-0000-0000-0000-000000000002'::uuid, 'growth-v0.1', 9.00, 8.00, 1, 1.00, 9.00, 900, 1200, 34, '{}'::jsonb, now() - interval '2 days'),
-  ('gr200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 'vb100000-0000-0000-0000-000000000001'::uuid, 'eb100000-0000-0000-0000-000000000001'::uuid, 'growth-v0.1', 10.00, 9.00, 1, 1.00, 10.00, 1000, 1500, 40, '{}'::jsonb, now() - interval '1 day')
+  ('cc100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'ba100000-0000-0000-0000-000000000001'::uuid, 'ea200000-0000-0000-0000-000000000002'::uuid, 'growth-v0.1', 9.00, 8.00, 1, 1.00, 9.00, 900, 1200, 34, '{}'::jsonb, now() - interval '2 days'),
+  ('cc200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 'bb100000-0000-0000-0000-000000000001'::uuid, 'eb100000-0000-0000-0000-000000000001'::uuid, 'growth-v0.1', 10.00, 9.00, 1, 1.00, 10.00, 1000, 1500, 40, '{}'::jsonb, now() - interval '1 day')
 on conflict (id) do nothing;
 
 -- XP Ledger
 insert into public.xp_ledger (id, family_id, child_id, amount, reason_code, source_type, idempotency_key, created_at) values
-  ('x1000000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 34, 'growth_award', 'growth_event', 'xp:gr1', now() - interval '2 days'),
-  ('x2000000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 40, 'growth_award', 'growth_event', 'xp:gr2', now() - interval '1 day')
+  ('dd100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 34, 'growth_award', 'growth_event', 'xp:gr1', now() - interval '2 days'),
+  ('dd200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 40, 'growth_award', 'growth_event', 'xp:gr2', now() - interval '1 day')
 on conflict (idempotency_key) do nothing;
 
 -- RP Ledger
 insert into public.rp_ledger (id, family_id, child_id, amount_minor, reason_code, source_type, idempotency_key, created_at) values
-  ('r1000000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 1200, 'growth_award', 'growth_event', 'rp:gr1', now() - interval '2 days'),
-  ('r2000000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 1500, 'growth_award', 'growth_event', 'rp:gr2', now() - interval '1 day')
+  ('ee100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 1200, 'growth_award', 'growth_event', 'rp:gr1', now() - interval '2 days'),
+  ('ee200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 1500, 'growth_award', 'growth_event', 'rp:gr2', now() - interval '1 day')
 on conflict (idempotency_key) do nothing;
 
 -- Rewards
 insert into public.rewards (id, family_id, title, description, icon_key, category, store_cost_minor, store_enabled, wheel_enabled, wheel_tier, is_active) values
-  ('rw100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'Family A Book', 'Desc', 'book', 'treat', 1000, true, true, 'common', true),
-  ('rw200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'Family B Toy', 'Desc', 'toy', 'treat', 1500, true, true, 'common', true)
+  ('aa100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'Family A Book', 'Desc', 'book', 'treat', 1000, true, true, 'common', true),
+  ('aa200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'Family B Toy', 'Desc', 'toy', 'treat', 1500, true, true, 'common', true)
 on conflict (id) do nothing;
 
 -- Reward Redemptions
 insert into public.reward_redemptions (id, family_id, child_id, reward_id, origin, rp_cost_minor, status, reward_snapshot, created_at) values
-  ('rd100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'rw100000-0000-0000-0000-000000000001'::uuid, 'store', 1000, 'fulfilled', '{"title": "Family A Book"}'::jsonb, now() - interval '3 days'),
-  ('rd200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 'rw200000-0000-0000-0000-000000000002'::uuid, 'store', 1500, 'fulfilled', '{"title": "Family B Toy"}'::jsonb, now() - interval '2 days')
+  ('ab100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'aa100000-0000-0000-0000-000000000001'::uuid, 'store', 1000, 'fulfilled', '{"title": "Family A Book"}'::jsonb, now() - interval '3 days'),
+  ('ab200000-0000-0000-0000-000000000002'::uuid, 'fb000000-0000-0000-0000-000000000001'::uuid, 'cb100000-0000-0000-0000-000000000001'::uuid, 'aa200000-0000-0000-0000-000000000002'::uuid, 'store', 1500, 'fulfilled', '{"title": "Family B Toy"}'::jsonb, now() - interval '2 days')
 on conflict (id) do nothing;
 
 -- Wheel Spins
 insert into public.wheel_spins (id, family_id, child_id, reward_id, redemption_id, origin, spin_cost_minor, selection_snapshot, created_at) values
-  ('ws100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'rw100000-0000-0000-0000-000000000001'::uuid, 'rd100000-0000-0000-0000-000000000001'::uuid, 'wheel', 1000, '{"winning_tier": "common"}'::jsonb, now() - interval '3 days')
+  ('ac100000-0000-0000-0000-000000000001'::uuid, 'fa000000-0000-0000-0000-000000000001'::uuid, 'ca100000-0000-0000-0000-000000000001'::uuid, 'aa100000-0000-0000-0000-000000000001'::uuid, 'ab100000-0000-0000-0000-000000000001'::uuid, 'wheel', 1000, '{"winning_tier": "common"}'::jsonb, now() - interval '3 days')
 on conflict (id) do nothing;
 
 
@@ -311,7 +311,7 @@ select is(
   (
     select count(*)
     from jsonb_array_elements(public.export_family_data_json('fa000000-0000-0000-0000-000000000001'::uuid) -> 'xp_ledger') as x
-    where x ->> 'id' = 'x2000000-0000-0000-0000-000000000002'
+    where x ->> 'id' = 'dd200000-0000-0000-0000-000000000002'
   ),
   0::bigint,
   'Foreign XP ledger row is completely excluded from Family A xp_ledger array'
@@ -365,7 +365,7 @@ select is(
   (
     select e ->> 'storage_path'
     from jsonb_array_elements(public.export_family_data_json('fa000000-0000-0000-0000-000000000001'::uuid) -> 'assessment_evidence') as e
-    where e ->> 'id' = 'ev100000-0000-0000-0000-000000000001'
+    where e ->> 'id' = '0e100000-0000-0000-0000-000000000001'
   ),
   'fa000000-0000-0000-0000-000000000001/ca100000-0000-0000-0000-000000000001/ea200000-0000-0000-0000-000000000002/ev1.jpg',
   'assessment_evidence exports relative storage_path'
@@ -376,7 +376,7 @@ select ok(
   (
     select (e ? 'data') = false and (e ? 'bytes') = false and (e ? 'image_bytes') = false
     from jsonb_array_elements(public.export_family_data_json('fa000000-0000-0000-0000-000000000001'::uuid) -> 'assessment_evidence') as e
-    where e ->> 'id' = 'ev100000-0000-0000-0000-000000000001'
+    where e ->> 'id' = '0e100000-0000-0000-0000-000000000001'
   ),
   'assessment_evidence adheres to data minimization: zero raw image bytes exported'
 );
@@ -391,7 +391,7 @@ select is(
   (
     select count(*)
     from jsonb_array_elements(public.export_family_data_json('fa000000-0000-0000-0000-000000000001'::uuid) -> 'verified_learning_events') as v
-    where v ->> 'id' = 'va100000-0000-0000-0000-000000000001'
+    where v ->> 'id' = 'ba100000-0000-0000-0000-000000000001'
   ),
   1::bigint,
   'verified_learning_events exports Family A VLE'
@@ -402,7 +402,7 @@ select is(
   (
     select count(*)
     from jsonb_array_elements(public.export_family_data_json('fa000000-0000-0000-0000-000000000001'::uuid) -> 'growth_events') as g
-    where g ->> 'id' = 'gr100000-0000-0000-0000-000000000001'
+    where g ->> 'id' = 'cc100000-0000-0000-0000-000000000001'
   ),
   1::bigint,
   'growth_events exports Family A growth event'
@@ -413,7 +413,7 @@ select is(
   (
     select count(*)
     from jsonb_array_elements(public.export_family_data_json('fa000000-0000-0000-0000-000000000001'::uuid) -> 'xp_ledger') as x
-    where x ->> 'id' = 'x1000000-0000-0000-0000-000000000001'
+    where x ->> 'id' = 'dd100000-0000-0000-0000-000000000001'
   ),
   1::bigint,
   'xp_ledger exports Family A XP record'
@@ -424,7 +424,7 @@ select is(
   (
     select count(*)
     from jsonb_array_elements(public.export_family_data_json('fa000000-0000-0000-0000-000000000001'::uuid) -> 'rp_ledger') as r
-    where r ->> 'id' = 'r1000000-0000-0000-0000-000000000001'
+    where r ->> 'id' = 'ee100000-0000-0000-0000-000000000001'
   ),
   1::bigint,
   'rp_ledger exports Family A RP record'
@@ -435,7 +435,7 @@ select is(
   (
     select count(*)
     from jsonb_array_elements(public.export_family_data_json('fa000000-0000-0000-0000-000000000001'::uuid) -> 'reward_redemptions') as rd
-    where rd ->> 'id' = 'rd100000-0000-0000-0000-000000000001'
+    where rd ->> 'id' = 'ab100000-0000-0000-0000-000000000001'
   ),
   1::bigint,
   'reward_redemptions exports Family A redemption'
@@ -446,7 +446,7 @@ select is(
   (
     select count(*)
     from jsonb_array_elements(public.export_family_data_json('fa000000-0000-0000-0000-000000000001'::uuid) -> 'wheel_spins') as ws
-    where ws ->> 'id' = 'ws100000-0000-0000-0000-000000000001'
+    where ws ->> 'id' = 'ac100000-0000-0000-0000-000000000001'
   ),
   1::bigint,
   'wheel_spins exports Family A wheel spin'
