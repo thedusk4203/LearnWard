@@ -24,6 +24,7 @@
 create or replace function public.export_family_data_json(p_family_id uuid)
 returns jsonb
 language plpgsql
+stable
 security definer
 set search_path = ''
 as $$
@@ -47,6 +48,7 @@ begin
   end if;
 
   -- 3. Construct structured export payload using strictly verified columns
+  -- Secondary ordering by primary key guarantees deterministic array stability on timestamp ties
   select jsonb_build_object(
     'export_version', 1,
     'exported_at', now(),
@@ -72,7 +74,7 @@ begin
         'status', status,
         'created_at', created_at,
         'archived_at', archived_at
-      ) order by created_at)
+      ) order by created_at, id)
       from public.child_profiles
       where family_id = p_family_id
     ), '[]'::jsonb),
@@ -103,7 +105,7 @@ begin
         'occurred_at', occurred_at,
         'version', version,
         'created_at', created_at
-      ) order by occurred_at)
+      ) order by occurred_at, id)
       from public.assessments
       where family_id = p_family_id and status != 'draft'
     ), '[]'::jsonb),
@@ -115,7 +117,7 @@ begin
         'media_type', media_type,
         'file_size_bytes', file_size_bytes,
         'created_at', created_at
-      ) order by created_at)
+      ) order by created_at, id)
       from public.assessment_evidence
       where family_id = p_family_id
     ), '[]'::jsonb),
@@ -136,7 +138,7 @@ begin
         'entry_context', entry_context,
         'occurred_at', occurred_at,
         'verified_at', verified_at
-      ) order by occurred_at)
+      ) order by occurred_at, id)
       from public.verified_learning_events
       where family_id = p_family_id
     ), '[]'::jsonb),
@@ -168,7 +170,7 @@ begin
         'total_rp_minor', total_rp_minor,
         'xp_awarded', xp_awarded,
         'created_at', created_at
-      ) order by created_at)
+      ) order by created_at, id)
       from public.growth_events
       where family_id = p_family_id
     ), '[]'::jsonb),
@@ -181,7 +183,7 @@ begin
         'source_type', source_type,
         'source_id', source_id,
         'created_at', created_at
-      ) order by created_at)
+      ) order by created_at, id)
       from public.xp_ledger
       where family_id = p_family_id
     ), '[]'::jsonb),
@@ -194,7 +196,7 @@ begin
         'source_type', source_type,
         'source_id', source_id,
         'created_at', created_at
-      ) order by created_at)
+      ) order by created_at, id)
       from public.rp_ledger
       where family_id = p_family_id
     ), '[]'::jsonb),
@@ -210,7 +212,7 @@ begin
         'cancellation_reason', cancellation_reason,
         'fulfilled_at', fulfilled_at,
         'created_at', created_at
-      ) order by created_at)
+      ) order by created_at, id)
       from public.reward_redemptions
       where family_id = p_family_id
     ), '[]'::jsonb),
@@ -224,7 +226,7 @@ begin
         'spin_cost_minor', spin_cost_minor,
         'selection_snapshot', selection_snapshot,
         'created_at', created_at
-      ) order by created_at)
+      ) order by created_at, id)
       from public.wheel_spins
       where family_id = p_family_id
     ), '[]'::jsonb)
