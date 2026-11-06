@@ -305,11 +305,14 @@ select lives_ok(
 );
 
 -- Test 19: Child A2 paired device grant is transitioned to revoked by archival RPC
+reset role;
 select is(
   (select status from public.child_device_grants where id = '0a200000-0000-0000-0000-000000000002'::uuid),
   'revoked',
   'Child A2 device grant revoked by authoritative archive_child_profile'
 );
+set role authenticated;
+select set_config('request.jwt.claims', '{"sub": "11000000-0000-0000-0000-000000000001", "role": "authenticated"}', true);
 
 
 -- ---------------------------------------------------------------------------
