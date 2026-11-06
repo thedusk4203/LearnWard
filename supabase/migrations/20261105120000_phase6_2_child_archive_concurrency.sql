@@ -2797,6 +2797,8 @@ declare
   v_user_id uuid;
   v_child_row record;
   v_active_child_ids uuid[] := '{}';
+  v_candidate_vle_ids uuid[] := '{}';
+  v_lock_rec record;
   v_vle record;
   v_count integer := 0;
 begin
@@ -2833,20 +2835,44 @@ begin
     );
   end if;
 
+  -- Select candidate unprocessed VLEs for active children
+  select coalesce(array_agg(vle.id order by vle.id asc), '{}')
+  into v_candidate_vle_ids
+  from public.verified_learning_events vle
+  where vle.family_id = p_family_id
+    and vle.child_id = any(v_active_child_ids)
+    and not exists (
+      select 1 from public.learning_processing_events lpe
+      where lpe.verified_learning_event_id = vle.id
+    );
+
+  if cardinality(v_candidate_vle_ids) = 0 then
+    return jsonb_build_object(
+      'family_id', p_family_id,
+      'processed_count', 0
+    );
+  end if;
+
+  -- Order 4: Advisory serialization locks across all candidate VLEs
+  -- Prelock all candidate VLE advisory locks in strictly ascending lock key order
+  -- BEFORE executing any processing. This maintains the monotonic lock hierarchy
+  -- (Order 4: vle_ -> child_node_) and prevents deadlock with concurrent single-event
+  -- processors that acquire vle_ before child_node_.
+  for v_lock_rec in
+    select distinct hashtext('vle_' || cid::text) as k
+    from unnest(v_candidate_vle_ids) as cid
+    order by k asc
+  loop
+    perform pg_advisory_xact_lock(v_lock_rec.k);
+  end loop;
+
+  -- Process candidate VLEs in canonical chronological order
   for v_vle in
     select vle.id, vle.child_id
     from public.verified_learning_events vle
-    where vle.family_id = p_family_id
-      and vle.child_id = any(v_active_child_ids)
-      and not exists (
-        select 1 from public.learning_processing_events lpe
-        where lpe.verified_learning_event_id = vle.id
-      )
+    where vle.id = any(v_candidate_vle_ids)
     order by vle.child_id asc, vle.occurred_at asc, vle.id asc
   loop
-    -- Order 4: Advisory serialization lock per VLE
-    perform pg_advisory_xact_lock(hashtext('vle_' || v_vle.id::text));
-
     -- Recheck child lifecycle status (Order 1 lock already held for share)
     if exists (
       select 1
