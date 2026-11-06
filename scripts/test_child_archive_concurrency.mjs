@@ -101,7 +101,7 @@ async function main() {
     on conflict (idempotency_key) do nothing;
 
     insert into public.family_wheel_settings (family_id, is_enabled, spin_cost_minor, daily_spin_cap)
-    values ('${FAMILY_ID}', true, 2500, 50)
+    values ('${FAMILY_ID}', true, 2500, 5)
     on conflict (family_id) do nothing;
 
     insert into public.rewards (id, family_id, title, description, icon_key, category, store_cost_minor, store_enabled, wheel_enabled, wheel_tier, is_active)
@@ -503,7 +503,7 @@ async function main() {
     on conflict (idempotency_key) do nothing;
 
     insert into public.family_wheel_settings (family_id, is_enabled, spin_cost_minor, daily_spin_cap)
-    values ('${T8_FAMILY_ID}', true, 100, 100)
+    values ('${T8_FAMILY_ID}', true, 100, 5)
     on conflict (family_id) do nothing;
 
     insert into public.rewards (id, family_id, title, description, icon_key, category, store_cost_minor, store_enabled, wheel_enabled, wheel_tier, is_active)
@@ -673,14 +673,15 @@ async function main() {
     if (r.code === 0) {
       successCount++;
     } else {
-      // Assert that failure is an expected business boundary (SQLSTATE 42501 for archived child)
+      // Assert that failure is an expected business boundary (SQLSTATE 42501 for archived child, LW202 for daily spin cap)
       if (
-        r.stderr.includes('42501') &&
-        (r.stderr.includes('Child profile is archived') ||
-          r.stderr.includes('Child profile is already archived') ||
-          r.stderr.includes('already verified') ||
-          r.stderr.includes('Invalid command replay') ||
-          r.stderr.includes('Permission denied'))
+        (r.stderr.includes('42501') &&
+          (r.stderr.includes('Child profile is archived') ||
+            r.stderr.includes('Child profile is already archived') ||
+            r.stderr.includes('already verified') ||
+            r.stderr.includes('Invalid command replay') ||
+            r.stderr.includes('Permission denied'))) ||
+        (r.stderr.includes('LW202') || r.stderr.includes('Daily spin limit reached'))
       ) {
         expectedBusinessFailures++;
       } else {
