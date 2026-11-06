@@ -485,6 +485,9 @@ select is(
 select has_function('public', 'export_family_data_json', array['uuid'], 'export_family_data_json(uuid) exists');
 
 -- Test 33: Authenticated role has execute permission
-select has_function_privilege('authenticated', 'public.export_family_data_json(uuid)', 'execute', 'authenticated role has execute permission');
+select ok(
+  has_function_privilege('authenticated', 'public.export_family_data_json(uuid)', 'execute'),
+  'authenticated role has execute permission'
+);
 
 rollback;
