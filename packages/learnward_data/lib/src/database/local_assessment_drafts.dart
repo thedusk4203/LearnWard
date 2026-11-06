@@ -40,6 +40,27 @@ class LocalAssessmentDrafts extends Table {
 
   DateTimeColumn get updatedAt => dateTime()();
 
+  // Phase 6.1 Additions (v5):
+  TextColumn get serverEvidenceId => text().nullable()();
+
+  TextColumn get sha256Checksum => text().nullable()();
+
+  TextColumn get localCompressedPhotoPath => text().nullable()();
+
+  TextColumn get submissionStatus =>
+      text().withDefault(const Constant('draft'))();
+
+  IntColumn get retryCount => integer().withDefault(const Constant(0))();
+
+  TextColumn get dispatchState =>
+      text().withDefault(const Constant('unknown_legacy'))();
+
+  TextColumn get lastErrorMessage => text().nullable()();
+
+  TextColumn get actorUserId => text().nullable()();
+
+  TextColumn get actorRole => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {localDraftId};
 }

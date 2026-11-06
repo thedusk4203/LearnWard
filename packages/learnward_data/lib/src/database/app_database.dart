@@ -11,7 +11,7 @@ part 'app_database.g.dart';
 /// LearnWard's local SQLite database.
 ///
 /// The server remains authoritative. This database is reserved for cached read
-/// models, drafts and the future offline command outbox.
+/// models, drafts and the offline command outbox.
 @DriftDatabase(
   tables: [LocalMetadataEntries, LocalAssessmentDrafts, PendingRewardCommands],
 )
@@ -20,7 +20,7 @@ class AppDatabase extends _$AppDatabase
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -45,6 +45,82 @@ class AppDatabase extends _$AppDatabase
       }
       if (from < 4) {
         await migrator.createTable(pendingRewardCommands);
+      }
+      if (from < 5) {
+        // v4 -> v5 migration: Additive schema upgrade for Phase 6 offline resilience
+        // 1. PendingRewardCommands additions
+        await migrator.addColumn(
+          pendingRewardCommands,
+          pendingRewardCommands.actorUserId,
+        );
+        await migrator.addColumn(
+          pendingRewardCommands,
+          pendingRewardCommands.actorRole,
+        );
+        await migrator.addColumn(
+          pendingRewardCommands,
+          pendingRewardCommands.schemaVersion,
+        );
+        await migrator.addColumn(
+          pendingRewardCommands,
+          pendingRewardCommands.recoveryState,
+        );
+        await migrator.addColumn(
+          pendingRewardCommands,
+          pendingRewardCommands.dispatchState,
+        );
+
+        // Quarantine all existing v4 pending commands as unknown_legacy with quarantined_unknown_outcome
+        await customStatement(
+          "UPDATE pending_reward_commands SET "
+          "recovery_state = 'quarantined_unknown_outcome', "
+          "dispatch_state = 'unknown_legacy' "
+          "WHERE actor_user_id IS NULL;",
+        );
+
+        // 2. LocalAssessmentDrafts additions
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.serverEvidenceId,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.sha256Checksum,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.localCompressedPhotoPath,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.submissionStatus,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.retryCount,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.dispatchState,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.lastErrorMessage,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.actorUserId,
+        );
+        await migrator.addColumn(
+          localAssessmentDrafts,
+          localAssessmentDrafts.actorRole,
+        );
+
+        // All migrated v4 drafts start with dispatch_state = 'unknown_legacy'
+        await customStatement(
+          "UPDATE local_assessment_drafts SET "
+          "dispatch_state = 'unknown_legacy';",
+        );
       }
     },
     beforeOpen: (details) async {
@@ -99,6 +175,15 @@ class AppDatabase extends _$AppDatabase
         entryContext: Value(draft.entryContext.value),
         occurredAt: draft.occurredAt,
         updatedAt: draft.updatedAt,
+        serverEvidenceId: Value(draft.serverEvidenceId),
+        sha256Checksum: Value(draft.sha256Checksum),
+        localCompressedPhotoPath: Value(draft.localCompressedPhotoPath),
+        submissionStatus: Value(draft.submissionStatus.wireValue),
+        retryCount: Value(draft.retryCount),
+        dispatchState: Value(draft.dispatchState.wireValue),
+        lastErrorMessage: Value(draft.lastErrorMessage),
+        actorUserId: Value(draft.actorUserId),
+        actorRole: Value(draft.actorRole),
       ),
     );
   }
@@ -164,6 +249,15 @@ class AppDatabase extends _$AppDatabase
       entryContext: ctx,
       occurredAt: row.occurredAt,
       updatedAt: row.updatedAt,
+      serverEvidenceId: row.serverEvidenceId,
+      sha256Checksum: row.sha256Checksum,
+      localCompressedPhotoPath: row.localCompressedPhotoPath,
+      submissionStatus: DraftSubmissionStatus.fromString(row.submissionStatus),
+      retryCount: row.retryCount,
+      dispatchState: CommandDispatchState.fromString(row.dispatchState),
+      lastErrorMessage: row.lastErrorMessage,
+      actorUserId: row.actorUserId,
+      actorRole: row.actorRole,
     );
   }
 
@@ -183,6 +277,11 @@ class AppDatabase extends _$AppDatabase
         redemptionId: Value(command.redemptionId),
         cancellationReason: Value(command.cancellationReason),
         createdAt: command.createdAt,
+        actorUserId: Value(command.actorUserId),
+        actorRole: Value(command.actorRole),
+        schemaVersion: Value(command.schemaVersion),
+        recoveryState: Value(command.recoveryState.wireValue),
+        dispatchState: Value(command.dispatchState.wireValue),
       ),
       mode: InsertMode.insertOrReplace,
     );
@@ -201,13 +300,15 @@ class AppDatabase extends _$AppDatabase
   Future<PendingRewardCommand?> findPendingSpinCommand({
     required String familyId,
     required String childId,
+    CommandRecoveryState recoveryState = CommandRecoveryState.active,
   }) async {
     final query = select(pendingRewardCommands)
       ..where(
         (entry) =>
             entry.operation.equals(RewardCommandOperation.spinWheel.wireValue) &
             entry.familyId.equals(familyId) &
-            entry.childId.equals(childId),
+            entry.childId.equals(childId) &
+            entry.recoveryState.equals(recoveryState.wireValue),
       )
       ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
       ..limit(1);
@@ -221,6 +322,7 @@ class AppDatabase extends _$AppDatabase
     required String familyId,
     required String childId,
     required String rewardId,
+    CommandRecoveryState recoveryState = CommandRecoveryState.active,
   }) async {
     final query = select(pendingRewardCommands)
       ..where(
@@ -230,7 +332,8 @@ class AppDatabase extends _$AppDatabase
             ) &
             entry.familyId.equals(familyId) &
             entry.childId.equals(childId) &
-            entry.rewardId.equals(rewardId),
+            entry.rewardId.equals(rewardId) &
+            entry.recoveryState.equals(recoveryState.wireValue),
       )
       ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
       ..limit(1);
@@ -243,12 +346,14 @@ class AppDatabase extends _$AppDatabase
   Future<PendingRewardCommand?> findPendingRedemptionCommand({
     required RewardCommandOperation operation,
     required String redemptionId,
+    CommandRecoveryState recoveryState = CommandRecoveryState.active,
   }) async {
     final query = select(pendingRewardCommands)
       ..where(
         (entry) =>
             entry.operation.equals(operation.wireValue) &
-            entry.redemptionId.equals(redemptionId),
+            entry.redemptionId.equals(redemptionId) &
+            entry.recoveryState.equals(recoveryState.wireValue),
       )
       ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
       ..limit(1);
@@ -261,6 +366,8 @@ class AppDatabase extends _$AppDatabase
   Future<List<PendingRewardCommand>> listPendingCommands({
     String? familyId,
     String? childId,
+    CommandRecoveryState? recoveryState,
+    CommandDispatchState? dispatchState,
   }) async {
     final query = select(pendingRewardCommands);
     if (familyId != null) {
@@ -268,6 +375,16 @@ class AppDatabase extends _$AppDatabase
     }
     if (childId != null) {
       query.where((entry) => entry.childId.equals(childId));
+    }
+    if (recoveryState != null) {
+      query.where(
+        (entry) => entry.recoveryState.equals(recoveryState.wireValue),
+      );
+    }
+    if (dispatchState != null) {
+      query.where(
+        (entry) => entry.dispatchState.equals(dispatchState.wireValue),
+      );
     }
     query.orderBy([(t) => OrderingTerm.desc(t.createdAt)]);
     final rows = await query.get();
@@ -292,6 +409,11 @@ class AppDatabase extends _$AppDatabase
       redemptionId: row.redemptionId,
       cancellationReason: row.cancellationReason,
       createdAt: row.createdAt,
+      actorUserId: row.actorUserId,
+      actorRole: row.actorRole,
+      schemaVersion: row.schemaVersion,
+      recoveryState: CommandRecoveryState.fromString(row.recoveryState),
+      dispatchState: CommandDispatchState.fromString(row.dispatchState),
     );
   }
 }

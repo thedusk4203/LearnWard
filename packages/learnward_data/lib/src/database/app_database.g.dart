@@ -474,6 +474,108 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _serverEvidenceIdMeta = const VerificationMeta(
+    'serverEvidenceId',
+  );
+  @override
+  late final GeneratedColumn<String> serverEvidenceId = GeneratedColumn<String>(
+    'server_evidence_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _sha256ChecksumMeta = const VerificationMeta(
+    'sha256Checksum',
+  );
+  @override
+  late final GeneratedColumn<String> sha256Checksum = GeneratedColumn<String>(
+    'sha256_checksum',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _localCompressedPhotoPathMeta =
+      const VerificationMeta('localCompressedPhotoPath');
+  @override
+  late final GeneratedColumn<String> localCompressedPhotoPath =
+      GeneratedColumn<String>(
+        'local_compressed_photo_path',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _submissionStatusMeta = const VerificationMeta(
+    'submissionStatus',
+  );
+  @override
+  late final GeneratedColumn<String> submissionStatus = GeneratedColumn<String>(
+    'submission_status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('draft'),
+  );
+  static const VerificationMeta _retryCountMeta = const VerificationMeta(
+    'retryCount',
+  );
+  @override
+  late final GeneratedColumn<int> retryCount = GeneratedColumn<int>(
+    'retry_count',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _dispatchStateMeta = const VerificationMeta(
+    'dispatchState',
+  );
+  @override
+  late final GeneratedColumn<String> dispatchState = GeneratedColumn<String>(
+    'dispatch_state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('unknown_legacy'),
+  );
+  static const VerificationMeta _lastErrorMessageMeta = const VerificationMeta(
+    'lastErrorMessage',
+  );
+  @override
+  late final GeneratedColumn<String> lastErrorMessage = GeneratedColumn<String>(
+    'last_error_message',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _actorUserIdMeta = const VerificationMeta(
+    'actorUserId',
+  );
+  @override
+  late final GeneratedColumn<String> actorUserId = GeneratedColumn<String>(
+    'actor_user_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _actorRoleMeta = const VerificationMeta(
+    'actorRole',
+  );
+  @override
+  late final GeneratedColumn<String> actorRole = GeneratedColumn<String>(
+    'actor_role',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     localDraftId,
@@ -494,6 +596,15 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     entryContext,
     occurredAt,
     updatedAt,
+    serverEvidenceId,
+    sha256Checksum,
+    localCompressedPhotoPath,
+    submissionStatus,
+    retryCount,
+    dispatchState,
+    lastErrorMessage,
+    actorUserId,
+    actorRole,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -658,6 +769,81 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     } else if (isInserting) {
       context.missing(_updatedAtMeta);
     }
+    if (data.containsKey('server_evidence_id')) {
+      context.handle(
+        _serverEvidenceIdMeta,
+        serverEvidenceId.isAcceptableOrUnknown(
+          data['server_evidence_id']!,
+          _serverEvidenceIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('sha256_checksum')) {
+      context.handle(
+        _sha256ChecksumMeta,
+        sha256Checksum.isAcceptableOrUnknown(
+          data['sha256_checksum']!,
+          _sha256ChecksumMeta,
+        ),
+      );
+    }
+    if (data.containsKey('local_compressed_photo_path')) {
+      context.handle(
+        _localCompressedPhotoPathMeta,
+        localCompressedPhotoPath.isAcceptableOrUnknown(
+          data['local_compressed_photo_path']!,
+          _localCompressedPhotoPathMeta,
+        ),
+      );
+    }
+    if (data.containsKey('submission_status')) {
+      context.handle(
+        _submissionStatusMeta,
+        submissionStatus.isAcceptableOrUnknown(
+          data['submission_status']!,
+          _submissionStatusMeta,
+        ),
+      );
+    }
+    if (data.containsKey('retry_count')) {
+      context.handle(
+        _retryCountMeta,
+        retryCount.isAcceptableOrUnknown(data['retry_count']!, _retryCountMeta),
+      );
+    }
+    if (data.containsKey('dispatch_state')) {
+      context.handle(
+        _dispatchStateMeta,
+        dispatchState.isAcceptableOrUnknown(
+          data['dispatch_state']!,
+          _dispatchStateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_error_message')) {
+      context.handle(
+        _lastErrorMessageMeta,
+        lastErrorMessage.isAcceptableOrUnknown(
+          data['last_error_message']!,
+          _lastErrorMessageMeta,
+        ),
+      );
+    }
+    if (data.containsKey('actor_user_id')) {
+      context.handle(
+        _actorUserIdMeta,
+        actorUserId.isAcceptableOrUnknown(
+          data['actor_user_id']!,
+          _actorUserIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('actor_role')) {
+      context.handle(
+        _actorRoleMeta,
+        actorRole.isAcceptableOrUnknown(data['actor_role']!, _actorRoleMeta),
+      );
+    }
     return context;
   }
 
@@ -742,6 +928,42 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
         DriftSqlType.dateTime,
         data['${effectivePrefix}updated_at'],
       )!,
+      serverEvidenceId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}server_evidence_id'],
+      ),
+      sha256Checksum: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sha256_checksum'],
+      ),
+      localCompressedPhotoPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}local_compressed_photo_path'],
+      ),
+      submissionStatus: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}submission_status'],
+      )!,
+      retryCount: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}retry_count'],
+      )!,
+      dispatchState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}dispatch_state'],
+      )!,
+      lastErrorMessage: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}last_error_message'],
+      ),
+      actorUserId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}actor_user_id'],
+      ),
+      actorRole: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}actor_role'],
+      ),
     );
   }
 
@@ -771,6 +993,15 @@ class LocalAssessmentDraftEntry extends DataClass
   final String entryContext;
   final DateTime occurredAt;
   final DateTime updatedAt;
+  final String? serverEvidenceId;
+  final String? sha256Checksum;
+  final String? localCompressedPhotoPath;
+  final String submissionStatus;
+  final int retryCount;
+  final String dispatchState;
+  final String? lastErrorMessage;
+  final String? actorUserId;
+  final String? actorRole;
   const LocalAssessmentDraftEntry({
     required this.localDraftId,
     required this.familyId,
@@ -790,6 +1021,15 @@ class LocalAssessmentDraftEntry extends DataClass
     required this.entryContext,
     required this.occurredAt,
     required this.updatedAt,
+    this.serverEvidenceId,
+    this.sha256Checksum,
+    this.localCompressedPhotoPath,
+    required this.submissionStatus,
+    required this.retryCount,
+    required this.dispatchState,
+    this.lastErrorMessage,
+    this.actorUserId,
+    this.actorRole,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -822,6 +1062,29 @@ class LocalAssessmentDraftEntry extends DataClass
     map['entry_context'] = Variable<String>(entryContext);
     map['occurred_at'] = Variable<DateTime>(occurredAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
+    if (!nullToAbsent || serverEvidenceId != null) {
+      map['server_evidence_id'] = Variable<String>(serverEvidenceId);
+    }
+    if (!nullToAbsent || sha256Checksum != null) {
+      map['sha256_checksum'] = Variable<String>(sha256Checksum);
+    }
+    if (!nullToAbsent || localCompressedPhotoPath != null) {
+      map['local_compressed_photo_path'] = Variable<String>(
+        localCompressedPhotoPath,
+      );
+    }
+    map['submission_status'] = Variable<String>(submissionStatus);
+    map['retry_count'] = Variable<int>(retryCount);
+    map['dispatch_state'] = Variable<String>(dispatchState);
+    if (!nullToAbsent || lastErrorMessage != null) {
+      map['last_error_message'] = Variable<String>(lastErrorMessage);
+    }
+    if (!nullToAbsent || actorUserId != null) {
+      map['actor_user_id'] = Variable<String>(actorUserId);
+    }
+    if (!nullToAbsent || actorRole != null) {
+      map['actor_role'] = Variable<String>(actorRole);
+    }
     return map;
   }
 
@@ -855,6 +1118,27 @@ class LocalAssessmentDraftEntry extends DataClass
       entryContext: Value(entryContext),
       occurredAt: Value(occurredAt),
       updatedAt: Value(updatedAt),
+      serverEvidenceId: serverEvidenceId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(serverEvidenceId),
+      sha256Checksum: sha256Checksum == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sha256Checksum),
+      localCompressedPhotoPath: localCompressedPhotoPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(localCompressedPhotoPath),
+      submissionStatus: Value(submissionStatus),
+      retryCount: Value(retryCount),
+      dispatchState: Value(dispatchState),
+      lastErrorMessage: lastErrorMessage == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastErrorMessage),
+      actorUserId: actorUserId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(actorUserId),
+      actorRole: actorRole == null && nullToAbsent
+          ? const Value.absent()
+          : Value(actorRole),
     );
   }
 
@@ -884,6 +1168,17 @@ class LocalAssessmentDraftEntry extends DataClass
       entryContext: serializer.fromJson<String>(json['entryContext']),
       occurredAt: serializer.fromJson<DateTime>(json['occurredAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      serverEvidenceId: serializer.fromJson<String?>(json['serverEvidenceId']),
+      sha256Checksum: serializer.fromJson<String?>(json['sha256Checksum']),
+      localCompressedPhotoPath: serializer.fromJson<String?>(
+        json['localCompressedPhotoPath'],
+      ),
+      submissionStatus: serializer.fromJson<String>(json['submissionStatus']),
+      retryCount: serializer.fromJson<int>(json['retryCount']),
+      dispatchState: serializer.fromJson<String>(json['dispatchState']),
+      lastErrorMessage: serializer.fromJson<String?>(json['lastErrorMessage']),
+      actorUserId: serializer.fromJson<String?>(json['actorUserId']),
+      actorRole: serializer.fromJson<String?>(json['actorRole']),
     );
   }
   @override
@@ -908,6 +1203,17 @@ class LocalAssessmentDraftEntry extends DataClass
       'entryContext': serializer.toJson<String>(entryContext),
       'occurredAt': serializer.toJson<DateTime>(occurredAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'serverEvidenceId': serializer.toJson<String?>(serverEvidenceId),
+      'sha256Checksum': serializer.toJson<String?>(sha256Checksum),
+      'localCompressedPhotoPath': serializer.toJson<String?>(
+        localCompressedPhotoPath,
+      ),
+      'submissionStatus': serializer.toJson<String>(submissionStatus),
+      'retryCount': serializer.toJson<int>(retryCount),
+      'dispatchState': serializer.toJson<String>(dispatchState),
+      'lastErrorMessage': serializer.toJson<String?>(lastErrorMessage),
+      'actorUserId': serializer.toJson<String?>(actorUserId),
+      'actorRole': serializer.toJson<String?>(actorRole),
     };
   }
 
@@ -930,6 +1236,15 @@ class LocalAssessmentDraftEntry extends DataClass
     String? entryContext,
     DateTime? occurredAt,
     DateTime? updatedAt,
+    Value<String?> serverEvidenceId = const Value.absent(),
+    Value<String?> sha256Checksum = const Value.absent(),
+    Value<String?> localCompressedPhotoPath = const Value.absent(),
+    String? submissionStatus,
+    int? retryCount,
+    String? dispatchState,
+    Value<String?> lastErrorMessage = const Value.absent(),
+    Value<String?> actorUserId = const Value.absent(),
+    Value<String?> actorRole = const Value.absent(),
   }) => LocalAssessmentDraftEntry(
     localDraftId: localDraftId ?? this.localDraftId,
     familyId: familyId ?? this.familyId,
@@ -957,6 +1272,23 @@ class LocalAssessmentDraftEntry extends DataClass
     entryContext: entryContext ?? this.entryContext,
     occurredAt: occurredAt ?? this.occurredAt,
     updatedAt: updatedAt ?? this.updatedAt,
+    serverEvidenceId: serverEvidenceId.present
+        ? serverEvidenceId.value
+        : this.serverEvidenceId,
+    sha256Checksum: sha256Checksum.present
+        ? sha256Checksum.value
+        : this.sha256Checksum,
+    localCompressedPhotoPath: localCompressedPhotoPath.present
+        ? localCompressedPhotoPath.value
+        : this.localCompressedPhotoPath,
+    submissionStatus: submissionStatus ?? this.submissionStatus,
+    retryCount: retryCount ?? this.retryCount,
+    dispatchState: dispatchState ?? this.dispatchState,
+    lastErrorMessage: lastErrorMessage.present
+        ? lastErrorMessage.value
+        : this.lastErrorMessage,
+    actorUserId: actorUserId.present ? actorUserId.value : this.actorUserId,
+    actorRole: actorRole.present ? actorRole.value : this.actorRole,
   );
   LocalAssessmentDraftEntry copyWithCompanion(
     LocalAssessmentDraftsCompanion data,
@@ -1002,6 +1334,31 @@ class LocalAssessmentDraftEntry extends DataClass
           ? data.occurredAt.value
           : this.occurredAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      serverEvidenceId: data.serverEvidenceId.present
+          ? data.serverEvidenceId.value
+          : this.serverEvidenceId,
+      sha256Checksum: data.sha256Checksum.present
+          ? data.sha256Checksum.value
+          : this.sha256Checksum,
+      localCompressedPhotoPath: data.localCompressedPhotoPath.present
+          ? data.localCompressedPhotoPath.value
+          : this.localCompressedPhotoPath,
+      submissionStatus: data.submissionStatus.present
+          ? data.submissionStatus.value
+          : this.submissionStatus,
+      retryCount: data.retryCount.present
+          ? data.retryCount.value
+          : this.retryCount,
+      dispatchState: data.dispatchState.present
+          ? data.dispatchState.value
+          : this.dispatchState,
+      lastErrorMessage: data.lastErrorMessage.present
+          ? data.lastErrorMessage.value
+          : this.lastErrorMessage,
+      actorUserId: data.actorUserId.present
+          ? data.actorUserId.value
+          : this.actorUserId,
+      actorRole: data.actorRole.present ? data.actorRole.value : this.actorRole,
     );
   }
 
@@ -1025,13 +1382,22 @@ class LocalAssessmentDraftEntry extends DataClass
           ..write('localPhotoPath: $localPhotoPath, ')
           ..write('entryContext: $entryContext, ')
           ..write('occurredAt: $occurredAt, ')
-          ..write('updatedAt: $updatedAt')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('serverEvidenceId: $serverEvidenceId, ')
+          ..write('sha256Checksum: $sha256Checksum, ')
+          ..write('localCompressedPhotoPath: $localCompressedPhotoPath, ')
+          ..write('submissionStatus: $submissionStatus, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('dispatchState: $dispatchState, ')
+          ..write('lastErrorMessage: $lastErrorMessage, ')
+          ..write('actorUserId: $actorUserId, ')
+          ..write('actorRole: $actorRole')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     localDraftId,
     familyId,
     childId,
@@ -1050,7 +1416,16 @@ class LocalAssessmentDraftEntry extends DataClass
     entryContext,
     occurredAt,
     updatedAt,
-  );
+    serverEvidenceId,
+    sha256Checksum,
+    localCompressedPhotoPath,
+    submissionStatus,
+    retryCount,
+    dispatchState,
+    lastErrorMessage,
+    actorUserId,
+    actorRole,
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1072,7 +1447,16 @@ class LocalAssessmentDraftEntry extends DataClass
           other.localPhotoPath == this.localPhotoPath &&
           other.entryContext == this.entryContext &&
           other.occurredAt == this.occurredAt &&
-          other.updatedAt == this.updatedAt);
+          other.updatedAt == this.updatedAt &&
+          other.serverEvidenceId == this.serverEvidenceId &&
+          other.sha256Checksum == this.sha256Checksum &&
+          other.localCompressedPhotoPath == this.localCompressedPhotoPath &&
+          other.submissionStatus == this.submissionStatus &&
+          other.retryCount == this.retryCount &&
+          other.dispatchState == this.dispatchState &&
+          other.lastErrorMessage == this.lastErrorMessage &&
+          other.actorUserId == this.actorUserId &&
+          other.actorRole == this.actorRole);
 }
 
 class LocalAssessmentDraftsCompanion
@@ -1095,6 +1479,15 @@ class LocalAssessmentDraftsCompanion
   final Value<String> entryContext;
   final Value<DateTime> occurredAt;
   final Value<DateTime> updatedAt;
+  final Value<String?> serverEvidenceId;
+  final Value<String?> sha256Checksum;
+  final Value<String?> localCompressedPhotoPath;
+  final Value<String> submissionStatus;
+  final Value<int> retryCount;
+  final Value<String> dispatchState;
+  final Value<String?> lastErrorMessage;
+  final Value<String?> actorUserId;
+  final Value<String?> actorRole;
   final Value<int> rowid;
   const LocalAssessmentDraftsCompanion({
     this.localDraftId = const Value.absent(),
@@ -1115,6 +1508,15 @@ class LocalAssessmentDraftsCompanion
     this.entryContext = const Value.absent(),
     this.occurredAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
+    this.serverEvidenceId = const Value.absent(),
+    this.sha256Checksum = const Value.absent(),
+    this.localCompressedPhotoPath = const Value.absent(),
+    this.submissionStatus = const Value.absent(),
+    this.retryCount = const Value.absent(),
+    this.dispatchState = const Value.absent(),
+    this.lastErrorMessage = const Value.absent(),
+    this.actorUserId = const Value.absent(),
+    this.actorRole = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   LocalAssessmentDraftsCompanion.insert({
@@ -1136,6 +1538,15 @@ class LocalAssessmentDraftsCompanion
     this.entryContext = const Value.absent(),
     required DateTime occurredAt,
     required DateTime updatedAt,
+    this.serverEvidenceId = const Value.absent(),
+    this.sha256Checksum = const Value.absent(),
+    this.localCompressedPhotoPath = const Value.absent(),
+    this.submissionStatus = const Value.absent(),
+    this.retryCount = const Value.absent(),
+    this.dispatchState = const Value.absent(),
+    this.lastErrorMessage = const Value.absent(),
+    this.actorUserId = const Value.absent(),
+    this.actorRole = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : localDraftId = Value(localDraftId),
        familyId = Value(familyId),
@@ -1167,6 +1578,15 @@ class LocalAssessmentDraftsCompanion
     Expression<String>? entryContext,
     Expression<DateTime>? occurredAt,
     Expression<DateTime>? updatedAt,
+    Expression<String>? serverEvidenceId,
+    Expression<String>? sha256Checksum,
+    Expression<String>? localCompressedPhotoPath,
+    Expression<String>? submissionStatus,
+    Expression<int>? retryCount,
+    Expression<String>? dispatchState,
+    Expression<String>? lastErrorMessage,
+    Expression<String>? actorUserId,
+    Expression<String>? actorRole,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1189,6 +1609,16 @@ class LocalAssessmentDraftsCompanion
       if (entryContext != null) 'entry_context': entryContext,
       if (occurredAt != null) 'occurred_at': occurredAt,
       if (updatedAt != null) 'updated_at': updatedAt,
+      if (serverEvidenceId != null) 'server_evidence_id': serverEvidenceId,
+      if (sha256Checksum != null) 'sha256_checksum': sha256Checksum,
+      if (localCompressedPhotoPath != null)
+        'local_compressed_photo_path': localCompressedPhotoPath,
+      if (submissionStatus != null) 'submission_status': submissionStatus,
+      if (retryCount != null) 'retry_count': retryCount,
+      if (dispatchState != null) 'dispatch_state': dispatchState,
+      if (lastErrorMessage != null) 'last_error_message': lastErrorMessage,
+      if (actorUserId != null) 'actor_user_id': actorUserId,
+      if (actorRole != null) 'actor_role': actorRole,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1212,6 +1642,15 @@ class LocalAssessmentDraftsCompanion
     Value<String>? entryContext,
     Value<DateTime>? occurredAt,
     Value<DateTime>? updatedAt,
+    Value<String?>? serverEvidenceId,
+    Value<String?>? sha256Checksum,
+    Value<String?>? localCompressedPhotoPath,
+    Value<String>? submissionStatus,
+    Value<int>? retryCount,
+    Value<String>? dispatchState,
+    Value<String?>? lastErrorMessage,
+    Value<String?>? actorUserId,
+    Value<String?>? actorRole,
     Value<int>? rowid,
   }) {
     return LocalAssessmentDraftsCompanion(
@@ -1233,6 +1672,16 @@ class LocalAssessmentDraftsCompanion
       entryContext: entryContext ?? this.entryContext,
       occurredAt: occurredAt ?? this.occurredAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      serverEvidenceId: serverEvidenceId ?? this.serverEvidenceId,
+      sha256Checksum: sha256Checksum ?? this.sha256Checksum,
+      localCompressedPhotoPath:
+          localCompressedPhotoPath ?? this.localCompressedPhotoPath,
+      submissionStatus: submissionStatus ?? this.submissionStatus,
+      retryCount: retryCount ?? this.retryCount,
+      dispatchState: dispatchState ?? this.dispatchState,
+      lastErrorMessage: lastErrorMessage ?? this.lastErrorMessage,
+      actorUserId: actorUserId ?? this.actorUserId,
+      actorRole: actorRole ?? this.actorRole,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1294,6 +1743,35 @@ class LocalAssessmentDraftsCompanion
     if (updatedAt.present) {
       map['updated_at'] = Variable<DateTime>(updatedAt.value);
     }
+    if (serverEvidenceId.present) {
+      map['server_evidence_id'] = Variable<String>(serverEvidenceId.value);
+    }
+    if (sha256Checksum.present) {
+      map['sha256_checksum'] = Variable<String>(sha256Checksum.value);
+    }
+    if (localCompressedPhotoPath.present) {
+      map['local_compressed_photo_path'] = Variable<String>(
+        localCompressedPhotoPath.value,
+      );
+    }
+    if (submissionStatus.present) {
+      map['submission_status'] = Variable<String>(submissionStatus.value);
+    }
+    if (retryCount.present) {
+      map['retry_count'] = Variable<int>(retryCount.value);
+    }
+    if (dispatchState.present) {
+      map['dispatch_state'] = Variable<String>(dispatchState.value);
+    }
+    if (lastErrorMessage.present) {
+      map['last_error_message'] = Variable<String>(lastErrorMessage.value);
+    }
+    if (actorUserId.present) {
+      map['actor_user_id'] = Variable<String>(actorUserId.value);
+    }
+    if (actorRole.present) {
+      map['actor_role'] = Variable<String>(actorRole.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1321,6 +1799,15 @@ class LocalAssessmentDraftsCompanion
           ..write('entryContext: $entryContext, ')
           ..write('occurredAt: $occurredAt, ')
           ..write('updatedAt: $updatedAt, ')
+          ..write('serverEvidenceId: $serverEvidenceId, ')
+          ..write('sha256Checksum: $sha256Checksum, ')
+          ..write('localCompressedPhotoPath: $localCompressedPhotoPath, ')
+          ..write('submissionStatus: $submissionStatus, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('dispatchState: $dispatchState, ')
+          ..write('lastErrorMessage: $lastErrorMessage, ')
+          ..write('actorUserId: $actorUserId, ')
+          ..write('actorRole: $actorRole, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1435,6 +1922,64 @@ class $PendingRewardCommandsTable extends PendingRewardCommands
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _actorUserIdMeta = const VerificationMeta(
+    'actorUserId',
+  );
+  @override
+  late final GeneratedColumn<String> actorUserId = GeneratedColumn<String>(
+    'actor_user_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _actorRoleMeta = const VerificationMeta(
+    'actorRole',
+  );
+  @override
+  late final GeneratedColumn<String> actorRole = GeneratedColumn<String>(
+    'actor_role',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _schemaVersionMeta = const VerificationMeta(
+    'schemaVersion',
+  );
+  @override
+  late final GeneratedColumn<int> schemaVersion = GeneratedColumn<int>(
+    'schema_version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(1),
+  );
+  static const VerificationMeta _recoveryStateMeta = const VerificationMeta(
+    'recoveryState',
+  );
+  @override
+  late final GeneratedColumn<String> recoveryState = GeneratedColumn<String>(
+    'recovery_state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('active'),
+  );
+  static const VerificationMeta _dispatchStateMeta = const VerificationMeta(
+    'dispatchState',
+  );
+  @override
+  late final GeneratedColumn<String> dispatchState = GeneratedColumn<String>(
+    'dispatch_state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('unknown_legacy'),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1446,6 +1991,11 @@ class $PendingRewardCommandsTable extends PendingRewardCommands
     redemptionId,
     cancellationReason,
     createdAt,
+    actorUserId,
+    actorRole,
+    schemaVersion,
+    recoveryState,
+    dispatchState,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1524,6 +2074,48 @@ class $PendingRewardCommandsTable extends PendingRewardCommands
     } else if (isInserting) {
       context.missing(_createdAtMeta);
     }
+    if (data.containsKey('actor_user_id')) {
+      context.handle(
+        _actorUserIdMeta,
+        actorUserId.isAcceptableOrUnknown(
+          data['actor_user_id']!,
+          _actorUserIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('actor_role')) {
+      context.handle(
+        _actorRoleMeta,
+        actorRole.isAcceptableOrUnknown(data['actor_role']!, _actorRoleMeta),
+      );
+    }
+    if (data.containsKey('schema_version')) {
+      context.handle(
+        _schemaVersionMeta,
+        schemaVersion.isAcceptableOrUnknown(
+          data['schema_version']!,
+          _schemaVersionMeta,
+        ),
+      );
+    }
+    if (data.containsKey('recovery_state')) {
+      context.handle(
+        _recoveryStateMeta,
+        recoveryState.isAcceptableOrUnknown(
+          data['recovery_state']!,
+          _recoveryStateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('dispatch_state')) {
+      context.handle(
+        _dispatchStateMeta,
+        dispatchState.isAcceptableOrUnknown(
+          data['dispatch_state']!,
+          _dispatchStateMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -1572,6 +2164,26 @@ class $PendingRewardCommandsTable extends PendingRewardCommands
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
       )!,
+      actorUserId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}actor_user_id'],
+      ),
+      actorRole: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}actor_role'],
+      ),
+      schemaVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}schema_version'],
+      )!,
+      recoveryState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recovery_state'],
+      )!,
+      dispatchState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}dispatch_state'],
+      )!,
     );
   }
 
@@ -1592,6 +2204,11 @@ class PendingRewardCommandEntry extends DataClass
   final String? redemptionId;
   final String? cancellationReason;
   final DateTime createdAt;
+  final String? actorUserId;
+  final String? actorRole;
+  final int schemaVersion;
+  final String recoveryState;
+  final String dispatchState;
   const PendingRewardCommandEntry({
     required this.id,
     required this.operation,
@@ -1602,6 +2219,11 @@ class PendingRewardCommandEntry extends DataClass
     this.redemptionId,
     this.cancellationReason,
     required this.createdAt,
+    this.actorUserId,
+    this.actorRole,
+    required this.schemaVersion,
+    required this.recoveryState,
+    required this.dispatchState,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1623,6 +2245,15 @@ class PendingRewardCommandEntry extends DataClass
       map['cancellation_reason'] = Variable<String>(cancellationReason);
     }
     map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || actorUserId != null) {
+      map['actor_user_id'] = Variable<String>(actorUserId);
+    }
+    if (!nullToAbsent || actorRole != null) {
+      map['actor_role'] = Variable<String>(actorRole);
+    }
+    map['schema_version'] = Variable<int>(schemaVersion);
+    map['recovery_state'] = Variable<String>(recoveryState);
+    map['dispatch_state'] = Variable<String>(dispatchState);
     return map;
   }
 
@@ -1645,6 +2276,15 @@ class PendingRewardCommandEntry extends DataClass
           ? const Value.absent()
           : Value(cancellationReason),
       createdAt: Value(createdAt),
+      actorUserId: actorUserId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(actorUserId),
+      actorRole: actorRole == null && nullToAbsent
+          ? const Value.absent()
+          : Value(actorRole),
+      schemaVersion: Value(schemaVersion),
+      recoveryState: Value(recoveryState),
+      dispatchState: Value(dispatchState),
     );
   }
 
@@ -1665,6 +2305,11 @@ class PendingRewardCommandEntry extends DataClass
         json['cancellationReason'],
       ),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      actorUserId: serializer.fromJson<String?>(json['actorUserId']),
+      actorRole: serializer.fromJson<String?>(json['actorRole']),
+      schemaVersion: serializer.fromJson<int>(json['schemaVersion']),
+      recoveryState: serializer.fromJson<String>(json['recoveryState']),
+      dispatchState: serializer.fromJson<String>(json['dispatchState']),
     );
   }
   @override
@@ -1680,6 +2325,11 @@ class PendingRewardCommandEntry extends DataClass
       'redemptionId': serializer.toJson<String?>(redemptionId),
       'cancellationReason': serializer.toJson<String?>(cancellationReason),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'actorUserId': serializer.toJson<String?>(actorUserId),
+      'actorRole': serializer.toJson<String?>(actorRole),
+      'schemaVersion': serializer.toJson<int>(schemaVersion),
+      'recoveryState': serializer.toJson<String>(recoveryState),
+      'dispatchState': serializer.toJson<String>(dispatchState),
     };
   }
 
@@ -1693,6 +2343,11 @@ class PendingRewardCommandEntry extends DataClass
     Value<String?> redemptionId = const Value.absent(),
     Value<String?> cancellationReason = const Value.absent(),
     DateTime? createdAt,
+    Value<String?> actorUserId = const Value.absent(),
+    Value<String?> actorRole = const Value.absent(),
+    int? schemaVersion,
+    String? recoveryState,
+    String? dispatchState,
   }) => PendingRewardCommandEntry(
     id: id ?? this.id,
     operation: operation ?? this.operation,
@@ -1705,6 +2360,11 @@ class PendingRewardCommandEntry extends DataClass
         ? cancellationReason.value
         : this.cancellationReason,
     createdAt: createdAt ?? this.createdAt,
+    actorUserId: actorUserId.present ? actorUserId.value : this.actorUserId,
+    actorRole: actorRole.present ? actorRole.value : this.actorRole,
+    schemaVersion: schemaVersion ?? this.schemaVersion,
+    recoveryState: recoveryState ?? this.recoveryState,
+    dispatchState: dispatchState ?? this.dispatchState,
   );
   PendingRewardCommandEntry copyWithCompanion(
     PendingRewardCommandsCompanion data,
@@ -1723,6 +2383,19 @@ class PendingRewardCommandEntry extends DataClass
           ? data.cancellationReason.value
           : this.cancellationReason,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      actorUserId: data.actorUserId.present
+          ? data.actorUserId.value
+          : this.actorUserId,
+      actorRole: data.actorRole.present ? data.actorRole.value : this.actorRole,
+      schemaVersion: data.schemaVersion.present
+          ? data.schemaVersion.value
+          : this.schemaVersion,
+      recoveryState: data.recoveryState.present
+          ? data.recoveryState.value
+          : this.recoveryState,
+      dispatchState: data.dispatchState.present
+          ? data.dispatchState.value
+          : this.dispatchState,
     );
   }
 
@@ -1737,7 +2410,12 @@ class PendingRewardCommandEntry extends DataClass
           ..write('rewardId: $rewardId, ')
           ..write('redemptionId: $redemptionId, ')
           ..write('cancellationReason: $cancellationReason, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('actorUserId: $actorUserId, ')
+          ..write('actorRole: $actorRole, ')
+          ..write('schemaVersion: $schemaVersion, ')
+          ..write('recoveryState: $recoveryState, ')
+          ..write('dispatchState: $dispatchState')
           ..write(')'))
         .toString();
   }
@@ -1753,6 +2431,11 @@ class PendingRewardCommandEntry extends DataClass
     redemptionId,
     cancellationReason,
     createdAt,
+    actorUserId,
+    actorRole,
+    schemaVersion,
+    recoveryState,
+    dispatchState,
   );
   @override
   bool operator ==(Object other) =>
@@ -1766,7 +2449,12 @@ class PendingRewardCommandEntry extends DataClass
           other.rewardId == this.rewardId &&
           other.redemptionId == this.redemptionId &&
           other.cancellationReason == this.cancellationReason &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.actorUserId == this.actorUserId &&
+          other.actorRole == this.actorRole &&
+          other.schemaVersion == this.schemaVersion &&
+          other.recoveryState == this.recoveryState &&
+          other.dispatchState == this.dispatchState);
 }
 
 class PendingRewardCommandsCompanion
@@ -1780,6 +2468,11 @@ class PendingRewardCommandsCompanion
   final Value<String?> redemptionId;
   final Value<String?> cancellationReason;
   final Value<DateTime> createdAt;
+  final Value<String?> actorUserId;
+  final Value<String?> actorRole;
+  final Value<int> schemaVersion;
+  final Value<String> recoveryState;
+  final Value<String> dispatchState;
   const PendingRewardCommandsCompanion({
     this.id = const Value.absent(),
     this.operation = const Value.absent(),
@@ -1790,6 +2483,11 @@ class PendingRewardCommandsCompanion
     this.redemptionId = const Value.absent(),
     this.cancellationReason = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.actorUserId = const Value.absent(),
+    this.actorRole = const Value.absent(),
+    this.schemaVersion = const Value.absent(),
+    this.recoveryState = const Value.absent(),
+    this.dispatchState = const Value.absent(),
   });
   PendingRewardCommandsCompanion.insert({
     this.id = const Value.absent(),
@@ -1801,6 +2499,11 @@ class PendingRewardCommandsCompanion
     this.redemptionId = const Value.absent(),
     this.cancellationReason = const Value.absent(),
     required DateTime createdAt,
+    this.actorUserId = const Value.absent(),
+    this.actorRole = const Value.absent(),
+    this.schemaVersion = const Value.absent(),
+    this.recoveryState = const Value.absent(),
+    this.dispatchState = const Value.absent(),
   }) : operation = Value(operation),
        commandId = Value(commandId),
        familyId = Value(familyId),
@@ -1815,6 +2518,11 @@ class PendingRewardCommandsCompanion
     Expression<String>? redemptionId,
     Expression<String>? cancellationReason,
     Expression<DateTime>? createdAt,
+    Expression<String>? actorUserId,
+    Expression<String>? actorRole,
+    Expression<int>? schemaVersion,
+    Expression<String>? recoveryState,
+    Expression<String>? dispatchState,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -1826,6 +2534,11 @@ class PendingRewardCommandsCompanion
       if (redemptionId != null) 'redemption_id': redemptionId,
       if (cancellationReason != null) 'cancellation_reason': cancellationReason,
       if (createdAt != null) 'created_at': createdAt,
+      if (actorUserId != null) 'actor_user_id': actorUserId,
+      if (actorRole != null) 'actor_role': actorRole,
+      if (schemaVersion != null) 'schema_version': schemaVersion,
+      if (recoveryState != null) 'recovery_state': recoveryState,
+      if (dispatchState != null) 'dispatch_state': dispatchState,
     });
   }
 
@@ -1839,6 +2552,11 @@ class PendingRewardCommandsCompanion
     Value<String?>? redemptionId,
     Value<String?>? cancellationReason,
     Value<DateTime>? createdAt,
+    Value<String?>? actorUserId,
+    Value<String?>? actorRole,
+    Value<int>? schemaVersion,
+    Value<String>? recoveryState,
+    Value<String>? dispatchState,
   }) {
     return PendingRewardCommandsCompanion(
       id: id ?? this.id,
@@ -1850,6 +2568,11 @@ class PendingRewardCommandsCompanion
       redemptionId: redemptionId ?? this.redemptionId,
       cancellationReason: cancellationReason ?? this.cancellationReason,
       createdAt: createdAt ?? this.createdAt,
+      actorUserId: actorUserId ?? this.actorUserId,
+      actorRole: actorRole ?? this.actorRole,
+      schemaVersion: schemaVersion ?? this.schemaVersion,
+      recoveryState: recoveryState ?? this.recoveryState,
+      dispatchState: dispatchState ?? this.dispatchState,
     );
   }
 
@@ -1883,6 +2606,21 @@ class PendingRewardCommandsCompanion
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (actorUserId.present) {
+      map['actor_user_id'] = Variable<String>(actorUserId.value);
+    }
+    if (actorRole.present) {
+      map['actor_role'] = Variable<String>(actorRole.value);
+    }
+    if (schemaVersion.present) {
+      map['schema_version'] = Variable<int>(schemaVersion.value);
+    }
+    if (recoveryState.present) {
+      map['recovery_state'] = Variable<String>(recoveryState.value);
+    }
+    if (dispatchState.present) {
+      map['dispatch_state'] = Variable<String>(dispatchState.value);
+    }
     return map;
   }
 
@@ -1897,7 +2635,12 @@ class PendingRewardCommandsCompanion
           ..write('rewardId: $rewardId, ')
           ..write('redemptionId: $redemptionId, ')
           ..write('cancellationReason: $cancellationReason, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('actorUserId: $actorUserId, ')
+          ..write('actorRole: $actorRole, ')
+          ..write('schemaVersion: $schemaVersion, ')
+          ..write('recoveryState: $recoveryState, ')
+          ..write('dispatchState: $dispatchState')
           ..write(')'))
         .toString();
   }
@@ -2132,6 +2875,15 @@ typedef $$LocalAssessmentDraftsTableCreateCompanionBuilder =
       Value<String> entryContext,
       required DateTime occurredAt,
       required DateTime updatedAt,
+      Value<String?> serverEvidenceId,
+      Value<String?> sha256Checksum,
+      Value<String?> localCompressedPhotoPath,
+      Value<String> submissionStatus,
+      Value<int> retryCount,
+      Value<String> dispatchState,
+      Value<String?> lastErrorMessage,
+      Value<String?> actorUserId,
+      Value<String?> actorRole,
       Value<int> rowid,
     });
 typedef $$LocalAssessmentDraftsTableUpdateCompanionBuilder =
@@ -2154,6 +2906,15 @@ typedef $$LocalAssessmentDraftsTableUpdateCompanionBuilder =
       Value<String> entryContext,
       Value<DateTime> occurredAt,
       Value<DateTime> updatedAt,
+      Value<String?> serverEvidenceId,
+      Value<String?> sha256Checksum,
+      Value<String?> localCompressedPhotoPath,
+      Value<String> submissionStatus,
+      Value<int> retryCount,
+      Value<String> dispatchState,
+      Value<String?> lastErrorMessage,
+      Value<String?> actorUserId,
+      Value<String?> actorRole,
       Value<int> rowid,
     });
 
@@ -2253,6 +3014,51 @@ class $$LocalAssessmentDraftsTableFilterComposer
 
   ColumnFilters<DateTime> get updatedAt => $composableBuilder(
     column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get serverEvidenceId => $composableBuilder(
+    column: $table.serverEvidenceId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sha256Checksum => $composableBuilder(
+    column: $table.sha256Checksum,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get localCompressedPhotoPath => $composableBuilder(
+    column: $table.localCompressedPhotoPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get submissionStatus => $composableBuilder(
+    column: $table.submissionStatus,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dispatchState => $composableBuilder(
+    column: $table.dispatchState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get lastErrorMessage => $composableBuilder(
+    column: $table.lastErrorMessage,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get actorUserId => $composableBuilder(
+    column: $table.actorUserId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get actorRole => $composableBuilder(
+    column: $table.actorRole,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -2355,6 +3161,51 @@ class $$LocalAssessmentDraftsTableOrderingComposer
     column: $table.updatedAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get serverEvidenceId => $composableBuilder(
+    column: $table.serverEvidenceId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get sha256Checksum => $composableBuilder(
+    column: $table.sha256Checksum,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get localCompressedPhotoPath => $composableBuilder(
+    column: $table.localCompressedPhotoPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get submissionStatus => $composableBuilder(
+    column: $table.submissionStatus,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get dispatchState => $composableBuilder(
+    column: $table.dispatchState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get lastErrorMessage => $composableBuilder(
+    column: $table.lastErrorMessage,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get actorUserId => $composableBuilder(
+    column: $table.actorUserId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get actorRole => $composableBuilder(
+    column: $table.actorRole,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$LocalAssessmentDraftsTableAnnotationComposer
@@ -2441,6 +3292,49 @@ class $$LocalAssessmentDraftsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get updatedAt =>
       $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get serverEvidenceId => $composableBuilder(
+    column: $table.serverEvidenceId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get sha256Checksum => $composableBuilder(
+    column: $table.sha256Checksum,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get localCompressedPhotoPath => $composableBuilder(
+    column: $table.localCompressedPhotoPath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get submissionStatus => $composableBuilder(
+    column: $table.submissionStatus,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get dispatchState => $composableBuilder(
+    column: $table.dispatchState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get lastErrorMessage => $composableBuilder(
+    column: $table.lastErrorMessage,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get actorUserId => $composableBuilder(
+    column: $table.actorUserId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get actorRole =>
+      $composableBuilder(column: $table.actorRole, builder: (column) => column);
 }
 
 class $$LocalAssessmentDraftsTableTableManager
@@ -2507,6 +3401,15 @@ class $$LocalAssessmentDraftsTableTableManager
                 Value<String> entryContext = const Value.absent(),
                 Value<DateTime> occurredAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
+                Value<String?> serverEvidenceId = const Value.absent(),
+                Value<String?> sha256Checksum = const Value.absent(),
+                Value<String?> localCompressedPhotoPath = const Value.absent(),
+                Value<String> submissionStatus = const Value.absent(),
+                Value<int> retryCount = const Value.absent(),
+                Value<String> dispatchState = const Value.absent(),
+                Value<String?> lastErrorMessage = const Value.absent(),
+                Value<String?> actorUserId = const Value.absent(),
+                Value<String?> actorRole = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalAssessmentDraftsCompanion(
                 localDraftId: localDraftId,
@@ -2527,6 +3430,15 @@ class $$LocalAssessmentDraftsTableTableManager
                 entryContext: entryContext,
                 occurredAt: occurredAt,
                 updatedAt: updatedAt,
+                serverEvidenceId: serverEvidenceId,
+                sha256Checksum: sha256Checksum,
+                localCompressedPhotoPath: localCompressedPhotoPath,
+                submissionStatus: submissionStatus,
+                retryCount: retryCount,
+                dispatchState: dispatchState,
+                lastErrorMessage: lastErrorMessage,
+                actorUserId: actorUserId,
+                actorRole: actorRole,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -2549,6 +3461,15 @@ class $$LocalAssessmentDraftsTableTableManager
                 Value<String> entryContext = const Value.absent(),
                 required DateTime occurredAt,
                 required DateTime updatedAt,
+                Value<String?> serverEvidenceId = const Value.absent(),
+                Value<String?> sha256Checksum = const Value.absent(),
+                Value<String?> localCompressedPhotoPath = const Value.absent(),
+                Value<String> submissionStatus = const Value.absent(),
+                Value<int> retryCount = const Value.absent(),
+                Value<String> dispatchState = const Value.absent(),
+                Value<String?> lastErrorMessage = const Value.absent(),
+                Value<String?> actorUserId = const Value.absent(),
+                Value<String?> actorRole = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalAssessmentDraftsCompanion.insert(
                 localDraftId: localDraftId,
@@ -2569,6 +3490,15 @@ class $$LocalAssessmentDraftsTableTableManager
                 entryContext: entryContext,
                 occurredAt: occurredAt,
                 updatedAt: updatedAt,
+                serverEvidenceId: serverEvidenceId,
+                sha256Checksum: sha256Checksum,
+                localCompressedPhotoPath: localCompressedPhotoPath,
+                submissionStatus: submissionStatus,
+                retryCount: retryCount,
+                dispatchState: dispatchState,
+                lastErrorMessage: lastErrorMessage,
+                actorUserId: actorUserId,
+                actorRole: actorRole,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -2623,6 +3553,11 @@ typedef $$PendingRewardCommandsTableCreateCompanionBuilder =
       Value<String?> redemptionId,
       Value<String?> cancellationReason,
       required DateTime createdAt,
+      Value<String?> actorUserId,
+      Value<String?> actorRole,
+      Value<int> schemaVersion,
+      Value<String> recoveryState,
+      Value<String> dispatchState,
     });
 typedef $$PendingRewardCommandsTableUpdateCompanionBuilder =
     PendingRewardCommandsCompanion Function({
@@ -2635,6 +3570,11 @@ typedef $$PendingRewardCommandsTableUpdateCompanionBuilder =
       Value<String?> redemptionId,
       Value<String?> cancellationReason,
       Value<DateTime> createdAt,
+      Value<String?> actorUserId,
+      Value<String?> actorRole,
+      Value<int> schemaVersion,
+      Value<String> recoveryState,
+      Value<String> dispatchState,
     });
 
 class $$PendingRewardCommandsTableFilterComposer
@@ -2688,6 +3628,31 @@ class $$PendingRewardCommandsTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get actorUserId => $composableBuilder(
+    column: $table.actorUserId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get actorRole => $composableBuilder(
+    column: $table.actorRole,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get schemaVersion => $composableBuilder(
+    column: $table.schemaVersion,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recoveryState => $composableBuilder(
+    column: $table.recoveryState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dispatchState => $composableBuilder(
+    column: $table.dispatchState,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -2745,6 +3710,31 @@ class $$PendingRewardCommandsTableOrderingComposer
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get actorUserId => $composableBuilder(
+    column: $table.actorUserId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get actorRole => $composableBuilder(
+    column: $table.actorRole,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get schemaVersion => $composableBuilder(
+    column: $table.schemaVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get recoveryState => $composableBuilder(
+    column: $table.recoveryState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get dispatchState => $composableBuilder(
+    column: $table.dispatchState,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$PendingRewardCommandsTableAnnotationComposer
@@ -2786,6 +3776,29 @@ class $$PendingRewardCommandsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<String> get actorUserId => $composableBuilder(
+    column: $table.actorUserId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get actorRole =>
+      $composableBuilder(column: $table.actorRole, builder: (column) => column);
+
+  GeneratedColumn<int> get schemaVersion => $composableBuilder(
+    column: $table.schemaVersion,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get recoveryState => $composableBuilder(
+    column: $table.recoveryState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get dispatchState => $composableBuilder(
+    column: $table.dispatchState,
+    builder: (column) => column,
+  );
 }
 
 class $$PendingRewardCommandsTableTableManager
@@ -2843,6 +3856,11 @@ class $$PendingRewardCommandsTableTableManager
                 Value<String?> redemptionId = const Value.absent(),
                 Value<String?> cancellationReason = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<String?> actorUserId = const Value.absent(),
+                Value<String?> actorRole = const Value.absent(),
+                Value<int> schemaVersion = const Value.absent(),
+                Value<String> recoveryState = const Value.absent(),
+                Value<String> dispatchState = const Value.absent(),
               }) => PendingRewardCommandsCompanion(
                 id: id,
                 operation: operation,
@@ -2853,6 +3871,11 @@ class $$PendingRewardCommandsTableTableManager
                 redemptionId: redemptionId,
                 cancellationReason: cancellationReason,
                 createdAt: createdAt,
+                actorUserId: actorUserId,
+                actorRole: actorRole,
+                schemaVersion: schemaVersion,
+                recoveryState: recoveryState,
+                dispatchState: dispatchState,
               ),
           createCompanionCallback:
               ({
@@ -2865,6 +3888,11 @@ class $$PendingRewardCommandsTableTableManager
                 Value<String?> redemptionId = const Value.absent(),
                 Value<String?> cancellationReason = const Value.absent(),
                 required DateTime createdAt,
+                Value<String?> actorUserId = const Value.absent(),
+                Value<String?> actorRole = const Value.absent(),
+                Value<int> schemaVersion = const Value.absent(),
+                Value<String> recoveryState = const Value.absent(),
+                Value<String> dispatchState = const Value.absent(),
               }) => PendingRewardCommandsCompanion.insert(
                 id: id,
                 operation: operation,
@@ -2875,6 +3903,11 @@ class $$PendingRewardCommandsTableTableManager
                 redemptionId: redemptionId,
                 cancellationReason: cancellationReason,
                 createdAt: createdAt,
+                actorUserId: actorUserId,
+                actorRole: actorRole,
+                schemaVersion: schemaVersion,
+                recoveryState: recoveryState,
+                dispatchState: dispatchState,
               ),
           withReferenceMapper: (p0) => p0
               .map(
