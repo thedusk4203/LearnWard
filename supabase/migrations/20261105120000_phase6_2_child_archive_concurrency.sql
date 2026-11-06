@@ -2567,6 +2567,7 @@ declare
   v_user_id uuid;
   v_child_row record;
   v_active_child_ids uuid[] := '{}';
+  v_candidate_vle_ids uuid[] := '{}';
   v_event record;
   v_processed_count integer := 0;
 begin
@@ -2600,28 +2601,55 @@ begin
     return 0;
   end if;
 
+  -- Select candidate unprocessed VLEs for active children
+  select coalesce(array_agg(vle.id order by vle.id asc), '{}')
+  into v_candidate_vle_ids
+  from public.verified_learning_events vle
+  where vle.family_id = p_family_id
+    and vle.child_id = any(v_active_child_ids)
+    and not exists (
+      select 1
+      from public.growth_events ge
+      where ge.verified_learning_event_id = vle.id
+    );
+
+  if cardinality(v_candidate_vle_ids) = 0 then
+    return 0;
+  end if;
+
+  -- Order 2/3: Pre-lock all candidate verified_learning_events rows FOR UPDATE in deterministic id asc order.
+  -- This guarantees all VLE row locks precede any downstream child_balances row locks acquired
+  -- during growth processing, preventing lock hierarchy inversion deadlocks (40P01) with concurrent
+  -- single-event process_verified_learning_event calls or concurrent catch_up_unprocessed_growth calls.
+  perform 1
+  from public.verified_learning_events
+  where id = any(v_candidate_vle_ids)
+  order by id asc
+  for update;
+
   for v_event in
-    select vle.id
+    select vle.id, vle.child_id
     from public.verified_learning_events vle
-    where vle.family_id = p_family_id
-      and vle.child_id = any(v_active_child_ids)
-      and not exists (
-        select 1
-        from public.growth_events ge
-        where ge.verified_learning_event_id = vle.id
-      )
+    where vle.id = any(v_candidate_vle_ids)
     order by vle.child_id asc, vle.occurred_at asc, vle.verified_at asc, vle.id asc
   loop
     -- Recheck child status (Order 1 lock already held for share)
     if exists (
       select 1
       from public.child_profiles
-      where id = (select child_id from public.verified_learning_events where id = v_event.id)
+      where id = v_event.child_id
         and family_id = p_family_id
         and status = 'active'
     ) then
-      perform public.process_verified_learning_event(v_event.id, null);
-      v_processed_count := v_processed_count + 1;
+      -- Recheck pending growth processing state after acquiring synchronization locks
+      if not exists (
+        select 1
+        from public.growth_events ge
+        where ge.verified_learning_event_id = v_event.id
+      ) then
+        perform public.process_verified_learning_event(v_event.id, null);
+        v_processed_count := v_processed_count + 1;
+      end if;
     end if;
   end loop;
 
