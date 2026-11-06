@@ -2183,11 +2183,12 @@ begin
     raise exception 'Child profile is archived' using errcode = '42501';
   end if;
 
-  -- 5. Order 3: Resource row lock on verified_learning_events
+  -- 5. Order 4: Advisory serialization lock per VLE
+  perform pg_advisory_xact_lock(hashtext('growth_vle_' || p_verified_event_id::text));
+
   select * into v_event
   from public.verified_learning_events
-  where id = p_verified_event_id
-  for update;
+  where id = p_verified_event_id;
 
   -- 6. Idempotency check 1: Has this verified event already produced a growth event?
   select * into v_existing_growth
@@ -2568,6 +2569,7 @@ declare
   v_child_row record;
   v_active_child_ids uuid[] := '{}';
   v_candidate_vle_ids uuid[] := '{}';
+  v_lock_rec record;
   v_event record;
   v_processed_count integer := 0;
 begin
@@ -2617,15 +2619,18 @@ begin
     return 0;
   end if;
 
-  -- Order 2/3: Pre-lock all candidate verified_learning_events rows FOR UPDATE in deterministic id asc order.
-  -- This guarantees all VLE row locks precede any downstream child_balances row locks acquired
-  -- during growth processing, preventing lock hierarchy inversion deadlocks (40P01) with concurrent
-  -- single-event process_verified_learning_event calls or concurrent catch_up_unprocessed_growth calls.
-  perform 1
-  from public.verified_learning_events
-  where id = any(v_candidate_vle_ids)
-  order by id asc
-  for update;
+  -- Order 4: Advisory serialization locks across all candidate VLEs
+  -- Prelock all candidate growth VLE advisory locks in strictly ascending lock key order
+  -- BEFORE executing any processing. This maintains the monotonic lock hierarchy
+  -- and prevents deadlock with concurrent single-event process_verified_learning_event
+  -- or concurrent catch_up_unprocessed_growth calls.
+  for v_lock_rec in
+    select distinct hashtext('growth_vle_' || cid::text) as k
+    from unnest(v_candidate_vle_ids) as cid
+    order by k asc
+  loop
+    perform pg_advisory_xact_lock(v_lock_rec.k);
+  end loop;
 
   for v_event in
     select vle.id, vle.child_id
