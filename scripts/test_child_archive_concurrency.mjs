@@ -454,6 +454,9 @@ async function main() {
   const T8_DEVICE_B = crypto.randomUUID();
   const T8_GRANT_A = crypto.randomUUID();
   const T8_GRANT_B = crypto.randomUUID();
+  const T8_REWARD_1 = crypto.randomUUID();
+  const T8_REWARD_2 = crypto.randomUUID();
+  const T8_REWARD_3 = crypto.randomUUID();
 
   // Setup Test 8 fixture with sufficient balances and items
   let t8SetupSql = `
@@ -513,8 +516,9 @@ async function main() {
 
     insert into public.rewards (id, family_id, title, description, icon_key, category, store_cost_minor, store_enabled, wheel_enabled, wheel_tier, is_active)
     values
-      ('${REWARD_1}', '${T8_FAMILY_ID}', 'Toy 1', 'Desc', 'toy', 'treat', 1000, true, true, 'common', true),
-      ('${REWARD_2}', '${T8_FAMILY_ID}', 'Game 2', 'Desc', 'game', 'privilege', 1000, true, true, 'rare', true)
+      ('${T8_REWARD_1}', '${T8_FAMILY_ID}', 'Toy 1', 'Desc', 'toy', 'treat', 1000, true, true, 'common', true),
+      ('${T8_REWARD_2}', '${T8_FAMILY_ID}', 'Game 2', 'Desc', 'game', 'privilege', 1000, true, true, 'rare', true),
+      ('${T8_REWARD_3}', '${T8_FAMILY_ID}', 'Book 3', 'Desc', 'book', 'experience', 1000, true, true, 'special', true)
     on conflict (id) do nothing;
   `;
 
@@ -617,10 +621,10 @@ async function main() {
 
   // Group 3 (Workers 29-48, 20 workers): Store Reward Redemption writers
   for (let i = 0; i < 5; i++) {
-    workers.push({ name: `Redeem A${i}`, sql: `set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.redeem_store_reward('${REWARD_1}'::uuid, '${crypto.randomUUID()}'::uuid, '${T8_CHILD_A}'::uuid);` });
-    workers.push({ name: `Redeem B${i}`, sql: `set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.redeem_store_reward('${REWARD_1}'::uuid, '${crypto.randomUUID()}'::uuid, '${T8_CHILD_B}'::uuid);` });
-    workers.push({ name: `Redeem C${i}`, sql: `set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.redeem_store_reward('${REWARD_1}'::uuid, '${crypto.randomUUID()}'::uuid, '${T8_CHILD_C}'::uuid);` });
-    workers.push({ name: `Redeem D${i}`, sql: `set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.redeem_store_reward('${REWARD_1}'::uuid, '${crypto.randomUUID()}'::uuid, '${T8_CHILD_D}'::uuid);` });
+    workers.push({ name: `Redeem A${i}`, sql: `set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.redeem_store_reward('${T8_REWARD_1}'::uuid, '${crypto.randomUUID()}'::uuid, '${T8_CHILD_A}'::uuid);` });
+    workers.push({ name: `Redeem B${i}`, sql: `set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.redeem_store_reward('${T8_REWARD_1}'::uuid, '${crypto.randomUUID()}'::uuid, '${T8_CHILD_B}'::uuid);` });
+    workers.push({ name: `Redeem C${i}`, sql: `set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.redeem_store_reward('${T8_REWARD_1}'::uuid, '${crypto.randomUUID()}'::uuid, '${T8_CHILD_C}'::uuid);` });
+    workers.push({ name: `Redeem D${i}`, sql: `set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.redeem_store_reward('${T8_REWARD_1}'::uuid, '${crypto.randomUUID()}'::uuid, '${T8_CHILD_D}'::uuid);` });
   }
 
   // Group 4 (Workers 49-68, 20 workers): Celebration Wheel Spin writers
