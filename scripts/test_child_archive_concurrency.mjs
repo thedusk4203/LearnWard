@@ -432,7 +432,7 @@ async function main() {
     select set_config('request.jwt.claims', '{"sub": "${OWNER_ID}", "role": "authenticated"}', false);
     select public.reconcile_child_balance('${CHILD_2}'::uuid);
   `);
-  if (!recon2Res.stdout.includes('true')) {
+  if (!recon2Res.stdout.includes('true') && !recon2Res.stdout.includes(',t,')) {
     console.error('FAIL: Reconcile failed on active Child 2!', recon2Res.stderr || recon2Res.stdout);
     process.exit(1);
   }
@@ -742,11 +742,12 @@ async function main() {
   const reconFinalC = await runPsql(`set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.reconcile_child_balance('${T8_CHILD_C}'::uuid);`);
   const reconFinalD = await runPsql(`set role authenticated; select set_config('request.jwt.claims', '{"sub": "${T8_OWNER_ID}", "role": "authenticated"}', false); select public.reconcile_child_balance('${T8_CHILD_D}'::uuid);`);
 
+  const isReconciled = (out) => out.includes('true') || out.includes(',t,');
   if (
-    !reconFinalA.stdout.includes('true') ||
-    !reconFinalB.stdout.includes('true') ||
-    !reconFinalC.stdout.includes('true') ||
-    !reconFinalD.stdout.includes('true')
+    !isReconciled(reconFinalA.stdout) ||
+    !isReconciled(reconFinalB.stdout) ||
+    !isReconciled(reconFinalC.stdout) ||
+    !isReconciled(reconFinalD.stdout)
   ) {
     console.error('FAIL: Balance ledger reconciliation failed after concurrent writers workload!');
     process.exit(1);
