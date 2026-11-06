@@ -583,10 +583,10 @@ async function main() {
 
       insert into public.verified_learning_events (id, family_id, child_id, assessment_id, subject_key, subject, title, assessment_type, difficulty, raw_score, max_score, normalized_score, evidence_count, entry_context, occurred_at, verified_at, verified_by_user_id, review_event_id, learning_catalog_version, grade_level_snapshot)
       values
-        ('${vleA}', '${T8_FAMILY_ID}', '${T8_CHILD_A}', '${pIdA}', 'math', 'Math', 'VLE A${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now(), now(), '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 4),
-        ('${vleB}', '${T8_FAMILY_ID}', '${T8_CHILD_B}', '${pIdB}', 'math', 'Math', 'VLE B${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now(), now(), '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 5),
-        ('${vleC}', '${T8_FAMILY_ID}', '${T8_CHILD_C}', '${pIdC}', 'math', 'Math', 'VLE C${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now(), now(), '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 3),
-        ('${vleD}', '${T8_FAMILY_ID}', '${T8_CHILD_D}', '${pIdD}', 'math', 'Math', 'VLE D${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now(), now(), '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 6);
+        ('${vleA}', '${T8_FAMILY_ID}', '${T8_CHILD_A}', '${pIdA}', 'math', 'Math', 'VLE A${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 4),
+        ('${vleB}', '${T8_FAMILY_ID}', '${T8_CHILD_B}', '${pIdB}', 'math', 'Math', 'VLE B${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 5),
+        ('${vleC}', '${T8_FAMILY_ID}', '${T8_CHILD_C}', '${pIdC}', 'math', 'Math', 'VLE C${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 3),
+        ('${vleD}', '${T8_FAMILY_ID}', '${T8_CHILD_D}', '${pIdD}', 'math', 'Math', 'VLE D${i}', 'quiz', 'normal', 9, 10, 9.00, 0, 'adult', now() - interval '${20 - i} minutes', now() - interval '${20 - i} minutes', '${T8_OWNER_ID}', '${revEv}', 'pilot-v0.1', 6);
     `;
   }
 

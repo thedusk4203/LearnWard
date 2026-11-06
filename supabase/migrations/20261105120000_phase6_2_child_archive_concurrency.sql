@@ -2553,7 +2553,7 @@ begin
       from public.growth_events ge
       where ge.verified_learning_event_id = vle.id
     )
-  order by vle.occurred_at asc, vle.verified_at asc;
+  order by vle.child_id asc, vle.occurred_at asc, vle.verified_at asc, vle.id asc;
 end;
 $$;
 
@@ -2610,7 +2610,7 @@ begin
         from public.growth_events ge
         where ge.verified_learning_event_id = vle.id
       )
-    order by vle.occurred_at asc, vle.verified_at asc
+    order by vle.child_id asc, vle.occurred_at asc, vle.verified_at asc, vle.id asc
   loop
     -- Recheck child status (Order 1 lock already held for share)
     if exists (
@@ -2842,7 +2842,7 @@ begin
         select 1 from public.learning_processing_events lpe
         where lpe.verified_learning_event_id = vle.id
       )
-    order by vle.occurred_at asc, vle.id asc
+    order by vle.child_id asc, vle.occurred_at asc, vle.id asc
   loop
     -- Order 4: Advisory serialization lock per VLE
     perform pg_advisory_xact_lock(hashtext('vle_' || v_vle.id::text));
