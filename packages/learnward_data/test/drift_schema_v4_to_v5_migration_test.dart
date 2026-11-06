@@ -776,25 +776,88 @@ void main() {
 
         final spinUseCase = SpinRewardWheel(fakeServer, database);
 
-        // Calling with different actor does NOT replay usr-1's command
-        fakeServer.failNextWithNetwork = true;
+        // 5. Fail closed on actor mismatch: different actor CANNOT replay usr-1's command
+        // Must throw StateError, must NOT generate replacement command, must NOT call server
         await expectLater(
           () => spinUseCase(
             familyId: FamilyId('fam-1'),
             childId: ChildId('child-1'),
             actorUserId: 'usr-different-actor',
           ),
-          throwsA(isA<Exception>()),
+          throwsA(isA<StateError>()),
         );
 
-        // The new command for usr-different-actor was saved with its own distinct commandId
+        // usr-1's command is still intact and preserved for reconciliation
+        final preservedCmd = await database.findPendingSpinCommand(
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'usr-1',
+        );
+        expect(preservedCmd, isNotNull);
+        expect(preservedCmd!.commandId, equals('cmd-active'));
+
+        // No new command was created for usr-different-actor
         final differentActorCmd = await database.findPendingSpinCommand(
           familyId: 'fam-1',
           childId: 'child-1',
           actorUserId: 'usr-different-actor',
         );
-        expect(differentActorCmd, isNotNull);
-        expect(differentActorCmd!.commandId, isNot(equals('cmd-active')));
+        expect(differentActorCmd, isNull);
+
+        // 6. Fail closed on missing caller actor
+        await expectLater(
+          () => spinUseCase(
+            familyId: FamilyId('fam-1'),
+            childId: ChildId('child-1'),
+            actorUserId: null,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // 7. Successful replay with matching actor sets possiblyDispatched BEFORE remote RPC
+        fakeServer.failNextWithNetwork = true;
+        await expectLater(
+          () => spinUseCase(
+            familyId: FamilyId('fam-1'),
+            childId: ChildId('child-1'),
+            actorUserId: 'usr-1',
+          ),
+          throwsA(isA<Exception>()),
+        );
+
+        // Pre-dispatch durability: row is marked possibly_dispatched on disk
+        final replayedCmd = await database.findPendingSpinCommand(
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'usr-1',
+        );
+        expect(replayedCmd, isNotNull);
+        expect(replayedCmd!.commandId, equals('cmd-active'));
+        expect(
+          replayedCmd.dispatchState,
+          equals(CommandDispatchState.possiblyDispatched),
+        );
+
+        // 8. 42501 permission error does NOT delete the pending command
+        fakeServer.failNextWithPermissionError = true;
+        await expectLater(
+          () => spinUseCase(
+            familyId: FamilyId('fam-1'),
+            childId: ChildId('child-1'),
+            actorUserId: 'usr-1',
+          ),
+          throwsA(isA<Exception>()),
+        );
+        final stillPendingAfter42501 = await database.findPendingSpinCommand(
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'usr-1',
+        );
+        expect(
+          stillPendingAfter42501,
+          isNotNull,
+          reason: '42501 must preserve pending journal row for provenance',
+        );
       } finally {
         await database.close();
       }

@@ -504,4 +504,130 @@ void main() {
     // Verify storage has evidence
     expect(storage.storage.values.first, equals([9, 8, 7]));
   });
+
+  test('SubmitAssessmentDraft blocks quarantined legacy draft with StateError before network call', () async {
+    final draftStore = InMemoryLocalDraftStore();
+    const legacyDraftId = 'legacy-draft-quarantined-1';
+    await draftStore.saveLocalDraft(
+      LocalAssessmentDraft(
+        localDraftId: legacyDraftId,
+        familyId: familyId.value,
+        childId: childId.value,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Legacy Draft',
+        assessmentType: 'quiz',
+        difficulty: 'normal',
+        rawScore: 8.0,
+        maxScore: 10.0,
+        occurredAt: DateTime.utc(2026, 11, 1),
+        updatedAt: DateTime.utc(2026, 11, 1),
+        dispatchState: CommandDispatchState.unknownLegacy,
+      ),
+    );
+
+    final submitWorkflow = SubmitAssessmentDraft(
+      repository: repository,
+      storage: storage,
+      localDraftStore: draftStore,
+    );
+
+    await expectLater(
+      () => submitWorkflow(
+        createCommandId: 'cmd-create-legacy',
+        submitCommandId: 'cmd-submit-legacy',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Legacy Draft',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 8, maxScore: 10),
+        localDraftId: legacyDraftId,
+      ),
+      throwsA(isA<StateError>()),
+    );
+
+    // Verify draft remains quarantined in store
+    final draftAfter = await draftStore.getLocalDraft(legacyDraftId);
+    expect(draftAfter, isNotNull);
+    expect(draftAfter!.dispatchState, CommandDispatchState.unknownLegacy);
+  });
+
+  test('SubmitAssessmentDraft persists possiblyDispatched before remote calls; failure retains state', () async {
+    final draftStore = InMemoryLocalDraftStore();
+    const testDraftId = 'draft-provenance-test-1';
+    await draftStore.saveLocalDraft(
+      LocalAssessmentDraft(
+        localDraftId: testDraftId,
+        familyId: familyId.value,
+        childId: childId.value,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Failing Network Draft',
+        assessmentType: 'quiz',
+        difficulty: 'normal',
+        rawScore: 8.0,
+        maxScore: 10.0,
+        occurredAt: DateTime.utc(2026, 11, 1),
+        updatedAt: DateTime.utc(2026, 11, 1),
+        dispatchState: CommandDispatchState.neverDispatched,
+      ),
+    );
+
+    final failingRepo = _FailingCreateAssessmentRepository();
+
+    final submitWorkflow = SubmitAssessmentDraft(
+      repository: failingRepo,
+      storage: storage,
+      localDraftStore: draftStore,
+    );
+
+    await expectLater(
+      () => submitWorkflow(
+        createCommandId: 'cmd-create-fail',
+        submitCommandId: 'cmd-submit-fail',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Failing Network Draft',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 8, maxScore: 10),
+        localDraftId: testDraftId,
+      ),
+      throwsA(isA<Exception>()),
+    );
+
+    // Draft in store MUST have been updated to possiblyDispatched before remote call
+    final draftAfter = await draftStore.getLocalDraft(testDraftId);
+    expect(draftAfter, isNotNull);
+    expect(draftAfter!.dispatchState, CommandDispatchState.possiblyDispatched);
+    expect(
+      draftAfter.submissionStatus,
+      DraftSubmissionStatus.submittingAssessment,
+    );
+  });
+}
+
+final class _FailingCreateAssessmentRepository
+    extends FakeAssessmentRepository {
+  @override
+  Future<Assessment> createDraft({
+    required String commandId,
+    required FamilyId familyId,
+    required ChildId childId,
+    required SubjectKey subjectKey,
+    required String subject,
+    required String title,
+    required AssessmentType type,
+    required AssessmentDifficulty difficulty,
+    required AssessmentScore score,
+    DateTime? occurredAt,
+    EntryContext entryContext = EntryContext.adult,
+  }) async {
+    throw Exception('Simulated network timeout during createDraft');
+  }
 }

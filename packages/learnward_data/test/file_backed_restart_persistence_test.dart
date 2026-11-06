@@ -44,6 +44,7 @@ void main() {
           familyId: familyId,
           rewardId: rewardId,
           childId: childId,
+          actorUserId: 'usr-child-1',
         ),
         throwsA(isA<SocketException>()),
       );
@@ -76,12 +77,20 @@ void main() {
       final persistedCommandId = pendingOnDisk.commandId;
       expect(persistedCommandId, isNotEmpty);
 
+      // Verify dispatchState is possiblyDispatched
+      expect(
+        pendingOnDisk.dispatchState,
+        CommandDispatchState.possiblyDispatched,
+      );
+      expect(pendingOnDisk.actorUserId, 'usr-child-1');
+
       // Retry redemption with dbB on fresh app session
       final redeemUseCaseB = RedeemStoreReward(server, dbB);
       final recovered = await redeemUseCaseB(
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'usr-child-1',
       );
 
       // Assert exactly 1 server debit occurred (server deduplicated via cached receipt)
@@ -103,6 +112,7 @@ void main() {
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'usr-child-1',
       );
       expect(
         server.debitCount,
@@ -258,6 +268,7 @@ void main() {
         familyId: familyId.value,
         childId: childId.value,
         rewardId: rewardId.value,
+        actorUserId: 'usr-child-1',
         createdAt: DateTime.now().toUtc(),
       );
       await dbA.savePendingCommand(command);
@@ -277,6 +288,7 @@ void main() {
           familyId: familyId,
           rewardId: rewardId,
           childId: childId,
+          actorUserId: 'usr-child-1',
         ),
         throwsA(isA<InvalidRewardException>()),
       );

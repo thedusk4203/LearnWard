@@ -31,6 +31,7 @@ final class FakeWheelRepository implements WheelRepository {
   /// Simulated failure modes for durability & recovery tests.
   bool failNextWithNetwork = false;
   bool failAfterCommitResponseLost = false;
+  bool failNextWithPermissionError = false;
 
   void addReward(Reward reward) => _rewards.add(reward);
 
@@ -153,6 +154,11 @@ final class FakeWheelRepository implements WheelRepository {
       throw Exception(
         'NetworkException: Connection timeout before reaching server',
       );
+    }
+
+    if (failNextWithPermissionError) {
+      failNextWithPermissionError = false;
+      throw Exception('PostgreSQL error 42501: permission denied');
     }
 
     // 3. Resolve family & settings

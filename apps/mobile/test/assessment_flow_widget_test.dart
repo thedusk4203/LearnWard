@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:learnward/app/app.dart';
 import 'package:learnward/app/bootstrap/app_providers.dart';
 import 'package:learnward/app/bootstrap/in_memory_repositories.dart';
+import 'package:learnward/features/assessments/presentation/add_assessment_screen.dart';
 import 'package:learnward/features/assessments/presentation/evidence_picker_service.dart';
 import 'package:learnward/features/assessments/services/local_evidence_file_store.dart';
 import 'package:learnward_application/learnward_application.dart';
@@ -744,6 +745,99 @@ void main() {
       // Friendly error should be mapped without raw SQL details
       expect(find.textContaining('Network connection issue'), findsOneWidget);
       expect(find.textContaining('PG_ERR_5432'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'AddAssessmentScreen displays quarantine banner, disables submit, and preserves metadata for unknown_legacy draft',
+    (tester) async {
+      final legacyDraft = LocalAssessmentDraft(
+        localDraftId: 'legacy-draft-quarantine-test',
+        familyId: testFamily.id.value,
+        childId: testChild.id.value,
+        subjectKey: SubjectKey.science,
+        subject: 'Physics',
+        title: 'Legacy Physics Lab',
+        assessmentType: 'quiz',
+        difficulty: 'hard',
+        rawScore: 9.0,
+        maxScore: 10.0,
+        occurredAt: now,
+        updatedAt: now,
+        dispatchState: CommandDispatchState.unknownLegacy,
+        submissionStatus: DraftSubmissionStatus.draft,
+        retryCount: 2,
+        actorUserId: 'usr-legacy-actor',
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+            familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
+            childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
+            assessmentRepositoryProvider.overrideWithValue(fakeAssessmentRepo),
+            assessmentEvidenceStorageProvider.overrideWithValue(fakeStorage),
+            localEvidenceFileStoreProvider.overrideWithValue(
+              fakeEvidenceFileStore,
+            ),
+            localDraftStoreProvider.overrideWithValue(fakeDraftStore),
+            activeFamilyProvider.overrideWith(
+              () => _PresetFamilyNotifier(testFamily),
+            ),
+            activeChildModeProvider.overrideWith(
+              () => _PresetActiveChildNotifier(testChild),
+            ),
+          ],
+          child: MaterialApp(
+            home: AddAssessmentScreen(initialDraft: legacyDraft),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 1. Verify quarantine banner is displayed
+      expect(
+        find.byKey(const Key('legacy_draft_quarantine_banner')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          'This draft was preserved from an earlier app version',
+        ),
+        findsOneWidget,
+      );
+
+      // 2. Verify Submit for Review button is disabled
+      final submitButtonFinder = find.byKey(
+        const Key('submit_assessment_button'),
+      );
+      expect(submitButtonFinder, findsOneWidget);
+      final submitButton = tester.widget<FilledButton>(submitButtonFinder);
+      expect(
+        submitButton.enabled,
+        isFalse,
+        reason: 'Submit button must be disabled for quarantined legacy drafts',
+      );
+
+      // 3. Tap Save Local Draft and verify metadata is preserved
+      final saveButtonFinder = find.byKey(const Key('save_draft_button'));
+      expect(saveButtonFinder, findsOneWidget);
+      await tester.ensureVisible(saveButtonFinder);
+      await tester.tap(saveButtonFinder);
+      await tester.pumpAndSettle();
+
+      final savedDraft = await fakeDraftStore.getLocalDraft(
+        'legacy-draft-quarantine-test',
+      );
+      expect(savedDraft, isNotNull);
+      expect(
+        savedDraft!.dispatchState,
+        equals(CommandDispatchState.unknownLegacy),
+        reason: 'Saving local draft must preserve unknown_legacy dispatchState',
+      );
+      expect(savedDraft.retryCount, equals(2));
+      expect(savedDraft.actorUserId, equals('usr-legacy-actor'));
     },
   );
 }

@@ -28,23 +28,35 @@ final class SpinRewardWheel {
     final existing = await _commandStore.findPendingSpinCommand(
       familyId: familyId.value,
       childId: childId.value,
-      actorUserId: actorUserId,
+      recoveryState: null,
     );
 
-    final canReplayExisting =
-        existing != null &&
-        existing.recoveryState == CommandRecoveryState.active &&
-        existing.dispatchState != CommandDispatchState.unknownLegacy &&
-        existing.dispatchState != CommandDispatchState.confirmedCommitted &&
-        (actorUserId == null ||
-            existing.actorUserId == null ||
-            existing.actorUserId == actorUserId);
+    final String actualCommandId;
+    if (existing != null) {
+      final canReplayExisting =
+          actorUserId != null &&
+          actorUserId.isNotEmpty &&
+          existing.actorUserId != null &&
+          existing.actorUserId == actorUserId &&
+          existing.canAutoReplay;
 
-    final actualCommandId = canReplayExisting
-        ? existing.commandId
-        : commandId ?? (uuidGenerator?.call() ?? _generateUuid());
+      if (!canReplayExisting) {
+        throw StateError(
+          'Cannot dispatch reward command: an unresolved pending command exists '
+          '(id: ${existing.commandId}, recoveryState: ${existing.recoveryState.wireValue}, '
+          'dispatchState: ${existing.dispatchState.wireValue}) that is ineligible for automatic replay. '
+          'Reconciliation is required.',
+        );
+      }
 
-    if (existing == null || !canReplayExisting) {
+      actualCommandId = existing.commandId;
+      await _commandStore.savePendingCommand(
+        existing.copyWith(
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+      );
+    } else {
+      actualCommandId = commandId ?? (uuidGenerator?.call() ?? _generateUuid());
       await _commandStore.savePendingCommand(
         PendingRewardCommand(
           operation: RewardCommandOperation.spinWheel,
@@ -54,6 +66,7 @@ final class SpinRewardWheel {
           actorUserId: actorUserId,
           actorRole: actorRole,
           createdAt: DateTime.now().toUtc(),
+          dispatchState: CommandDispatchState.possiblyDispatched,
         ),
       );
     }
@@ -81,7 +94,6 @@ final class SpinRewardWheel {
         msg.contains('LW203') || // Pool size < 3
         msg.contains('LW206') || // Wheel disabled
         msg.contains('LW004') || // Timezone / invalid
-        msg.contains('42501') || // Permission denied
         msg.contains('P0002') || // Child not found
         msg.contains('22000') || // Bad argument
         msg.contains('InvalidWheelException')) {

@@ -29,23 +29,35 @@ final class RedeemStoreReward {
       familyId: familyId.value,
       childId: childId.value,
       rewardId: rewardId.value,
-      actorUserId: actorUserId,
+      recoveryState: null,
     );
 
-    final canReplayExisting =
-        existing != null &&
-        existing.recoveryState == CommandRecoveryState.active &&
-        existing.dispatchState != CommandDispatchState.unknownLegacy &&
-        existing.dispatchState != CommandDispatchState.confirmedCommitted &&
-        (actorUserId == null ||
-            existing.actorUserId == null ||
-            existing.actorUserId == actorUserId);
+    final String actualCommandId;
+    if (existing != null) {
+      final canReplayExisting =
+          actorUserId != null &&
+          actorUserId.isNotEmpty &&
+          existing.actorUserId != null &&
+          existing.actorUserId == actorUserId &&
+          existing.canAutoReplay;
 
-    final actualCommandId = canReplayExisting
-        ? existing.commandId
-        : commandId ?? (uuidGenerator?.call() ?? _generateUuid());
+      if (!canReplayExisting) {
+        throw StateError(
+          'Cannot dispatch reward command: an unresolved pending command exists '
+          '(id: ${existing.commandId}, recoveryState: ${existing.recoveryState.wireValue}, '
+          'dispatchState: ${existing.dispatchState.wireValue}) that is ineligible for automatic replay. '
+          'Reconciliation is required.',
+        );
+      }
 
-    if (existing == null || !canReplayExisting) {
+      actualCommandId = existing.commandId;
+      await _commandStore.savePendingCommand(
+        existing.copyWith(
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+      );
+    } else {
+      actualCommandId = commandId ?? (uuidGenerator?.call() ?? _generateUuid());
       await _commandStore.savePendingCommand(
         PendingRewardCommand(
           operation: RewardCommandOperation.redeemReward,
@@ -56,6 +68,7 @@ final class RedeemStoreReward {
           actorUserId: actorUserId,
           actorRole: actorRole,
           createdAt: DateTime.now().toUtc(),
+          dispatchState: CommandDispatchState.possiblyDispatched,
         ),
       );
     }
@@ -84,7 +97,6 @@ final class RedeemStoreReward {
         msg.contains('LW205') ||
         msg.contains('LW206') ||
         msg.contains('LW004') ||
-        msg.contains('42501') ||
         msg.contains('InvalidRedemptionException') ||
         msg.contains('InvalidRewardException')) {
       return true;

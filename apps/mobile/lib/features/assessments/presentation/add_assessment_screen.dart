@@ -202,6 +202,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final raw = double.tryParse(_rawScoreController.text.trim()) ?? 0.0;
     final max = double.tryParse(_maxScoreController.text.trim()) ?? 10.0;
 
+    final initial = widget.initialDraft;
     final draft = LocalAssessmentDraft(
       localDraftId: _localDraftId,
       familyId: activeChild.familyId.value,
@@ -225,6 +226,17 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       occurredAt: _occurredAt,
       updatedAt: DateTime.now().toUtc(),
       entryContext: EntryContext.sharedChild,
+      serverEvidenceId: initial?.serverEvidenceId,
+      sha256Checksum: initial?.sha256Checksum,
+      localCompressedPhotoPath: initial?.localCompressedPhotoPath,
+      submissionStatus:
+          initial?.submissionStatus ?? DraftSubmissionStatus.draft,
+      retryCount: initial?.retryCount ?? 0,
+      dispatchState:
+          initial?.dispatchState ?? CommandDispatchState.neverDispatched,
+      lastErrorMessage: initial?.lastErrorMessage,
+      actorUserId: initial?.actorUserId ?? ref.read(currentUserIdProvider),
+      actorRole: initial?.actorRole,
     );
 
     final store = ref.read(localDraftStoreProvider);
@@ -237,6 +249,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   Future<void> _submitAssessment() async {
+    if (widget.initialDraft?.isLegacyUnknown ?? false) {
+      setState(() {
+        _errorMessage = 'Cannot submit a quarantined legacy draft. Recovery reconciliation is required.';
+      });
+      return;
+    }
+
     if (!_formKey.currentState!.validate()) return;
 
     final activeChild = ref.read(activeChildModeProvider);
@@ -267,6 +286,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
 
       // Persist local draft state before submitting so that any crash/drop
       // during or before submit preserves the stable command and evidence IDs.
+      final initial = widget.initialDraft;
       final localDraft = LocalAssessmentDraft(
         localDraftId: _localDraftId,
         familyId: activeChild.familyId.value,
@@ -290,6 +310,15 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         occurredAt: _occurredAt,
         updatedAt: DateTime.now().toUtc(),
         entryContext: EntryContext.sharedChild,
+        serverEvidenceId: initial?.serverEvidenceId,
+        sha256Checksum: initial?.sha256Checksum,
+        localCompressedPhotoPath: initial?.localCompressedPhotoPath,
+        submissionStatus: DraftSubmissionStatus.submittingAssessment,
+        retryCount: initial?.retryCount ?? 0,
+        dispatchState: CommandDispatchState.possiblyDispatched,
+        lastErrorMessage: null,
+        actorUserId: initial?.actorUserId ?? ref.read(currentUserIdProvider),
+        actorRole: initial?.actorRole,
       );
       await localStore.saveLocalDraft(localDraft);
 
@@ -394,6 +423,37 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (widget.initialDraft?.isLegacyUnknown ?? false) ...[
+                      Card(
+                        key: const Key('legacy_draft_quarantine_banner'),
+                        color: theme.colorScheme.tertiaryContainer,
+                        child: Padding(
+                          padding: const EdgeInsets.all(AppSpacing.md),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.warning_amber_rounded,
+                                color: theme.colorScheme.onTertiaryContainer,
+                              ),
+                              const SizedBox(width: AppSpacing.md),
+                              Expanded(
+                                child: Text(
+                                  'This draft was preserved from an earlier app version with unverified sync state. '
+                                  'It has been quarantined for data safety and cannot be submitted directly. '
+                                  'You may review or edit its contents and save locally.',
+                                  style: TextStyle(
+                                    color:
+                                        theme.colorScheme.onTertiaryContainer,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                    ],
                     if (_errorMessage != null) ...[
                       Card(
                         color: theme.colorScheme.errorContainer,
@@ -686,7 +746,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                         Expanded(
                           child: FilledButton(
                             key: const Key('submit_assessment_button'),
-                            onPressed: _isSubmitting ? null : _submitAssessment,
+                            onPressed:
+                                (_isSubmitting ||
+                                    (widget.initialDraft?.isLegacyUnknown ??
+                                        false))
+                                ? null
+                                : _submitAssessment,
                             child: _isSubmitting
                                 ? const SizedBox(
                                     height: 20,

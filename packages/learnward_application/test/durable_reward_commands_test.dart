@@ -22,12 +22,17 @@ void main() {
     });
 
     test('Redeem commit-response-loss: exactly 1 debit across failure and restart, subsequent action gets new command ID', () async {
-      // 1. Initial attempt with simulated response loss
+      // 1. Initial attempt with simulated response loss and authenticated actor
       var redeemUseCase = RedeemStoreReward(server, commandStore);
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
-        redeemUseCase(familyId: familyId, rewardId: rewardId, childId: childId),
+        redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
         throwsA(isA<SocketException>()),
       );
 
@@ -35,22 +40,28 @@ void main() {
       expect(server.debitCount, 1);
       expect(server.childBalances[childId.value], 3500);
 
-      // Client preserved pending command in journal
+      // Client preserved pending command in journal with possibly_dispatched state
       final pendingList = await commandStore.listPendingCommands(
         familyId: familyId.value,
         childId: childId.value,
       );
       expect(pendingList.length, 1);
       final firstCommandId = pendingList.first.commandId;
+      expect(pendingList.first.actorUserId, 'actor-child-1');
+      expect(
+        pendingList.first.dispatchState,
+        CommandDispatchState.possiblyDispatched,
+      );
 
       // 2. Simulate complete application restart (new use case instance reading persistent store)
       redeemUseCase = RedeemStoreReward(server, commandStore);
 
-      // 3. User retries claim or screen recovers
+      // 3. User retries claim or screen recovers with matching actor
       final recoveredRedemption = await redeemUseCase(
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'actor-child-1',
       );
 
       // Verify NO duplicate debit occurred
@@ -71,6 +82,7 @@ void main() {
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'actor-child-1',
       );
 
       // Verified new command ID and second legitimate debit
@@ -85,6 +97,113 @@ void main() {
       // The first and subsequent command IDs are distinct
       expect(server.commandReceipts.keys.toList(), contains(firstCommandId));
       expect(server.commandReceipts.keys.length, 2);
+    });
+
+    test(
+      'Redeem fail closed: cannot replay when actor is missing or mismatched',
+      () async {
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.redeemReward,
+            commandId: 'cmd-redeem-no-actor',
+            familyId: familyId.value,
+            childId: childId.value,
+            rewardId: rewardId.value,
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        final redeemUseCase = RedeemStoreReward(server, commandStore);
+
+        // Attempting to dispatch must fail closed with StateError, not touch server
+        await expectLater(
+          () => redeemUseCase(
+            familyId: familyId,
+            rewardId: rewardId,
+            childId: childId,
+            actorUserId: 'actor-child-1',
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Clean up and test actor mismatch
+        await commandStore.deletePendingCommand('cmd-redeem-no-actor');
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.redeemReward,
+            commandId: 'cmd-redeem-actor-1',
+            familyId: familyId.value,
+            childId: childId.value,
+            rewardId: rewardId.value,
+            actorUserId: 'actor-child-1',
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        await expectLater(
+          () => redeemUseCase(
+            familyId: familyId,
+            rewardId: rewardId,
+            childId: childId,
+            actorUserId: 'actor-different',
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        await commandStore.deletePendingCommand('cmd-redeem-actor-1');
+      },
+    );
+
+    test('Redeem fail closed: cannot replay when existing command is quarantined or legacy unknown', () async {
+      // Quarantined
+      await commandStore.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.redeemReward,
+          commandId: 'cmd-redeem-quarantined',
+          familyId: familyId.value,
+          childId: childId.value,
+          rewardId: rewardId.value,
+          actorUserId: 'actor-child-1',
+          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
+          createdAt: DateTime.now().toUtc(),
+        ),
+      );
+
+      final redeemUseCase = RedeemStoreReward(server, commandStore);
+      await expectLater(
+        () => redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      await commandStore.deletePendingCommand('cmd-redeem-quarantined');
+
+      // Legacy unknown
+      await commandStore.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.redeemReward,
+          commandId: 'cmd-redeem-legacy',
+          familyId: familyId.value,
+          childId: childId.value,
+          rewardId: rewardId.value,
+          actorUserId: 'actor-child-1',
+          dispatchState: CommandDispatchState.unknownLegacy,
+          createdAt: DateTime.now().toUtc(),
+        ),
+      );
+      await expectLater(
+        () => redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      await commandStore.deletePendingCommand('cmd-redeem-legacy');
     });
 
     test('Fulfill commit-response-loss: exactly 1 transition across failure and restart, subsequent action gets new command ID', () async {

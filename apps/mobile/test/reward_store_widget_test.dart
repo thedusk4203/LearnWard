@@ -258,6 +258,7 @@ void main() {
             familyId: testFamily.id.value,
             childId: testChild.id.value,
             rewardId: createdReward.id.value,
+            actorUserId: 'parent-1',
             createdAt: DateTime.now().toUtc(),
           ),
         );
@@ -265,6 +266,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              currentUserIdProvider.overrideWithValue('parent-1'),
               activeFamilyProvider.overrideWith(
                 () => _PresetActiveFamilyNotifier(testFamily),
               ),

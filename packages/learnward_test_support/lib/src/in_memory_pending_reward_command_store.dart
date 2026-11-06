@@ -19,14 +19,14 @@ final class InMemoryPendingRewardCommandStore
   Future<PendingRewardCommand?> findPendingSpinCommand({
     required String familyId,
     required String childId,
-    CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
     String? actorUserId,
   }) async {
     for (final cmd in _commands.values.toList().reversed) {
       if (cmd.operation == RewardCommandOperation.spinWheel &&
           cmd.familyId == familyId &&
           cmd.childId == childId &&
-          cmd.recoveryState == recoveryState &&
+          (recoveryState == null || cmd.recoveryState == recoveryState) &&
           (actorUserId == null || cmd.actorUserId == actorUserId)) {
         return cmd;
       }
@@ -39,7 +39,7 @@ final class InMemoryPendingRewardCommandStore
     required String familyId,
     required String childId,
     required String rewardId,
-    CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
     String? actorUserId,
   }) async {
     for (final cmd in _commands.values.toList().reversed) {
@@ -47,7 +47,7 @@ final class InMemoryPendingRewardCommandStore
           cmd.familyId == familyId &&
           cmd.childId == childId &&
           cmd.rewardId == rewardId &&
-          cmd.recoveryState == recoveryState &&
+          (recoveryState == null || cmd.recoveryState == recoveryState) &&
           (actorUserId == null || cmd.actorUserId == actorUserId)) {
         return cmd;
       }
@@ -59,13 +59,13 @@ final class InMemoryPendingRewardCommandStore
   Future<PendingRewardCommand?> findPendingRedemptionCommand({
     required RewardCommandOperation operation,
     required String redemptionId,
-    CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
     String? actorUserId,
   }) async {
     for (final cmd in _commands.values.toList().reversed) {
       if (cmd.operation == operation &&
           cmd.redemptionId == redemptionId &&
-          cmd.recoveryState == recoveryState &&
+          (recoveryState == null || cmd.recoveryState == recoveryState) &&
           (actorUserId == null || cmd.actorUserId == actorUserId)) {
         return cmd;
       }

@@ -416,7 +416,7 @@ class AppDatabase extends _$AppDatabase
   Future<PendingRewardCommand?> findPendingSpinCommand({
     required String familyId,
     required String childId,
-    CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
     String? actorUserId,
   }) async {
     final query = select(pendingRewardCommands)
@@ -424,9 +424,13 @@ class AppDatabase extends _$AppDatabase
         (entry) =>
             entry.operation.equals(RewardCommandOperation.spinWheel.wireValue) &
             entry.familyId.equals(familyId) &
-            entry.childId.equals(childId) &
-            entry.recoveryState.equals(recoveryState.wireValue),
+            entry.childId.equals(childId),
       );
+    if (recoveryState != null) {
+      query.where(
+        (entry) => entry.recoveryState.equals(recoveryState.wireValue),
+      );
+    }
     if (actorUserId != null) {
       query.where((entry) => entry.actorUserId.equals(actorUserId));
     }
@@ -443,7 +447,7 @@ class AppDatabase extends _$AppDatabase
     required String familyId,
     required String childId,
     required String rewardId,
-    CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
     String? actorUserId,
   }) async {
     final query = select(pendingRewardCommands)
@@ -454,9 +458,13 @@ class AppDatabase extends _$AppDatabase
             ) &
             entry.familyId.equals(familyId) &
             entry.childId.equals(childId) &
-            entry.rewardId.equals(rewardId) &
-            entry.recoveryState.equals(recoveryState.wireValue),
+            entry.rewardId.equals(rewardId),
       );
+    if (recoveryState != null) {
+      query.where(
+        (entry) => entry.recoveryState.equals(recoveryState.wireValue),
+      );
+    }
     if (actorUserId != null) {
       query.where((entry) => entry.actorUserId.equals(actorUserId));
     }
@@ -472,16 +480,20 @@ class AppDatabase extends _$AppDatabase
   Future<PendingRewardCommand?> findPendingRedemptionCommand({
     required RewardCommandOperation operation,
     required String redemptionId,
-    CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
     String? actorUserId,
   }) async {
     final query = select(pendingRewardCommands)
       ..where(
         (entry) =>
             entry.operation.equals(operation.wireValue) &
-            entry.redemptionId.equals(redemptionId) &
-            entry.recoveryState.equals(recoveryState.wireValue),
+            entry.redemptionId.equals(redemptionId),
       );
+    if (recoveryState != null) {
+      query.where(
+        (entry) => entry.recoveryState.equals(recoveryState.wireValue),
+      );
+    }
     if (actorUserId != null) {
       query.where((entry) => entry.actorUserId.equals(actorUserId));
     }

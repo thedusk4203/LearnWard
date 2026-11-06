@@ -165,10 +165,12 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
           ref.read(rewardRepositoryProvider),
           commandStore,
         );
+        final actorUserId = ref.read(currentUserIdProvider);
         await redeemUseCase(
           familyId: family.id,
           rewardId: reward.id,
           childId: activeChild.id,
+          actorUserId: actorUserId,
         );
 
         if (mounted) {
@@ -218,11 +220,13 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
         ref.read(rewardRepositoryProvider),
         commandStore,
       );
+      final actorUserId = ref.read(currentUserIdProvider);
       await redeemUseCase(
         commandId: pending.commandId,
         familyId: family.id,
         rewardId: RewardId(pending.rewardId!),
         childId: activeChild.id,
+        actorUserId: actorUserId,
       );
 
       if (mounted) {

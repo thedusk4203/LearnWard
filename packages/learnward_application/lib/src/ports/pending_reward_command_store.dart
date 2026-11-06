@@ -111,7 +111,7 @@ abstract interface class PendingRewardCommandStore {
   Future<PendingRewardCommand?> findPendingSpinCommand({
     required String familyId,
     required String childId,
-    CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
     String? actorUserId,
   });
 
@@ -120,7 +120,7 @@ abstract interface class PendingRewardCommandStore {
     required String familyId,
     required String childId,
     required String rewardId,
-    CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
     String? actorUserId,
   });
 
@@ -128,7 +128,7 @@ abstract interface class PendingRewardCommandStore {
   Future<PendingRewardCommand?> findPendingRedemptionCommand({
     required RewardCommandOperation operation,
     required String redemptionId,
-    CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
     String? actorUserId,
   });
 

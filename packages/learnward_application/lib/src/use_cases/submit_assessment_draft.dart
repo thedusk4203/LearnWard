@@ -2,6 +2,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../ports/assessment_evidence_storage.dart';
 import '../ports/assessment_repository.dart';
+import '../ports/command_lifecycle_states.dart';
 import '../ports/local_draft_store.dart';
 import 'upload_assessment_evidence.dart';
 
@@ -39,6 +40,27 @@ final class SubmitAssessmentDraft {
     EvidenceId? evidenceId,
     String? localDraftId,
   }) async {
+    // Durable pre-dispatch check & provenance:
+    // If draft is unknown_legacy, fail closed immediately.
+    // Otherwise record possibly_dispatched before issuing remote RPC.
+    if (localDraftStore != null && localDraftId != null) {
+      final existingLocal = await localDraftStore!.getLocalDraft(localDraftId);
+      if (existingLocal != null) {
+        if (existingLocal.isLegacyUnknown) {
+          throw StateError(
+            'Cannot submit quarantined legacy assessment draft (id: $localDraftId). '
+            'Draft is in unknown_legacy dispatch state and requires reconciliation before submission.',
+          );
+        }
+        await localDraftStore!.saveLocalDraft(
+          existingLocal.copyWith(
+            submissionStatus: DraftSubmissionStatus.submittingAssessment,
+            dispatchState: CommandDispatchState.possiblyDispatched,
+          ),
+        );
+      }
+    }
+
     // 1. Create server draft via server-authoritative trusted RPC using createCommandId
     final draft = await repository.createDraft(
       commandId: createCommandId,
