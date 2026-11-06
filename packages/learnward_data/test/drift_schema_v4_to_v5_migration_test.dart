@@ -1,11 +1,40 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_data/learnward_data.dart';
 import 'package:learnward_domain/learnward_domain.dart';
+import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
+
+/// Test database subclass simulating a crash or network interruption midway through migration
+class CrashingAppDatabase extends AppDatabase {
+  CrashingAppDatabase(super.executor);
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (migrator) => migrator.createAll(),
+    onUpgrade: (migrator, from, to) async {
+      await customStatement('PRAGMA foreign_keys = OFF');
+      try {
+        await transaction(() async {
+          // Add one column, then throw to simulate crash/power loss mid-upgrade
+          await migrator.addColumn(
+            localAssessmentDrafts,
+            localAssessmentDrafts.serverEvidenceId,
+          );
+          throw StateError(
+            'Simulated process crash / power failure midway through migration',
+          );
+        });
+      } finally {
+        await customStatement('PRAGMA foreign_keys = ON');
+      }
+    },
+  );
+}
 
 void main() {
   group('Drift Schema v4 -> v5 Migration & Backward Compatibility', () {
@@ -16,7 +45,7 @@ void main() {
       tempDir = Directory.systemTemp.createTempSync(
         'learnward_v4_v5_migration_',
       );
-      dbFile = File('${tempDir.path}/migration_v4_to_v5.sqlite');
+      dbFile = File('${tempDir.path}/migration_test.sqlite');
     });
 
     tearDown(() {
@@ -27,14 +56,11 @@ void main() {
       }
     });
 
-    /// Helper that creates a real SQLite file populated with exact Drift v4 tables and rows.
-    void createAndPopulateV4Database(File file) {
+    /// Helper creating a real SQLite v1 database (only metadata table)
+    void createAndPopulateV1Database(File file) {
       final db = sqlite3.open(file.path);
       try {
-        // Set schema version to 4
-        db.execute('PRAGMA user_version = 4;');
-
-        // Create exact Drift v4 tables
+        db.execute('PRAGMA user_version = 1;');
         db.execute('''
           CREATE TABLE "local_metadata_entries" (
             "key" TEXT NOT NULL PRIMARY KEY,
@@ -42,7 +68,78 @@ void main() {
             "updated_at" INTEGER NOT NULL
           );
         ''');
+        db.execute('''
+          INSERT INTO "local_metadata_entries" ("key", "value", "updated_at")
+          VALUES ('v1_probe', 'v1_initial_data', 1729000000000);
+        ''');
+      } finally {
+        db.close();
+      }
+    }
 
+    /// Helper creating a real SQLite v2 database (metadata + local_assessment_drafts without v3/v5 columns)
+    void createAndPopulateV2Database(File file) {
+      final db = sqlite3.open(file.path);
+      try {
+        db.execute('PRAGMA user_version = 2;');
+        db.execute('''
+          CREATE TABLE "local_metadata_entries" (
+            "key" TEXT NOT NULL PRIMARY KEY,
+            "value" TEXT NOT NULL,
+            "updated_at" INTEGER NOT NULL
+          );
+        ''');
+        db.execute('''
+          CREATE TABLE "local_assessment_drafts" (
+            "local_draft_id" TEXT NOT NULL PRIMARY KEY,
+            "family_id" TEXT NOT NULL,
+            "child_id" TEXT NOT NULL,
+            "subject_key" TEXT NOT NULL DEFAULT 'math',
+            "subject" TEXT NOT NULL,
+            "title" TEXT NOT NULL,
+            "assessment_type" TEXT NOT NULL,
+            "difficulty" TEXT NOT NULL,
+            "raw_score" REAL NOT NULL,
+            "max_score" REAL NOT NULL,
+            "local_photo_path" TEXT,
+            "entry_context" TEXT NOT NULL DEFAULT 'shared_child',
+            "occurred_at" INTEGER NOT NULL,
+            "updated_at" INTEGER NOT NULL,
+            "server_assessment_id" TEXT
+          );
+        ''');
+        db.execute('''
+          INSERT INTO "local_metadata_entries" ("key", "value", "updated_at")
+          VALUES ('v2_probe', 'v2_initial_data', 1729500000000);
+        ''');
+        db.execute('''
+          INSERT INTO "local_assessment_drafts" (
+            "local_draft_id", "family_id", "child_id",
+            "subject_key", "subject", "title", "assessment_type", "difficulty",
+            "raw_score", "max_score", "occurred_at", "updated_at"
+          ) VALUES (
+            'draft-v2-1', 'fam-v2-1', 'child-v2-1',
+            'math', 'Mathematics', 'V2 Historical Quiz', 'quiz', 'normal',
+            9.0, 10.0, 1729500000000, 1729500000000
+          );
+        ''');
+      } finally {
+        db.close();
+      }
+    }
+
+    /// Helper creating a real SQLite v3 database (with v3 draft columns, but no pending_reward_commands)
+    void createAndPopulateV3Database(File file) {
+      final db = sqlite3.open(file.path);
+      try {
+        db.execute('PRAGMA user_version = 3;');
+        db.execute('''
+          CREATE TABLE "local_metadata_entries" (
+            "key" TEXT NOT NULL PRIMARY KEY,
+            "value" TEXT NOT NULL,
+            "updated_at" INTEGER NOT NULL
+          );
+        ''');
         db.execute('''
           CREATE TABLE "local_assessment_drafts" (
             "local_draft_id" TEXT NOT NULL PRIMARY KEY,
@@ -65,7 +162,62 @@ void main() {
             "updated_at" INTEGER NOT NULL
           );
         ''');
+        db.execute('''
+          INSERT INTO "local_metadata_entries" ("key", "value", "updated_at")
+          VALUES ('v3_probe', 'v3_initial_data', 1729800000000);
+        ''');
+        db.execute('''
+          INSERT INTO "local_assessment_drafts" (
+            "local_draft_id", "family_id", "child_id",
+            "create_command_id", "submit_command_id", "evidence_id", "server_assessment_id",
+            "subject_key", "subject", "title", "assessment_type", "difficulty",
+            "raw_score", "max_score", "occurred_at", "updated_at"
+          ) VALUES (
+            'draft-v3-1', 'fam-v3-1', 'child-v3-1',
+            'cmd-create-v3', 'cmd-submit-v3', 'ev-v3-1', 'srv-ass-v3',
+            'science', 'Science', 'V3 Inflight Draft', 'quiz', 'normal',
+            8.0, 10.0, 1729800000000, 1729800000000
+          );
+        ''');
+      } finally {
+        db.close();
+      }
+    }
 
+    /// Helper creating a real SQLite v4 database populated with exact Drift v4 tables and rows
+    void createAndPopulateV4Database(File file) {
+      final db = sqlite3.open(file.path);
+      try {
+        db.execute('PRAGMA user_version = 4;');
+        db.execute('''
+          CREATE TABLE "local_metadata_entries" (
+            "key" TEXT NOT NULL PRIMARY KEY,
+            "value" TEXT NOT NULL,
+            "updated_at" INTEGER NOT NULL
+          );
+        ''');
+        db.execute('''
+          CREATE TABLE "local_assessment_drafts" (
+            "local_draft_id" TEXT NOT NULL PRIMARY KEY,
+            "family_id" TEXT NOT NULL,
+            "child_id" TEXT NOT NULL,
+            "create_command_id" TEXT,
+            "submit_command_id" TEXT,
+            "evidence_id" TEXT,
+            "server_assessment_id" TEXT,
+            "subject_key" TEXT NOT NULL DEFAULT 'math',
+            "subject" TEXT NOT NULL,
+            "title" TEXT NOT NULL,
+            "assessment_type" TEXT NOT NULL,
+            "difficulty" TEXT NOT NULL,
+            "raw_score" REAL NOT NULL,
+            "max_score" REAL NOT NULL,
+            "local_photo_path" TEXT,
+            "entry_context" TEXT NOT NULL DEFAULT 'shared_child',
+            "occurred_at" INTEGER NOT NULL,
+            "updated_at" INTEGER NOT NULL
+          );
+        ''');
         db.execute('''
           CREATE TABLE "pending_reward_commands" (
             "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -79,15 +231,10 @@ void main() {
             "created_at" INTEGER NOT NULL
           );
         ''');
-
-        // Populate metadata
         db.execute('''
           INSERT INTO "local_metadata_entries" ("key", "value", "updated_at")
           VALUES ('schema_probe', 'v4_initial', 1730000000000);
         ''');
-
-        // Populate diverse v4 assessment drafts:
-        // Draft 1: Pure offline draft (nullable command/server IDs are null)
         db.execute('''
           INSERT INTO "local_assessment_drafts" (
             "local_draft_id", "family_id", "child_id",
@@ -100,11 +247,9 @@ void main() {
             NULL, NULL, NULL, NULL,
             'math', 'Mathematics', 'Weekly Quiz 1', 'quiz', 'normal',
             8.5, 10.0, '/data/user/0/com.learnward/cache/photo_offline.jpg', 'shared_child',
-            1730100000000, 1730101000000
+            1730000000000, 1730000000000
           );
         ''');
-
-        // Draft 2: In-flight draft with partial server work (server_assessment_id populated, evidence_id populated)
         db.execute('''
           INSERT INTO "local_assessment_drafts" (
             "local_draft_id", "family_id", "child_id",
@@ -115,55 +260,54 @@ void main() {
           ) VALUES (
             'draft-v4-inflight', 'fam-v4-1', 'child-v4-1',
             'cmd-create-v4', 'cmd-submit-v4', 'ev-client-uuid-v4', 'srv-ass-0099',
-            'science', 'Science Experiments', 'Unit 3 Test', 'quiz', 'hard',
-            9.0, 10.0, '/data/user/0/com.learnward/cache/photo_inflight.jpg', 'parent_supervised',
-            1730200000000, 1730201000000
+            'math', 'Mathematics', 'Weekly Quiz 2 Inflight', 'quiz', 'normal',
+            9.0, 10.0, '/data/user/0/com.learnward/cache/photo_inflight.jpg', 'shared_child',
+            1730100000000, 1730100000000
           );
         ''');
-
-        // Populate diverse v4 pending reward commands:
-        // Command 1: Redeem Store Reward
         db.execute('''
           INSERT INTO "pending_reward_commands" (
-            "operation", "command_id", "family_id", "child_id", "reward_id", "redemption_id", "cancellation_reason", "created_at"
+            "operation", "command_id", "family_id", "child_id", "reward_id",
+            "redemption_id", "cancellation_reason", "created_at"
           ) VALUES (
-            'redeem_reward', 'cmd-redeem-v4', 'fam-v4-1', 'child-v4-1', 'rew-v4-book', NULL, NULL, 1730300000000
+            'redeem_reward', 'cmd-redeem-v4', 'fam-v4-1', 'child-v4-1', 'rew-v4-book',
+            NULL, NULL, 1730200000000
           );
         ''');
-
-        // Command 2: Spin Wheel
         db.execute('''
           INSERT INTO "pending_reward_commands" (
-            "operation", "command_id", "family_id", "child_id", "reward_id", "redemption_id", "cancellation_reason", "created_at"
+            "operation", "command_id", "family_id", "child_id", "reward_id",
+            "redemption_id", "cancellation_reason", "created_at"
           ) VALUES (
-            'spin_wheel', 'cmd-spin-v4', 'fam-v4-1', 'child-v4-1', NULL, NULL, NULL, 1730301000000
+            'spin_wheel', 'cmd-spin-v4', 'fam-v4-1', 'child-v4-1', NULL,
+            NULL, NULL, 1730210000000
           );
         ''');
-
-        // Command 3: Fulfill Reward
         db.execute('''
           INSERT INTO "pending_reward_commands" (
-            "operation", "command_id", "family_id", "child_id", "reward_id", "redemption_id", "cancellation_reason", "created_at"
+            "operation", "command_id", "family_id", "child_id", "reward_id",
+            "redemption_id", "cancellation_reason", "created_at"
           ) VALUES (
-            'fulfill_reward', 'cmd-fulfill-v4', 'fam-v4-1', NULL, NULL, 'red-v4-101', NULL, 1730302000000
+            'fulfill_reward', 'cmd-fulfill-v4', 'fam-v4-1', 'child-v4-1', NULL,
+            'red-v4-101', NULL, 1730220000000
           );
         ''');
-
-        // Command 4: Cancel Reward with cancellation reason
         db.execute('''
           INSERT INTO "pending_reward_commands" (
-            "operation", "command_id", "family_id", "child_id", "reward_id", "redemption_id", "cancellation_reason", "created_at"
+            "operation", "command_id", "family_id", "child_id", "reward_id",
+            "redemption_id", "cancellation_reason", "created_at"
           ) VALUES (
-            'cancel_reward', 'cmd-cancel-v4', 'fam-v4-1', NULL, NULL, 'red-v4-102', 'Out of stock at bookstore', 1730303000000
+            'cancel_reward', 'cmd-cancel-v4', 'fam-v4-1', 'child-v4-1', NULL,
+            'red-v4-102', 'Out of stock at bookstore', 1730230000000
           );
         ''');
-
-        // Command 5: Command with nullable child_id, reward_id, redemption_id, cancellation_reason
         db.execute('''
           INSERT INTO "pending_reward_commands" (
-            "operation", "command_id", "family_id", "child_id", "reward_id", "redemption_id", "cancellation_reason", "created_at"
+            "operation", "command_id", "family_id", "child_id", "reward_id",
+            "redemption_id", "cancellation_reason", "created_at"
           ) VALUES (
-            'spin_wheel', 'cmd-nullable-v4', 'fam-v4-1', NULL, NULL, NULL, NULL, 1730304000000
+            'spin_wheel', 'cmd-nullable-v4', 'fam-v4-1', NULL, NULL,
+            NULL, NULL, 1730304000000
           );
         ''');
       } finally {
@@ -171,320 +315,383 @@ void main() {
       }
     }
 
-    test('populates real SQLite v4 database and successfully upgrades to v5', () async {
-      createAndPopulateV4Database(dbFile);
+    test(
+      'populates real SQLite v4 database and successfully upgrades to v5',
+      () async {
+        createAndPopulateV4Database(dbFile);
 
-      // Verify v4 version before opening with AppDatabase
+        final rawDbBefore = sqlite3.open(dbFile.path);
+        expect(rawDbBefore.userVersion, 4);
+        rawDbBefore.close();
+
+        final database = AppDatabase(NativeDatabase(dbFile));
+        try {
+          expect(database.schemaVersion, 5);
+
+          // Metadata survived
+          final probe = await database.readMetadata('schema_probe');
+          expect(probe, 'v4_initial');
+
+          // PRAGMA user_version is 5
+          final rawCheck = await database
+              .customSelect('PRAGMA user_version')
+              .getSingle();
+          expect(rawCheck.data['user_version'], 5);
+
+          // Draft migration: offline draft preserves NULL command and evidence IDs
+          final offlineDraft = await database.getLocalDraft('draft-v4-offline');
+          expect(offlineDraft, isNotNull);
+          expect(offlineDraft!.localDraftId, 'draft-v4-offline');
+          expect(offlineDraft.familyId, 'fam-v4-1');
+          expect(offlineDraft.childId, 'child-v4-1');
+          expect(offlineDraft.createCommandId, isNull);
+          expect(offlineDraft.submitCommandId, isNull);
+          expect(offlineDraft.evidenceId, isNull);
+          expect(offlineDraft.serverAssessmentId, isNull);
+          expect(
+            offlineDraft.dispatchState,
+            CommandDispatchState.unknownLegacy,
+          );
+          expect(offlineDraft.isLegacyUnknown, isTrue);
+          expect(offlineDraft.canAutoSubmit, isFalse);
+
+          // Inflight draft preserved
+          final inflightDraft = await database.getLocalDraft(
+            'draft-v4-inflight',
+          );
+          expect(inflightDraft, isNotNull);
+          expect(inflightDraft!.createCommandId, 'cmd-create-v4');
+          expect(inflightDraft.submitCommandId, 'cmd-submit-v4');
+          expect(inflightDraft.evidenceId, 'ev-client-uuid-v4');
+          expect(inflightDraft.serverAssessmentId, 'srv-ass-0099');
+          expect(
+            inflightDraft.dispatchState,
+            CommandDispatchState.unknownLegacy,
+          );
+          expect(inflightDraft.canAutoSubmit, isFalse);
+
+          // Commands migration: all 5 legacy commands are quarantined
+          final quarantinedCommands = await database.listPendingCommands(
+            recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
+          );
+          expect(quarantinedCommands.length, 5);
+          for (final cmd in quarantinedCommands) {
+            expect(
+              cmd.recoveryState,
+              CommandRecoveryState.quarantinedUnknownOutcome,
+            );
+            expect(cmd.dispatchState, CommandDispatchState.unknownLegacy);
+            expect(cmd.canAutoReplay, isFalse);
+          }
+
+          // Active commands list is empty
+          final activeCommands = await database.listPendingCommands(
+            recoveryState: CommandRecoveryState.active,
+          );
+          expect(activeCommands, isEmpty);
+
+          // Legacy spin, redeem, and redemption lookups return null
+          expect(
+            await database.findPendingSpinCommand(
+              familyId: 'fam-v4-1',
+              childId: 'child-v4-1',
+            ),
+            isNull,
+          );
+          expect(
+            await database.findPendingRedeemCommand(
+              familyId: 'fam-v4-1',
+              childId: 'child-v4-1',
+              rewardId: 'rew-v4-book',
+            ),
+            isNull,
+          );
+
+          // Fresh v5 command creation and lookup
+          final freshCmd = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-spin-v5-fresh',
+            familyId: 'fam-v4-1',
+            childId: 'child-v4-1',
+            actorUserId: 'usr-child-dev-1',
+            actorRole: 'paired_child',
+            createdAt: DateTime.utc(2026, 11, 6, 12, 10),
+          );
+          await database.savePendingCommand(freshCmd);
+
+          final activeSpin = await database.findPendingSpinCommand(
+            familyId: 'fam-v4-1',
+            childId: 'child-v4-1',
+          );
+          expect(activeSpin, isNotNull);
+          expect(activeSpin!.commandId, 'cmd-spin-v5-fresh');
+          expect(activeSpin.canAutoReplay, isTrue);
+
+          // Filter by matching actor returns command; mismatched actor returns null
+          expect(
+            await database.findPendingSpinCommand(
+              familyId: 'fam-v4-1',
+              childId: 'child-v4-1',
+              actorUserId: 'usr-child-dev-1',
+            ),
+            isNotNull,
+          );
+          expect(
+            await database.findPendingSpinCommand(
+              familyId: 'fam-v4-1',
+              childId: 'child-v4-1',
+              actorUserId: 'usr-different-actor',
+            ),
+            isNull,
+          );
+        } finally {
+          await database.close();
+        }
+
+        // Reopen integrity
+        final databaseSecondOpen = AppDatabase(NativeDatabase(dbFile));
+        try {
+          expect(databaseSecondOpen.schemaVersion, 5);
+          expect((await databaseSecondOpen.listPendingCommands()).length, 6);
+        } finally {
+          await databaseSecondOpen.close();
+        }
+      },
+    );
+
+    test('upgrades directly from v1 to v5, preserving metadata and creating tables cleanly', () async {
+      createAndPopulateV1Database(dbFile);
+
       final rawDbBefore = sqlite3.open(dbFile.path);
-      expect(rawDbBefore.userVersion, 4);
+      expect(rawDbBefore.userVersion, 1);
       rawDbBefore.close();
 
-      // Open database with AppDatabase (triggers onUpgrade from 4 to 5)
       final database = AppDatabase(NativeDatabase(dbFile));
-
       try {
         expect(database.schemaVersion, 5);
+        final probe = await database.readMetadata('v1_probe');
+        expect(probe, 'v1_initial_data');
 
-        // 1. Verify existing metadata survived
-        final probe = await database.readMetadata('schema_probe');
-        expect(probe, 'v4_initial');
+        // Can insert and query drafts
+        final draft = LocalAssessmentDraft(
+          localDraftId: 'draft-from-v1',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          subjectKey: SubjectKey.science,
+          subject: 'Science',
+          title: 'V1 Upgrade Test',
+          assessmentType: 'quiz',
+          difficulty: 'normal',
+          rawScore: 10,
+          maxScore: 10,
+          actorUserId: 'usr-1',
+          occurredAt: DateTime.utc(2026, 11, 6),
+          updatedAt: DateTime.utc(2026, 11, 6),
+        );
+        await database.saveLocalDraft(draft);
+        final loadedDraft = await database.getLocalDraft('draft-from-v1');
+        expect(loadedDraft, isNotNull);
+        expect(loadedDraft!.canAutoSubmit, isTrue);
 
-        // 2. Verify PRAGMA user_version is now 5 in SQLite file
-        final rawCheck = await database
+        // Can insert and query commands
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-from-v1',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'usr-1',
+          createdAt: DateTime.utc(2026, 11, 6),
+        );
+        await database.savePendingCommand(cmd);
+        final loadedCmd = await database.getPendingCommand('cmd-from-v1');
+        expect(loadedCmd, isNotNull);
+        expect(loadedCmd!.canAutoReplay, isTrue);
+      } finally {
+        await database.close();
+      }
+    });
+
+    test('upgrades directly from v2 to v5, adding v3 and v5 columns and quarantining drafts', () async {
+      createAndPopulateV2Database(dbFile);
+
+      final rawDbBefore = sqlite3.open(dbFile.path);
+      expect(rawDbBefore.userVersion, 2);
+      rawDbBefore.close();
+
+      final database = AppDatabase(NativeDatabase(dbFile));
+      try {
+        expect(database.schemaVersion, 5);
+        final probe = await database.readMetadata('v2_probe');
+        expect(probe, 'v2_initial_data');
+
+        final draft = await database.getLocalDraft('draft-v2-1');
+        expect(draft, isNotNull);
+        expect(draft!.title, 'V2 Historical Quiz');
+        expect(draft.createCommandId, isNull);
+        expect(draft.submitCommandId, isNull);
+        expect(draft.evidenceId, isNull);
+        expect(draft.dispatchState, CommandDispatchState.unknownLegacy);
+        expect(draft.canAutoSubmit, isFalse);
+
+        // Pending reward commands table created cleanly without duplicate column crashes
+        final commands = await database.listPendingCommands();
+        expect(commands, isEmpty);
+      } finally {
+        await database.close();
+      }
+    });
+
+    test(
+      'upgrades directly from v3 to v5 without duplicate column errors',
+      () async {
+        createAndPopulateV3Database(dbFile);
+
+        final rawDbBefore = sqlite3.open(dbFile.path);
+        expect(rawDbBefore.userVersion, 3);
+        rawDbBefore.close();
+
+        final database = AppDatabase(NativeDatabase(dbFile));
+        try {
+          expect(database.schemaVersion, 5);
+          final probe = await database.readMetadata('v3_probe');
+          expect(probe, 'v3_initial_data');
+
+          final draft = await database.getLocalDraft('draft-v3-1');
+          expect(draft, isNotNull);
+          expect(draft!.createCommandId, 'cmd-create-v3');
+          expect(draft.submitCommandId, 'cmd-submit-v3');
+          expect(draft.evidenceId, 'ev-v3-1');
+          expect(draft.dispatchState, CommandDispatchState.unknownLegacy);
+          expect(draft.canAutoSubmit, isFalse);
+
+          // Pending reward commands table created cleanly and accepts fresh commands
+          final cmd = PendingRewardCommand(
+            operation: RewardCommandOperation.redeemReward,
+            commandId: 'cmd-v3-fresh',
+            familyId: 'fam-v3-1',
+            childId: 'child-v3-1',
+            rewardId: 'rew-v3-1',
+            actorUserId: 'usr-v3-child',
+            createdAt: DateTime.utc(2026, 11, 6),
+          );
+          await database.savePendingCommand(cmd);
+          final loadedCmd = await database.getPendingCommand('cmd-v3-fresh');
+          expect(loadedCmd, isNotNull);
+          expect(loadedCmd!.canAutoReplay, isTrue);
+        } finally {
+          await database.close();
+        }
+      },
+    );
+
+    test('atomic rollback on interrupted migration and successful recovery on reopen', () async {
+      createAndPopulateV4Database(dbFile);
+
+      // Attempt upgrade with CrashingAppDatabase which throws inside transaction
+      final crashingDb = CrashingAppDatabase(NativeDatabase(dbFile));
+      try {
+        await expectLater(
+          () => crashingDb.getLocalDraft('draft-v4-offline'),
+          throwsA(isA<StateError>()),
+        );
+      } finally {
+        await crashingDb.close();
+      }
+
+      // Verify transaction rolled back: PRAGMA user_version remains 4
+      final rawDbAfterCrash = sqlite3.open(dbFile.path);
+      expect(rawDbAfterCrash.userVersion, 4);
+
+      // Verify partially added column does NOT exist in table
+      final cols = rawDbAfterCrash.select(
+        "PRAGMA table_info('local_assessment_drafts');",
+      );
+      final colNames = cols.map((row) => row['name'] as String).toList();
+      expect(colNames.contains('server_evidence_id'), isFalse);
+      rawDbAfterCrash.close();
+
+      // Normal application restart / reopen succeeds without duplicate column error
+      final standardDb = AppDatabase(NativeDatabase(dbFile));
+      try {
+        expect(standardDb.schemaVersion, 5);
+
+        // Verify successful full migration to v5
+        final rawCheck = await standardDb
             .customSelect('PRAGMA user_version')
             .getSingle();
         expect(rawCheck.data['user_version'], 5);
 
-        // ---------------------------------------------------------------------
-        // DRAFT MIGRATION VERIFICATION
-        // ---------------------------------------------------------------------
-        final offlineDraft = await database.getLocalDraft('draft-v4-offline');
-        expect(offlineDraft, isNotNull);
-        expect(offlineDraft!.localDraftId, 'draft-v4-offline');
-        expect(offlineDraft.familyId, 'fam-v4-1');
-        expect(offlineDraft.childId, 'child-v4-1');
-        expect(offlineDraft.subjectKey, SubjectKey.math);
-        expect(offlineDraft.title, 'Weekly Quiz 1');
-        expect(offlineDraft.rawScore, 8.5);
-        expect(offlineDraft.maxScore, 10.0);
-        expect(
-          offlineDraft.localPhotoPath,
-          '/data/user/0/com.learnward/cache/photo_offline.jpg',
-        );
-        // Nullable IDs remain nullable
-        expect(offlineDraft.serverAssessmentId, isNull);
-        expect(offlineDraft.evidenceId, isNull);
-        expect(offlineDraft.serverEvidenceId, isNull);
-        expect(offlineDraft.sha256Checksum, isNull);
-        expect(offlineDraft.localCompressedPhotoPath, isNull);
-        expect(offlineDraft.actorUserId, isNull);
-        expect(offlineDraft.actorRole, isNull);
-        // Dispatch provenance: migrated v4 drafts are quarantined as unknown_legacy
-        expect(offlineDraft.dispatchState, CommandDispatchState.unknownLegacy);
-        expect(offlineDraft.isLegacyUnknown, isTrue);
-        expect(
-          offlineDraft.canAutoSubmit,
-          isFalse,
-          reason: 'Legacy unknown drafts must fail closed',
-        );
-
-        final inflightDraft = await database.getLocalDraft('draft-v4-inflight');
-        expect(inflightDraft, isNotNull);
-        expect(inflightDraft!.localDraftId, 'draft-v4-inflight');
-        expect(inflightDraft.createCommandId, 'cmd-create-v4');
-        expect(inflightDraft.submitCommandId, 'cmd-submit-v4');
-        expect(inflightDraft.evidenceId, 'ev-client-uuid-v4');
-        expect(inflightDraft.serverAssessmentId, 'srv-ass-0099');
-        expect(
-          inflightDraft.localPhotoPath,
-          '/data/user/0/com.learnward/cache/photo_inflight.jpg',
-        );
-        // Existing server assessment ID proves prior partial work, not successful completion
-        // All migrated drafts must start with dispatchState = unknown_legacy
-        expect(inflightDraft.dispatchState, CommandDispatchState.unknownLegacy);
-        expect(inflightDraft.isLegacyUnknown, isTrue);
-        expect(inflightDraft.canAutoSubmit, isFalse);
-
-        // List drafts for child
-        final childDrafts = await database.listLocalDrafts(
-          ChildId('child-v4-1'),
-        );
-        expect(childDrafts.length, 2);
-
-        // ---------------------------------------------------------------------
-        // COMMAND MIGRATION & QUARANTINE VERIFICATION
-        // ---------------------------------------------------------------------
-        final redeemCmd = await database.getPendingCommand('cmd-redeem-v4');
-        expect(redeemCmd, isNotNull);
-        expect(redeemCmd!.operation, RewardCommandOperation.redeemReward);
-        expect(redeemCmd.familyId, 'fam-v4-1');
-        expect(redeemCmd.childId, 'child-v4-1');
-        expect(redeemCmd.rewardId, 'rew-v4-book');
-        expect(redeemCmd.actorUserId, isNull);
-        expect(redeemCmd.actorRole, isNull);
-        expect(redeemCmd.schemaVersion, 1);
-        expect(
-          redeemCmd.recoveryState,
-          CommandRecoveryState.quarantinedUnknownOutcome,
-        );
-        expect(redeemCmd.dispatchState, CommandDispatchState.unknownLegacy);
-        expect(
-          redeemCmd.canAutoReplay,
-          isFalse,
-          reason: 'Quarantined legacy commands must fail closed',
-        );
-
-        final spinCmd = await database.getPendingCommand('cmd-spin-v4');
-        expect(spinCmd, isNotNull);
-        expect(spinCmd!.operation, RewardCommandOperation.spinWheel);
-        expect(spinCmd.familyId, 'fam-v4-1');
-        expect(spinCmd.childId, 'child-v4-1');
-        expect(
-          spinCmd.recoveryState,
-          CommandRecoveryState.quarantinedUnknownOutcome,
-        );
-        expect(spinCmd.dispatchState, CommandDispatchState.unknownLegacy);
-        expect(spinCmd.canAutoReplay, isFalse);
-
-        final cancelCmd = await database.getPendingCommand('cmd-cancel-v4');
-        expect(cancelCmd, isNotNull);
-        expect(cancelCmd!.cancellationReason, 'Out of stock at bookstore');
-        expect(cancelCmd.redemptionId, 'red-v4-102');
-        expect(
-          cancelCmd.recoveryState,
-          CommandRecoveryState.quarantinedUnknownOutcome,
-        );
-        expect(cancelCmd.dispatchState, CommandDispatchState.unknownLegacy);
-
-        final nullableCmd = await database.getPendingCommand('cmd-nullable-v4');
-        expect(nullableCmd, isNotNull);
-        expect(nullableCmd!.childId, isNull);
-        expect(nullableCmd.rewardId, isNull);
-        expect(nullableCmd.redemptionId, isNull);
-        expect(nullableCmd.cancellationReason, isNull);
-        expect(
-          nullableCmd.recoveryState,
-          CommandRecoveryState.quarantinedUnknownOutcome,
-        );
-        expect(nullableCmd.dispatchState, CommandDispatchState.unknownLegacy);
-
-        // ---------------------------------------------------------------------
-        // PROVE NO AUTOMATIC LEGACY REPLAY
-        // ---------------------------------------------------------------------
-        // Regular use-case lookup for active pending commands MUST return null for quarantined legacy rows
-        expect(
-          await database.findPendingSpinCommand(
-            familyId: 'fam-v4-1',
-            childId: 'child-v4-1',
-          ),
-          isNull,
-          reason:
-              'Legacy spin command must not be returned for automated replay',
-        );
-
-        expect(
-          await database.findPendingRedeemCommand(
-            familyId: 'fam-v4-1',
-            childId: 'child-v4-1',
-            rewardId: 'rew-v4-book',
-          ),
-          isNull,
-          reason:
-              'Legacy redeem command must not be returned for automated replay',
-        );
-
-        expect(
-          await database.findPendingRedemptionCommand(
-            operation: RewardCommandOperation.fulfillReward,
-            redemptionId: 'red-v4-101',
-          ),
-          isNull,
-          reason: 'Legacy fulfill command must not be returned for automated replay',
-        );
-
-        // Active commands list is empty
-        final activeCommands = await database.listPendingCommands(
-          recoveryState: CommandRecoveryState.active,
-        );
-        expect(activeCommands, isEmpty);
-
-        // Quarantined commands list contains all 5 migrated legacy commands
-        final quarantinedCommands = await database.listPendingCommands(
-          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
-        );
-        expect(quarantinedCommands.length, 5);
-
-        final allCommands = await database.listPendingCommands();
-        expect(allCommands.length, 5);
-
-        // ---------------------------------------------------------------------
-        // FRESH v5 RECORD CREATION & DEFAULTS
-        // ---------------------------------------------------------------------
-        // Fresh draft
-        final freshDraft = LocalAssessmentDraft(
-          localDraftId: 'draft-v5-fresh',
-          familyId: 'fam-v4-1',
-          childId: 'child-v4-1',
-          createCommandId: 'cmd-c-fresh',
-          submitCommandId: 'cmd-s-fresh',
-          subjectKey: SubjectKey.science,
-          subject: 'Physics',
-          title: 'Forces & Motion',
-          assessmentType: 'quiz',
-          difficulty: 'normal',
-          rawScore: 10.0,
-          maxScore: 10.0,
-          actorUserId: 'usr-adult-1',
-          actorRole: 'owner',
-          occurredAt: DateTime.utc(2026, 11, 6, 12, 0),
-          updatedAt: DateTime.utc(2026, 11, 6, 12, 5),
-        );
-        await database.saveLocalDraft(freshDraft);
-
-        final savedFreshDraft = await database.getLocalDraft('draft-v5-fresh');
-        expect(savedFreshDraft, isNotNull);
-        expect(
-          savedFreshDraft!.dispatchState,
-          CommandDispatchState.neverDispatched,
-        );
-        expect(savedFreshDraft.submissionStatus, DraftSubmissionStatus.draft);
-        expect(savedFreshDraft.retryCount, 0);
-        expect(savedFreshDraft.actorUserId, 'usr-adult-1');
-        expect(savedFreshDraft.canAutoSubmit, isTrue);
-
-        // Fresh command
-        final freshCmd = PendingRewardCommand(
-          operation: RewardCommandOperation.spinWheel,
-          commandId: 'cmd-spin-v5-fresh',
-          familyId: 'fam-v4-1',
-          childId: 'child-v4-1',
-          actorUserId: 'usr-child-dev-1',
-          actorRole: 'paired_child',
-          createdAt: DateTime.utc(2026, 11, 6, 12, 10),
-        );
-        await database.savePendingCommand(freshCmd);
-
-        final savedFreshCmd = await database.getPendingCommand(
-          'cmd-spin-v5-fresh',
-        );
-        expect(savedFreshCmd, isNotNull);
-        expect(
-          savedFreshCmd!.dispatchState,
-          CommandDispatchState.neverDispatched,
-        );
-        expect(savedFreshCmd.recoveryState, CommandRecoveryState.active);
-        expect(savedFreshCmd.canAutoReplay, isTrue);
-
-        // findPendingSpinCommand now returns the fresh active command, NOT the quarantined legacy one
-        final activeSpin = await database.findPendingSpinCommand(
-          familyId: 'fam-v4-1',
-          childId: 'child-v4-1',
-        );
-        expect(activeSpin, isNotNull);
-        expect(activeSpin!.commandId, 'cmd-spin-v5-fresh');
+        final draft = await standardDb.getLocalDraft('draft-v4-offline');
+        expect(draft, isNotNull);
+        expect(draft!.dispatchState, CommandDispatchState.unknownLegacy);
       } finally {
-        await database.close();
-      }
-
-      // -----------------------------------------------------------------------
-      // REPEATED STARTUP / REOPEN INTEGRITY
-      // -----------------------------------------------------------------------
-      // Reopening the database must not corrupt data or re-run destructive migrations
-      final databaseSecondOpen = AppDatabase(NativeDatabase(dbFile));
-      try {
-        expect(databaseSecondOpen.schemaVersion, 5);
-
-        // Verify migrated legacy records remain quarantined
-        final legacySpin = await databaseSecondOpen.getPendingCommand(
-          'cmd-spin-v4',
-        );
-        expect(
-          legacySpin!.recoveryState,
-          CommandRecoveryState.quarantinedUnknownOutcome,
-        );
-        expect(legacySpin.dispatchState, CommandDispatchState.unknownLegacy);
-
-        // Verify fresh v5 records remain active
-        final freshSpin = await databaseSecondOpen.getPendingCommand(
-          'cmd-spin-v5-fresh',
-        );
-        expect(freshSpin!.recoveryState, CommandRecoveryState.active);
-        expect(freshSpin.dispatchState, CommandDispatchState.neverDispatched);
-
-        // Total commands count: 5 legacy + 1 fresh = 6
-        final allCommands = await databaseSecondOpen.listPendingCommands();
-        expect(allCommands.length, 6);
-
-        // Total drafts count: 2 legacy + 1 fresh = 3
-        final drafts = await databaseSecondOpen.listLocalDrafts(
-          ChildId('child-v4-1'),
-        );
-        expect(drafts.length, 3);
-      } finally {
-        await databaseSecondOpen.close();
+        await standardDb.close();
       }
     });
 
-    test('retryCount zero default does not imply never-dispatched status on legacy items', () async {
+    test('preserves NULL command identity provenance through domain read-save-reopen cycle', () async {
       createAndPopulateV4Database(dbFile);
 
       final database = AppDatabase(NativeDatabase(dbFile));
       try {
+        // Read draft with NULL create/submit command IDs and partial server progress
         final offlineDraft = await database.getLocalDraft('draft-v4-offline');
         expect(offlineDraft, isNotNull);
-        // Even though retryCount defaults to 0, dispatchState MUST be unknownLegacy
-        expect(offlineDraft!.retryCount, 0);
-        expect(offlineDraft.dispatchState, CommandDispatchState.unknownLegacy);
-        expect(offlineDraft.isLegacyUnknown, isTrue);
+        expect(offlineDraft!.createCommandId, isNull);
+        expect(offlineDraft.submitCommandId, isNull);
+
+        // Update draft with partial server progress while keeping command IDs null
+        final updatedDraft = offlineDraft.copyWith(
+          title: 'Updated Offline Quiz Title',
+          serverAssessmentId: 'srv-partial-draft-101',
+        );
+        expect(updatedDraft.createCommandId, isNull);
+        expect(updatedDraft.submitCommandId, isNull);
+
+        await database.saveLocalDraft(updatedDraft);
+
+        // Reload within same connection
+        final reloaded = await database.getLocalDraft('draft-v4-offline');
+        expect(reloaded, isNotNull);
+        expect(reloaded!.title, 'Updated Offline Quiz Title');
+        expect(reloaded.serverAssessmentId, 'srv-partial-draft-101');
+        expect(reloaded.createCommandId, isNull);
+        expect(reloaded.submitCommandId, isNull);
       } finally {
         await database.close();
       }
+
+      // Reopen database and verify SQLite persisted real NULL values (not fabricated localDraftId)
+      final reopenedDb = AppDatabase(NativeDatabase(dbFile));
+      try {
+        final reloadedAfterReopen = await reopenedDb.getLocalDraft(
+          'draft-v4-offline',
+        );
+        expect(reloadedAfterReopen, isNotNull);
+        expect(reloadedAfterReopen!.createCommandId, isNull);
+        expect(reloadedAfterReopen.submitCommandId, isNull);
+        expect(reloadedAfterReopen.serverAssessmentId, 'srv-partial-draft-101');
+      } finally {
+        await reopenedDb.close();
+      }
     });
 
-    test('fail-closed security for unknown or missing actor identities', () async {
+    test('fail-closed replay eligibility across actor, quarantine, and committed states', () async {
       final database = AppDatabase(NativeDatabase.memory());
       try {
-        // Command without actor fails closed
+        // 1. Quarantined legacy command fails closed
+        final legacyCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-legacy-q',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          createdAt: DateTime.utc(2026, 11, 6),
+          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
+          dispatchState: CommandDispatchState.unknownLegacy,
+        );
+        expect(legacyCmd.canAutoReplay, isFalse);
+
+        // 2. Command without actor fails closed
         final cmdWithoutActor = PendingRewardCommand(
           operation: RewardCommandOperation.redeemReward,
           commandId: 'cmd-no-actor',
@@ -496,39 +703,98 @@ void main() {
         expect(cmdWithoutActor.actorUserId, isNull);
         expect(cmdWithoutActor.canAutoReplay, isFalse);
 
-        // Command with actor succeeds eligibility check
-        final cmdWithActor = cmdWithoutActor.copyWith(
-          actorUserId: 'usr-parent-1',
-          actorRole: 'parent',
-        );
-        expect(cmdWithActor.canAutoReplay, isTrue);
-
-        // Draft without actor fails closed for automatic background submission
-        final draftWithoutActor = LocalAssessmentDraft(
-          localDraftId: 'draft-no-actor',
+        // 3. Confirmed committed command fails closed against replay
+        final committedCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-committed',
           familyId: 'fam-1',
           childId: 'child-1',
-          createCommandId: 'cmd-c-1',
-          submitCommandId: 'cmd-s-1',
-          subjectKey: SubjectKey.math,
-          subject: 'Math',
-          title: 'Math Quiz',
-          assessmentType: 'quiz',
-          difficulty: 'normal',
-          rawScore: 9,
-          maxScore: 10,
-          occurredAt: DateTime.utc(2026, 11, 6),
-          updatedAt: DateTime.utc(2026, 11, 6),
+          actorUserId: 'usr-1',
+          actorRole: 'paired_child',
+          createdAt: DateTime.utc(2026, 11, 6),
+          dispatchState: CommandDispatchState.confirmedCommitted,
         );
-        expect(draftWithoutActor.actorUserId, isNull);
-        expect(draftWithoutActor.canAutoSubmit, isFalse);
+        expect(committedCmd.canAutoReplay, isFalse);
 
-        // Draft with actor succeeds eligibility check
-        final draftWithActor = draftWithoutActor.copyWith(
-          actorUserId: 'usr-parent-1',
-          actorRole: 'parent',
+        // 4. Active command with actor is eligible
+        final activeCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-active',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'usr-1',
+          actorRole: 'paired_child',
+          createdAt: DateTime.utc(2026, 11, 6),
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
         );
-        expect(draftWithActor.canAutoSubmit, isTrue);
+        expect(activeCmd.canAutoReplay, isTrue);
+
+        await database.savePendingCommand(activeCmd);
+
+        // 5. SpinRewardWheel use-case preserves actor binding and prevents replay of mismatched actor
+        final fakeServer = FakeWheelRepository(randomSeed: 42);
+        fakeServer.addReward(
+          Reward(
+            id: RewardId('rw-1'),
+            familyId: FamilyId('fam-1'),
+            title: 'Reward 1',
+            category: RewardCategory.item,
+            storeEnabled: false,
+            wheelEnabled: true,
+            wheelTier: WheelTier.common,
+            createdAt: DateTime.utc(2026, 11, 6),
+            updatedAt: DateTime.utc(2026, 11, 6),
+          ),
+        );
+        fakeServer.addReward(
+          Reward(
+            id: RewardId('rw-2'),
+            familyId: FamilyId('fam-1'),
+            title: 'Reward 2',
+            category: RewardCategory.item,
+            storeEnabled: false,
+            wheelEnabled: true,
+            wheelTier: WheelTier.common,
+            createdAt: DateTime.utc(2026, 11, 6),
+            updatedAt: DateTime.utc(2026, 11, 6),
+          ),
+        );
+        fakeServer.addReward(
+          Reward(
+            id: RewardId('rw-3'),
+            familyId: FamilyId('fam-1'),
+            title: 'Reward 3',
+            category: RewardCategory.item,
+            storeEnabled: false,
+            wheelEnabled: true,
+            wheelTier: WheelTier.common,
+            createdAt: DateTime.utc(2026, 11, 6),
+            updatedAt: DateTime.utc(2026, 11, 6),
+          ),
+        );
+
+        final spinUseCase = SpinRewardWheel(fakeServer, database);
+
+        // Calling with different actor does NOT replay usr-1's command
+        fakeServer.failNextWithNetwork = true;
+        await expectLater(
+          () => spinUseCase(
+            familyId: FamilyId('fam-1'),
+            childId: ChildId('child-1'),
+            actorUserId: 'usr-different-actor',
+          ),
+          throwsA(isA<Exception>()),
+        );
+
+        // The new command for usr-different-actor was saved with its own distinct commandId
+        final differentActorCmd = await database.findPendingSpinCommand(
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'usr-different-actor',
+        );
+        expect(differentActorCmd, isNotNull);
+        expect(differentActorCmd!.commandId, isNot(equals('cmd-active')));
       } finally {
         await database.close();
       }

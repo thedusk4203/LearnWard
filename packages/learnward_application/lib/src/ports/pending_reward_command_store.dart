@@ -55,10 +55,12 @@ final class PendingRewardCommand {
   final CommandDispatchState dispatchState;
 
   /// Whether this command is eligible for automatic retry/replay.
-  /// Fails closed if the command is quarantined, legacy unknown, or missing actor binding.
+  /// Fails closed if the command is quarantined, legacy unknown, confirmed committed,
+  /// or missing actor binding.
   bool get canAutoReplay =>
       recoveryState == CommandRecoveryState.active &&
       dispatchState != CommandDispatchState.unknownLegacy &&
+      dispatchState != CommandDispatchState.confirmedCommitted &&
       actorUserId != null &&
       actorUserId!.isNotEmpty;
 
@@ -110,6 +112,7 @@ abstract interface class PendingRewardCommandStore {
     required String familyId,
     required String childId,
     CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   });
 
   /// Finds an existing pending redeem command for a given family, child and reward.
@@ -118,6 +121,7 @@ abstract interface class PendingRewardCommandStore {
     required String childId,
     required String rewardId,
     CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   });
 
   /// Finds an existing pending fulfillment/cancellation command for a redemption.
@@ -125,6 +129,7 @@ abstract interface class PendingRewardCommandStore {
     required RewardCommandOperation operation,
     required String redemptionId,
     CommandRecoveryState recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   });
 
   /// Lists all pending commands, optionally filtered by family, child, and states.

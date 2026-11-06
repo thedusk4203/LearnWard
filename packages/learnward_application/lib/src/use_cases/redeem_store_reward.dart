@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:learnward_domain/learnward_domain.dart';
 
+import '../ports/command_lifecycle_states.dart';
 import '../ports/pending_reward_command_store.dart';
 import '../ports/reward_repository.dart';
 
@@ -21,19 +22,30 @@ final class RedeemStoreReward {
     required RewardId rewardId,
     required ChildId childId,
     String? commandId,
+    String? actorUserId,
+    String? actorRole,
   }) async {
     final existing = await _commandStore.findPendingRedeemCommand(
       familyId: familyId.value,
       childId: childId.value,
       rewardId: rewardId.value,
+      actorUserId: actorUserId,
     );
 
-    final actualCommandId =
-        existing?.commandId ??
-        commandId ??
-        (uuidGenerator?.call() ?? _generateUuid());
+    final canReplayExisting =
+        existing != null &&
+        existing.recoveryState == CommandRecoveryState.active &&
+        existing.dispatchState != CommandDispatchState.unknownLegacy &&
+        existing.dispatchState != CommandDispatchState.confirmedCommitted &&
+        (actorUserId == null ||
+            existing.actorUserId == null ||
+            existing.actorUserId == actorUserId);
 
-    if (existing == null) {
+    final actualCommandId = canReplayExisting
+        ? existing.commandId
+        : commandId ?? (uuidGenerator?.call() ?? _generateUuid());
+
+    if (existing == null || !canReplayExisting) {
       await _commandStore.savePendingCommand(
         PendingRewardCommand(
           operation: RewardCommandOperation.redeemReward,
@@ -41,6 +53,8 @@ final class RedeemStoreReward {
           familyId: familyId.value,
           childId: childId.value,
           rewardId: rewardId.value,
+          actorUserId: actorUserId,
+          actorRole: actorRole,
           createdAt: DateTime.now().toUtc(),
         ),
       );

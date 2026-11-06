@@ -25,8 +25,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   final _formKey = GlobalKey<FormState>();
 
   late String _localDraftId;
-  late String _createCommandId;
-  late String _submitCommandId;
+  String? _createCommandId;
+  String? _submitCommandId;
   String? _evidenceId;
   String? _serverAssessmentId;
 
@@ -262,6 +262,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         _evidenceId = generateUuid();
       }
 
+      _createCommandId ??= generateUuid();
+      _submitCommandId ??= generateUuid();
+
       // Persist local draft state before submitting so that any crash/drop
       // during or before submit preserves the stable command and evidence IDs.
       final localDraft = LocalAssessmentDraft(
@@ -301,8 +304,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           : null;
 
       await submitUseCase(
-        createCommandId: _createCommandId,
-        submitCommandId: _submitCommandId,
+        createCommandId: _createCommandId!,
+        submitCommandId: _submitCommandId!,
         familyId: activeChild.familyId,
         childId: activeChild.id,
         subjectKey: _selectedSubjectKey,

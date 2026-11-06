@@ -8,8 +8,8 @@ final class LocalAssessmentDraft {
     required this.localDraftId,
     required this.familyId,
     required this.childId,
-    required this.createCommandId,
-    required this.submitCommandId,
+    this.createCommandId,
+    this.submitCommandId,
     this.evidenceId,
     this.serverAssessmentId,
     required this.subjectKey,
@@ -37,8 +37,8 @@ final class LocalAssessmentDraft {
   final String localDraftId;
   final String familyId;
   final String childId;
-  final String createCommandId;
-  final String submitCommandId;
+  final String? createCommandId;
+  final String? submitCommandId;
   final String? evidenceId;
   final String? serverAssessmentId;
   final SubjectKey subjectKey;
