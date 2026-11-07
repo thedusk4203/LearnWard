@@ -36,6 +36,7 @@ dev_dependencies:
     sdk: flutter
   learnward_test_support:
     path: ../../packages/learnward_test_support
+  sqlite3: ^3.8.0
 
 flutter:
   uses-material-design: true

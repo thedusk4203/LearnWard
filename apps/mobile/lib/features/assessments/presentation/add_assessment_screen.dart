@@ -43,12 +43,14 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
 
   bool _isSubmitting = false;
   bool _isQuarantined = false;
+  bool _evidenceRemoved = false;
   String? _errorMessage;
   double? _liveNormalizedScore;
 
   @override
   void initState() {
     super.initState();
+    _evidenceRemoved = false;
     final draft = widget.initialDraft;
     if (draft != null) {
       _localDraftId = draft.localDraftId;
@@ -167,6 +169,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         bytes: file.bytes,
       );
       setState(() {
+        _evidenceRemoved = false;
         _evidenceId ??= generateUuid();
         _selectedEvidence = SelectedEvidenceFile(
           bytes: file.bytes,
@@ -178,6 +181,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       });
     } catch (_) {
       setState(() {
+        _evidenceRemoved = false;
         _evidenceId ??= generateUuid();
         _selectedEvidence = file;
         _errorMessage = null;
@@ -193,6 +197,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       } catch (_) {}
     }
     setState(() {
+      _evidenceRemoved = true;
       _selectedEvidence = null;
       _evidenceId = null;
     });
@@ -224,14 +229,50 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final existingFromStore = await store.getLocalDraft(_localDraftId);
     final prior = existingFromStore ?? widget.initialDraft;
 
-    if (prior?.isLegacyUnknown ?? false) {
+    final isLegacy =
+        (prior?.isLegacyUnknown ?? false) ||
+        _isQuarantined ||
+        (widget.initialDraft?.isLegacyUnknown ?? false);
+
+    if (isLegacy) {
       _isQuarantined = true;
     }
 
-    _createCommandId ??= prior?.createCommandId ?? generateUuid();
-    _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
-    _evidenceId ??= prior?.evidenceId;
-    _serverAssessmentId ??= prior?.serverAssessmentId;
+    final String? resolvedCreateCommandId;
+    final String? resolvedSubmitCommandId;
+    final String? resolvedActorUserId;
+    final String? resolvedActorRole;
+    final CommandDispatchState resolvedDispatchState;
+
+    if (isLegacy) {
+      // For unknown_legacy drafts, preserve all existing command IDs, actor identity,
+      // and dispatchState exactly as stored. Preserve NULL as NULL.
+      // Never generate replacement command IDs or backfill actorUserId from the current user during ordinary local editing.
+      resolvedCreateCommandId = prior?.createCommandId;
+      resolvedSubmitCommandId = prior?.submitCommandId;
+      resolvedActorUserId = prior?.actorUserId;
+      resolvedActorRole = prior?.actorRole;
+      resolvedDispatchState = CommandDispatchState.unknownLegacy;
+    } else {
+      // Fresh v5 drafts generate and preserve stable command IDs for genuinely new operations.
+      _createCommandId ??= prior?.createCommandId ?? generateUuid();
+      _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
+      resolvedCreateCommandId = _createCommandId;
+      resolvedSubmitCommandId = _submitCommandId;
+      resolvedActorUserId =
+          prior?.actorUserId ?? ref.read(currentUserIdProvider);
+      resolvedActorRole = prior?.actorRole;
+      resolvedDispatchState = _resolveSafeDispatchState(prior);
+    }
+
+    final resolvedEvidenceId = _evidenceRemoved
+        ? null
+        : (_evidenceId ?? prior?.evidenceId);
+    final resolvedServerAssessmentId =
+        _serverAssessmentId ?? prior?.serverAssessmentId;
+    final resolvedPhotoPath = _evidenceRemoved
+        ? null
+        : (_selectedEvidence?.localPath ?? prior?.localPhotoPath);
 
     final raw = double.tryParse(_rawScoreController.text.trim()) ?? 0.0;
     final max = double.tryParse(_maxScoreController.text.trim()) ?? 10.0;
@@ -240,10 +281,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       localDraftId: _localDraftId,
       familyId: activeChild.familyId.value,
       childId: activeChild.id.value,
-      createCommandId: _createCommandId,
-      submitCommandId: _submitCommandId,
-      evidenceId: _evidenceId,
-      serverAssessmentId: _serverAssessmentId,
+      createCommandId: resolvedCreateCommandId,
+      submitCommandId: resolvedSubmitCommandId,
+      evidenceId: resolvedEvidenceId,
+      serverAssessmentId: resolvedServerAssessmentId,
       subjectKey: _selectedSubjectKey,
       subject: _subjectController.text.trim().isEmpty
           ? _selectedSubjectKey.displayLabel
@@ -255,7 +296,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       difficulty: _selectedDifficulty.value,
       rawScore: raw,
       maxScore: max,
-      localPhotoPath: _selectedEvidence?.localPath,
+      localPhotoPath: resolvedPhotoPath,
       occurredAt: _occurredAt,
       updatedAt: DateTime.now().toUtc(),
       entryContext: EntryContext.sharedChild,
@@ -264,10 +305,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       localCompressedPhotoPath: prior?.localCompressedPhotoPath,
       submissionStatus: prior?.submissionStatus ?? DraftSubmissionStatus.draft,
       retryCount: prior?.retryCount ?? 0,
-      dispatchState: _resolveSafeDispatchState(prior),
+      dispatchState: resolvedDispatchState,
       lastErrorMessage: prior?.lastErrorMessage,
-      actorUserId: prior?.actorUserId ?? ref.read(currentUserIdProvider),
-      actorRole: prior?.actorRole,
+      actorUserId: resolvedActorUserId,
+      actorRole: resolvedActorRole,
     );
 
     await store.saveLocalDraft(draft);
