@@ -481,73 +481,116 @@ class AppDatabase extends _$AppDatabase
   }
 
   @override
-  Future<void> savePendingCommand(PendingRewardCommand command) async {
-    final existing =
-        await (select(pendingRewardCommands)
-              ..where((entry) => entry.commandId.equals(command.commandId)))
-            .getSingleOrNull();
-
-    final now = DateTime.now().toUtc();
-
-    if (existing == null) {
-      await into(pendingRewardCommands).insert(
-        PendingRewardCommandsCompanion.insert(
-          operation: command.operation.wireValue,
-          commandId: command.commandId,
-          familyId: command.familyId,
-          childId: Value(command.childId),
-          rewardId: Value(command.rewardId),
-          redemptionId: Value(command.redemptionId),
-          cancellationReason: Value(command.cancellationReason),
-          createdAt: command.createdAt,
-          actorUserId: Value(command.actorUserId),
-          actorRole: Value(command.actorRole),
-          schemaVersion: Value(command.schemaVersion),
-          recoveryState: Value(command.recoveryState.wireValue),
-          dispatchState: Value(command.dispatchState.wireValue),
-          retryCount: Value(command.retryCount),
-          nextAttemptAt: Value(command.nextAttemptAt),
-          lastErrorMessage: Value(command.lastErrorMessage),
-          leaseToken: Value(command.leaseToken),
-          leaseExpiresAt: Value(command.leaseExpiresAt),
-        ),
-        mode: InsertMode.insert,
+  Future<void> savePendingCommand(
+    PendingRewardCommand command, {
+    DateTime? now,
+  }) async {
+    final hasPartialLease =
+        (command.leaseToken != null && command.leaseExpiresAt == null) ||
+        (command.leaseToken == null && command.leaseExpiresAt != null);
+    if (hasPartialLease) {
+      throw ArgumentError(
+        'Cannot save pending command ${command.commandId}: partial lease metadata '
+        '(leaseToken=${command.leaseToken}, leaseExpiresAt=${command.leaseExpiresAt})',
       );
-    } else {
-      final hasActiveLease =
-          existing.leaseToken != null &&
-          existing.leaseExpiresAt != null &&
-          existing.leaseExpiresAt!.isAfter(now);
+    }
 
-      if (hasActiveLease && existing.leaseToken != command.leaseToken) {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    await transaction(() async {
+      final existing =
+          await (select(pendingRewardCommands)
+                ..where((entry) => entry.commandId.equals(command.commandId)))
+              .getSingleOrNull();
+
+      if (existing == null) {
+        await into(pendingRewardCommands).insert(
+          PendingRewardCommandsCompanion.insert(
+            operation: command.operation.wireValue,
+            commandId: command.commandId,
+            familyId: command.familyId,
+            childId: Value(command.childId),
+            rewardId: Value(command.rewardId),
+            redemptionId: Value(command.redemptionId),
+            cancellationReason: Value(command.cancellationReason),
+            createdAt: command.createdAt.toUtc(),
+            actorUserId: Value(command.actorUserId),
+            actorRole: Value(command.actorRole),
+            schemaVersion: Value(command.schemaVersion),
+            recoveryState: Value(command.recoveryState.wireValue),
+            dispatchState: Value(command.dispatchState.wireValue),
+            retryCount: Value(command.retryCount),
+            nextAttemptAt: Value(command.nextAttemptAt?.toUtc()),
+            lastErrorMessage: Value(command.lastErrorMessage),
+            leaseToken: const Value(null),
+            leaseExpiresAt: const Value(null),
+          ),
+          mode: InsertMode.insert,
+        );
+        return;
+      }
+
+      final rowsAffected = await customUpdate(
+        '''
+        UPDATE pending_reward_commands
+        SET operation = ?,
+            family_id = ?,
+            child_id = COALESCE(?, child_id),
+            reward_id = COALESCE(?, reward_id),
+            redemption_id = COALESCE(?, redemption_id),
+            cancellation_reason = COALESCE(?, cancellation_reason),
+            actor_user_id = COALESCE(actor_user_id, ?),
+            actor_role = COALESCE(actor_role, ?),
+            recovery_state = CASE
+              WHEN recovery_state <> 'active' THEN recovery_state
+              ELSE ?
+            END,
+            dispatch_state = CASE
+              WHEN dispatch_state = 'possibly_dispatched' THEN 'possibly_dispatched'
+              ELSE ?
+            END,
+            retry_count = CASE
+              WHEN retry_count > ? THEN retry_count
+              ELSE ?
+            END,
+            next_attempt_at = COALESCE(next_attempt_at, ?),
+            last_error_message = COALESCE(last_error_message, ?),
+            lease_token = NULL,
+            lease_expires_at = NULL
+        WHERE command_id = ?
+          AND (
+            (lease_token IS NULL AND lease_expires_at IS NULL)
+            OR
+            (lease_token IS NOT NULL AND lease_expires_at <= ?)
+          );
+        ''',
+        variables: [
+          Variable<String>(command.operation.wireValue),
+          Variable<String>(command.familyId),
+          Variable<String>(command.childId),
+          Variable<String>(command.rewardId),
+          Variable<String>(command.redemptionId),
+          Variable<String>(command.cancellationReason),
+          Variable<String>(command.actorUserId),
+          Variable<String>(command.actorRole),
+          Variable<String>(command.recoveryState.wireValue),
+          Variable<String>(command.dispatchState.wireValue),
+          Variable<int>(command.retryCount),
+          Variable<int>(command.retryCount),
+          Variable<DateTime>(command.nextAttemptAt?.toUtc()),
+          Variable<String>(command.lastErrorMessage),
+          Variable<String>(command.commandId),
+          Variable<DateTime>(effectiveNow),
+        ],
+        updates: {pendingRewardCommands},
+      );
+
+      if (rowsAffected == 0) {
         throw StateError(
           'Cannot overwrite pending command ${command.commandId}: held by an active lease',
         );
       }
-
-      await (update(
-        pendingRewardCommands,
-      )..where((entry) => entry.commandId.equals(command.commandId))).write(
-        PendingRewardCommandsCompanion(
-          operation: Value(command.operation.wireValue),
-          familyId: Value(command.familyId),
-          childId: Value(command.childId),
-          rewardId: Value(command.rewardId),
-          redemptionId: Value(command.redemptionId),
-          cancellationReason: Value(command.cancellationReason),
-          actorUserId: Value(command.actorUserId),
-          actorRole: Value(command.actorRole),
-          schemaVersion: Value(command.schemaVersion),
-          recoveryState: Value(command.recoveryState.wireValue),
-          dispatchState: Value(command.dispatchState.wireValue),
-          retryCount: Value(command.retryCount),
-          nextAttemptAt: Value(command.nextAttemptAt),
-          lastErrorMessage: Value(command.lastErrorMessage),
-          leaseToken: Value(command.leaseToken),
-          leaseExpiresAt: Value(command.leaseExpiresAt),
-        ),
-      );
-    }
+    });
   }
 
   @override
@@ -683,9 +726,16 @@ class AppDatabase extends _$AppDatabase
 
   @override
   Future<void> deletePendingCommand(String commandId) async {
-    final query = delete(pendingRewardCommands)
-      ..where((entry) => entry.commandId.equals(commandId));
-    await query.go();
+    await customUpdate(
+      '''
+      DELETE FROM pending_reward_commands
+      WHERE command_id = ?
+        AND lease_token IS NULL
+        AND lease_expires_at IS NULL;
+      ''',
+      variables: [Variable<String>(commandId)],
+      updates: {pendingRewardCommands},
+    );
   }
 
   // ---------------------------------------------------------------------------

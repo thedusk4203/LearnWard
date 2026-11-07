@@ -77,54 +77,83 @@ final class PendingRewardCommand {
       actorUserId!.isNotEmpty;
 
   PendingRewardCommand copyWith({
-    int? id,
+    Object? id = _sentinel,
     RewardCommandOperation? operation,
     String? commandId,
     String? familyId,
-    String? childId,
-    String? rewardId,
-    String? redemptionId,
-    String? cancellationReason,
+    Object? childId = _sentinel,
+    Object? rewardId = _sentinel,
+    Object? redemptionId = _sentinel,
+    Object? cancellationReason = _sentinel,
     DateTime? createdAt,
-    String? actorUserId,
-    String? actorRole,
+    Object? actorUserId = _sentinel,
+    Object? actorRole = _sentinel,
     int? schemaVersion,
     CommandRecoveryState? recoveryState,
     CommandDispatchState? dispatchState,
     int? retryCount,
-    DateTime? nextAttemptAt,
-    String? lastErrorMessage,
-    String? leaseToken,
-    DateTime? leaseExpiresAt,
+    Object? nextAttemptAt = _sentinel,
+    Object? lastErrorMessage = _sentinel,
+    Object? leaseToken = _sentinel,
+    Object? leaseExpiresAt = _sentinel,
   }) {
     return PendingRewardCommand(
-      id: id ?? this.id,
+      id: identical(id, _sentinel) ? this.id : id as int?,
       operation: operation ?? this.operation,
       commandId: commandId ?? this.commandId,
       familyId: familyId ?? this.familyId,
-      childId: childId ?? this.childId,
-      rewardId: rewardId ?? this.rewardId,
-      redemptionId: redemptionId ?? this.redemptionId,
-      cancellationReason: cancellationReason ?? this.cancellationReason,
+      childId: identical(childId, _sentinel)
+          ? this.childId
+          : childId as String?,
+      rewardId: identical(rewardId, _sentinel)
+          ? this.rewardId
+          : rewardId as String?,
+      redemptionId: identical(redemptionId, _sentinel)
+          ? this.redemptionId
+          : redemptionId as String?,
+      cancellationReason: identical(cancellationReason, _sentinel)
+          ? this.cancellationReason
+          : cancellationReason as String?,
       createdAt: createdAt ?? this.createdAt,
-      actorUserId: actorUserId ?? this.actorUserId,
-      actorRole: actorRole ?? this.actorRole,
+      actorUserId: identical(actorUserId, _sentinel)
+          ? this.actorUserId
+          : actorUserId as String?,
+      actorRole: identical(actorRole, _sentinel)
+          ? this.actorRole
+          : actorRole as String?,
       schemaVersion: schemaVersion ?? this.schemaVersion,
       recoveryState: recoveryState ?? this.recoveryState,
       dispatchState: dispatchState ?? this.dispatchState,
       retryCount: retryCount ?? this.retryCount,
-      nextAttemptAt: nextAttemptAt ?? this.nextAttemptAt,
-      lastErrorMessage: lastErrorMessage ?? this.lastErrorMessage,
-      leaseToken: leaseToken ?? this.leaseToken,
-      leaseExpiresAt: leaseExpiresAt ?? this.leaseExpiresAt,
+      nextAttemptAt: identical(nextAttemptAt, _sentinel)
+          ? this.nextAttemptAt
+          : nextAttemptAt as DateTime?,
+      lastErrorMessage: identical(lastErrorMessage, _sentinel)
+          ? this.lastErrorMessage
+          : lastErrorMessage as String?,
+      leaseToken: identical(leaseToken, _sentinel)
+          ? this.leaseToken
+          : leaseToken as String?,
+      leaseExpiresAt: identical(leaseExpiresAt, _sentinel)
+          ? this.leaseExpiresAt
+          : leaseExpiresAt as DateTime?,
     );
   }
+
+  /// Convenience copy helper that explicitly clears active lease metadata.
+  PendingRewardCommand clearLease() =>
+      copyWith(leaseToken: null, leaseExpiresAt: null);
 }
+
+const Object _sentinel = Object();
 
 /// Port for durable local journal of pending reward commands.
 abstract interface class PendingRewardCommandStore {
   /// Saves a pending command into the durable local journal.
-  Future<void> savePendingCommand(PendingRewardCommand command);
+  Future<void> savePendingCommand(
+    PendingRewardCommand command, {
+    DateTime? now,
+  });
 
   /// Retrieves an existing pending command by its unique commandId.
   Future<PendingRewardCommand?> getPendingCommand(String commandId);

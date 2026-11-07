@@ -159,23 +159,69 @@ final class InMemoryPendingRewardCommandStore
   }
 
   @override
-  Future<void> savePendingCommand(PendingRewardCommand command) async {
-    final existing = _commands[command.commandId];
-    final now = DateTime.now().toUtc();
-
-    if (existing != null) {
-      final hasActiveLease =
-          existing.leaseToken != null &&
-          existing.leaseExpiresAt != null &&
-          existing.leaseExpiresAt!.isAfter(now);
-
-      if (hasActiveLease && existing.leaseToken != command.leaseToken) {
-        throw StateError(
-          'Cannot overwrite pending command ${command.commandId}: held by an active lease',
-        );
-      }
+  Future<void> savePendingCommand(
+    PendingRewardCommand command, {
+    DateTime? now,
+  }) async {
+    final hasPartialLease =
+        (command.leaseToken != null && command.leaseExpiresAt == null) ||
+        (command.leaseToken == null && command.leaseExpiresAt != null);
+    if (hasPartialLease) {
+      throw ArgumentError(
+        'Cannot save pending command ${command.commandId}: partial lease metadata '
+        '(leaseToken=${command.leaseToken}, leaseExpiresAt=${command.leaseExpiresAt})',
+      );
     }
-    _commands[command.commandId] = command;
+
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+    final existing = _commands[command.commandId];
+
+    if (existing == null) {
+      _commands[command.commandId] = command.copyWith(
+        createdAt: command.createdAt.toUtc(),
+        nextAttemptAt: command.nextAttemptAt?.toUtc(),
+        leaseToken: null,
+        leaseExpiresAt: null,
+      );
+      return;
+    }
+
+    final hasActiveLease =
+        existing.leaseToken != null &&
+        existing.leaseExpiresAt != null &&
+        existing.leaseExpiresAt!.isAfter(effectiveNow);
+
+    if (hasActiveLease) {
+      throw StateError(
+        'Cannot overwrite pending command ${command.commandId}: held by an active lease',
+      );
+    }
+
+    _commands[command.commandId] = existing.copyWith(
+      operation: command.operation,
+      familyId: command.familyId,
+      childId: command.childId ?? existing.childId,
+      rewardId: command.rewardId ?? existing.rewardId,
+      redemptionId: command.redemptionId ?? existing.redemptionId,
+      cancellationReason:
+          command.cancellationReason ?? existing.cancellationReason,
+      actorUserId: existing.actorUserId ?? command.actorUserId,
+      actorRole: existing.actorRole ?? command.actorRole,
+      recoveryState: existing.recoveryState != CommandRecoveryState.active
+          ? existing.recoveryState
+          : command.recoveryState,
+      dispatchState:
+          existing.dispatchState == CommandDispatchState.possiblyDispatched
+          ? CommandDispatchState.possiblyDispatched
+          : command.dispatchState,
+      retryCount: existing.retryCount > command.retryCount
+          ? existing.retryCount
+          : command.retryCount,
+      nextAttemptAt: existing.nextAttemptAt ?? command.nextAttemptAt?.toUtc(),
+      lastErrorMessage: existing.lastErrorMessage ?? command.lastErrorMessage,
+      leaseToken: null,
+      leaseExpiresAt: null,
+    );
   }
 
   @override
@@ -265,7 +311,11 @@ final class InMemoryPendingRewardCommandStore
 
   @override
   Future<void> deletePendingCommand(String commandId) async {
-    _commands.remove(commandId);
+    final cmd = _commands[commandId];
+    if (cmd == null) return;
+    if (cmd.leaseToken == null && cmd.leaseExpiresAt == null) {
+      _commands.remove(commandId);
+    }
   }
 
   // ---------------------------------------------------------------------------

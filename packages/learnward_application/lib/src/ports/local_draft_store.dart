@@ -88,10 +88,10 @@ final class LocalAssessmentDraft {
   LocalAssessmentDraft copyWith({
     String? familyId,
     String? childId,
-    String? createCommandId,
-    String? submitCommandId,
-    String? evidenceId,
-    String? serverAssessmentId,
+    Object? createCommandId = _sentinel,
+    Object? submitCommandId = _sentinel,
+    Object? evidenceId = _sentinel,
+    Object? serverAssessmentId = _sentinel,
     SubjectKey? subjectKey,
     String? subject,
     String? title,
@@ -99,31 +99,39 @@ final class LocalAssessmentDraft {
     String? difficulty,
     double? rawScore,
     double? maxScore,
-    String? localPhotoPath,
+    Object? localPhotoPath = _sentinel,
     EntryContext? entryContext,
     DateTime? occurredAt,
     DateTime? updatedAt,
-    String? serverEvidenceId,
-    String? sha256Checksum,
-    String? localCompressedPhotoPath,
+    Object? serverEvidenceId = _sentinel,
+    Object? sha256Checksum = _sentinel,
+    Object? localCompressedPhotoPath = _sentinel,
     DraftSubmissionStatus? submissionStatus,
     int? retryCount,
     CommandDispatchState? dispatchState,
-    String? lastErrorMessage,
-    String? actorUserId,
-    String? actorRole,
-    DateTime? nextAttemptAt,
-    String? leaseToken,
-    DateTime? leaseExpiresAt,
+    Object? lastErrorMessage = _sentinel,
+    Object? actorUserId = _sentinel,
+    Object? actorRole = _sentinel,
+    Object? nextAttemptAt = _sentinel,
+    Object? leaseToken = _sentinel,
+    Object? leaseExpiresAt = _sentinel,
   }) {
     return LocalAssessmentDraft(
       localDraftId: localDraftId,
       familyId: familyId ?? this.familyId,
       childId: childId ?? this.childId,
-      createCommandId: createCommandId ?? this.createCommandId,
-      submitCommandId: submitCommandId ?? this.submitCommandId,
-      evidenceId: evidenceId ?? this.evidenceId,
-      serverAssessmentId: serverAssessmentId ?? this.serverAssessmentId,
+      createCommandId: identical(createCommandId, _sentinel)
+          ? this.createCommandId
+          : createCommandId as String?,
+      submitCommandId: identical(submitCommandId, _sentinel)
+          ? this.submitCommandId
+          : submitCommandId as String?,
+      evidenceId: identical(evidenceId, _sentinel)
+          ? this.evidenceId
+          : evidenceId as String?,
+      serverAssessmentId: identical(serverAssessmentId, _sentinel)
+          ? this.serverAssessmentId
+          : serverAssessmentId as String?,
       subjectKey: subjectKey ?? this.subjectKey,
       subject: subject ?? this.subject,
       title: title ?? this.title,
@@ -131,26 +139,47 @@ final class LocalAssessmentDraft {
       difficulty: difficulty ?? this.difficulty,
       rawScore: rawScore ?? this.rawScore,
       maxScore: maxScore ?? this.maxScore,
-      localPhotoPath: localPhotoPath ?? this.localPhotoPath,
+      localPhotoPath: identical(localPhotoPath, _sentinel)
+          ? this.localPhotoPath
+          : localPhotoPath as String?,
       entryContext: entryContext ?? this.entryContext,
       occurredAt: occurredAt ?? this.occurredAt,
       updatedAt: updatedAt ?? this.updatedAt,
-      serverEvidenceId: serverEvidenceId ?? this.serverEvidenceId,
-      sha256Checksum: sha256Checksum ?? this.sha256Checksum,
-      localCompressedPhotoPath:
-          localCompressedPhotoPath ?? this.localCompressedPhotoPath,
+      serverEvidenceId: identical(serverEvidenceId, _sentinel)
+          ? this.serverEvidenceId
+          : serverEvidenceId as String?,
+      sha256Checksum: identical(sha256Checksum, _sentinel)
+          ? this.sha256Checksum
+          : sha256Checksum as String?,
+      localCompressedPhotoPath: identical(localCompressedPhotoPath, _sentinel)
+          ? this.localCompressedPhotoPath
+          : localCompressedPhotoPath as String?,
       submissionStatus: submissionStatus ?? this.submissionStatus,
       retryCount: retryCount ?? this.retryCount,
       dispatchState: dispatchState ?? this.dispatchState,
-      lastErrorMessage: lastErrorMessage ?? this.lastErrorMessage,
-      actorUserId: actorUserId ?? this.actorUserId,
-      actorRole: actorRole ?? this.actorRole,
-      nextAttemptAt: nextAttemptAt ?? this.nextAttemptAt,
-      leaseToken: leaseToken ?? this.leaseToken,
-      leaseExpiresAt: leaseExpiresAt ?? this.leaseExpiresAt,
+      lastErrorMessage: identical(lastErrorMessage, _sentinel)
+          ? this.lastErrorMessage
+          : lastErrorMessage as String?,
+      actorUserId: identical(actorUserId, _sentinel)
+          ? this.actorUserId
+          : actorUserId as String?,
+      actorRole: identical(actorRole, _sentinel)
+          ? this.actorRole
+          : actorRole as String?,
+      nextAttemptAt: identical(nextAttemptAt, _sentinel)
+          ? this.nextAttemptAt
+          : nextAttemptAt as DateTime?,
+      leaseToken: identical(leaseToken, _sentinel)
+          ? this.leaseToken
+          : leaseToken as String?,
+      leaseExpiresAt: identical(leaseExpiresAt, _sentinel)
+          ? this.leaseExpiresAt
+          : leaseExpiresAt as DateTime?,
     );
   }
 }
+
+const Object _sentinel = Object();
 
 /// Port for local offline assessment drafts storage.
 abstract interface class LocalDraftStore {
