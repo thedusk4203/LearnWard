@@ -32,6 +32,9 @@ final class LocalAssessmentDraft {
     this.lastErrorMessage,
     this.actorUserId,
     this.actorRole,
+    this.nextAttemptAt,
+    this.leaseToken,
+    this.leaseExpiresAt,
   });
 
   final String localDraftId;
@@ -63,6 +66,11 @@ final class LocalAssessmentDraft {
   final String? lastErrorMessage;
   final String? actorUserId;
   final String? actorRole;
+
+  // Phase 6 Slice 4A-0 Additions (v6):
+  final DateTime? nextAttemptAt;
+  final String? leaseToken;
+  final DateTime? leaseExpiresAt;
 
   /// Whether this draft was migrated from an uninstrumented legacy schema (Drift v4)
   /// with unknown network outcome.
@@ -104,6 +112,9 @@ final class LocalAssessmentDraft {
     String? lastErrorMessage,
     String? actorUserId,
     String? actorRole,
+    DateTime? nextAttemptAt,
+    String? leaseToken,
+    DateTime? leaseExpiresAt,
   }) {
     return LocalAssessmentDraft(
       localDraftId: localDraftId,
@@ -134,6 +145,9 @@ final class LocalAssessmentDraft {
       lastErrorMessage: lastErrorMessage ?? this.lastErrorMessage,
       actorUserId: actorUserId ?? this.actorUserId,
       actorRole: actorRole ?? this.actorRole,
+      nextAttemptAt: nextAttemptAt ?? this.nextAttemptAt,
+      leaseToken: leaseToken ?? this.leaseToken,
+      leaseExpiresAt: leaseExpiresAt ?? this.leaseExpiresAt,
     );
   }
 }

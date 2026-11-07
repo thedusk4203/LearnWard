@@ -576,6 +576,41 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _nextAttemptAtMeta = const VerificationMeta(
+    'nextAttemptAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> nextAttemptAt =
+      GeneratedColumn<DateTime>(
+        'next_attempt_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _leaseTokenMeta = const VerificationMeta(
+    'leaseToken',
+  );
+  @override
+  late final GeneratedColumn<String> leaseToken = GeneratedColumn<String>(
+    'lease_token',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _leaseExpiresAtMeta = const VerificationMeta(
+    'leaseExpiresAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> leaseExpiresAt =
+      GeneratedColumn<DateTime>(
+        'lease_expires_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
   @override
   List<GeneratedColumn> get $columns => [
     localDraftId,
@@ -605,6 +640,9 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
     lastErrorMessage,
     actorUserId,
     actorRole,
+    nextAttemptAt,
+    leaseToken,
+    leaseExpiresAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -844,6 +882,30 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
         actorRole.isAcceptableOrUnknown(data['actor_role']!, _actorRoleMeta),
       );
     }
+    if (data.containsKey('next_attempt_at')) {
+      context.handle(
+        _nextAttemptAtMeta,
+        nextAttemptAt.isAcceptableOrUnknown(
+          data['next_attempt_at']!,
+          _nextAttemptAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('lease_token')) {
+      context.handle(
+        _leaseTokenMeta,
+        leaseToken.isAcceptableOrUnknown(data['lease_token']!, _leaseTokenMeta),
+      );
+    }
+    if (data.containsKey('lease_expires_at')) {
+      context.handle(
+        _leaseExpiresAtMeta,
+        leaseExpiresAt.isAcceptableOrUnknown(
+          data['lease_expires_at']!,
+          _leaseExpiresAtMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -964,6 +1026,18 @@ class $LocalAssessmentDraftsTable extends LocalAssessmentDrafts
         DriftSqlType.string,
         data['${effectivePrefix}actor_role'],
       ),
+      nextAttemptAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}next_attempt_at'],
+      ),
+      leaseToken: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}lease_token'],
+      ),
+      leaseExpiresAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}lease_expires_at'],
+      ),
     );
   }
 
@@ -1002,6 +1076,9 @@ class LocalAssessmentDraftEntry extends DataClass
   final String? lastErrorMessage;
   final String? actorUserId;
   final String? actorRole;
+  final DateTime? nextAttemptAt;
+  final String? leaseToken;
+  final DateTime? leaseExpiresAt;
   const LocalAssessmentDraftEntry({
     required this.localDraftId,
     required this.familyId,
@@ -1030,6 +1107,9 @@ class LocalAssessmentDraftEntry extends DataClass
     this.lastErrorMessage,
     this.actorUserId,
     this.actorRole,
+    this.nextAttemptAt,
+    this.leaseToken,
+    this.leaseExpiresAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1085,6 +1165,15 @@ class LocalAssessmentDraftEntry extends DataClass
     if (!nullToAbsent || actorRole != null) {
       map['actor_role'] = Variable<String>(actorRole);
     }
+    if (!nullToAbsent || nextAttemptAt != null) {
+      map['next_attempt_at'] = Variable<DateTime>(nextAttemptAt);
+    }
+    if (!nullToAbsent || leaseToken != null) {
+      map['lease_token'] = Variable<String>(leaseToken);
+    }
+    if (!nullToAbsent || leaseExpiresAt != null) {
+      map['lease_expires_at'] = Variable<DateTime>(leaseExpiresAt);
+    }
     return map;
   }
 
@@ -1139,6 +1228,15 @@ class LocalAssessmentDraftEntry extends DataClass
       actorRole: actorRole == null && nullToAbsent
           ? const Value.absent()
           : Value(actorRole),
+      nextAttemptAt: nextAttemptAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(nextAttemptAt),
+      leaseToken: leaseToken == null && nullToAbsent
+          ? const Value.absent()
+          : Value(leaseToken),
+      leaseExpiresAt: leaseExpiresAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(leaseExpiresAt),
     );
   }
 
@@ -1179,6 +1277,9 @@ class LocalAssessmentDraftEntry extends DataClass
       lastErrorMessage: serializer.fromJson<String?>(json['lastErrorMessage']),
       actorUserId: serializer.fromJson<String?>(json['actorUserId']),
       actorRole: serializer.fromJson<String?>(json['actorRole']),
+      nextAttemptAt: serializer.fromJson<DateTime?>(json['nextAttemptAt']),
+      leaseToken: serializer.fromJson<String?>(json['leaseToken']),
+      leaseExpiresAt: serializer.fromJson<DateTime?>(json['leaseExpiresAt']),
     );
   }
   @override
@@ -1214,6 +1315,9 @@ class LocalAssessmentDraftEntry extends DataClass
       'lastErrorMessage': serializer.toJson<String?>(lastErrorMessage),
       'actorUserId': serializer.toJson<String?>(actorUserId),
       'actorRole': serializer.toJson<String?>(actorRole),
+      'nextAttemptAt': serializer.toJson<DateTime?>(nextAttemptAt),
+      'leaseToken': serializer.toJson<String?>(leaseToken),
+      'leaseExpiresAt': serializer.toJson<DateTime?>(leaseExpiresAt),
     };
   }
 
@@ -1245,6 +1349,9 @@ class LocalAssessmentDraftEntry extends DataClass
     Value<String?> lastErrorMessage = const Value.absent(),
     Value<String?> actorUserId = const Value.absent(),
     Value<String?> actorRole = const Value.absent(),
+    Value<DateTime?> nextAttemptAt = const Value.absent(),
+    Value<String?> leaseToken = const Value.absent(),
+    Value<DateTime?> leaseExpiresAt = const Value.absent(),
   }) => LocalAssessmentDraftEntry(
     localDraftId: localDraftId ?? this.localDraftId,
     familyId: familyId ?? this.familyId,
@@ -1289,6 +1396,13 @@ class LocalAssessmentDraftEntry extends DataClass
         : this.lastErrorMessage,
     actorUserId: actorUserId.present ? actorUserId.value : this.actorUserId,
     actorRole: actorRole.present ? actorRole.value : this.actorRole,
+    nextAttemptAt: nextAttemptAt.present
+        ? nextAttemptAt.value
+        : this.nextAttemptAt,
+    leaseToken: leaseToken.present ? leaseToken.value : this.leaseToken,
+    leaseExpiresAt: leaseExpiresAt.present
+        ? leaseExpiresAt.value
+        : this.leaseExpiresAt,
   );
   LocalAssessmentDraftEntry copyWithCompanion(
     LocalAssessmentDraftsCompanion data,
@@ -1359,6 +1473,15 @@ class LocalAssessmentDraftEntry extends DataClass
           ? data.actorUserId.value
           : this.actorUserId,
       actorRole: data.actorRole.present ? data.actorRole.value : this.actorRole,
+      nextAttemptAt: data.nextAttemptAt.present
+          ? data.nextAttemptAt.value
+          : this.nextAttemptAt,
+      leaseToken: data.leaseToken.present
+          ? data.leaseToken.value
+          : this.leaseToken,
+      leaseExpiresAt: data.leaseExpiresAt.present
+          ? data.leaseExpiresAt.value
+          : this.leaseExpiresAt,
     );
   }
 
@@ -1391,7 +1514,10 @@ class LocalAssessmentDraftEntry extends DataClass
           ..write('dispatchState: $dispatchState, ')
           ..write('lastErrorMessage: $lastErrorMessage, ')
           ..write('actorUserId: $actorUserId, ')
-          ..write('actorRole: $actorRole')
+          ..write('actorRole: $actorRole, ')
+          ..write('nextAttemptAt: $nextAttemptAt, ')
+          ..write('leaseToken: $leaseToken, ')
+          ..write('leaseExpiresAt: $leaseExpiresAt')
           ..write(')'))
         .toString();
   }
@@ -1425,6 +1551,9 @@ class LocalAssessmentDraftEntry extends DataClass
     lastErrorMessage,
     actorUserId,
     actorRole,
+    nextAttemptAt,
+    leaseToken,
+    leaseExpiresAt,
   ]);
   @override
   bool operator ==(Object other) =>
@@ -1456,7 +1585,10 @@ class LocalAssessmentDraftEntry extends DataClass
           other.dispatchState == this.dispatchState &&
           other.lastErrorMessage == this.lastErrorMessage &&
           other.actorUserId == this.actorUserId &&
-          other.actorRole == this.actorRole);
+          other.actorRole == this.actorRole &&
+          other.nextAttemptAt == this.nextAttemptAt &&
+          other.leaseToken == this.leaseToken &&
+          other.leaseExpiresAt == this.leaseExpiresAt);
 }
 
 class LocalAssessmentDraftsCompanion
@@ -1488,6 +1620,9 @@ class LocalAssessmentDraftsCompanion
   final Value<String?> lastErrorMessage;
   final Value<String?> actorUserId;
   final Value<String?> actorRole;
+  final Value<DateTime?> nextAttemptAt;
+  final Value<String?> leaseToken;
+  final Value<DateTime?> leaseExpiresAt;
   final Value<int> rowid;
   const LocalAssessmentDraftsCompanion({
     this.localDraftId = const Value.absent(),
@@ -1517,6 +1652,9 @@ class LocalAssessmentDraftsCompanion
     this.lastErrorMessage = const Value.absent(),
     this.actorUserId = const Value.absent(),
     this.actorRole = const Value.absent(),
+    this.nextAttemptAt = const Value.absent(),
+    this.leaseToken = const Value.absent(),
+    this.leaseExpiresAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   LocalAssessmentDraftsCompanion.insert({
@@ -1547,6 +1685,9 @@ class LocalAssessmentDraftsCompanion
     this.lastErrorMessage = const Value.absent(),
     this.actorUserId = const Value.absent(),
     this.actorRole = const Value.absent(),
+    this.nextAttemptAt = const Value.absent(),
+    this.leaseToken = const Value.absent(),
+    this.leaseExpiresAt = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : localDraftId = Value(localDraftId),
        familyId = Value(familyId),
@@ -1587,6 +1728,9 @@ class LocalAssessmentDraftsCompanion
     Expression<String>? lastErrorMessage,
     Expression<String>? actorUserId,
     Expression<String>? actorRole,
+    Expression<DateTime>? nextAttemptAt,
+    Expression<String>? leaseToken,
+    Expression<DateTime>? leaseExpiresAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1619,6 +1763,9 @@ class LocalAssessmentDraftsCompanion
       if (lastErrorMessage != null) 'last_error_message': lastErrorMessage,
       if (actorUserId != null) 'actor_user_id': actorUserId,
       if (actorRole != null) 'actor_role': actorRole,
+      if (nextAttemptAt != null) 'next_attempt_at': nextAttemptAt,
+      if (leaseToken != null) 'lease_token': leaseToken,
+      if (leaseExpiresAt != null) 'lease_expires_at': leaseExpiresAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1651,6 +1798,9 @@ class LocalAssessmentDraftsCompanion
     Value<String?>? lastErrorMessage,
     Value<String?>? actorUserId,
     Value<String?>? actorRole,
+    Value<DateTime?>? nextAttemptAt,
+    Value<String?>? leaseToken,
+    Value<DateTime?>? leaseExpiresAt,
     Value<int>? rowid,
   }) {
     return LocalAssessmentDraftsCompanion(
@@ -1682,6 +1832,9 @@ class LocalAssessmentDraftsCompanion
       lastErrorMessage: lastErrorMessage ?? this.lastErrorMessage,
       actorUserId: actorUserId ?? this.actorUserId,
       actorRole: actorRole ?? this.actorRole,
+      nextAttemptAt: nextAttemptAt ?? this.nextAttemptAt,
+      leaseToken: leaseToken ?? this.leaseToken,
+      leaseExpiresAt: leaseExpiresAt ?? this.leaseExpiresAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1772,6 +1925,15 @@ class LocalAssessmentDraftsCompanion
     if (actorRole.present) {
       map['actor_role'] = Variable<String>(actorRole.value);
     }
+    if (nextAttemptAt.present) {
+      map['next_attempt_at'] = Variable<DateTime>(nextAttemptAt.value);
+    }
+    if (leaseToken.present) {
+      map['lease_token'] = Variable<String>(leaseToken.value);
+    }
+    if (leaseExpiresAt.present) {
+      map['lease_expires_at'] = Variable<DateTime>(leaseExpiresAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1808,6 +1970,9 @@ class LocalAssessmentDraftsCompanion
           ..write('lastErrorMessage: $lastErrorMessage, ')
           ..write('actorUserId: $actorUserId, ')
           ..write('actorRole: $actorRole, ')
+          ..write('nextAttemptAt: $nextAttemptAt, ')
+          ..write('leaseToken: $leaseToken, ')
+          ..write('leaseExpiresAt: $leaseExpiresAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1980,6 +2145,64 @@ class $PendingRewardCommandsTable extends PendingRewardCommands
     requiredDuringInsert: false,
     defaultValue: const Constant('unknown_legacy'),
   );
+  static const VerificationMeta _retryCountMeta = const VerificationMeta(
+    'retryCount',
+  );
+  @override
+  late final GeneratedColumn<int> retryCount = GeneratedColumn<int>(
+    'retry_count',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _nextAttemptAtMeta = const VerificationMeta(
+    'nextAttemptAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> nextAttemptAt =
+      GeneratedColumn<DateTime>(
+        'next_attempt_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _lastErrorMessageMeta = const VerificationMeta(
+    'lastErrorMessage',
+  );
+  @override
+  late final GeneratedColumn<String> lastErrorMessage = GeneratedColumn<String>(
+    'last_error_message',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _leaseTokenMeta = const VerificationMeta(
+    'leaseToken',
+  );
+  @override
+  late final GeneratedColumn<String> leaseToken = GeneratedColumn<String>(
+    'lease_token',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _leaseExpiresAtMeta = const VerificationMeta(
+    'leaseExpiresAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> leaseExpiresAt =
+      GeneratedColumn<DateTime>(
+        'lease_expires_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1996,6 +2219,11 @@ class $PendingRewardCommandsTable extends PendingRewardCommands
     schemaVersion,
     recoveryState,
     dispatchState,
+    retryCount,
+    nextAttemptAt,
+    lastErrorMessage,
+    leaseToken,
+    leaseExpiresAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -2116,6 +2344,45 @@ class $PendingRewardCommandsTable extends PendingRewardCommands
         ),
       );
     }
+    if (data.containsKey('retry_count')) {
+      context.handle(
+        _retryCountMeta,
+        retryCount.isAcceptableOrUnknown(data['retry_count']!, _retryCountMeta),
+      );
+    }
+    if (data.containsKey('next_attempt_at')) {
+      context.handle(
+        _nextAttemptAtMeta,
+        nextAttemptAt.isAcceptableOrUnknown(
+          data['next_attempt_at']!,
+          _nextAttemptAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_error_message')) {
+      context.handle(
+        _lastErrorMessageMeta,
+        lastErrorMessage.isAcceptableOrUnknown(
+          data['last_error_message']!,
+          _lastErrorMessageMeta,
+        ),
+      );
+    }
+    if (data.containsKey('lease_token')) {
+      context.handle(
+        _leaseTokenMeta,
+        leaseToken.isAcceptableOrUnknown(data['lease_token']!, _leaseTokenMeta),
+      );
+    }
+    if (data.containsKey('lease_expires_at')) {
+      context.handle(
+        _leaseExpiresAtMeta,
+        leaseExpiresAt.isAcceptableOrUnknown(
+          data['lease_expires_at']!,
+          _leaseExpiresAtMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -2184,6 +2451,26 @@ class $PendingRewardCommandsTable extends PendingRewardCommands
         DriftSqlType.string,
         data['${effectivePrefix}dispatch_state'],
       )!,
+      retryCount: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}retry_count'],
+      )!,
+      nextAttemptAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}next_attempt_at'],
+      ),
+      lastErrorMessage: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}last_error_message'],
+      ),
+      leaseToken: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}lease_token'],
+      ),
+      leaseExpiresAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}lease_expires_at'],
+      ),
     );
   }
 
@@ -2209,6 +2496,11 @@ class PendingRewardCommandEntry extends DataClass
   final int schemaVersion;
   final String recoveryState;
   final String dispatchState;
+  final int retryCount;
+  final DateTime? nextAttemptAt;
+  final String? lastErrorMessage;
+  final String? leaseToken;
+  final DateTime? leaseExpiresAt;
   const PendingRewardCommandEntry({
     required this.id,
     required this.operation,
@@ -2224,6 +2516,11 @@ class PendingRewardCommandEntry extends DataClass
     required this.schemaVersion,
     required this.recoveryState,
     required this.dispatchState,
+    required this.retryCount,
+    this.nextAttemptAt,
+    this.lastErrorMessage,
+    this.leaseToken,
+    this.leaseExpiresAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -2254,6 +2551,19 @@ class PendingRewardCommandEntry extends DataClass
     map['schema_version'] = Variable<int>(schemaVersion);
     map['recovery_state'] = Variable<String>(recoveryState);
     map['dispatch_state'] = Variable<String>(dispatchState);
+    map['retry_count'] = Variable<int>(retryCount);
+    if (!nullToAbsent || nextAttemptAt != null) {
+      map['next_attempt_at'] = Variable<DateTime>(nextAttemptAt);
+    }
+    if (!nullToAbsent || lastErrorMessage != null) {
+      map['last_error_message'] = Variable<String>(lastErrorMessage);
+    }
+    if (!nullToAbsent || leaseToken != null) {
+      map['lease_token'] = Variable<String>(leaseToken);
+    }
+    if (!nullToAbsent || leaseExpiresAt != null) {
+      map['lease_expires_at'] = Variable<DateTime>(leaseExpiresAt);
+    }
     return map;
   }
 
@@ -2285,6 +2595,19 @@ class PendingRewardCommandEntry extends DataClass
       schemaVersion: Value(schemaVersion),
       recoveryState: Value(recoveryState),
       dispatchState: Value(dispatchState),
+      retryCount: Value(retryCount),
+      nextAttemptAt: nextAttemptAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(nextAttemptAt),
+      lastErrorMessage: lastErrorMessage == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastErrorMessage),
+      leaseToken: leaseToken == null && nullToAbsent
+          ? const Value.absent()
+          : Value(leaseToken),
+      leaseExpiresAt: leaseExpiresAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(leaseExpiresAt),
     );
   }
 
@@ -2310,6 +2633,11 @@ class PendingRewardCommandEntry extends DataClass
       schemaVersion: serializer.fromJson<int>(json['schemaVersion']),
       recoveryState: serializer.fromJson<String>(json['recoveryState']),
       dispatchState: serializer.fromJson<String>(json['dispatchState']),
+      retryCount: serializer.fromJson<int>(json['retryCount']),
+      nextAttemptAt: serializer.fromJson<DateTime?>(json['nextAttemptAt']),
+      lastErrorMessage: serializer.fromJson<String?>(json['lastErrorMessage']),
+      leaseToken: serializer.fromJson<String?>(json['leaseToken']),
+      leaseExpiresAt: serializer.fromJson<DateTime?>(json['leaseExpiresAt']),
     );
   }
   @override
@@ -2330,6 +2658,11 @@ class PendingRewardCommandEntry extends DataClass
       'schemaVersion': serializer.toJson<int>(schemaVersion),
       'recoveryState': serializer.toJson<String>(recoveryState),
       'dispatchState': serializer.toJson<String>(dispatchState),
+      'retryCount': serializer.toJson<int>(retryCount),
+      'nextAttemptAt': serializer.toJson<DateTime?>(nextAttemptAt),
+      'lastErrorMessage': serializer.toJson<String?>(lastErrorMessage),
+      'leaseToken': serializer.toJson<String?>(leaseToken),
+      'leaseExpiresAt': serializer.toJson<DateTime?>(leaseExpiresAt),
     };
   }
 
@@ -2348,6 +2681,11 @@ class PendingRewardCommandEntry extends DataClass
     int? schemaVersion,
     String? recoveryState,
     String? dispatchState,
+    int? retryCount,
+    Value<DateTime?> nextAttemptAt = const Value.absent(),
+    Value<String?> lastErrorMessage = const Value.absent(),
+    Value<String?> leaseToken = const Value.absent(),
+    Value<DateTime?> leaseExpiresAt = const Value.absent(),
   }) => PendingRewardCommandEntry(
     id: id ?? this.id,
     operation: operation ?? this.operation,
@@ -2365,6 +2703,17 @@ class PendingRewardCommandEntry extends DataClass
     schemaVersion: schemaVersion ?? this.schemaVersion,
     recoveryState: recoveryState ?? this.recoveryState,
     dispatchState: dispatchState ?? this.dispatchState,
+    retryCount: retryCount ?? this.retryCount,
+    nextAttemptAt: nextAttemptAt.present
+        ? nextAttemptAt.value
+        : this.nextAttemptAt,
+    lastErrorMessage: lastErrorMessage.present
+        ? lastErrorMessage.value
+        : this.lastErrorMessage,
+    leaseToken: leaseToken.present ? leaseToken.value : this.leaseToken,
+    leaseExpiresAt: leaseExpiresAt.present
+        ? leaseExpiresAt.value
+        : this.leaseExpiresAt,
   );
   PendingRewardCommandEntry copyWithCompanion(
     PendingRewardCommandsCompanion data,
@@ -2396,6 +2745,21 @@ class PendingRewardCommandEntry extends DataClass
       dispatchState: data.dispatchState.present
           ? data.dispatchState.value
           : this.dispatchState,
+      retryCount: data.retryCount.present
+          ? data.retryCount.value
+          : this.retryCount,
+      nextAttemptAt: data.nextAttemptAt.present
+          ? data.nextAttemptAt.value
+          : this.nextAttemptAt,
+      lastErrorMessage: data.lastErrorMessage.present
+          ? data.lastErrorMessage.value
+          : this.lastErrorMessage,
+      leaseToken: data.leaseToken.present
+          ? data.leaseToken.value
+          : this.leaseToken,
+      leaseExpiresAt: data.leaseExpiresAt.present
+          ? data.leaseExpiresAt.value
+          : this.leaseExpiresAt,
     );
   }
 
@@ -2415,7 +2779,12 @@ class PendingRewardCommandEntry extends DataClass
           ..write('actorRole: $actorRole, ')
           ..write('schemaVersion: $schemaVersion, ')
           ..write('recoveryState: $recoveryState, ')
-          ..write('dispatchState: $dispatchState')
+          ..write('dispatchState: $dispatchState, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('nextAttemptAt: $nextAttemptAt, ')
+          ..write('lastErrorMessage: $lastErrorMessage, ')
+          ..write('leaseToken: $leaseToken, ')
+          ..write('leaseExpiresAt: $leaseExpiresAt')
           ..write(')'))
         .toString();
   }
@@ -2436,6 +2805,11 @@ class PendingRewardCommandEntry extends DataClass
     schemaVersion,
     recoveryState,
     dispatchState,
+    retryCount,
+    nextAttemptAt,
+    lastErrorMessage,
+    leaseToken,
+    leaseExpiresAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -2454,7 +2828,12 @@ class PendingRewardCommandEntry extends DataClass
           other.actorRole == this.actorRole &&
           other.schemaVersion == this.schemaVersion &&
           other.recoveryState == this.recoveryState &&
-          other.dispatchState == this.dispatchState);
+          other.dispatchState == this.dispatchState &&
+          other.retryCount == this.retryCount &&
+          other.nextAttemptAt == this.nextAttemptAt &&
+          other.lastErrorMessage == this.lastErrorMessage &&
+          other.leaseToken == this.leaseToken &&
+          other.leaseExpiresAt == this.leaseExpiresAt);
 }
 
 class PendingRewardCommandsCompanion
@@ -2473,6 +2852,11 @@ class PendingRewardCommandsCompanion
   final Value<int> schemaVersion;
   final Value<String> recoveryState;
   final Value<String> dispatchState;
+  final Value<int> retryCount;
+  final Value<DateTime?> nextAttemptAt;
+  final Value<String?> lastErrorMessage;
+  final Value<String?> leaseToken;
+  final Value<DateTime?> leaseExpiresAt;
   const PendingRewardCommandsCompanion({
     this.id = const Value.absent(),
     this.operation = const Value.absent(),
@@ -2488,6 +2872,11 @@ class PendingRewardCommandsCompanion
     this.schemaVersion = const Value.absent(),
     this.recoveryState = const Value.absent(),
     this.dispatchState = const Value.absent(),
+    this.retryCount = const Value.absent(),
+    this.nextAttemptAt = const Value.absent(),
+    this.lastErrorMessage = const Value.absent(),
+    this.leaseToken = const Value.absent(),
+    this.leaseExpiresAt = const Value.absent(),
   });
   PendingRewardCommandsCompanion.insert({
     this.id = const Value.absent(),
@@ -2504,6 +2893,11 @@ class PendingRewardCommandsCompanion
     this.schemaVersion = const Value.absent(),
     this.recoveryState = const Value.absent(),
     this.dispatchState = const Value.absent(),
+    this.retryCount = const Value.absent(),
+    this.nextAttemptAt = const Value.absent(),
+    this.lastErrorMessage = const Value.absent(),
+    this.leaseToken = const Value.absent(),
+    this.leaseExpiresAt = const Value.absent(),
   }) : operation = Value(operation),
        commandId = Value(commandId),
        familyId = Value(familyId),
@@ -2523,6 +2917,11 @@ class PendingRewardCommandsCompanion
     Expression<int>? schemaVersion,
     Expression<String>? recoveryState,
     Expression<String>? dispatchState,
+    Expression<int>? retryCount,
+    Expression<DateTime>? nextAttemptAt,
+    Expression<String>? lastErrorMessage,
+    Expression<String>? leaseToken,
+    Expression<DateTime>? leaseExpiresAt,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -2539,6 +2938,11 @@ class PendingRewardCommandsCompanion
       if (schemaVersion != null) 'schema_version': schemaVersion,
       if (recoveryState != null) 'recovery_state': recoveryState,
       if (dispatchState != null) 'dispatch_state': dispatchState,
+      if (retryCount != null) 'retry_count': retryCount,
+      if (nextAttemptAt != null) 'next_attempt_at': nextAttemptAt,
+      if (lastErrorMessage != null) 'last_error_message': lastErrorMessage,
+      if (leaseToken != null) 'lease_token': leaseToken,
+      if (leaseExpiresAt != null) 'lease_expires_at': leaseExpiresAt,
     });
   }
 
@@ -2557,6 +2961,11 @@ class PendingRewardCommandsCompanion
     Value<int>? schemaVersion,
     Value<String>? recoveryState,
     Value<String>? dispatchState,
+    Value<int>? retryCount,
+    Value<DateTime?>? nextAttemptAt,
+    Value<String?>? lastErrorMessage,
+    Value<String?>? leaseToken,
+    Value<DateTime?>? leaseExpiresAt,
   }) {
     return PendingRewardCommandsCompanion(
       id: id ?? this.id,
@@ -2573,6 +2982,11 @@ class PendingRewardCommandsCompanion
       schemaVersion: schemaVersion ?? this.schemaVersion,
       recoveryState: recoveryState ?? this.recoveryState,
       dispatchState: dispatchState ?? this.dispatchState,
+      retryCount: retryCount ?? this.retryCount,
+      nextAttemptAt: nextAttemptAt ?? this.nextAttemptAt,
+      lastErrorMessage: lastErrorMessage ?? this.lastErrorMessage,
+      leaseToken: leaseToken ?? this.leaseToken,
+      leaseExpiresAt: leaseExpiresAt ?? this.leaseExpiresAt,
     );
   }
 
@@ -2621,6 +3035,21 @@ class PendingRewardCommandsCompanion
     if (dispatchState.present) {
       map['dispatch_state'] = Variable<String>(dispatchState.value);
     }
+    if (retryCount.present) {
+      map['retry_count'] = Variable<int>(retryCount.value);
+    }
+    if (nextAttemptAt.present) {
+      map['next_attempt_at'] = Variable<DateTime>(nextAttemptAt.value);
+    }
+    if (lastErrorMessage.present) {
+      map['last_error_message'] = Variable<String>(lastErrorMessage.value);
+    }
+    if (leaseToken.present) {
+      map['lease_token'] = Variable<String>(leaseToken.value);
+    }
+    if (leaseExpiresAt.present) {
+      map['lease_expires_at'] = Variable<DateTime>(leaseExpiresAt.value);
+    }
     return map;
   }
 
@@ -2640,7 +3069,12 @@ class PendingRewardCommandsCompanion
           ..write('actorRole: $actorRole, ')
           ..write('schemaVersion: $schemaVersion, ')
           ..write('recoveryState: $recoveryState, ')
-          ..write('dispatchState: $dispatchState')
+          ..write('dispatchState: $dispatchState, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('nextAttemptAt: $nextAttemptAt, ')
+          ..write('lastErrorMessage: $lastErrorMessage, ')
+          ..write('leaseToken: $leaseToken, ')
+          ..write('leaseExpiresAt: $leaseExpiresAt')
           ..write(')'))
         .toString();
   }
@@ -2884,6 +3318,9 @@ typedef $$LocalAssessmentDraftsTableCreateCompanionBuilder =
       Value<String?> lastErrorMessage,
       Value<String?> actorUserId,
       Value<String?> actorRole,
+      Value<DateTime?> nextAttemptAt,
+      Value<String?> leaseToken,
+      Value<DateTime?> leaseExpiresAt,
       Value<int> rowid,
     });
 typedef $$LocalAssessmentDraftsTableUpdateCompanionBuilder =
@@ -2915,6 +3352,9 @@ typedef $$LocalAssessmentDraftsTableUpdateCompanionBuilder =
       Value<String?> lastErrorMessage,
       Value<String?> actorUserId,
       Value<String?> actorRole,
+      Value<DateTime?> nextAttemptAt,
+      Value<String?> leaseToken,
+      Value<DateTime?> leaseExpiresAt,
       Value<int> rowid,
     });
 
@@ -3059,6 +3499,21 @@ class $$LocalAssessmentDraftsTableFilterComposer
 
   ColumnFilters<String> get actorRole => $composableBuilder(
     column: $table.actorRole,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get nextAttemptAt => $composableBuilder(
+    column: $table.nextAttemptAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get leaseToken => $composableBuilder(
+    column: $table.leaseToken,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get leaseExpiresAt => $composableBuilder(
+    column: $table.leaseExpiresAt,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -3206,6 +3661,21 @@ class $$LocalAssessmentDraftsTableOrderingComposer
     column: $table.actorRole,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<DateTime> get nextAttemptAt => $composableBuilder(
+    column: $table.nextAttemptAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get leaseToken => $composableBuilder(
+    column: $table.leaseToken,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get leaseExpiresAt => $composableBuilder(
+    column: $table.leaseExpiresAt,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$LocalAssessmentDraftsTableAnnotationComposer
@@ -3335,6 +3805,21 @@ class $$LocalAssessmentDraftsTableAnnotationComposer
 
   GeneratedColumn<String> get actorRole =>
       $composableBuilder(column: $table.actorRole, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get nextAttemptAt => $composableBuilder(
+    column: $table.nextAttemptAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get leaseToken => $composableBuilder(
+    column: $table.leaseToken,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get leaseExpiresAt => $composableBuilder(
+    column: $table.leaseExpiresAt,
+    builder: (column) => column,
+  );
 }
 
 class $$LocalAssessmentDraftsTableTableManager
@@ -3410,6 +3895,9 @@ class $$LocalAssessmentDraftsTableTableManager
                 Value<String?> lastErrorMessage = const Value.absent(),
                 Value<String?> actorUserId = const Value.absent(),
                 Value<String?> actorRole = const Value.absent(),
+                Value<DateTime?> nextAttemptAt = const Value.absent(),
+                Value<String?> leaseToken = const Value.absent(),
+                Value<DateTime?> leaseExpiresAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalAssessmentDraftsCompanion(
                 localDraftId: localDraftId,
@@ -3439,6 +3927,9 @@ class $$LocalAssessmentDraftsTableTableManager
                 lastErrorMessage: lastErrorMessage,
                 actorUserId: actorUserId,
                 actorRole: actorRole,
+                nextAttemptAt: nextAttemptAt,
+                leaseToken: leaseToken,
+                leaseExpiresAt: leaseExpiresAt,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -3470,6 +3961,9 @@ class $$LocalAssessmentDraftsTableTableManager
                 Value<String?> lastErrorMessage = const Value.absent(),
                 Value<String?> actorUserId = const Value.absent(),
                 Value<String?> actorRole = const Value.absent(),
+                Value<DateTime?> nextAttemptAt = const Value.absent(),
+                Value<String?> leaseToken = const Value.absent(),
+                Value<DateTime?> leaseExpiresAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => LocalAssessmentDraftsCompanion.insert(
                 localDraftId: localDraftId,
@@ -3499,6 +3993,9 @@ class $$LocalAssessmentDraftsTableTableManager
                 lastErrorMessage: lastErrorMessage,
                 actorUserId: actorUserId,
                 actorRole: actorRole,
+                nextAttemptAt: nextAttemptAt,
+                leaseToken: leaseToken,
+                leaseExpiresAt: leaseExpiresAt,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -3558,6 +4055,11 @@ typedef $$PendingRewardCommandsTableCreateCompanionBuilder =
       Value<int> schemaVersion,
       Value<String> recoveryState,
       Value<String> dispatchState,
+      Value<int> retryCount,
+      Value<DateTime?> nextAttemptAt,
+      Value<String?> lastErrorMessage,
+      Value<String?> leaseToken,
+      Value<DateTime?> leaseExpiresAt,
     });
 typedef $$PendingRewardCommandsTableUpdateCompanionBuilder =
     PendingRewardCommandsCompanion Function({
@@ -3575,6 +4077,11 @@ typedef $$PendingRewardCommandsTableUpdateCompanionBuilder =
       Value<int> schemaVersion,
       Value<String> recoveryState,
       Value<String> dispatchState,
+      Value<int> retryCount,
+      Value<DateTime?> nextAttemptAt,
+      Value<String?> lastErrorMessage,
+      Value<String?> leaseToken,
+      Value<DateTime?> leaseExpiresAt,
     });
 
 class $$PendingRewardCommandsTableFilterComposer
@@ -3653,6 +4160,31 @@ class $$PendingRewardCommandsTableFilterComposer
 
   ColumnFilters<String> get dispatchState => $composableBuilder(
     column: $table.dispatchState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get nextAttemptAt => $composableBuilder(
+    column: $table.nextAttemptAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get lastErrorMessage => $composableBuilder(
+    column: $table.lastErrorMessage,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get leaseToken => $composableBuilder(
+    column: $table.leaseToken,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get leaseExpiresAt => $composableBuilder(
+    column: $table.leaseExpiresAt,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -3735,6 +4267,31 @@ class $$PendingRewardCommandsTableOrderingComposer
     column: $table.dispatchState,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get nextAttemptAt => $composableBuilder(
+    column: $table.nextAttemptAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get lastErrorMessage => $composableBuilder(
+    column: $table.lastErrorMessage,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get leaseToken => $composableBuilder(
+    column: $table.leaseToken,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get leaseExpiresAt => $composableBuilder(
+    column: $table.leaseExpiresAt,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$PendingRewardCommandsTableAnnotationComposer
@@ -3799,6 +4356,31 @@ class $$PendingRewardCommandsTableAnnotationComposer
     column: $table.dispatchState,
     builder: (column) => column,
   );
+
+  GeneratedColumn<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get nextAttemptAt => $composableBuilder(
+    column: $table.nextAttemptAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get lastErrorMessage => $composableBuilder(
+    column: $table.lastErrorMessage,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get leaseToken => $composableBuilder(
+    column: $table.leaseToken,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get leaseExpiresAt => $composableBuilder(
+    column: $table.leaseExpiresAt,
+    builder: (column) => column,
+  );
 }
 
 class $$PendingRewardCommandsTableTableManager
@@ -3861,6 +4443,11 @@ class $$PendingRewardCommandsTableTableManager
                 Value<int> schemaVersion = const Value.absent(),
                 Value<String> recoveryState = const Value.absent(),
                 Value<String> dispatchState = const Value.absent(),
+                Value<int> retryCount = const Value.absent(),
+                Value<DateTime?> nextAttemptAt = const Value.absent(),
+                Value<String?> lastErrorMessage = const Value.absent(),
+                Value<String?> leaseToken = const Value.absent(),
+                Value<DateTime?> leaseExpiresAt = const Value.absent(),
               }) => PendingRewardCommandsCompanion(
                 id: id,
                 operation: operation,
@@ -3876,6 +4463,11 @@ class $$PendingRewardCommandsTableTableManager
                 schemaVersion: schemaVersion,
                 recoveryState: recoveryState,
                 dispatchState: dispatchState,
+                retryCount: retryCount,
+                nextAttemptAt: nextAttemptAt,
+                lastErrorMessage: lastErrorMessage,
+                leaseToken: leaseToken,
+                leaseExpiresAt: leaseExpiresAt,
               ),
           createCompanionCallback:
               ({
@@ -3893,6 +4485,11 @@ class $$PendingRewardCommandsTableTableManager
                 Value<int> schemaVersion = const Value.absent(),
                 Value<String> recoveryState = const Value.absent(),
                 Value<String> dispatchState = const Value.absent(),
+                Value<int> retryCount = const Value.absent(),
+                Value<DateTime?> nextAttemptAt = const Value.absent(),
+                Value<String?> lastErrorMessage = const Value.absent(),
+                Value<String?> leaseToken = const Value.absent(),
+                Value<DateTime?> leaseExpiresAt = const Value.absent(),
               }) => PendingRewardCommandsCompanion.insert(
                 id: id,
                 operation: operation,
@@ -3908,6 +4505,11 @@ class $$PendingRewardCommandsTableTableManager
                 schemaVersion: schemaVersion,
                 recoveryState: recoveryState,
                 dispatchState: dispatchState,
+                retryCount: retryCount,
+                nextAttemptAt: nextAttemptAt,
+                lastErrorMessage: lastErrorMessage,
+                leaseToken: leaseToken,
+                leaseExpiresAt: leaseExpiresAt,
               ),
           withReferenceMapper: (p0) => p0
               .map(
