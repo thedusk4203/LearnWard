@@ -142,6 +142,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              currentUserIdProvider.overrideWithValue('parent-1'),
               activeFamilyProvider.overrideWith(
                 () => _PresetActiveFamilyNotifier(testFamily),
               ),
@@ -324,6 +325,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              currentUserIdProvider.overrideWithValue('parent-1'),
               activeFamilyProvider.overrideWith(
                 () => _PresetActiveFamilyNotifier(testFamily),
               ),
@@ -463,6 +465,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              currentUserIdProvider.overrideWithValue('parent-1'),
               activeFamilyProvider.overrideWith(
                 () => _PresetActiveFamilyNotifier(testFamily),
               ),
@@ -552,6 +555,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              currentUserIdProvider.overrideWithValue('parent-1'),
               activeFamilyProvider.overrideWith(
                 () => _PresetActiveFamilyNotifier(testFamily),
               ),

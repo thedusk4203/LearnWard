@@ -13,6 +13,7 @@ class MockServerRewardRepository implements RewardRepository {
 
   int debitCount = 0;
   int refundCount = 0;
+  int redeemCallCount = 0;
   bool simulateLossOnNextCommit = false;
 
   @override
@@ -21,6 +22,8 @@ class MockServerRewardRepository implements RewardRepository {
     required RewardId rewardId,
     required ChildId childId,
   }) async {
+    redeemCallCount++;
+
     // 1. Idempotency check via server command receipt
     if (commandReceipts.containsKey(commandId)) {
       final redemptionId = commandReceipts[commandId]!;

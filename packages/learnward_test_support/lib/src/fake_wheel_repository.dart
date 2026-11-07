@@ -26,6 +26,8 @@ final class FakeWheelRepository implements WheelRepository {
   final List<WheelSpin> _spins = [];
   final Map<String, WheelSpinResult> _receipts = {};
 
+  int spinCallCount = 0;
+
   late final Random _rng;
 
   /// Simulated failure modes for durability & recovery tests.
@@ -142,6 +144,8 @@ final class FakeWheelRepository implements WheelRepository {
     required String commandId,
     required ChildId childId,
   }) async {
+    spinCallCount++;
+
     // 1. Replay check
     final existingResult = _receipts[commandId];
     if (existingResult != null) {

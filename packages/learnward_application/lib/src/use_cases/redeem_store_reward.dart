@@ -57,6 +57,12 @@ final class RedeemStoreReward {
         ),
       );
     } else {
+      if (actorUserId == null || actorUserId.isEmpty) {
+        throw StateError(
+          'Cannot dispatch reward command: authenticated actor identity is required but was missing or empty.',
+        );
+      }
+
       actualCommandId = commandId ?? (uuidGenerator?.call() ?? _generateUuid());
       await _commandStore.savePendingCommand(
         PendingRewardCommand(

@@ -133,6 +133,7 @@ void main() {
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'usr-child-1',
       );
       expect(server.childBalances[childId.value], 3500);
       await initialDb.close();
@@ -208,6 +209,7 @@ void main() {
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'usr-child-1',
       );
       await initialDb.close();
 
@@ -296,6 +298,143 @@ void main() {
       // Must be deleted from SQLite file on terminal business error
       expect(await dbB.getPendingCommand('cmd-term-001'), isNull);
       expect(await dbB.listPendingCommands(), isEmpty);
+
+      await dbB.close();
+    });
+
+    test('Test A: Fresh draft timeout -> Save Local Draft -> close SQLite -> reopen on real file-backed SQLite: preserves possibly_dispatched and exact command IDs', () async {
+      final dbA = AppDatabase(NativeDatabase(dbFile));
+      final draftId = 'draft-fresh-timeout-001';
+      final createCmdId = 'cmd-create-timeout-111';
+      final submitCmdId = 'cmd-submit-timeout-222';
+      final evidenceId = 'evi-timeout-333';
+
+      // 1. Fresh draft attempted to submit: marked possibly_dispatched before network RPC
+      final inFlightDraft = LocalAssessmentDraft(
+        localDraftId: draftId,
+        familyId: familyId.value,
+        childId: childId.value,
+        createCommandId: createCmdId,
+        submitCommandId: submitCmdId,
+        evidenceId: evidenceId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Quiz 1',
+        assessmentType: 'quiz',
+        difficulty: 'normal',
+        rawScore: 9.0,
+        maxScore: 10.0,
+        occurredAt: DateTime.now().toUtc(),
+        updatedAt: DateTime.now().toUtc(),
+        submissionStatus: DraftSubmissionStatus.submittingAssessment,
+        dispatchState: CommandDispatchState.possiblyDispatched,
+        actorUserId: 'usr-child-1',
+        actorRole: 'child',
+      );
+      await dbA.saveLocalDraft(inFlightDraft);
+
+      // 2. Network drop occurs. User taps "Save Local Draft" while still on screen.
+      // Reconciles with existing persisted row: edits title/score and saves
+      final persistedBeforeSave = await dbA.getLocalDraft(draftId);
+      expect(persistedBeforeSave, isNotNull);
+      expect(
+        persistedBeforeSave!.dispatchState,
+        CommandDispatchState.possiblyDispatched,
+      );
+
+      final editedDraft = persistedBeforeSave.copyWith(
+        title: 'Quiz 1 (Edited After Timeout)',
+        rawScore: 9.5,
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await dbA.saveLocalDraft(editedDraft);
+
+      // 3. Close SQLite database (simulating process termination / crash)
+      await dbA.close();
+
+      // 4. Reopen on real file-backed SQLite
+      final dbB = AppDatabase(NativeDatabase(dbFile));
+      final recoveredDraft = await dbB.getLocalDraft(draftId);
+
+      expect(recoveredDraft, isNotNull);
+      expect(recoveredDraft!.localDraftId, equals(draftId));
+      expect(recoveredDraft.createCommandId, equals(createCmdId));
+      expect(recoveredDraft.submitCommandId, equals(submitCmdId));
+      expect(recoveredDraft.evidenceId, equals(evidenceId));
+      expect(
+        recoveredDraft.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+        reason: 'possibly_dispatched must NEVER roll back to never_dispatched',
+      );
+      expect(
+        recoveredDraft.submissionStatus,
+        equals(DraftSubmissionStatus.submittingAssessment),
+      );
+      expect(recoveredDraft.title, equals('Quiz 1 (Edited After Timeout)'));
+      expect(recoveredDraft.rawScore, equals(9.5));
+      expect(recoveredDraft.actorUserId, equals('usr-child-1'));
+
+      await dbB.close();
+    });
+
+    test('Test B: Existing unknown_legacy draft remains quarantined after edit and local save', () async {
+      final dbA = AppDatabase(NativeDatabase(dbFile));
+      final legacyDraftId = 'draft-legacy-quarantine-002';
+
+      // 1. Seed quarantined legacy draft (Drift v4 uninstrumented migration)
+      final legacyDraft = LocalAssessmentDraft(
+        localDraftId: legacyDraftId,
+        familyId: familyId.value,
+        childId: childId.value,
+        createCommandId: null,
+        submitCommandId: null,
+        subjectKey: SubjectKey.english,
+        subject: 'English',
+        title: 'Legacy Essay',
+        assessmentType: 'project',
+        difficulty: 'normal',
+        rawScore: 8.0,
+        maxScore: 10.0,
+        occurredAt: DateTime.now().toUtc(),
+        updatedAt: DateTime.now().toUtc(),
+        submissionStatus: DraftSubmissionStatus.draft,
+        dispatchState: CommandDispatchState.unknownLegacy,
+        actorUserId: 'usr-legacy-actor',
+      );
+      await dbA.saveLocalDraft(legacyDraft);
+
+      // 2. Edit draft and save locally
+      final loaded = await dbA.getLocalDraft(legacyDraftId);
+      expect(loaded, isNotNull);
+      expect(loaded!.isLegacyUnknown, isTrue);
+
+      final editedLegacy = loaded.copyWith(
+        title: 'Legacy Essay (Edited Locally)',
+        rawScore: 8.5,
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await dbA.saveLocalDraft(editedLegacy);
+
+      // 3. Close and reopen to ensure disk integrity
+      await dbA.close();
+
+      final dbB = AppDatabase(NativeDatabase(dbFile));
+      final recovered = await dbB.getLocalDraft(legacyDraftId);
+
+      expect(recovered, isNotNull);
+      expect(recovered!.isLegacyUnknown, isTrue);
+      expect(
+        recovered.dispatchState,
+        equals(CommandDispatchState.unknownLegacy),
+        reason: 'Local editing must never promote unknown_legacy draft',
+      );
+      expect(
+        recovered.canAutoSubmit,
+        isFalse,
+        reason: 'Quarantined draft must remain ineligible for auto submission',
+      );
+      expect(recovered.title, equals('Legacy Essay (Edited Locally)'));
+      expect(recovered.rawScore, equals(8.5));
 
       await dbB.close();
     });

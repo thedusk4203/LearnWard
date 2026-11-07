@@ -133,6 +133,7 @@ void main() {
         familyId: familyId,
         childId: childId,
         commandId: 'cmd-spin-100',
+        actorUserId: 'actor-child-1',
       );
 
       expect(result.spinCostMinor, equals(1000));
@@ -372,12 +373,84 @@ void main() {
       final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
 
       await expectLater(
-        () => spinUseCase(familyId: familyId, childId: childId),
+        () => spinUseCase(
+          familyId: familyId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
         throwsA(isA<InvalidWheelException>()),
       );
 
       // Journal MUST be cleared on terminal rejection (do not poison journal)
       expect(await fakeCommandStore.listPendingCommands(), isEmpty);
+    });
+
+    test('Test C: missing or empty actor during new spin fails closed, zero server calls, zero journal entries', () async {
+      fakeRepo.spinCallCount = 0;
+      final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
+
+      // 1. null actor
+      await expectLater(
+        () => spinUseCase(
+          familyId: familyId,
+          childId: childId,
+          actorUserId: null,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        fakeRepo.spinCallCount,
+        equals(0),
+        reason: 'Zero server calls on missing actor',
+      );
+      expect(
+        await fakeCommandStore.listPendingCommands(),
+        isEmpty,
+        reason: 'Zero journal entries on missing actor',
+      );
+
+      // 2. empty actor
+      await expectLater(
+        () =>
+            spinUseCase(familyId: familyId, childId: childId, actorUserId: ''),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        fakeRepo.spinCallCount,
+        equals(0),
+        reason: 'Zero server calls on empty actor',
+      );
+      expect(
+        await fakeCommandStore.listPendingCommands(),
+        isEmpty,
+        reason: 'Zero journal entries on empty actor',
+      );
+    });
+
+    test('Test E: valid authenticated actor creates one new command with possibly_dispatched persisted before RPC', () async {
+      final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
+      fakeRepo.failNextWithNetwork = true;
+
+      await expectLater(
+        () => spinUseCase(
+          familyId: familyId,
+          childId: childId,
+          actorUserId: 'actor-valid-child-1',
+          actorRole: 'child',
+        ),
+        throwsA(isA<Exception>()),
+      );
+
+      final pendingList = await fakeCommandStore.listPendingCommands();
+      expect(pendingList.length, equals(1));
+      final pending = pendingList.first;
+      expect(pending.actorUserId, equals('actor-valid-child-1'));
+      expect(pending.actorRole, equals('child'));
+      expect(
+        pending.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+      );
+      expect(pending.commandId, isNotEmpty);
     });
   });
 }

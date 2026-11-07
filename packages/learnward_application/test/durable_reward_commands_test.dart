@@ -213,6 +213,7 @@ void main() {
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'actor-child-1',
       );
 
       // 1. Initial fulfill attempt with simulated timeout after server commit
@@ -261,6 +262,7 @@ void main() {
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'actor-child-1',
       );
       expect(server.childBalances[childId.value], 3500);
 
@@ -319,13 +321,76 @@ void main() {
       final redeemUseCase = RedeemStoreReward(server, commandStore);
 
       await expectLater(
-        redeemUseCase(familyId: familyId, rewardId: rewardId, childId: childId),
+        redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
         throwsA(isA<InvalidRewardException>()),
       );
 
       // Journal must NOT retain pending command on terminal business error
       expect(await commandStore.listPendingCommands(), isEmpty);
       expect(server.debitCount, 0);
+    });
+
+    test('Test D: missing or empty actor during new redemption fails closed, zero server calls, zero journal entries', () async {
+      server.redeemCallCount = 0;
+      server.debitCount = 0;
+      final redeemUseCase = RedeemStoreReward(server, commandStore);
+
+      // 1. null actor
+      await expectLater(
+        () => redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: null,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        server.redeemCallCount,
+        equals(0),
+        reason: 'Zero server calls on missing actor',
+      );
+      expect(
+        server.debitCount,
+        equals(0),
+        reason: 'Zero balance debits on missing actor',
+      );
+      expect(
+        await commandStore.listPendingCommands(),
+        isEmpty,
+        reason: 'Zero journal entries on missing actor',
+      );
+
+      // 2. empty actor
+      await expectLater(
+        () => redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: '',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        server.redeemCallCount,
+        equals(0),
+        reason: 'Zero server calls on empty actor',
+      );
+      expect(
+        server.debitCount,
+        equals(0),
+        reason: 'Zero balance debits on empty actor',
+      );
+      expect(
+        await commandStore.listPendingCommands(),
+        isEmpty,
+        reason: 'Zero journal entries on empty actor',
+      );
     });
   });
 }

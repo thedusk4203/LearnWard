@@ -42,6 +42,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   SelectedEvidenceFile? _selectedEvidence;
 
   bool _isSubmitting = false;
+  bool _isQuarantined = false;
   String? _errorMessage;
   double? _liveNormalizedScore;
 
@@ -55,6 +56,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId = draft.submitCommandId;
       _evidenceId = draft.evidenceId;
       _serverAssessmentId = draft.serverAssessmentId;
+      _isQuarantined = draft.isLegacyUnknown;
       _selectedSubjectKey = draft.subjectKey;
       _subjectController = TextEditingController(text: draft.subject);
       _titleController = TextEditingController(text: draft.title);
@@ -76,6 +78,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId = generateUuid();
       _evidenceId = null;
       _serverAssessmentId = null;
+      _isQuarantined = false;
       _selectedSubjectKey = SubjectKey.math;
       _subjectController = TextEditingController(
         text: SubjectKey.math.displayLabel,
@@ -195,14 +198,44 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     });
   }
 
+  static CommandDispatchState _resolveSafeDispatchState(
+    LocalAssessmentDraft? prior,
+  ) {
+    if (prior == null) {
+      return CommandDispatchState.neverDispatched;
+    }
+    if (prior.dispatchState == CommandDispatchState.unknownLegacy) {
+      return CommandDispatchState.unknownLegacy;
+    }
+    if (prior.dispatchState == CommandDispatchState.possiblyDispatched) {
+      return CommandDispatchState.possiblyDispatched;
+    }
+    if (prior.dispatchState == CommandDispatchState.confirmedCommitted) {
+      return CommandDispatchState.confirmedCommitted;
+    }
+    return CommandDispatchState.neverDispatched;
+  }
+
   Future<void> _saveLocalDraft() async {
     final activeChild = ref.read(activeChildModeProvider);
     if (activeChild == null) return;
 
+    final store = ref.read(localDraftStoreProvider);
+    final existingFromStore = await store.getLocalDraft(_localDraftId);
+    final prior = existingFromStore ?? widget.initialDraft;
+
+    if (prior?.isLegacyUnknown ?? false) {
+      _isQuarantined = true;
+    }
+
+    _createCommandId ??= prior?.createCommandId ?? generateUuid();
+    _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
+    _evidenceId ??= prior?.evidenceId;
+    _serverAssessmentId ??= prior?.serverAssessmentId;
+
     final raw = double.tryParse(_rawScoreController.text.trim()) ?? 0.0;
     final max = double.tryParse(_maxScoreController.text.trim()) ?? 10.0;
 
-    final initial = widget.initialDraft;
     final draft = LocalAssessmentDraft(
       localDraftId: _localDraftId,
       familyId: activeChild.familyId.value,
@@ -226,20 +259,17 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       occurredAt: _occurredAt,
       updatedAt: DateTime.now().toUtc(),
       entryContext: EntryContext.sharedChild,
-      serverEvidenceId: initial?.serverEvidenceId,
-      sha256Checksum: initial?.sha256Checksum,
-      localCompressedPhotoPath: initial?.localCompressedPhotoPath,
-      submissionStatus:
-          initial?.submissionStatus ?? DraftSubmissionStatus.draft,
-      retryCount: initial?.retryCount ?? 0,
-      dispatchState:
-          initial?.dispatchState ?? CommandDispatchState.neverDispatched,
-      lastErrorMessage: initial?.lastErrorMessage,
-      actorUserId: initial?.actorUserId ?? ref.read(currentUserIdProvider),
-      actorRole: initial?.actorRole,
+      serverEvidenceId: prior?.serverEvidenceId,
+      sha256Checksum: prior?.sha256Checksum,
+      localCompressedPhotoPath: prior?.localCompressedPhotoPath,
+      submissionStatus: prior?.submissionStatus ?? DraftSubmissionStatus.draft,
+      retryCount: prior?.retryCount ?? 0,
+      dispatchState: _resolveSafeDispatchState(prior),
+      lastErrorMessage: prior?.lastErrorMessage,
+      actorUserId: prior?.actorUserId ?? ref.read(currentUserIdProvider),
+      actorRole: prior?.actorRole,
     );
 
-    final store = ref.read(localDraftStoreProvider);
     await store.saveLocalDraft(draft);
 
     if (mounted) {
@@ -249,8 +279,14 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   Future<void> _submitAssessment() async {
-    if (widget.initialDraft?.isLegacyUnknown ?? false) {
+    final store = ref.read(localDraftStoreProvider);
+    final existingFromStore = await store.getLocalDraft(_localDraftId);
+    final prior = existingFromStore ?? widget.initialDraft;
+
+    final isQuarantined = (prior?.isLegacyUnknown ?? false) || _isQuarantined;
+    if (isQuarantined) {
       setState(() {
+        _isQuarantined = true;
         _errorMessage = 'Cannot submit a quarantined legacy draft. Recovery reconciliation is required.';
       });
       return;
@@ -275,18 +311,17 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     try {
       final repo = ref.read(assessmentRepositoryProvider);
       final storage = ref.read(assessmentEvidenceStorageProvider);
-      final localStore = ref.read(localDraftStoreProvider);
 
       if (_selectedEvidence != null && _evidenceId == null) {
-        _evidenceId = generateUuid();
+        _evidenceId = prior?.evidenceId ?? generateUuid();
       }
 
-      _createCommandId ??= generateUuid();
-      _submitCommandId ??= generateUuid();
+      _createCommandId ??= prior?.createCommandId ?? generateUuid();
+      _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
+      _serverAssessmentId ??= prior?.serverAssessmentId;
 
       // Persist local draft state before submitting so that any crash/drop
       // during or before submit preserves the stable command and evidence IDs.
-      final initial = widget.initialDraft;
       final localDraft = LocalAssessmentDraft(
         localDraftId: _localDraftId,
         familyId: activeChild.familyId.value,
@@ -310,22 +345,22 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         occurredAt: _occurredAt,
         updatedAt: DateTime.now().toUtc(),
         entryContext: EntryContext.sharedChild,
-        serverEvidenceId: initial?.serverEvidenceId,
-        sha256Checksum: initial?.sha256Checksum,
-        localCompressedPhotoPath: initial?.localCompressedPhotoPath,
+        serverEvidenceId: prior?.serverEvidenceId,
+        sha256Checksum: prior?.sha256Checksum,
+        localCompressedPhotoPath: prior?.localCompressedPhotoPath,
         submissionStatus: DraftSubmissionStatus.submittingAssessment,
-        retryCount: initial?.retryCount ?? 0,
+        retryCount: prior?.retryCount ?? 0,
         dispatchState: CommandDispatchState.possiblyDispatched,
         lastErrorMessage: null,
-        actorUserId: initial?.actorUserId ?? ref.read(currentUserIdProvider),
-        actorRole: initial?.actorRole,
+        actorUserId: prior?.actorUserId ?? ref.read(currentUserIdProvider),
+        actorRole: prior?.actorRole,
       );
-      await localStore.saveLocalDraft(localDraft);
+      await store.saveLocalDraft(localDraft);
 
       final submitUseCase = SubmitAssessmentDraft(
         repository: repo,
         storage: storage,
-        localDraftStore: localStore,
+        localDraftStore: store,
       );
 
       final evidenceIdObj = _evidenceId != null
@@ -423,7 +458,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (widget.initialDraft?.isLegacyUnknown ?? false) ...[
+                    if (_isQuarantined ||
+                        (widget.initialDraft?.isLegacyUnknown ?? false)) ...[
                       Card(
                         key: const Key('legacy_draft_quarantine_banner'),
                         color: theme.colorScheme.tertiaryContainer,
@@ -748,6 +784,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                             key: const Key('submit_assessment_button'),
                             onPressed:
                                 (_isSubmitting ||
+                                    _isQuarantined ||
                                     (widget.initialDraft?.isLegacyUnknown ??
                                         false))
                                 ? null

@@ -840,6 +840,103 @@ void main() {
       expect(savedDraft.actorUserId, equals('usr-legacy-actor'));
     },
   );
+
+  testWidgets(
+    'Fresh draft timeout -> Save Local Draft preserves possibly_dispatched and exact command IDs',
+    (tester) async {
+      final failingSubmitRepo = _FailingSubmitAssessmentRepository();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+            familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
+            childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
+            assessmentRepositoryProvider.overrideWithValue(failingSubmitRepo),
+            assessmentEvidenceStorageProvider.overrideWithValue(fakeStorage),
+            localEvidenceFileStoreProvider.overrideWithValue(
+              fakeEvidenceFileStore,
+            ),
+            localDraftStoreProvider.overrideWithValue(fakeDraftStore),
+            currentUserIdProvider.overrideWithValue('usr-child-1'),
+            activeFamilyProvider.overrideWith(
+              () => _PresetFamilyNotifier(testFamily),
+            ),
+            activeChildModeProvider.overrideWith(
+              () => _PresetActiveChildNotifier(testChild),
+            ),
+          ],
+          child: const MaterialApp(home: AddAssessmentScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 1. Enter assessment details
+      await tester.enterText(
+        find.byKey(const Key('assessment_raw_score_field')),
+        '9.0',
+      );
+      await tester.enterText(
+        find.byKey(const Key('assessment_title_field')),
+        'Fresh Quiz Before Drop',
+      );
+      await tester.pumpAndSettle();
+
+      // 2. Submit -> fails with network error
+      final submitFinder = find.byKey(const Key('submit_assessment_button'));
+      await tester.ensureVisible(submitFinder);
+      await tester.tap(submitFinder);
+      await tester.pumpAndSettle();
+
+      // Verify draft in store is marked possibly_dispatched with stable command IDs
+      final draftsAfterDrop = await fakeDraftStore.listLocalDrafts(
+        testChild.id,
+      );
+      expect(draftsAfterDrop.length, equals(1));
+      final draftAfterDrop = draftsAfterDrop.first;
+      expect(
+        draftAfterDrop.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+      );
+      expect(draftAfterDrop.createCommandId, isNotNull);
+      expect(draftAfterDrop.submitCommandId, isNotNull);
+      final originalCreateCmdId = draftAfterDrop.createCommandId;
+      final originalSubmitCmdId = draftAfterDrop.submitCommandId;
+
+      // 3. User is still on screen after network drop; user edits title and taps Save Local Draft
+      await tester.enterText(
+        find.byKey(const Key('assessment_title_field')),
+        'Fresh Quiz After Save',
+      );
+      final saveFinder = find.byKey(const Key('save_draft_button'));
+      await tester.ensureVisible(saveFinder);
+      await tester.tap(saveFinder);
+      await tester.pumpAndSettle();
+
+      // 4. Verify draft in store NEVER regressed to never_dispatched and command IDs are preserved
+      final draftsAfterSave = await fakeDraftStore.listLocalDrafts(
+        testChild.id,
+      );
+      expect(draftsAfterSave.length, equals(1));
+      final draftAfterSave = draftsAfterSave.first;
+      expect(
+        draftAfterSave.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+        reason: 'possibly_dispatched must NOT roll back to never_dispatched when saving locally',
+      );
+      expect(
+        draftAfterSave.createCommandId,
+        equals(originalCreateCmdId),
+        reason: 'createCommandId must be preserved',
+      );
+      expect(
+        draftAfterSave.submitCommandId,
+        equals(originalSubmitCmdId),
+        reason: 'submitCommandId must be preserved',
+      );
+      expect(draftAfterSave.title, equals('Fresh Quiz After Save'));
+    },
+  );
 }
 
 final class _TrackingAssessmentRepository extends FakeAssessmentRepository {
