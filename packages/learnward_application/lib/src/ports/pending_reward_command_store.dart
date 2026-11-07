@@ -220,6 +220,20 @@ abstract interface class PendingRewardCommandStore {
     String? lastErrorMessage,
   });
 
+  /// Atomically commits a token-fenced pre-dispatch marker ('possibly_dispatched')
+  /// directly before remote mutating RPC execution.
+  ///
+  /// Requires matching [leaseToken], unexpired lease ([now] < lease_expires_at),
+  /// actor_user_id == [authenticatedActorId], recovery_state == 'active',
+  /// operation IN ('spin_wheel', 'redeem_reward'), and
+  /// dispatch_state IN ('never_dispatched', 'possibly_dispatched').
+  Future<bool> markPossiblyDispatched({
+    required String commandId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime now,
+  });
+
   /// Deletes a successfully completed command from the journal.
   /// Conditional on [leaseToken].
   Future<bool> completeCommand({
@@ -262,10 +276,12 @@ abstract interface class PendingRewardCommandStore {
   /// operation IN ('spin_wheel', 'redeem_reward'), dispatch_state IN ('never_dispatched', 'possibly_dispatched'),
   /// (next_attempt_at IS NULL OR next_attempt_at <= clock.now()),
   /// and ((lease_token IS NULL AND lease_expires_at IS NULL) OR (lease_token IS NOT NULL AND lease_expires_at <= clock.now())).
+  /// When [familyId] is provided, additionally filters by family_id == [familyId].
   Future<List<PendingRewardCommand>> listClaimableCommands({
     required String actorUserId,
     required int limit,
     DateTime? now,
+    String? familyId,
   });
 
   /// Discovers active commands belonging to a different actor for the family.

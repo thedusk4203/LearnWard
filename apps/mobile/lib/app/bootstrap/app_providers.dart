@@ -12,6 +12,8 @@ import '../../features/assessments/services/local_evidence_file_store.dart';
 import '../../features/shared_device/domain/parent_gate_service.dart';
 import 'app_config.dart';
 import 'in_memory_repositories.dart';
+import 'supabase_auth_session_adapter.dart';
+import 'supabase_recovery_authorization_adapter.dart';
 
 /// Build-time application configuration.
 final appConfigProvider = Provider<AppConfig>((ref) {
@@ -245,6 +247,65 @@ final learningRepositoryProvider = Provider<LearningRepository>((ref) {
     );
   }
   throw MissingSupabaseConfigurationException(config.environment);
+});
+
+/// Auth session port provider.
+final authSessionPortProvider = Provider<AuthSessionPort>((ref) {
+  final config = ref.watch(appConfigProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (client != null) {
+    return SupabaseAuthSessionAdapter(client);
+  }
+  if (config.canUseLocalDemoRepositories) {
+    final currentUserId = ref.watch(currentUserIdProvider);
+    return InMemoryAuthSessionPort(activeUserId: currentUserId);
+  }
+  throw MissingSupabaseConfigurationException(config.environment);
+});
+
+/// Recovery authorization port provider.
+final recoveryAuthorizationPortProvider = Provider<RecoveryAuthorizationPort>((
+  ref,
+) {
+  final config = ref.watch(appConfigProvider);
+  final client = ref.watch(supabaseClientProvider);
+  if (client != null) {
+    return SupabaseRecoveryAuthorizationAdapter(client);
+  }
+  if (config.canUseLocalDemoRepositories) {
+    return const InMemoryRecoveryAuthorizationPort();
+  }
+  throw MissingSupabaseConfigurationException(config.environment);
+});
+
+/// Shared recovery coordinator provider for Spin and Redeem operations.
+final recoveryCoordinatorProvider = Provider<RecoveryCoordinator>((ref) {
+  final commandStore = ref.watch(pendingRewardCommandStoreProvider);
+  final wheelRepo = ref.watch(wheelRepositoryProvider);
+  final rewardRepo = ref.watch(rewardRepositoryProvider);
+  final authPort = ref.watch(authSessionPortProvider);
+  final authzPort = ref.watch(recoveryAuthorizationPortProvider);
+
+  return RecoveryCoordinator(
+    commandStore: commandStore,
+    wheelRepository: wheelRepo,
+    rewardRepository: rewardRepo,
+    authSessionPort: authPort,
+    authorizationPort: authzPort,
+  );
+});
+
+/// Outbox recovery dispatcher provider.
+final outboxRecoveryDispatcherProvider = Provider<OutboxRecoveryDispatcher>((
+  ref,
+) {
+  final commandStore = ref.watch(pendingRewardCommandStoreProvider);
+  final coordinator = ref.watch(recoveryCoordinatorProvider);
+
+  return OutboxRecoveryDispatcher(
+    commandStore: commandStore,
+    coordinator: coordinator,
+  );
 });
 
 /// Notifier managing the currently selected family.
