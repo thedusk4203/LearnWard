@@ -72,6 +72,13 @@ final class AppConfig {
   final String supabasePublishableKey;
   final bool enableLocalDemo;
 
+  /// Feature flag for automated background outbox recovery dispatching.
+  /// Must default to FALSE in all builds until reviewed end-to-end.
+  static const bool recoveryDispatcherEnabled = bool.fromEnvironment(
+    'RECOVERY_DISPATCHER_ENABLED',
+    defaultValue: false,
+  );
+
   /// Whether both public Supabase values were supplied at build time.
   bool get isSupabaseConfigured =>
       supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty;

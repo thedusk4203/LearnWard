@@ -852,6 +852,7 @@ void main() {
           familyId: 'fam-1',
           childId: 'child-1',
           actorUserId: 'usr-1',
+          recoveryState: null,
         );
         expect(
           stillPendingAfter42501,

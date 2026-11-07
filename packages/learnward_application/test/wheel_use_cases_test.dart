@@ -349,6 +349,7 @@ void main() {
         final pending = await fakeCommandStore.findPendingSpinCommand(
           familyId: familyId.value,
           childId: childId.value,
+          recoveryState: null,
         );
         expect(
           pending,

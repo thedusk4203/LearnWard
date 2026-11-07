@@ -199,7 +199,12 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
     try {
       final wheelRepo = ref.read(wheelRepositoryProvider);
       final commandStore = ref.read(pendingRewardCommandStoreProvider);
-      final spinUseCase = SpinRewardWheel(wheelRepo, commandStore);
+      final coordinator = ref.read(recoveryCoordinatorProvider);
+      final spinUseCase = SpinRewardWheel(
+        wheelRepo,
+        commandStore,
+        coordinator: coordinator,
+      );
 
       // 2. Server-Authoritative RPC invocation with durable idempotency
       final actorUserId = ref.read(currentUserIdProvider);
@@ -253,7 +258,12 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
     try {
       final wheelRepo = ref.read(wheelRepositoryProvider);
       final commandStore = ref.read(pendingRewardCommandStoreProvider);
-      final spinUseCase = SpinRewardWheel(wheelRepo, commandStore);
+      final coordinator = ref.read(recoveryCoordinatorProvider);
+      final spinUseCase = SpinRewardWheel(
+        wheelRepo,
+        commandStore,
+        coordinator: coordinator,
+      );
 
       final actorUserId = ref.read(currentUserIdProvider);
       final result = await spinUseCase(

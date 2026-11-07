@@ -1,21 +1,39 @@
-import 'dart:math';
+// ignore_for_file: prefer_initializing_formals
 
 import 'package:learnward_domain/learnward_domain.dart';
 
-import '../ports/command_lifecycle_states.dart';
+import '../ports/auth_session_port.dart';
+import '../ports/clock.dart';
 import '../ports/pending_reward_command_store.dart';
+import '../ports/recovery_authorization_port.dart';
 import '../ports/reward_repository.dart';
+import '../services/jitter_source.dart';
+import '../services/recovery_coordinator.dart';
 
 final class RedeemStoreReward {
-  const RedeemStoreReward(
+  RedeemStoreReward(
     this._repository,
     this._commandStore, {
     this.uuidGenerator,
-  });
+    AuthSessionPort? authSessionPort,
+    RecoveryAuthorizationPort? authorizationPort,
+    Clock? clock,
+    JitterSource? jitterSource,
+    RecoveryCoordinator? coordinator,
+  }) : _authSessionPort = authSessionPort,
+       _authorizationPort = authorizationPort,
+       _clock = clock ?? const SystemClock(),
+       _jitterSource = jitterSource ?? const DeterministicJitterSource(),
+       _coordinator = coordinator;
 
   final RewardRepository _repository;
   final PendingRewardCommandStore _commandStore;
   final String Function()? uuidGenerator;
+  final AuthSessionPort? _authSessionPort;
+  final RecoveryAuthorizationPort? _authorizationPort;
+  final Clock _clock;
+  final JitterSource _jitterSource;
+  final RecoveryCoordinator? _coordinator;
 
   Future<RewardRedemption> call({
     required FamilyId familyId,
@@ -32,7 +50,6 @@ final class RedeemStoreReward {
       recoveryState: null,
     );
 
-    final String actualCommandId;
     if (existing != null) {
       final canReplayExisting =
           actorUserId != null &&
@@ -49,73 +66,116 @@ final class RedeemStoreReward {
           'Reconciliation is required.',
         );
       }
-
-      actualCommandId = existing.commandId;
-      await _commandStore.savePendingCommand(
-        existing.copyWith(
-          dispatchState: CommandDispatchState.possiblyDispatched,
-        ),
-      );
     } else {
       if (actorUserId == null || actorUserId.isEmpty) {
         throw StateError(
           'Cannot dispatch reward command: authenticated actor identity is required but was missing or empty.',
         );
       }
+    }
 
-      actualCommandId = commandId ?? (uuidGenerator?.call() ?? _generateUuid());
-      await _commandStore.savePendingCommand(
-        PendingRewardCommand(
-          operation: RewardCommandOperation.redeemReward,
-          commandId: actualCommandId,
-          familyId: familyId.value,
-          childId: childId.value,
-          rewardId: rewardId.value,
+    final effectiveAuthPort =
+        _authSessionPort ??
+        _DirectActorSessionPort(
           actorUserId: actorUserId,
-          actorRole: actorRole,
-          createdAt: DateTime.now().toUtc(),
-          dispatchState: CommandDispatchState.possiblyDispatched,
-        ),
-      );
-    }
+          role: actorRole,
+          clock: _clock,
+        );
 
-    try {
-      final redemption = await _repository.redeemStoreReward(
-        commandId: actualCommandId,
-        rewardId: rewardId,
-        childId: childId,
-      );
+    final effectiveAuthzPort =
+        _authorizationPort ?? const _PermissiveAuthorizationPort();
 
-      await _commandStore.deletePendingCommand(actualCommandId);
-      return redemption;
-    } catch (e) {
-      if (_isTerminalError(e)) {
-        await _commandStore.deletePendingCommand(actualCommandId);
-      }
-      rethrow;
-    }
+    final coordinator =
+        _coordinator ??
+        RecoveryCoordinator(
+          commandStore: _commandStore,
+          rewardRepository: _repository,
+          authSessionPort: effectiveAuthPort,
+          authorizationPort: effectiveAuthzPort,
+          clock: _clock,
+          jitterSource: _jitterSource,
+          uuidGenerator: uuidGenerator,
+        );
+
+    final result = await coordinator.execute(
+      operation: RewardCommandOperation.redeemReward,
+      familyId: familyId.value,
+      childId: childId.value,
+      rewardId: rewardId.value,
+      requestedCommandId: commandId,
+      trigger: CommandExecutionTrigger.foreground,
+    );
+
+    return switch (result) {
+      CommandCommittedResult(redemption: final res) => res!,
+      CommandTerminalRejectionResult(
+        originalError: final err,
+        errorMessage: final msg,
+      ) =>
+        err != null ? throw err : throw StateError(msg),
+      CommandScheduledResult(
+        originalError: final err,
+        errorMessage: final msg,
+      ) =>
+        err != null
+            ? throw err
+            : throw StateError(msg ?? 'Scheduled for retry'),
+      CommandPendingOriginalActorResult(
+        originalError: final err,
+        reason: final r,
+      ) =>
+        err != null ? throw err : throw StateError('Cannot replay: $r'),
+      CommandQuarantinedResult(originalError: final err, reason: final r) =>
+        err != null ? throw err : throw StateError('Cannot replay: $r'),
+      CommandAlreadyInFlightResult(commandId: final id) => throw StateError(
+        'Command $id is already in flight',
+      ),
+      CommandAuthUnavailableResult(reason: final r) => throw StateError(r),
+    };
   }
+}
 
-  static bool _isTerminalError(Object error) {
-    final msg = error.toString();
-    if (msg.contains('LW201') ||
-        msg.contains('LW204') ||
-        msg.contains('LW205') ||
-        msg.contains('LW206') ||
-        msg.contains('LW004') ||
-        msg.contains('InvalidRedemptionException') ||
-        msg.contains('InvalidRewardException')) {
-      return true;
-    }
-    return false;
+final class _DirectActorSessionPort implements AuthSessionPort {
+  const _DirectActorSessionPort({
+    required this.actorUserId,
+    this.role,
+    required this.clock,
+  });
+
+  final String? actorUserId;
+  final String? role;
+  final Clock clock;
+
+  @override
+  String? get currentSessionGeneration =>
+      actorUserId != null ? 'gen-$actorUserId' : null;
+
+  @override
+  Stream<String?> get sessionGenerationStream =>
+      Stream.value(currentSessionGeneration);
+
+  @override
+  Future<ValidatedActorContext?> validateForMutation() async {
+    if (actorUserId == null || actorUserId!.isEmpty) return null;
+    return ValidatedActorContext(
+      userId: actorUserId!,
+      sessionGeneration: currentSessionGeneration!,
+      observedAt: clock.now().toUtc(),
+      role: role,
+    );
   }
+}
 
-  static String _generateUuid() {
-    final random = Random.secure();
-    final values = List<int>.generate(16, (i) => random.nextInt(256));
-    values[6] = (values[6] & 0x0f) | 0x40;
-    values[8] = (values[8] & 0x3f) | 0x80;
-    final hex = values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
+final class _PermissiveAuthorizationPort implements RecoveryAuthorizationPort {
+  const _PermissiveAuthorizationPort();
+
+  @override
+  Future<TargetAuthorizationStatus> verifyTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+    required RewardCommandOperation operation,
+  }) async {
+    return TargetAuthorizationStatus.authorized;
   }
 }

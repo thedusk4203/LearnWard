@@ -2159,3 +2159,45 @@ final class InMemoryLearningRepository implements LearningRepository {
     );
   }
 }
+
+/// Lightweight in-memory fallback for [AuthSessionPort] in local development.
+final class InMemoryAuthSessionPort implements AuthSessionPort {
+  InMemoryAuthSessionPort({String? activeUserId, String? sessionGeneration})
+    : _userId = activeUserId ?? 'local-parent-user',
+      _generation = sessionGeneration ?? 'demo-generation-1';
+
+  final String _userId;
+  final String _generation;
+
+  @override
+  String? get currentSessionGeneration => _generation;
+
+  @override
+  Stream<String?> get sessionGenerationStream => Stream.value(_generation);
+
+  @override
+  Future<ValidatedActorContext?> validateForMutation() async {
+    return ValidatedActorContext(
+      userId: _userId,
+      sessionGeneration: _generation,
+      observedAt: DateTime.now().toUtc(),
+      role: 'parent',
+    );
+  }
+}
+
+/// Lightweight in-memory fallback for [RecoveryAuthorizationPort] in local development.
+final class InMemoryRecoveryAuthorizationPort
+    implements RecoveryAuthorizationPort {
+  const InMemoryRecoveryAuthorizationPort();
+
+  @override
+  Future<TargetAuthorizationStatus> verifyTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+    required RewardCommandOperation operation,
+  }) async {
+    return TargetAuthorizationStatus.authorized;
+  }
+}
