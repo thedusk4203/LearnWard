@@ -326,17 +326,17 @@ void main() {
 
         final database = AppDatabase(NativeDatabase(dbFile));
         try {
-          expect(database.schemaVersion, 5);
+          expect(database.schemaVersion, 6);
 
           // Metadata survived
           final probe = await database.readMetadata('schema_probe');
           expect(probe, 'v4_initial');
 
-          // PRAGMA user_version is 5
+          // PRAGMA user_version is 6
           final rawCheck = await database
               .customSelect('PRAGMA user_version')
               .getSingle();
-          expect(rawCheck.data['user_version'], 5);
+          expect(rawCheck.data['user_version'], 6);
 
           // Draft migration: offline draft preserves NULL command and evidence IDs
           final offlineDraft = await database.getLocalDraft('draft-v4-offline');
@@ -451,7 +451,7 @@ void main() {
         // Reopen integrity
         final databaseSecondOpen = AppDatabase(NativeDatabase(dbFile));
         try {
-          expect(databaseSecondOpen.schemaVersion, 5);
+          expect(databaseSecondOpen.schemaVersion, 6);
           expect((await databaseSecondOpen.listPendingCommands()).length, 6);
         } finally {
           await databaseSecondOpen.close();
@@ -468,7 +468,7 @@ void main() {
 
       final database = AppDatabase(NativeDatabase(dbFile));
       try {
-        expect(database.schemaVersion, 5);
+        expect(database.schemaVersion, 6);
         final probe = await database.readMetadata('v1_probe');
         expect(probe, 'v1_initial_data');
 
@@ -520,7 +520,7 @@ void main() {
 
       final database = AppDatabase(NativeDatabase(dbFile));
       try {
-        expect(database.schemaVersion, 5);
+        expect(database.schemaVersion, 6);
         final probe = await database.readMetadata('v2_probe');
         expect(probe, 'v2_initial_data');
 
@@ -552,7 +552,7 @@ void main() {
 
         final database = AppDatabase(NativeDatabase(dbFile));
         try {
-          expect(database.schemaVersion, 5);
+          expect(database.schemaVersion, 6);
           final probe = await database.readMetadata('v3_probe');
           expect(probe, 'v3_initial_data');
 
@@ -613,13 +613,13 @@ void main() {
       // Normal application restart / reopen succeeds without duplicate column error
       final standardDb = AppDatabase(NativeDatabase(dbFile));
       try {
-        expect(standardDb.schemaVersion, 5);
+        expect(standardDb.schemaVersion, 6);
 
-        // Verify successful full migration to v5
+        // Verify successful full migration to v6
         final rawCheck = await standardDb
             .customSelect('PRAGMA user_version')
             .getSingle();
-        expect(rawCheck.data['user_version'], 5);
+        expect(rawCheck.data['user_version'], 6);
 
         final draft = await standardDb.getLocalDraft('draft-v4-offline');
         expect(draft, isNotNull);

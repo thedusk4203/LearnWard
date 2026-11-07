@@ -61,6 +61,13 @@ class LocalAssessmentDrafts extends Table {
 
   TextColumn get actorRole => text().nullable()();
 
+  // Phase 6 Slice 4A-0 Additions (v6):
+  DateTimeColumn get nextAttemptAt => dateTime().nullable()();
+
+  TextColumn get leaseToken => text().nullable()();
+
+  DateTimeColumn get leaseExpiresAt => dateTime().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {localDraftId};
 }

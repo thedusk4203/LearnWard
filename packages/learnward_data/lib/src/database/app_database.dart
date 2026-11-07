@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:drift/drift.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
@@ -20,7 +22,7 @@ class AppDatabase extends _$AppDatabase
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   Future<bool> _tableExists(String tableName) async {
     final result = await customSelect(
@@ -234,6 +236,88 @@ class AppDatabase extends _$AppDatabase
               );
             }
           }
+          if (from < 6) {
+            // v5 -> v6 migration: Additive schema upgrade for Phase 6 Slice 4A-0
+            // 1. PendingRewardCommands additions
+            if (await _tableExists('pending_reward_commands')) {
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'retry_count',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.retryCount,
+                );
+              }
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'next_attempt_at',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.nextAttemptAt,
+                );
+              }
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'last_error_message',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.lastErrorMessage,
+                );
+              }
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'lease_token',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.leaseToken,
+                );
+              }
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'lease_expires_at',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.leaseExpiresAt,
+                );
+              }
+            }
+
+            // 2. LocalAssessmentDrafts additions
+            if (await _tableExists('local_assessment_drafts')) {
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'next_attempt_at',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.nextAttemptAt,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'lease_token',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.leaseToken,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'lease_expires_at',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.leaseExpiresAt,
+                );
+              }
+            }
+          }
         });
       } finally {
         await customStatement('PRAGMA foreign_keys = ON');
@@ -300,6 +384,9 @@ class AppDatabase extends _$AppDatabase
         lastErrorMessage: Value(draft.lastErrorMessage),
         actorUserId: Value(draft.actorUserId),
         actorRole: Value(draft.actorRole),
+        nextAttemptAt: Value(draft.nextAttemptAt),
+        leaseToken: Value(draft.leaseToken),
+        leaseExpiresAt: Value(draft.leaseExpiresAt),
       ),
     );
   }
@@ -363,8 +450,8 @@ class AppDatabase extends _$AppDatabase
       maxScore: row.maxScore,
       localPhotoPath: row.localPhotoPath,
       entryContext: ctx,
-      occurredAt: row.occurredAt,
-      updatedAt: row.updatedAt,
+      occurredAt: row.occurredAt.toUtc(),
+      updatedAt: row.updatedAt.toUtc(),
       serverEvidenceId: row.serverEvidenceId,
       sha256Checksum: row.sha256Checksum,
       localCompressedPhotoPath: row.localCompressedPhotoPath,
@@ -374,6 +461,9 @@ class AppDatabase extends _$AppDatabase
       lastErrorMessage: row.lastErrorMessage,
       actorUserId: row.actorUserId,
       actorRole: row.actorRole,
+      nextAttemptAt: row.nextAttemptAt?.toUtc(),
+      leaseToken: row.leaseToken,
+      leaseExpiresAt: row.leaseExpiresAt?.toUtc(),
     );
   }
 
@@ -381,26 +471,187 @@ class AppDatabase extends _$AppDatabase
   // PENDING REWARD COMMAND STORE
   // ---------------------------------------------------------------------------
 
+  static String _generateLeaseToken() {
+    final random = Random.secure();
+    final values = List<int>.generate(16, (i) => random.nextInt(256));
+    values[6] = (values[6] & 0x0f) | 0x40;
+    values[8] = (values[8] & 0x3f) | 0x80;
+    final hex = values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
+  }
+
   @override
-  Future<void> savePendingCommand(PendingRewardCommand command) {
-    return into(pendingRewardCommands).insert(
-      PendingRewardCommandsCompanion.insert(
-        operation: command.operation.wireValue,
-        commandId: command.commandId,
-        familyId: command.familyId,
-        childId: Value(command.childId),
-        rewardId: Value(command.rewardId),
-        redemptionId: Value(command.redemptionId),
-        cancellationReason: Value(command.cancellationReason),
-        createdAt: command.createdAt,
-        actorUserId: Value(command.actorUserId),
-        actorRole: Value(command.actorRole),
-        schemaVersion: Value(command.schemaVersion),
-        recoveryState: Value(command.recoveryState.wireValue),
-        dispatchState: Value(command.dispatchState.wireValue),
-      ),
-      mode: InsertMode.insertOrReplace,
-    );
+  Future<void> savePendingCommand(
+    PendingRewardCommand command, {
+    DateTime? now,
+  }) async {
+    final hasPartialLease =
+        (command.leaseToken != null && command.leaseExpiresAt == null) ||
+        (command.leaseToken == null && command.leaseExpiresAt != null);
+    if (hasPartialLease) {
+      throw ArgumentError(
+        'Cannot save pending command ${command.commandId}: partial lease metadata '
+        '(leaseToken=${command.leaseToken}, leaseExpiresAt=${command.leaseExpiresAt})',
+      );
+    }
+
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    await transaction(() async {
+      final existing =
+          await (select(pendingRewardCommands)
+                ..where((entry) => entry.commandId.equals(command.commandId)))
+              .getSingleOrNull();
+
+      if (existing == null) {
+        await into(pendingRewardCommands).insert(
+          PendingRewardCommandsCompanion.insert(
+            operation: command.operation.wireValue,
+            commandId: command.commandId,
+            familyId: command.familyId,
+            childId: Value(command.childId),
+            rewardId: Value(command.rewardId),
+            redemptionId: Value(command.redemptionId),
+            cancellationReason: Value(command.cancellationReason),
+            createdAt: command.createdAt.toUtc(),
+            actorUserId: Value(command.actorUserId),
+            actorRole: Value(command.actorRole),
+            schemaVersion: Value(command.schemaVersion),
+            recoveryState: Value(command.recoveryState.wireValue),
+            dispatchState: Value(command.dispatchState.wireValue),
+            retryCount: Value(command.retryCount),
+            nextAttemptAt: Value(command.nextAttemptAt?.toUtc()),
+            lastErrorMessage: Value(command.lastErrorMessage),
+            leaseToken: const Value(null),
+            leaseExpiresAt: const Value(null),
+          ),
+          mode: InsertMode.insert,
+        );
+        return;
+      }
+
+      // HIGH 1: Existing command identity must be immutable.
+      final isSameIdentity =
+          existing.operation == command.operation.wireValue &&
+          existing.familyId == command.familyId &&
+          existing.childId == command.childId &&
+          existing.rewardId == command.rewardId &&
+          existing.redemptionId == command.redemptionId &&
+          existing.cancellationReason == command.cancellationReason &&
+          existing.actorUserId == command.actorUserId &&
+          existing.actorRole == command.actorRole;
+
+      if (!isSameIdentity) {
+        throw StateError(
+          'Cannot mutate immutable identity fields of existing pending command ${command.commandId}',
+        );
+      }
+
+      // Active lease protection
+      final hasActiveLease =
+          existing.leaseToken != null &&
+          existing.leaseExpiresAt != null &&
+          existing.leaseExpiresAt!.isAfter(effectiveNow);
+      if (hasActiveLease) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: held by an active lease',
+        );
+      }
+
+      // MEDIUM: Malformed lease fail-close
+      final isMalformedLease =
+          (existing.leaseToken != null && existing.leaseExpiresAt == null) ||
+          (existing.leaseToken == null && existing.leaseExpiresAt != null);
+      if (isMalformedLease) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: existing lease is malformed',
+        );
+      }
+
+      // HIGH 2: Irreversible dispatch provenance & legacy quarantine checks
+      if (existing.dispatchState ==
+          CommandDispatchState.unknownLegacy.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is quarantined as unknown_legacy',
+        );
+      }
+      if (existing.dispatchState ==
+          CommandDispatchState.confirmedCommitted.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is already confirmed_committed',
+        );
+      }
+      if (existing.recoveryState ==
+          CommandRecoveryState.quarantinedUnknownOutcome.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is quarantined',
+        );
+      }
+      if (existing.recoveryState ==
+          CommandRecoveryState.pendingOriginalActor.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is paused for original actor',
+        );
+      }
+      if (existing.recoveryState ==
+          CommandRecoveryState.terminalError.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is in terminal_error',
+        );
+      }
+
+      final rowsAffected = await customUpdate(
+        '''
+        UPDATE pending_reward_commands
+        SET dispatch_state = CASE
+              WHEN dispatch_state = 'possibly_dispatched' THEN 'possibly_dispatched'
+              ELSE ?
+            END,
+            next_attempt_at = COALESCE(?, next_attempt_at),
+            last_error_message = COALESCE(?, last_error_message),
+            lease_token = NULL,
+            lease_expires_at = NULL
+        WHERE command_id = ?
+          AND operation = ?
+          AND family_id = ?
+          AND (child_id IS ?)
+          AND (reward_id IS ?)
+          AND (redemption_id IS ?)
+          AND (cancellation_reason IS ?)
+          AND (actor_user_id IS ?)
+          AND (actor_role IS ?)
+          AND dispatch_state NOT IN ('unknown_legacy', 'confirmed_committed')
+          AND recovery_state NOT IN ('quarantined_unknown_outcome', 'pending_original_actor', 'terminal_error')
+          AND (
+            (lease_token IS NULL AND lease_expires_at IS NULL)
+            OR
+            (lease_token IS NOT NULL AND lease_expires_at <= ?)
+          );
+        ''',
+        variables: [
+          Variable<String>(command.dispatchState.wireValue),
+          Variable<DateTime>(command.nextAttemptAt?.toUtc()),
+          Variable<String>(command.lastErrorMessage),
+          Variable<String>(command.commandId),
+          Variable<String>(command.operation.wireValue),
+          Variable<String>(command.familyId),
+          Variable<String>(command.childId),
+          Variable<String>(command.rewardId),
+          Variable<String>(command.redemptionId),
+          Variable<String>(command.cancellationReason),
+          Variable<String>(command.actorUserId),
+          Variable<String>(command.actorRole),
+          Variable<DateTime>(effectiveNow),
+        ],
+        updates: {pendingRewardCommands},
+      );
+
+      if (rowsAffected == 0) {
+        throw StateError(
+          'Cannot update pending command ${command.commandId}: conflicting identity or conditional predicates not met',
+        );
+      }
+    });
   }
 
   @override
@@ -536,9 +787,343 @@ class AppDatabase extends _$AppDatabase
 
   @override
   Future<void> deletePendingCommand(String commandId) async {
-    final query = delete(pendingRewardCommands)
-      ..where((entry) => entry.commandId.equals(commandId));
-    await query.go();
+    await customUpdate(
+      '''
+      DELETE FROM pending_reward_commands
+      WHERE command_id = ?
+        AND lease_token IS NULL
+        AND lease_expires_at IS NULL;
+      ''',
+      variables: [Variable<String>(commandId)],
+      updates: {pendingRewardCommands},
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // PHASE 6 SLICE 4A-0: ATOMIC CAS STORE OPERATIONS & FENCING
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<String?> acquireClaim({
+    required String commandId,
+    required String actorUserId,
+    required Duration leaseDuration,
+    DateTime? now,
+    String? overrideLeaseToken,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+    final leaseExpiresAt = effectiveNow.add(leaseDuration);
+    final newLeaseToken = overrideLeaseToken ?? _generateLeaseToken();
+
+    final rowsAffected = await customUpdate(
+      '''
+      UPDATE pending_reward_commands
+      SET lease_token = ?,
+          lease_expires_at = ?
+      WHERE command_id = ?
+        AND actor_user_id = ?
+        AND recovery_state = 'active'
+        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+        AND (
+          (lease_token IS NULL AND lease_expires_at IS NULL)
+          OR
+          (lease_token IS NOT NULL AND lease_expires_at <= ?)
+        );
+      ''',
+      variables: [
+        Variable<String>(newLeaseToken),
+        Variable<DateTime>(leaseExpiresAt),
+        Variable<String>(commandId),
+        Variable<String>(actorUserId),
+        Variable<DateTime>(effectiveNow),
+        Variable<DateTime>(effectiveNow),
+      ],
+      updates: {pendingRewardCommands},
+    );
+
+    return rowsAffected == 1 ? newLeaseToken : null;
+  }
+
+  @override
+  Future<bool> releaseClaim({
+    required String commandId,
+    required String leaseToken,
+    required DateTime nextAttemptAt,
+    String? lastErrorMessage,
+  }) async {
+    final rowsAffected = await customUpdate(
+      '''
+      UPDATE pending_reward_commands
+      SET retry_count = retry_count + 1,
+          next_attempt_at = ?,
+          last_error_message = ?,
+          lease_token = NULL,
+          lease_expires_at = NULL
+      WHERE command_id = ? AND lease_token = ?;
+      ''',
+      variables: [
+        Variable<DateTime>(nextAttemptAt.toUtc()),
+        Variable<String>(lastErrorMessage),
+        Variable<String>(commandId),
+        Variable<String>(leaseToken),
+      ],
+      updates: {pendingRewardCommands},
+    );
+
+    return rowsAffected == 1;
+  }
+
+  @override
+  Future<bool> completeCommand({
+    required String commandId,
+    required String leaseToken,
+  }) async {
+    final rowsAffected = await customUpdate(
+      '''
+      DELETE FROM pending_reward_commands
+      WHERE command_id = ? AND lease_token = ?;
+      ''',
+      variables: [Variable<String>(commandId), Variable<String>(leaseToken)],
+      updates: {pendingRewardCommands},
+    );
+
+    return rowsAffected == 1;
+  }
+
+  @override
+  Future<bool> transitionRecoveryState({
+    required String commandId,
+    required String leaseToken,
+    required CommandRecoveryState newState,
+    String? lastErrorMessage,
+  }) async {
+    final rowsAffected = await customUpdate(
+      '''
+      UPDATE pending_reward_commands
+      SET recovery_state = ?,
+          last_error_message = ?,
+          lease_token = NULL,
+          lease_expires_at = NULL
+      WHERE command_id = ? AND lease_token = ?;
+      ''',
+      variables: [
+        Variable<String>(newState.wireValue),
+        Variable<String>(lastErrorMessage),
+        Variable<String>(commandId),
+        Variable<String>(leaseToken),
+      ],
+      updates: {pendingRewardCommands},
+    );
+
+    return rowsAffected == 1;
+  }
+
+  @override
+  Future<bool> pauseMismatchedActorCommand({
+    required String commandId,
+    required String familyId,
+    required String authenticatedActorId,
+    String? mismatchReason,
+    DateTime? now,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    final rowsAffected = await customUpdate(
+      '''
+      UPDATE pending_reward_commands
+      SET recovery_state = 'pending_original_actor',
+          last_error_message = ?,
+          lease_token = NULL,
+          lease_expires_at = NULL
+      WHERE command_id = ?
+        AND family_id = ?
+        AND actor_user_id IS NOT NULL
+        AND actor_user_id <> ?
+        AND recovery_state = 'active'
+        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND (
+          (lease_token IS NULL AND lease_expires_at IS NULL)
+          OR
+          (lease_token IS NOT NULL AND lease_expires_at <= ?)
+        );
+      ''',
+      variables: [
+        Variable<String>(mismatchReason),
+        Variable<String>(commandId),
+        Variable<String>(familyId),
+        Variable<String>(authenticatedActorId),
+        Variable<DateTime>(effectiveNow),
+      ],
+      updates: {pendingRewardCommands},
+    );
+
+    return rowsAffected == 1;
+  }
+
+  @override
+  Future<bool> resumeOriginalActorCommand({
+    required String commandId,
+    required String familyId,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    final rowsAffected = await customUpdate(
+      '''
+      UPDATE pending_reward_commands
+      SET recovery_state = 'active',
+          last_error_message = NULL,
+          lease_token = NULL,
+          lease_expires_at = NULL
+      WHERE command_id = ?
+        AND family_id = ?
+        AND actor_user_id = ?
+        AND recovery_state = 'pending_original_actor'
+        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND (
+          (lease_token IS NULL AND lease_expires_at IS NULL)
+          OR
+          (lease_token IS NOT NULL AND lease_expires_at <= ?)
+        );
+      ''',
+      variables: [
+        Variable<String>(commandId),
+        Variable<String>(familyId),
+        Variable<String>(authenticatedActorId),
+        Variable<DateTime>(effectiveNow),
+      ],
+      updates: {pendingRewardCommands},
+    );
+
+    return rowsAffected == 1;
+  }
+
+  @override
+  Future<List<PendingRewardCommand>> listClaimableCommands({
+    required String actorUserId,
+    required int limit,
+    DateTime? now,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    final query = customSelect(
+      '''
+      SELECT * FROM pending_reward_commands
+      WHERE actor_user_id = ?
+        AND recovery_state = 'active'
+        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+        AND (
+          (lease_token IS NULL AND lease_expires_at IS NULL)
+          OR
+          (lease_token IS NOT NULL AND lease_expires_at <= ?)
+        )
+      ORDER BY created_at ASC
+      LIMIT ?;
+      ''',
+      variables: [
+        Variable<String>(actorUserId),
+        Variable<DateTime>(effectiveNow),
+        Variable<DateTime>(effectiveNow),
+        Variable<int>(limit),
+      ],
+      readsFrom: {pendingRewardCommands},
+    );
+
+    final rows = await query.get();
+    return rows
+        .map((row) => pendingRewardCommands.map(row.data))
+        .map(_mapRowToPendingCommand)
+        .toList();
+  }
+
+  @override
+  Future<List<PendingRewardCommand>> listMismatchedActiveCommands({
+    required String familyId,
+    required String authenticatedActorId,
+    required int limit,
+    DateTime? now,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    final query = customSelect(
+      '''
+      SELECT * FROM pending_reward_commands
+      WHERE family_id = ?
+        AND actor_user_id IS NOT NULL
+        AND actor_user_id <> ?
+        AND recovery_state = 'active'
+        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND (
+          (lease_token IS NULL AND lease_expires_at IS NULL)
+          OR
+          (lease_token IS NOT NULL AND lease_expires_at <= ?)
+        )
+      ORDER BY created_at ASC
+      LIMIT ?;
+      ''',
+      variables: [
+        Variable<String>(familyId),
+        Variable<String>(authenticatedActorId),
+        Variable<DateTime>(effectiveNow),
+        Variable<int>(limit),
+      ],
+      readsFrom: {pendingRewardCommands},
+    );
+
+    final rows = await query.get();
+    return rows
+        .map((row) => pendingRewardCommands.map(row.data))
+        .map(_mapRowToPendingCommand)
+        .toList();
+  }
+
+  @override
+  Future<List<PendingRewardCommand>> listPausedOriginalActorCommands({
+    required String familyId,
+    required String authenticatedActorId,
+    required int limit,
+    DateTime? now,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    final query = customSelect(
+      '''
+      SELECT * FROM pending_reward_commands
+      WHERE family_id = ?
+        AND actor_user_id = ?
+        AND recovery_state = 'pending_original_actor'
+        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND (
+          (lease_token IS NULL AND lease_expires_at IS NULL)
+          OR
+          (lease_token IS NOT NULL AND lease_expires_at <= ?)
+        )
+      ORDER BY created_at ASC
+      LIMIT ?;
+      ''',
+      variables: [
+        Variable<String>(familyId),
+        Variable<String>(authenticatedActorId),
+        Variable<DateTime>(effectiveNow),
+        Variable<int>(limit),
+      ],
+      readsFrom: {pendingRewardCommands},
+    );
+
+    final rows = await query.get();
+    return rows
+        .map((row) => pendingRewardCommands.map(row.data))
+        .map(_mapRowToPendingCommand)
+        .toList();
   }
 
   PendingRewardCommand _mapRowToPendingCommand(PendingRewardCommandEntry row) {
@@ -551,12 +1136,17 @@ class AppDatabase extends _$AppDatabase
       rewardId: row.rewardId,
       redemptionId: row.redemptionId,
       cancellationReason: row.cancellationReason,
-      createdAt: row.createdAt,
+      createdAt: row.createdAt.toUtc(),
       actorUserId: row.actorUserId,
       actorRole: row.actorRole,
       schemaVersion: row.schemaVersion,
       recoveryState: CommandRecoveryState.fromString(row.recoveryState),
       dispatchState: CommandDispatchState.fromString(row.dispatchState),
+      retryCount: row.retryCount,
+      nextAttemptAt: row.nextAttemptAt?.toUtc(),
+      lastErrorMessage: row.lastErrorMessage,
+      leaseToken: row.leaseToken,
+      leaseExpiresAt: row.leaseExpiresAt?.toUtc(),
     );
   }
 }

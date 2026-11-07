@@ -33,4 +33,15 @@ class PendingRewardCommands extends Table {
 
   TextColumn get dispatchState =>
       text().withDefault(const Constant('unknown_legacy'))();
+
+  // Phase 6 Slice 4A-0 Additions (v6):
+  IntColumn get retryCount => integer().withDefault(const Constant(0))();
+
+  DateTimeColumn get nextAttemptAt => dateTime().nullable()();
+
+  TextColumn get lastErrorMessage => text().nullable()();
+
+  TextColumn get leaseToken => text().nullable()();
+
+  DateTimeColumn get leaseExpiresAt => dateTime().nullable()();
 }
