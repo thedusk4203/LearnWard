@@ -14,7 +14,7 @@
 
 Following the successful merge and verification of PR #21 (Drift v5 Foundation @ `7b0d6ce9d179a7945bcb217f15dcd32274d649b0`), the local SQLite persistence layer has been safely upgraded with non-destructive additive schemas, atomic multi-version migrations, legacy quarantine markers, and fail-closed actor matching.
 
-This document formalizes the resolved architectural dependencies, durable state machine, concurrency-claim protocol, and implementation slicing for **Actor-Aware Offline Command Recovery (Phase 6 Slice 4)**.
+This document formalizes the resolved architectural dependencies, durable state machine, concurrency-claim and fencing protocol, store-port contracts, and implementation slicing for **Actor-Aware Offline Command Recovery (Phase 6 Slice 4)**.
 
 ---
 
@@ -60,39 +60,151 @@ To prevent conflating network transmission history with authorization and lifecy
 | **Network Dispatch** | `dispatch_state` | Physical network boundary tracking | `unknown_legacy`, `never_dispatched`, `possibly_dispatched`, `confirmed_committed` |
 | **Lifecycle & Recovery** | `recovery_state` | Execution eligibility & authorization | `active`, `pending_original_actor`, `quarantined_unknown_outcome`, `terminal_error` |
 
-#### Analysis of Drift v5 Schema Asymmetry & Additive v6 Decision:
-- **`pending_reward_commands` (Drift v5):** Contains `recovery_state`, `dispatch_state`, `actor_user_id`, `actor_role`. It does **not** persist `retry_count`, `next_attempt_at`, or `last_error_message`.
-- **`local_assessment_drafts` (Drift v5):** Contains `submission_status`, `retry_count`, `dispatch_state`, `last_error_message`, `actor_user_id`, `actor_role`. It does **not** persist `next_attempt_at` or `recovery_state`.
+#### Analysis of Drift v5 Schema Asymmetry:
+- **`pending_reward_commands` (Drift v5):** Contains `recovery_state`, `dispatch_state`, `actor_user_id`, `actor_role`. It does **not** persist `retry_count`, `next_attempt_at`, `last_error_message`, `lease_token`, or `lease_expires_at`.
+- **`local_assessment_drafts` (Drift v5):** Contains `submission_status`, `retry_count`, `dispatch_state`, `last_error_message`, `actor_user_id`, `actor_role`. It does **not** persist `next_attempt_at`, `lease_token`, or `lease_expires_at`.
 
-#### Architectural Decision for Sub-Slice 4A-0:
-To guarantee **restart-safe bounded exponential backoff** without resetting timers on application restart or memory pressure:
-1. An explicitly versioned additive Drift migration (**schemaVersion = 6**, `from == 5`) is introduced in sub-slice 4A-0.
+#### Architectural Decision for Sub-Slice 4A-0 (Drift Schema v6):
+To guarantee **restart-safe bounded exponential backoff** and **stale-worker fencing** without resetting timers on application restart or memory pressure:
+1. An explicitly versioned additive Drift migration (**schemaVersion = 6**, supporting direct upgrades from v1, v2, v3, v4, and v5) is introduced in sub-slice 4A-0.
 2. `pending_reward_commands` adds:
    - `retry_count`: `INTEGER NOT NULL DEFAULT 0`
-   - `next_attempt_at`: `DATETIME NULL`
+   - `next_attempt_at`: `DATETIME NULL` (scheduled retry eligibility)
    - `last_error_message`: `TEXT NULL`
+   - `lease_token`: `TEXT NULL` (unique claim ownership / fencing identity)
+   - `lease_expires_at`: `DATETIME NULL` (claim expiration timestamp)
 3. `local_assessment_drafts` adds:
-   - `next_attempt_at`: `DATETIME NULL`
+   - `next_attempt_at`: `DATETIME NULL` (scheduled retry eligibility)
+   - `lease_token`: `TEXT NULL` (unique claim ownership / fencing identity)
+   - `lease_expires_at`: `DATETIME NULL` (claim expiration timestamp)
 4. Draft recovery status maps directly to its existing `submission_status` (`draft`, `failed_retryable`, `terminal_error`) and `dispatch_state` (`unknown_legacy` $\implies$ quarantined); no redundant `recovery_state` column is required on drafts.
+
+#### Distinct Roles of Claim & Schedule Fields:
+- **`next_attempt_at`:** Scheduled retry eligibility. Represents the earliest instant the command is permitted to be attempted after exponential backoff.
+- **`lease_expires_at`:** Claim expiration timestamp. Represents the deadline after which a claimed command is considered abandoned by an in-flight worker.
+- **`lease_token`:** Unique claim ownership and fencing identity. A unique UUID generated per claim acquisition to ensure conditional updates and deletions only affect the active lease holder.
 
 ---
 
-### 2.3 Concurrency Claims & Foreground/Background Coordination
+### 2.3 Atomic Concurrency Claim, Fencing & Coordination Protocol
 
-To prevent race conditions where a background recovery timer and a user foreground action attempt to dispatch the same command concurrently:
+To prevent race conditions where a background recovery timer and a user foreground action attempt to dispatch the same command concurrently, or where a stale worker overwrites a newer worker's state:
 
-1. **Atomic Claim Lease Pattern:**
-   Before a worker (background dispatcher or foreground use case) dispatches a command, it acquires an atomic lease in SQLite:
+#### 2.3.1 Atomic SQLite Claim Predicate
+Before a worker (background dispatcher or foreground use case) dispatches a command, it acquires an atomic lease in SQLite:
+```sql
+UPDATE pending_reward_commands
+SET lease_token = :newLeaseToken,
+    lease_expires_at = :leaseExpiresAt
+WHERE command_id = :commandId
+  AND recovery_state = 'active'
+  AND (next_attempt_at IS NULL OR next_attempt_at <= :now)
+  AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= :now);
+```
+
+**Claim Invariants:**
+1. **Target Identity:** The command row must match `:commandId`.
+2. **Active State:** The command must be in `recovery_state = 'active'`. Commands in `quarantined_unknown_outcome`, `terminal_error`, or `pending_original_actor` can never be claimed.
+3. **Schedule Eligibility:** Current time must be past scheduled retry: `(next_attempt_at IS NULL OR next_attempt_at <= :now)`.
+4. **Lease Availability:** The command must be unclaimed or its lease expired: `(lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= :now)`.
+5. **Atomic Outcome:** Rows affected == 1 confirms acquisition. Rows affected == 0 indicates claim failure (command not found, ineligible, or actively owned by another worker); the worker immediately yields.
+
+#### 2.3.2 Stale-Worker Fencing & Conditional Mutations
+Every subsequent mutation, state change, retry rescheduling, or journal clearance **MUST be conditional on `lease_token`**:
+
+1. **Completion & Journal Deletion on Success:**
+   ```sql
+   DELETE FROM pending_reward_commands
+   WHERE command_id = :commandId AND lease_token = :leaseToken;
+   ```
+2. **Retry Reschedule / Release on Failure:**
    ```sql
    UPDATE pending_reward_commands
-   SET next_attempt_at = :leaseExpiresAt
-   WHERE command_id = :id
-     AND recovery_state = 'active'
-     AND (next_attempt_at IS NULL OR next_attempt_at <= :now);
+   SET retry_count = retry_count + 1,
+       next_attempt_at = :nextAttemptAt,
+       last_error_message = :errorMessage,
+       lease_token = NULL,
+       lease_expires_at = NULL
+   WHERE command_id = :commandId AND lease_token = :leaseToken;
    ```
-   If 0 rows are affected, another invocation is currently processing this command; the worker immediately yields.
-2. **Foreground Use Case Protection:**
-   When `spinRewardWheel` or `redeemStoreReward` is invoked by the user, it checks `_commandStore.findPending...`. If an unresolved command exists with an active lease, the foreground action does not overwrite the journal entry or launch a duplicate network call; it safely waits for the in-flight claim or returns an actionable in-progress notification.
+3. **State Transitions (e.g. `pending_original_actor` or `quarantined_unknown_outcome`):**
+   ```sql
+   UPDATE pending_reward_commands
+   SET recovery_state = :newRecoveryState,
+       last_error_message = :errorMessage,
+       lease_token = NULL,
+       lease_expires_at = NULL
+   WHERE command_id = :commandId AND lease_token = :leaseToken;
+   ```
+
+**Fencing Guarantees:**
+- If worker A's lease expires while an RPC is in-flight, worker B may claim the command with `:tokenB`.
+- When worker A later attempts to delete or update the row with `:tokenA`, rows affected == 0. Worker A cannot overwrite worker B's active claim or clear a newer command state.
+
+#### 2.3.3 Leases Expiring In-Flight & Server Idempotency
+- In distributed mobile architectures, a network RPC may remain in flight across cellular transitions longer than `lease_expires_at`.
+- Lease ownership alone **does not guarantee exactly-once network transmission**.
+- The system fundamentally relies on **server-authoritative same-command-ID idempotency** (`public.command_receipts`), guaranteeing that if two workers dispatch the same `p_command_id`, the server executes it exactly once and returns the committed entity without duplicate ledger debits or spins.
+- Client fencing ensures that the stale worker cannot corrupt SQLite journal records.
+
+#### 2.3.4 Coordination with Foreground Dispatch & `InsertMode`
+- **Current Vulnerability in v5:** `AppDatabase.savePendingCommand()` uses `InsertMode.insertOrReplace`. If a foreground use case calls this blindly, it replaces the entire SQLite row, wiping out active leases, resetting `retry_count`, and overriding `recovery_state`.
+- **Slice 4A-1 Replacement:**
+  1. Initial insertion of genuinely new commands uses `insert(..., mode: InsertMode.insert)` (failing if row already exists).
+  2. Unconditional `insertOrReplace` is eliminated for existing records.
+  3. When a foreground use case retries an existing pending command, it **MUST acquire the claim lease** via `acquireClaim`.
+  4. If the lease cannot be acquired (because the background dispatcher is actively processing it), the foreground action does not launch a duplicate RPC and does not overwrite the journal; it yields or reports an in-progress status.
+  5. No deletion or rescheduling is permitted without verifying lease ownership.
+  6. Original command ID and authenticated actor identity are strictly preserved; concurrent operations never silently regenerate command IDs.
+  7. Background workers can never promote quarantined commands to active.
+  8. Crash/restart releases claims naturally: when `clock.now() > lease_expires_at`, the atomic predicate allows the command to be reclaimed without special startup sweeps.
+
+#### 2.3.5 Store-Port API Additions (`PendingRewardCommandStore`)
+```dart
+abstract interface class PendingRewardCommandStore {
+  // Existing methods preserved...
+  
+  /// Atomically attempts to acquire an exclusive execution claim lease.
+  /// Returns granted leaseToken on success, or null if claim failed / already in-flight.
+  Future<String?> acquireClaim({
+    required String commandId,
+    required String actorUserId,
+    required Duration leaseDuration,
+  });
+
+  /// Releases an active claim back to scheduled retry with updated backoff.
+  /// Conditional on [leaseToken].
+  Future<bool> releaseClaim({
+    required String commandId,
+    required String leaseToken,
+    required DateTime nextAttemptAt,
+    required int retryCount,
+    String? lastErrorMessage,
+  });
+
+  /// Deletes a successfully completed command from the journal.
+  /// Conditional on [leaseToken].
+  Future<bool> completeCommand({
+    required String commandId,
+    required String leaseToken,
+  });
+
+  /// Transitions recovery state (e.g. to pendingOriginalActor or quarantinedUnknownOutcome).
+  /// Conditional on [leaseToken].
+  Future<bool> transitionRecoveryState({
+    required String commandId,
+    required String leaseToken,
+    required CommandRecoveryState newState,
+    String? lastErrorMessage,
+  });
+
+  /// Lists claimable commands due for execution by the authenticated actor.
+  Future<List<PendingRewardCommand>> listClaimableCommands({
+    required String actorUserId,
+    required int limit,
+  });
+}
+```
 
 ---
 
@@ -110,18 +222,18 @@ flowchart TD
     CheckLease -- Lease Acquired --> DispatchRPC[Invoke Server RPC with original commandId]
     
     DispatchRPC --> CheckResult{RPC Result?}
-    CheckResult -- 200 OK --> CommitSuccess[Set dispatchState = 'confirmed_committed'; Delete Journal]
-    CheckResult -- Network Error / Timeout --> Backoff[Increment retryCount; Set nextAttemptAt with Bounded Jitter]
+    CheckResult -- 200 OK --> CommitSuccess[completeCommand with leaseToken; Confirmed Committed]
+    CheckResult -- Network Error / Timeout --> Backoff[releaseClaim with leaseToken; Set nextAttemptAt with Bounded Jitter]
     CheckResult -- SQLSTATE 42501 --> Disambiguate42501[Disambiguate 42501]
-    CheckResult -- Terminal LW... Code --> Terminate[Mark terminal_error; Clean Journal; Surface UI Message]
+    CheckResult -- Terminal LW... Code --> Terminate[completeCommand / terminal_error with leaseToken; Surface UI]
     
     Disambiguate42501 --> CheckMsg{Error message?}
-    CheckMsg -- Child profile is archived --> ChildArchived[Set recoveryState = 'quarantined_unknown_outcome'; Stop Retry]
-    CheckMsg -- Command caller mismatch --> PauseMismatch[Set recoveryState = 'pending_original_actor'; Halt]
+    CheckMsg -- Child profile is archived --> ChildArchived[transitionRecoveryState to 'quarantined_unknown_outcome']
+    CheckMsg -- Command caller mismatch --> PauseMismatch[transitionRecoveryState to 'pending_original_actor']
     CheckMsg -- Paired Child Session --> CheckGrant{Query child_device_grants?}
     
-    CheckGrant -- status = 'revoked' --> DeviceRevoked[Set recoveryState = 'quarantined_unknown_outcome'; Lock Shell]
-    CheckGrant -- Network Fail / Active --> PauseActive[Retain active; Schedule Backoff]
+    CheckGrant -- status = 'revoked' --> DeviceRevoked[transitionRecoveryState to 'quarantined_unknown_outcome'; Lock Shell]
+    CheckGrant -- Network Fail / Active --> PauseActive[releaseClaim with leaseToken; Schedule Backoff]
 ```
 
 #### Safe Resumption Protocol:
@@ -195,11 +307,19 @@ flowchart LR
 ### Sub-Slice 4A-0: Durable Retry Foundation & Concurrency Claim Schema
 - **Scope:** `packages/learnward_data` and `packages/learnward_application`.
 - **Deliverables:**
-  - Additive Drift schema migration v5 $\to$ v6:
-    - `pending_reward_commands`: add `retry_count`, `next_attempt_at`, `last_error_message`.
-    - `local_assessment_drafts`: add `next_attempt_at`.
-  - Atomic migration unit tests (v1 $\to$ v6, v4 $\to$ v6, v5 $\to$ v6).
-  - Concurrency lease query and claim methods on `PendingRewardCommandStore`.
+  - Additive Drift schema migration to **schemaVersion = 6**:
+    - `pending_reward_commands`: add `retry_count`, `next_attempt_at`, `last_error_message`, `lease_token`, `lease_expires_at`.
+    - `local_assessment_drafts`: add `next_attempt_at`, `lease_token`, `lease_expires_at`.
+  - Atomic migration code in `AppDatabase.migration.onUpgrade` applying missing historical steps and v6 additions in order, wrapped in an explicit SQLite `transaction()` with foreign keys safely toggled (`PRAGMA foreign_keys = OFF / ON`).
+  - Store-port API extensions on `PendingRewardCommandStore` (`acquireClaim`, `releaseClaim`, `completeCommand`, `transitionRecoveryState`, `listClaimableCommands`).
+  - Multi-version migration test matrix:
+    - **v1 $\to$ v6:** Direct migration from initial schema to v6.
+    - **v2 $\to$ v6:** Direct migration from v2 schema to v6.
+    - **v3 $\to$ v6:** Direct migration from v3 schema to v6.
+    - **v4 $\to$ v6:** Direct migration from v4 schema to v6.
+    - **v5 $\to$ v6:** Additive migration from v5 schema to v6.
+    - **Interrupted v5 $\to$ v6:** Transaction rollback on injected exception, verifying zero partial columns and clean reopen.
+    - **Provenance Preservation:** Verification that existing v4/v5 drafts and commands retain all original NULL values, IDs, and quarantine status across upgrade.
 - **Target:** Smallest safe prerequisite PR.
 
 ---
@@ -211,11 +331,12 @@ flowchart LR
   - Queue drainage for `spinWheel` and `redeemReward`.
   - Original actor identity verification (`currentUserId` check).
   - Persistence of `recovery_state = 'pending_original_actor'` on mismatch.
-  - Re-invoking server mutation RPC with original `commandId`.
+  - Re-invoking server mutation RPC with original `commandId` under atomic claim lease.
+  - Stale worker fencing: conditional completion and retry rescheduling using `lease_token`.
   - Bounded exponential backoff with jitter and persistent `next_attempt_at`.
   - Archived-child detection (`42501`) and transition to `quarantined_unknown_outcome`.
   - Positive device revocation query handling for paired children.
-  - Comprehensive unit and integration tests with real SQLite files and simulated network drops.
+  - Comprehensive unit and integration tests with real SQLite files, simulated network drops, and concurrent claim conflicts.
 - **Explicit Limit:** No draft auto-submission; no fulfill/cancel dispatching; zero UI changes.
 
 ---
@@ -264,9 +385,10 @@ Before Slice 4A-1 can be accepted:
    - Server commits RPC and records `command_receipts`, but client times out before receiving HTTP response.
    - Dispatcher retries with identical `commandId`.
    - Server returns existing committed outcome; client marks `confirmed_committed` and deletes journal row with zero double debit/spin.
-5. **Concurrent Foreground and Background Processing:**
+5. **Concurrent Foreground and Background Processing & Fencing:**
    - Dispatcher acquiring claim lease prevents duplicate foreground execution.
    - User attempting foreground operation while background recovery is in-flight does not duplicate network call or corrupt journal.
+   - A stale worker whose lease expired in-flight cannot delete or overwrite a newer worker's claim (fenced by `lease_token`).
 6. **Archived Children:**
    - Mutation RPC on archived child profile receives `42501 (Child profile is archived)`.
    - Command transitions to `quarantined_unknown_outcome`; automated retry ceases permanently.
@@ -274,5 +396,5 @@ Before Slice 4A-1 can be accepted:
    - For paired child devices receiving `42501`, dispatcher executes dedicated `child_device_grants` query.
    - Revocation confirmed only upon positive proof (`status = 'revoked' AND revoked_at IS NOT NULL`).
 8. **Restart-Safe Backoff & Zero Economic Duplication:**
-   - Bounded exponential backoff persists `next_attempt_at` and `retry_count` in SQLite across app restarts.
+   - Bounded exponential backoff persists `next_attempt_at`, `retry_count`, and `lease_token` in SQLite across app restarts.
    - Ledger parity and daily cap invariance verified across 100% of test scenarios.

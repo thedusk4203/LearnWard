@@ -85,7 +85,7 @@ Final verified test totals from post-merge main CI run [`42337689222`](https://g
 1. **Conservative Historical Limit:**
    - Frozen Drift v4 recorded no dispatch marker and no retry counter. A newly added default `retryCount == 0` does **not** prove an operation was never transmitted over the network.
    - All migrated v4 drafts and commands are permanently stamped `dispatchState = 'unknown_legacy'`.
-   - Migrated v4 records are quarantined from automated network replay: `canAutoSubmit` returns `false` and `isEligibleForReplay` returns `false`.
+   - Migrated v4 records are quarantined from automated network replay: `canAutoSubmit` returns `false` and `canAutoReplay` returns `false`.
 
 2. **Strict NULL Preservation on Ordinary Local Edits:**
    - For an `unknown_legacy` draft, ordinary local editing (e.g. updating title, score, subject) and saving via `AddAssessmentScreen._saveLocalDraft()` preserves all existing fields:
@@ -105,7 +105,7 @@ Final verified test totals from post-merge main CI run [`42337689222`](https://g
    - These command IDs remain immutable across retries, local edits, and network timeouts.
 
 2. **Durable Pre-Dispatch Markers:**
-   - **Before** invoking any remote mutating RPC (`createDraft`, `submitAssessment`, `spinWheel`, `redeemReward`), the client atomically writes `dispatchState = 'possibly_dispatched'` (and `possiblyDispatched = true`) to SQLite.
+   - **Before** invoking any remote mutating RPC (`createDraft`, `submitAssessment`, `spinWheel`, `redeemReward`), the client atomically writes `dispatchState = 'possibly_dispatched'` (persisting `CommandDispatchState.possiblyDispatched`) to SQLite.
    - If the app crashes or network drops after SQLite commit but before server receipt, the operation remains durable in `possibly_dispatched`.
    - On retry, the client reuses the exact same command ID, relying on server-authoritative idempotent RPC replay contracts.
 
