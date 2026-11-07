@@ -26,11 +26,14 @@ final class FakeWheelRepository implements WheelRepository {
   final List<WheelSpin> _spins = [];
   final Map<String, WheelSpinResult> _receipts = {};
 
+  int spinCallCount = 0;
+
   late final Random _rng;
 
   /// Simulated failure modes for durability & recovery tests.
   bool failNextWithNetwork = false;
   bool failAfterCommitResponseLost = false;
+  bool failNextWithPermissionError = false;
 
   void addReward(Reward reward) => _rewards.add(reward);
 
@@ -141,6 +144,8 @@ final class FakeWheelRepository implements WheelRepository {
     required String commandId,
     required ChildId childId,
   }) async {
+    spinCallCount++;
+
     // 1. Replay check
     final existingResult = _receipts[commandId];
     if (existingResult != null) {
@@ -153,6 +158,11 @@ final class FakeWheelRepository implements WheelRepository {
       throw Exception(
         'NetworkException: Connection timeout before reaching server',
       );
+    }
+
+    if (failNextWithPermissionError) {
+      failNextWithPermissionError = false;
+      throw Exception('PostgreSQL error 42501: permission denied');
     }
 
     // 3. Resolve family & settings

@@ -1,14 +1,21 @@
+import 'dart:ffi';
+import 'dart:io';
+
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:learnward/app/app.dart';
 import 'package:learnward/app/bootstrap/app_providers.dart';
 import 'package:learnward/app/bootstrap/in_memory_repositories.dart';
+import 'package:learnward/features/assessments/presentation/add_assessment_screen.dart';
 import 'package:learnward/features/assessments/presentation/evidence_picker_service.dart';
 import 'package:learnward/features/assessments/services/local_evidence_file_store.dart';
 import 'package:learnward_application/learnward_application.dart';
+import 'package:learnward_data/learnward_data.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:learnward_test_support/learnward_test_support.dart';
+import 'package:sqlite3/sqlite3.dart';
 
 class FakeLocalEvidenceFileStore implements LocalEvidenceFileStore {
   final Map<String, List<int>> files = {};
@@ -68,7 +75,41 @@ class _PresetFamilyNotifier extends ActiveFamilyNotifier {
   Family? build() => _preset;
 }
 
+void _ensureSqliteInitialized() {
+  if (Platform.isWindows) {
+    try {
+      DynamicLibrary.open('sqlite3.dll');
+    } catch (_) {
+      final candidates = [
+        File('.dart_tool/lib/sqlite3.dll'),
+        File('../../.dart_tool/lib/sqlite3.dll'),
+        File('../.dart_tool/lib/sqlite3.dll'),
+      ];
+      for (final file in candidates) {
+        if (file.existsSync()) {
+          try {
+            DynamicLibrary.open(file.absolute.path);
+            break;
+          } catch (_) {}
+        }
+      }
+    }
+  } else if (Platform.isLinux) {
+    try {
+      DynamicLibrary.open('libsqlite3.so');
+    } catch (_) {
+      try {
+        DynamicLibrary.open('libsqlite3.so.0');
+      } catch (_) {}
+    }
+  }
+}
+
 void main() {
+  setUpAll(() {
+    _ensureSqliteInitialized();
+  });
+
   late FakeFamilyRepository fakeFamilyRepo;
   late FakeChildProfileRepository fakeChildRepo;
   late FakeAssessmentRepository fakeAssessmentRepo;
@@ -744,6 +785,415 @@ void main() {
       // Friendly error should be mapped without raw SQL details
       expect(find.textContaining('Network connection issue'), findsOneWidget);
       expect(find.textContaining('PG_ERR_5432'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'AddAssessmentScreen displays quarantine banner, disables submit, and preserves metadata for unknown_legacy draft',
+    (tester) async {
+      final legacyDraft = LocalAssessmentDraft(
+        localDraftId: 'legacy-draft-quarantine-test',
+        familyId: testFamily.id.value,
+        childId: testChild.id.value,
+        subjectKey: SubjectKey.science,
+        subject: 'Physics',
+        title: 'Legacy Physics Lab',
+        assessmentType: 'quiz',
+        difficulty: 'hard',
+        rawScore: 9.0,
+        maxScore: 10.0,
+        occurredAt: now,
+        updatedAt: now,
+        dispatchState: CommandDispatchState.unknownLegacy,
+        submissionStatus: DraftSubmissionStatus.draft,
+        retryCount: 2,
+        actorUserId: 'usr-legacy-actor',
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+            familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
+            childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
+            assessmentRepositoryProvider.overrideWithValue(fakeAssessmentRepo),
+            assessmentEvidenceStorageProvider.overrideWithValue(fakeStorage),
+            localEvidenceFileStoreProvider.overrideWithValue(
+              fakeEvidenceFileStore,
+            ),
+            localDraftStoreProvider.overrideWithValue(fakeDraftStore),
+            activeFamilyProvider.overrideWith(
+              () => _PresetFamilyNotifier(testFamily),
+            ),
+            activeChildModeProvider.overrideWith(
+              () => _PresetActiveChildNotifier(testChild),
+            ),
+          ],
+          child: MaterialApp(
+            home: AddAssessmentScreen(initialDraft: legacyDraft),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 1. Verify quarantine banner is displayed
+      expect(
+        find.byKey(const Key('legacy_draft_quarantine_banner')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining(
+          'This draft was preserved from an earlier app version',
+        ),
+        findsOneWidget,
+      );
+
+      // 2. Verify Submit for Review button is disabled
+      final submitButtonFinder = find.byKey(
+        const Key('submit_assessment_button'),
+      );
+      expect(submitButtonFinder, findsOneWidget);
+      final submitButton = tester.widget<FilledButton>(submitButtonFinder);
+      expect(
+        submitButton.enabled,
+        isFalse,
+        reason: 'Submit button must be disabled for quarantined legacy drafts',
+      );
+
+      // 3. Tap Save Local Draft and verify metadata is preserved
+      final saveButtonFinder = find.byKey(const Key('save_draft_button'));
+      expect(saveButtonFinder, findsOneWidget);
+      await tester.ensureVisible(saveButtonFinder);
+      await tester.tap(saveButtonFinder);
+      await tester.pumpAndSettle();
+
+      final savedDraft = await fakeDraftStore.getLocalDraft(
+        'legacy-draft-quarantine-test',
+      );
+      expect(savedDraft, isNotNull);
+      expect(
+        savedDraft!.dispatchState,
+        equals(CommandDispatchState.unknownLegacy),
+        reason: 'Saving local draft must preserve unknown_legacy dispatchState',
+      );
+      expect(savedDraft.retryCount, equals(2));
+      expect(savedDraft.actorUserId, equals('usr-legacy-actor'));
+    },
+  );
+
+  testWidgets(
+    'Fresh draft timeout -> Save Local Draft preserves possibly_dispatched and exact command IDs',
+    (tester) async {
+      final failingSubmitRepo = _FailingSubmitAssessmentRepository();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+            familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
+            childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
+            assessmentRepositoryProvider.overrideWithValue(failingSubmitRepo),
+            assessmentEvidenceStorageProvider.overrideWithValue(fakeStorage),
+            localEvidenceFileStoreProvider.overrideWithValue(
+              fakeEvidenceFileStore,
+            ),
+            localDraftStoreProvider.overrideWithValue(fakeDraftStore),
+            currentUserIdProvider.overrideWithValue('usr-child-1'),
+            activeFamilyProvider.overrideWith(
+              () => _PresetFamilyNotifier(testFamily),
+            ),
+            activeChildModeProvider.overrideWith(
+              () => _PresetActiveChildNotifier(testChild),
+            ),
+          ],
+          child: const MaterialApp(home: AddAssessmentScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 1. Enter assessment details
+      await tester.enterText(
+        find.byKey(const Key('assessment_raw_score_field')),
+        '9.0',
+      );
+      await tester.enterText(
+        find.byKey(const Key('assessment_title_field')),
+        'Fresh Quiz Before Drop',
+      );
+      await tester.pumpAndSettle();
+
+      // 2. Submit -> fails with network error
+      final submitFinder = find.byKey(const Key('submit_assessment_button'));
+      await tester.ensureVisible(submitFinder);
+      await tester.tap(submitFinder);
+      await tester.pumpAndSettle();
+
+      // Verify draft in store is marked possibly_dispatched with stable command IDs
+      final draftsAfterDrop = await fakeDraftStore.listLocalDrafts(
+        testChild.id,
+      );
+      expect(draftsAfterDrop.length, equals(1));
+      final draftAfterDrop = draftsAfterDrop.first;
+      expect(
+        draftAfterDrop.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+      );
+      expect(draftAfterDrop.createCommandId, isNotNull);
+      expect(draftAfterDrop.submitCommandId, isNotNull);
+      final originalCreateCmdId = draftAfterDrop.createCommandId;
+      final originalSubmitCmdId = draftAfterDrop.submitCommandId;
+
+      // 3. User is still on screen after network drop; user edits title and taps Save Local Draft
+      await tester.enterText(
+        find.byKey(const Key('assessment_title_field')),
+        'Fresh Quiz After Save',
+      );
+      final saveFinder = find.byKey(const Key('save_draft_button'));
+      await tester.ensureVisible(saveFinder);
+      await tester.tap(saveFinder);
+      await tester.pumpAndSettle();
+
+      // 4. Verify draft in store NEVER regressed to never_dispatched and command IDs are preserved
+      final draftsAfterSave = await fakeDraftStore.listLocalDrafts(
+        testChild.id,
+      );
+      expect(draftsAfterSave.length, equals(1));
+      final draftAfterSave = draftsAfterSave.first;
+      expect(
+        draftAfterSave.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+        reason: 'possibly_dispatched must NOT roll back to never_dispatched when saving locally',
+      );
+      expect(
+        draftAfterSave.createCommandId,
+        equals(originalCreateCmdId),
+        reason: 'createCommandId must be preserved',
+      );
+      expect(
+        draftAfterSave.submitCommandId,
+        equals(originalSubmitCmdId),
+        reason: 'submitCommandId must be preserved',
+      );
+      expect(draftAfterSave.title, equals('Fresh Quiz After Save'));
+    },
+  );
+
+  testWidgets(
+    'Migrated v4 unknown_legacy draft preserves NULL command and actor identities after edit and save in AddAssessmentScreen',
+    (tester) async {
+      final tempDir = Directory.systemTemp.createTempSync(
+        'learnward_v4_legacy_provenance_',
+      );
+      final dbFile = File('${tempDir.path}/legacy_draft_test.sqlite');
+
+      // 1. Create a populated SQLite v4 database on disk with NULL command IDs and NULL actor
+      final rawDb = sqlite3.open(dbFile.path);
+      try {
+        rawDb.execute('PRAGMA user_version = 4;');
+        rawDb.execute('''
+          CREATE TABLE "local_metadata_entries" (
+            "key" TEXT NOT NULL PRIMARY KEY,
+            "value" TEXT NOT NULL,
+            "updated_at" INTEGER NOT NULL
+          );
+        ''');
+        rawDb.execute('''
+          CREATE TABLE "local_assessment_drafts" (
+            "local_draft_id" TEXT NOT NULL PRIMARY KEY,
+            "family_id" TEXT NOT NULL,
+            "child_id" TEXT NOT NULL,
+            "create_command_id" TEXT,
+            "submit_command_id" TEXT,
+            "evidence_id" TEXT,
+            "server_assessment_id" TEXT,
+            "subject_key" TEXT NOT NULL DEFAULT 'math',
+            "subject" TEXT NOT NULL,
+            "title" TEXT NOT NULL,
+            "assessment_type" TEXT NOT NULL,
+            "difficulty" TEXT NOT NULL,
+            "raw_score" REAL NOT NULL,
+            "max_score" REAL NOT NULL,
+            "local_photo_path" TEXT,
+            "entry_context" TEXT NOT NULL DEFAULT 'shared_child',
+            "occurred_at" INTEGER NOT NULL,
+            "updated_at" INTEGER NOT NULL
+          );
+        ''');
+        rawDb.execute('''
+          CREATE TABLE "pending_reward_commands" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "operation" TEXT NOT NULL,
+            "command_id" TEXT NOT NULL UNIQUE,
+            "family_id" TEXT NOT NULL,
+            "child_id" TEXT,
+            "reward_id" TEXT,
+            "redemption_id" TEXT,
+            "cancellation_reason" TEXT,
+            "created_at" INTEGER NOT NULL
+          );
+        ''');
+        rawDb.execute('''
+          INSERT INTO "local_assessment_drafts" (
+            "local_draft_id", "family_id", "child_id",
+            "create_command_id", "submit_command_id", "evidence_id", "server_assessment_id",
+            "subject_key", "subject", "title", "assessment_type", "difficulty",
+            "raw_score", "max_score", "local_photo_path", "entry_context",
+            "occurred_at", "updated_at"
+          ) VALUES (
+            'draft-v4-migrated-fixture-001', 'fam-test-1', 'child-test-1',
+            NULL, NULL, 'ev-legacy-fixture-123', 'srv-legacy-fixture-456',
+            'science', 'Physics', 'Original V4 Physics Lab Title', 'quiz', 'hard',
+            9.0, 10.0, '/data/user/0/com.learnward/cache/photo_offline.jpg', 'shared_child',
+            1730000000000, 1730000000000
+          );
+        ''');
+      } finally {
+        rawDb.close();
+      }
+
+      // 2. Open with Drift AppDatabase, triggering v4 -> v5 migration
+      final appDb = AppDatabase(NativeDatabase(dbFile));
+      final migratedDraft = await appDb.getLocalDraft(
+        'draft-v4-migrated-fixture-001',
+      );
+      expect(migratedDraft, isNotNull);
+      expect(migratedDraft!.createCommandId, isNull);
+      expect(migratedDraft.submitCommandId, isNull);
+      expect(migratedDraft.actorUserId, isNull);
+      expect(
+        migratedDraft.dispatchState,
+        equals(CommandDispatchState.unknownLegacy),
+      );
+      expect(migratedDraft.canAutoSubmit, isFalse);
+
+      final trackingRepo = _TrackingAssessmentRepository();
+
+      // 3. Open in AddAssessmentScreen under a DIFFERENT signed-in adult
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+            familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
+            childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
+            assessmentRepositoryProvider.overrideWithValue(trackingRepo),
+            assessmentEvidenceStorageProvider.overrideWithValue(fakeStorage),
+            localEvidenceFileStoreProvider.overrideWithValue(
+              fakeEvidenceFileStore,
+            ),
+            localDraftStoreProvider.overrideWithValue(appDb),
+            currentUserIdProvider.overrideWithValue(
+              'different-signed-in-adult-999',
+            ),
+            activeFamilyProvider.overrideWith(
+              () => _PresetFamilyNotifier(testFamily),
+            ),
+            activeChildModeProvider.overrideWith(
+              () => _PresetActiveChildNotifier(testChild),
+            ),
+          ],
+          child: MaterialApp(
+            home: AddAssessmentScreen(initialDraft: migratedDraft),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 4. Verify quarantine banner is displayed and submit is disabled
+      expect(
+        find.byKey(const Key('legacy_draft_quarantine_banner')),
+        findsOneWidget,
+      );
+      final submitButtonFinder = find.byKey(
+        const Key('submit_assessment_button'),
+      );
+      expect(submitButtonFinder, findsOneWidget);
+      final submitButton = tester.widget<FilledButton>(submitButtonFinder);
+      expect(
+        submitButton.enabled,
+        isFalse,
+        reason: 'Submit button must be disabled for quarantined legacy drafts',
+      );
+
+      // 5. Edit title and tap Save Local Draft
+      await tester.enterText(
+        find.byKey(const Key('assessment_title_field')),
+        'Edited V4 Physics Lab Title',
+      );
+      await tester.pumpAndSettle();
+
+      final saveButtonFinder = find.byKey(const Key('save_draft_button'));
+      await tester.ensureVisible(saveButtonFinder);
+      await tester.tap(saveButtonFinder);
+      await tester.pumpAndSettle();
+
+      // 6. Close database and reopen to verify on-disk durability
+      await appDb.close();
+
+      final reopenedDb = AppDatabase(NativeDatabase(dbFile));
+      try {
+        final persisted = await reopenedDb.getLocalDraft(
+          'draft-v4-migrated-fixture-001',
+        );
+        expect(persisted, isNotNull);
+        expect(
+          persisted!.createCommandId,
+          isNull,
+          reason: 'Legacy draft must preserve NULL createCommandId on disk',
+        );
+        expect(
+          persisted.submitCommandId,
+          isNull,
+          reason: 'Legacy draft must preserve NULL submitCommandId on disk',
+        );
+        expect(
+          persisted.actorUserId,
+          isNull,
+          reason: 'Legacy draft must NOT backfill actorUserId with different current user identity',
+        );
+        expect(
+          persisted.dispatchState,
+          equals(CommandDispatchState.unknownLegacy),
+          reason: 'Legacy draft must remain in unknown_legacy dispatchState',
+        );
+        expect(
+          persisted.canAutoSubmit,
+          isFalse,
+          reason: 'Legacy draft must remain non-submittable (quarantined)',
+        );
+        expect(persisted.title, equals('Edited V4 Physics Lab Title'));
+        expect(
+          persisted.evidenceId,
+          equals('ev-legacy-fixture-123'),
+          reason: 'Legacy evidenceId must be preserved',
+        );
+        expect(
+          persisted.serverAssessmentId,
+          equals('srv-legacy-fixture-456'),
+          reason: 'Legacy serverAssessmentId must be preserved',
+        );
+        expect(
+          persisted.localPhotoPath,
+          equals('/data/user/0/com.learnward/cache/photo_offline.jpg'),
+          reason: 'Legacy localPhotoPath must be preserved',
+        );
+        expect(
+          trackingRepo.recordedCreateCommandIds,
+          isEmpty,
+          reason: 'No create RPC commands must be dispatched on local save',
+        );
+        expect(
+          trackingRepo.recordedSubmitCommandIds,
+          isEmpty,
+          reason: 'No submit RPC commands must be dispatched on local save',
+        );
+      } finally {
+        await reopenedDb.close();
+        if (tempDir.existsSync()) {
+          try {
+            tempDir.deleteSync(recursive: true);
+          } catch (_) {}
+        }
+      }
     },
   );
 }

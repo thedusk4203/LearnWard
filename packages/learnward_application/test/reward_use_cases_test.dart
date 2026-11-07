@@ -331,6 +331,7 @@ void main() {
           familyId: familyId,
           rewardId: RewardId('rew-10'),
           childId: childId,
+          actorUserId: 'usr-parent-1',
         );
 
         expect(repository.redeemCallCount, 1);

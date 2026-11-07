@@ -152,11 +152,15 @@ final class InMemoryPendingRewardCommandStore
   Future<PendingRewardCommand?> findPendingSpinCommand({
     required String familyId,
     required String childId,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   }) async {
     for (final cmd in _commands.values.toList().reversed) {
       if (cmd.operation == RewardCommandOperation.spinWheel &&
           cmd.familyId == familyId &&
-          cmd.childId == childId) {
+          cmd.childId == childId &&
+          (recoveryState == null || cmd.recoveryState == recoveryState) &&
+          (actorUserId == null || cmd.actorUserId == actorUserId)) {
         return cmd;
       }
     }
@@ -168,12 +172,16 @@ final class InMemoryPendingRewardCommandStore
     required String familyId,
     required String childId,
     required String rewardId,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   }) async {
     for (final cmd in _commands.values.toList().reversed) {
       if (cmd.operation == RewardCommandOperation.redeemReward &&
           cmd.familyId == familyId &&
           cmd.childId == childId &&
-          cmd.rewardId == rewardId) {
+          cmd.rewardId == rewardId &&
+          (recoveryState == null || cmd.recoveryState == recoveryState) &&
+          (actorUserId == null || cmd.actorUserId == actorUserId)) {
         return cmd;
       }
     }
@@ -184,9 +192,14 @@ final class InMemoryPendingRewardCommandStore
   Future<PendingRewardCommand?> findPendingRedemptionCommand({
     required RewardCommandOperation operation,
     required String redemptionId,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   }) async {
     for (final cmd in _commands.values.toList().reversed) {
-      if (cmd.operation == operation && cmd.redemptionId == redemptionId) {
+      if (cmd.operation == operation &&
+          cmd.redemptionId == redemptionId &&
+          (recoveryState == null || cmd.recoveryState == recoveryState) &&
+          (actorUserId == null || cmd.actorUserId == actorUserId)) {
         return cmd;
       }
     }
@@ -197,10 +210,18 @@ final class InMemoryPendingRewardCommandStore
   Future<List<PendingRewardCommand>> listPendingCommands({
     String? familyId,
     String? childId,
+    CommandRecoveryState? recoveryState,
+    CommandDispatchState? dispatchState,
   }) async {
     final list = _commands.values.where((cmd) {
       if (familyId != null && cmd.familyId != familyId) return false;
       if (childId != null && cmd.childId != childId) return false;
+      if (recoveryState != null && cmd.recoveryState != recoveryState) {
+        return false;
+      }
+      if (dispatchState != null && cmd.dispatchState != dispatchState) {
+        return false;
+      }
       return true;
     }).toList();
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));

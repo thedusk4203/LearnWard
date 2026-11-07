@@ -1,3 +1,5 @@
+import 'command_lifecycle_states.dart';
+
 /// Operation types for pending reward command journal.
 enum RewardCommandOperation {
   redeemReward('redeem_reward'),
@@ -28,6 +30,11 @@ final class PendingRewardCommand {
     this.redemptionId,
     this.cancellationReason,
     required this.createdAt,
+    this.actorUserId,
+    this.actorRole,
+    this.schemaVersion = 1,
+    this.recoveryState = CommandRecoveryState.active,
+    this.dispatchState = CommandDispatchState.neverDispatched,
   });
 
   final int? id;
@@ -40,6 +47,23 @@ final class PendingRewardCommand {
   final String? cancellationReason;
   final DateTime createdAt;
 
+  // Phase 6.1 Additions (v5):
+  final String? actorUserId;
+  final String? actorRole;
+  final int schemaVersion;
+  final CommandRecoveryState recoveryState;
+  final CommandDispatchState dispatchState;
+
+  /// Whether this command is eligible for automatic retry/replay.
+  /// Fails closed if the command is quarantined, legacy unknown, confirmed committed,
+  /// or missing actor binding.
+  bool get canAutoReplay =>
+      recoveryState == CommandRecoveryState.active &&
+      dispatchState != CommandDispatchState.unknownLegacy &&
+      dispatchState != CommandDispatchState.confirmedCommitted &&
+      actorUserId != null &&
+      actorUserId!.isNotEmpty;
+
   PendingRewardCommand copyWith({
     int? id,
     RewardCommandOperation? operation,
@@ -50,6 +74,11 @@ final class PendingRewardCommand {
     String? redemptionId,
     String? cancellationReason,
     DateTime? createdAt,
+    String? actorUserId,
+    String? actorRole,
+    int? schemaVersion,
+    CommandRecoveryState? recoveryState,
+    CommandDispatchState? dispatchState,
   }) {
     return PendingRewardCommand(
       id: id ?? this.id,
@@ -61,6 +90,11 @@ final class PendingRewardCommand {
       redemptionId: redemptionId ?? this.redemptionId,
       cancellationReason: cancellationReason ?? this.cancellationReason,
       createdAt: createdAt ?? this.createdAt,
+      actorUserId: actorUserId ?? this.actorUserId,
+      actorRole: actorRole ?? this.actorRole,
+      schemaVersion: schemaVersion ?? this.schemaVersion,
+      recoveryState: recoveryState ?? this.recoveryState,
+      dispatchState: dispatchState ?? this.dispatchState,
     );
   }
 }
@@ -77,6 +111,8 @@ abstract interface class PendingRewardCommandStore {
   Future<PendingRewardCommand?> findPendingSpinCommand({
     required String familyId,
     required String childId,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   });
 
   /// Finds an existing pending redeem command for a given family, child and reward.
@@ -84,18 +120,24 @@ abstract interface class PendingRewardCommandStore {
     required String familyId,
     required String childId,
     required String rewardId,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   });
 
   /// Finds an existing pending fulfillment/cancellation command for a redemption.
   Future<PendingRewardCommand?> findPendingRedemptionCommand({
     required RewardCommandOperation operation,
     required String redemptionId,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   });
 
-  /// Lists all pending commands, optionally filtered by family and child.
+  /// Lists all pending commands, optionally filtered by family, child, and states.
   Future<List<PendingRewardCommand>> listPendingCommands({
     String? familyId,
     String? childId,
+    CommandRecoveryState? recoveryState,
+    CommandDispatchState? dispatchState,
   });
 
   /// Removes a pending command from the journal upon confirmed server outcome or terminal error.

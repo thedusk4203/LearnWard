@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:learnward_domain/learnward_domain.dart';
 
+import '../ports/command_lifecycle_states.dart';
 import '../ports/pending_reward_command_store.dart';
 import '../ports/reward_repository.dart';
 
@@ -21,19 +22,48 @@ final class RedeemStoreReward {
     required RewardId rewardId,
     required ChildId childId,
     String? commandId,
+    String? actorUserId,
+    String? actorRole,
   }) async {
     final existing = await _commandStore.findPendingRedeemCommand(
       familyId: familyId.value,
       childId: childId.value,
       rewardId: rewardId.value,
+      recoveryState: null,
     );
 
-    final actualCommandId =
-        existing?.commandId ??
-        commandId ??
-        (uuidGenerator?.call() ?? _generateUuid());
+    final String actualCommandId;
+    if (existing != null) {
+      final canReplayExisting =
+          actorUserId != null &&
+          actorUserId.isNotEmpty &&
+          existing.actorUserId != null &&
+          existing.actorUserId == actorUserId &&
+          existing.canAutoReplay;
 
-    if (existing == null) {
+      if (!canReplayExisting) {
+        throw StateError(
+          'Cannot dispatch reward command: an unresolved pending command exists '
+          '(id: ${existing.commandId}, recoveryState: ${existing.recoveryState.wireValue}, '
+          'dispatchState: ${existing.dispatchState.wireValue}) that is ineligible for automatic replay. '
+          'Reconciliation is required.',
+        );
+      }
+
+      actualCommandId = existing.commandId;
+      await _commandStore.savePendingCommand(
+        existing.copyWith(
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+      );
+    } else {
+      if (actorUserId == null || actorUserId.isEmpty) {
+        throw StateError(
+          'Cannot dispatch reward command: authenticated actor identity is required but was missing or empty.',
+        );
+      }
+
+      actualCommandId = commandId ?? (uuidGenerator?.call() ?? _generateUuid());
       await _commandStore.savePendingCommand(
         PendingRewardCommand(
           operation: RewardCommandOperation.redeemReward,
@@ -41,7 +71,10 @@ final class RedeemStoreReward {
           familyId: familyId.value,
           childId: childId.value,
           rewardId: rewardId.value,
+          actorUserId: actorUserId,
+          actorRole: actorRole,
           createdAt: DateTime.now().toUtc(),
+          dispatchState: CommandDispatchState.possiblyDispatched,
         ),
       );
     }
@@ -70,7 +103,6 @@ final class RedeemStoreReward {
         msg.contains('LW205') ||
         msg.contains('LW206') ||
         msg.contains('LW004') ||
-        msg.contains('42501') ||
         msg.contains('InvalidRedemptionException') ||
         msg.contains('InvalidRewardException')) {
       return true;

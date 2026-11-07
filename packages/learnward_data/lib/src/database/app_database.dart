@@ -11,7 +11,7 @@ part 'app_database.g.dart';
 /// LearnWard's local SQLite database.
 ///
 /// The server remains authoritative. This database is reserved for cached read
-/// models, drafts and the future offline command outbox.
+/// models, drafts and the offline command outbox.
 @DriftDatabase(
   tables: [LocalMetadataEntries, LocalAssessmentDrafts, PendingRewardCommands],
 )
@@ -20,31 +20,223 @@ class AppDatabase extends _$AppDatabase
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
+
+  Future<bool> _tableExists(String tableName) async {
+    final result = await customSelect(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name = ?;",
+      variables: [Variable.withString(tableName)],
+    ).get();
+    return result.isNotEmpty;
+  }
+
+  Future<bool> _columnExists(String tableName, String columnName) async {
+    final result = await customSelect("PRAGMA table_info('$tableName');").get();
+    return result.any((row) => row.data['name'] == columnName);
+  }
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (migrator) => migrator.createAll(),
     onUpgrade: (migrator, from, to) async {
-      if (from < 2) {
-        await migrator.createTable(localAssessmentDrafts);
-      }
-      if (from < 3) {
-        await migrator.addColumn(
-          localAssessmentDrafts,
-          localAssessmentDrafts.createCommandId,
-        );
-        await migrator.addColumn(
-          localAssessmentDrafts,
-          localAssessmentDrafts.submitCommandId,
-        );
-        await migrator.addColumn(
-          localAssessmentDrafts,
-          localAssessmentDrafts.evidenceId,
-        );
-      }
-      if (from < 4) {
-        await migrator.createTable(pendingRewardCommands);
+      await customStatement('PRAGMA foreign_keys = OFF');
+      try {
+        await transaction(() async {
+          if (from < 2) {
+            if (!await _tableExists('local_assessment_drafts')) {
+              await migrator.createTable(localAssessmentDrafts);
+            }
+          }
+          if (from < 3) {
+            if (await _tableExists('local_assessment_drafts')) {
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'create_command_id',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.createCommandId,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'submit_command_id',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.submitCommandId,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'evidence_id',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.evidenceId,
+                );
+              }
+            }
+          }
+          if (from < 4) {
+            if (!await _tableExists('pending_reward_commands')) {
+              await migrator.createTable(pendingRewardCommands);
+            }
+          }
+          if (from < 5) {
+            // v4 -> v5 migration: Additive schema upgrade for Phase 6 offline resilience
+            // 1. PendingRewardCommands additions (only if table already existed prior to v5)
+            if (await _tableExists('pending_reward_commands')) {
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'actor_user_id',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.actorUserId,
+                );
+              }
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'actor_role',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.actorRole,
+                );
+              }
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'schema_version',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.schemaVersion,
+                );
+              }
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'recovery_state',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.recoveryState,
+                );
+              }
+              if (!await _columnExists(
+                'pending_reward_commands',
+                'dispatch_state',
+              )) {
+                await migrator.addColumn(
+                  pendingRewardCommands,
+                  pendingRewardCommands.dispatchState,
+                );
+              }
+
+              // Quarantine all existing legacy pending commands as unknown_legacy with quarantined_unknown_outcome
+              await customStatement(
+                "UPDATE pending_reward_commands SET "
+                "recovery_state = 'quarantined_unknown_outcome', "
+                "dispatch_state = 'unknown_legacy' "
+                "WHERE actor_user_id IS NULL;",
+              );
+            }
+
+            // 2. LocalAssessmentDrafts additions (only if table already existed prior to v5)
+            if (await _tableExists('local_assessment_drafts')) {
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'server_evidence_id',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.serverEvidenceId,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'sha256_checksum',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.sha256Checksum,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'local_compressed_photo_path',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.localCompressedPhotoPath,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'submission_status',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.submissionStatus,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'retry_count',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.retryCount,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'dispatch_state',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.dispatchState,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'last_error_message',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.lastErrorMessage,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'actor_user_id',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.actorUserId,
+                );
+              }
+              if (!await _columnExists(
+                'local_assessment_drafts',
+                'actor_role',
+              )) {
+                await migrator.addColumn(
+                  localAssessmentDrafts,
+                  localAssessmentDrafts.actorRole,
+                );
+              }
+
+              // All migrated legacy drafts start with dispatch_state = 'unknown_legacy'
+              await customStatement(
+                "UPDATE local_assessment_drafts SET "
+                "dispatch_state = 'unknown_legacy' "
+                "WHERE actor_user_id IS NULL OR dispatch_state = 'unknown_legacy';",
+              );
+            }
+          }
+        });
+      } finally {
+        await customStatement('PRAGMA foreign_keys = ON');
       }
     },
     beforeOpen: (details) async {
@@ -99,6 +291,15 @@ class AppDatabase extends _$AppDatabase
         entryContext: Value(draft.entryContext.value),
         occurredAt: draft.occurredAt,
         updatedAt: draft.updatedAt,
+        serverEvidenceId: Value(draft.serverEvidenceId),
+        sha256Checksum: Value(draft.sha256Checksum),
+        localCompressedPhotoPath: Value(draft.localCompressedPhotoPath),
+        submissionStatus: Value(draft.submissionStatus.wireValue),
+        retryCount: Value(draft.retryCount),
+        dispatchState: Value(draft.dispatchState.wireValue),
+        lastErrorMessage: Value(draft.lastErrorMessage),
+        actorUserId: Value(draft.actorUserId),
+        actorRole: Value(draft.actorRole),
       ),
     );
   }
@@ -149,8 +350,8 @@ class AppDatabase extends _$AppDatabase
       localDraftId: row.localDraftId,
       familyId: row.familyId,
       childId: row.childId,
-      createCommandId: row.createCommandId ?? row.localDraftId,
-      submitCommandId: row.submitCommandId ?? row.localDraftId,
+      createCommandId: row.createCommandId,
+      submitCommandId: row.submitCommandId,
       evidenceId: row.evidenceId,
       serverAssessmentId: row.serverAssessmentId,
       subjectKey: key,
@@ -164,6 +365,15 @@ class AppDatabase extends _$AppDatabase
       entryContext: ctx,
       occurredAt: row.occurredAt,
       updatedAt: row.updatedAt,
+      serverEvidenceId: row.serverEvidenceId,
+      sha256Checksum: row.sha256Checksum,
+      localCompressedPhotoPath: row.localCompressedPhotoPath,
+      submissionStatus: DraftSubmissionStatus.fromString(row.submissionStatus),
+      retryCount: row.retryCount,
+      dispatchState: CommandDispatchState.fromString(row.dispatchState),
+      lastErrorMessage: row.lastErrorMessage,
+      actorUserId: row.actorUserId,
+      actorRole: row.actorRole,
     );
   }
 
@@ -183,6 +393,11 @@ class AppDatabase extends _$AppDatabase
         redemptionId: Value(command.redemptionId),
         cancellationReason: Value(command.cancellationReason),
         createdAt: command.createdAt,
+        actorUserId: Value(command.actorUserId),
+        actorRole: Value(command.actorRole),
+        schemaVersion: Value(command.schemaVersion),
+        recoveryState: Value(command.recoveryState.wireValue),
+        dispatchState: Value(command.dispatchState.wireValue),
       ),
       mode: InsertMode.insertOrReplace,
     );
@@ -201,6 +416,8 @@ class AppDatabase extends _$AppDatabase
   Future<PendingRewardCommand?> findPendingSpinCommand({
     required String familyId,
     required String childId,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   }) async {
     final query = select(pendingRewardCommands)
       ..where(
@@ -208,7 +425,16 @@ class AppDatabase extends _$AppDatabase
             entry.operation.equals(RewardCommandOperation.spinWheel.wireValue) &
             entry.familyId.equals(familyId) &
             entry.childId.equals(childId),
-      )
+      );
+    if (recoveryState != null) {
+      query.where(
+        (entry) => entry.recoveryState.equals(recoveryState.wireValue),
+      );
+    }
+    if (actorUserId != null) {
+      query.where((entry) => entry.actorUserId.equals(actorUserId));
+    }
+    query
       ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
       ..limit(1);
     final row = await query.getSingleOrNull();
@@ -221,6 +447,8 @@ class AppDatabase extends _$AppDatabase
     required String familyId,
     required String childId,
     required String rewardId,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   }) async {
     final query = select(pendingRewardCommands)
       ..where(
@@ -231,7 +459,16 @@ class AppDatabase extends _$AppDatabase
             entry.familyId.equals(familyId) &
             entry.childId.equals(childId) &
             entry.rewardId.equals(rewardId),
-      )
+      );
+    if (recoveryState != null) {
+      query.where(
+        (entry) => entry.recoveryState.equals(recoveryState.wireValue),
+      );
+    }
+    if (actorUserId != null) {
+      query.where((entry) => entry.actorUserId.equals(actorUserId));
+    }
+    query
       ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
       ..limit(1);
     final row = await query.getSingleOrNull();
@@ -243,13 +480,24 @@ class AppDatabase extends _$AppDatabase
   Future<PendingRewardCommand?> findPendingRedemptionCommand({
     required RewardCommandOperation operation,
     required String redemptionId,
+    CommandRecoveryState? recoveryState = CommandRecoveryState.active,
+    String? actorUserId,
   }) async {
     final query = select(pendingRewardCommands)
       ..where(
         (entry) =>
             entry.operation.equals(operation.wireValue) &
             entry.redemptionId.equals(redemptionId),
-      )
+      );
+    if (recoveryState != null) {
+      query.where(
+        (entry) => entry.recoveryState.equals(recoveryState.wireValue),
+      );
+    }
+    if (actorUserId != null) {
+      query.where((entry) => entry.actorUserId.equals(actorUserId));
+    }
+    query
       ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
       ..limit(1);
     final row = await query.getSingleOrNull();
@@ -261,6 +509,8 @@ class AppDatabase extends _$AppDatabase
   Future<List<PendingRewardCommand>> listPendingCommands({
     String? familyId,
     String? childId,
+    CommandRecoveryState? recoveryState,
+    CommandDispatchState? dispatchState,
   }) async {
     final query = select(pendingRewardCommands);
     if (familyId != null) {
@@ -268,6 +518,16 @@ class AppDatabase extends _$AppDatabase
     }
     if (childId != null) {
       query.where((entry) => entry.childId.equals(childId));
+    }
+    if (recoveryState != null) {
+      query.where(
+        (entry) => entry.recoveryState.equals(recoveryState.wireValue),
+      );
+    }
+    if (dispatchState != null) {
+      query.where(
+        (entry) => entry.dispatchState.equals(dispatchState.wireValue),
+      );
     }
     query.orderBy([(t) => OrderingTerm.desc(t.createdAt)]);
     final rows = await query.get();
@@ -292,6 +552,11 @@ class AppDatabase extends _$AppDatabase
       redemptionId: row.redemptionId,
       cancellationReason: row.cancellationReason,
       createdAt: row.createdAt,
+      actorUserId: row.actorUserId,
+      actorRole: row.actorRole,
+      schemaVersion: row.schemaVersion,
+      recoveryState: CommandRecoveryState.fromString(row.recoveryState),
+      dispatchState: CommandDispatchState.fromString(row.dispatchState),
     );
   }
 }

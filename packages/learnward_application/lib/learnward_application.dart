@@ -7,6 +7,7 @@ export 'src/ports/assessment_evidence_storage.dart';
 export 'src/ports/assessment_repository.dart';
 export 'src/ports/child_profile_repository.dart';
 export 'src/ports/clock.dart';
+export 'src/ports/command_lifecycle_states.dart';
 export 'src/ports/family_repository.dart';
 export 'src/ports/growth_repository.dart';
 export 'src/ports/learning_repository.dart';

@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:learnward_domain/learnward_domain.dart';
 
+import '../ports/command_lifecycle_states.dart';
 import '../ports/pending_reward_command_store.dart';
 import '../ports/wheel_repository.dart';
 
@@ -21,25 +22,57 @@ final class SpinRewardWheel {
     required FamilyId familyId,
     required ChildId childId,
     String? commandId,
+    String? actorUserId,
+    String? actorRole,
   }) async {
     final existing = await _commandStore.findPendingSpinCommand(
       familyId: familyId.value,
       childId: childId.value,
+      recoveryState: null,
     );
 
-    final actualCommandId =
-        existing?.commandId ??
-        commandId ??
-        (uuidGenerator?.call() ?? _generateUuid());
+    final String actualCommandId;
+    if (existing != null) {
+      final canReplayExisting =
+          actorUserId != null &&
+          actorUserId.isNotEmpty &&
+          existing.actorUserId != null &&
+          existing.actorUserId == actorUserId &&
+          existing.canAutoReplay;
 
-    if (existing == null) {
+      if (!canReplayExisting) {
+        throw StateError(
+          'Cannot dispatch reward command: an unresolved pending command exists '
+          '(id: ${existing.commandId}, recoveryState: ${existing.recoveryState.wireValue}, '
+          'dispatchState: ${existing.dispatchState.wireValue}) that is ineligible for automatic replay. '
+          'Reconciliation is required.',
+        );
+      }
+
+      actualCommandId = existing.commandId;
+      await _commandStore.savePendingCommand(
+        existing.copyWith(
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+      );
+    } else {
+      if (actorUserId == null || actorUserId.isEmpty) {
+        throw StateError(
+          'Cannot dispatch reward command: authenticated actor identity is required but was missing or empty.',
+        );
+      }
+
+      actualCommandId = commandId ?? (uuidGenerator?.call() ?? _generateUuid());
       await _commandStore.savePendingCommand(
         PendingRewardCommand(
           operation: RewardCommandOperation.spinWheel,
           commandId: actualCommandId,
           familyId: familyId.value,
           childId: childId.value,
+          actorUserId: actorUserId,
+          actorRole: actorRole,
           createdAt: DateTime.now().toUtc(),
+          dispatchState: CommandDispatchState.possiblyDispatched,
         ),
       );
     }
@@ -67,7 +100,6 @@ final class SpinRewardWheel {
         msg.contains('LW203') || // Pool size < 3
         msg.contains('LW206') || // Wheel disabled
         msg.contains('LW004') || // Timezone / invalid
-        msg.contains('42501') || // Permission denied
         msg.contains('P0002') || // Child not found
         msg.contains('22000') || // Bad argument
         msg.contains('InvalidWheelException')) {

@@ -22,12 +22,17 @@ void main() {
     });
 
     test('Redeem commit-response-loss: exactly 1 debit across failure and restart, subsequent action gets new command ID', () async {
-      // 1. Initial attempt with simulated response loss
+      // 1. Initial attempt with simulated response loss and authenticated actor
       var redeemUseCase = RedeemStoreReward(server, commandStore);
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
-        redeemUseCase(familyId: familyId, rewardId: rewardId, childId: childId),
+        redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
         throwsA(isA<SocketException>()),
       );
 
@@ -35,22 +40,28 @@ void main() {
       expect(server.debitCount, 1);
       expect(server.childBalances[childId.value], 3500);
 
-      // Client preserved pending command in journal
+      // Client preserved pending command in journal with possibly_dispatched state
       final pendingList = await commandStore.listPendingCommands(
         familyId: familyId.value,
         childId: childId.value,
       );
       expect(pendingList.length, 1);
       final firstCommandId = pendingList.first.commandId;
+      expect(pendingList.first.actorUserId, 'actor-child-1');
+      expect(
+        pendingList.first.dispatchState,
+        CommandDispatchState.possiblyDispatched,
+      );
 
       // 2. Simulate complete application restart (new use case instance reading persistent store)
       redeemUseCase = RedeemStoreReward(server, commandStore);
 
-      // 3. User retries claim or screen recovers
+      // 3. User retries claim or screen recovers with matching actor
       final recoveredRedemption = await redeemUseCase(
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'actor-child-1',
       );
 
       // Verify NO duplicate debit occurred
@@ -71,6 +82,7 @@ void main() {
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'actor-child-1',
       );
 
       // Verified new command ID and second legitimate debit
@@ -87,6 +99,113 @@ void main() {
       expect(server.commandReceipts.keys.length, 2);
     });
 
+    test(
+      'Redeem fail closed: cannot replay when actor is missing or mismatched',
+      () async {
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.redeemReward,
+            commandId: 'cmd-redeem-no-actor',
+            familyId: familyId.value,
+            childId: childId.value,
+            rewardId: rewardId.value,
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        final redeemUseCase = RedeemStoreReward(server, commandStore);
+
+        // Attempting to dispatch must fail closed with StateError, not touch server
+        await expectLater(
+          () => redeemUseCase(
+            familyId: familyId,
+            rewardId: rewardId,
+            childId: childId,
+            actorUserId: 'actor-child-1',
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Clean up and test actor mismatch
+        await commandStore.deletePendingCommand('cmd-redeem-no-actor');
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.redeemReward,
+            commandId: 'cmd-redeem-actor-1',
+            familyId: familyId.value,
+            childId: childId.value,
+            rewardId: rewardId.value,
+            actorUserId: 'actor-child-1',
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        await expectLater(
+          () => redeemUseCase(
+            familyId: familyId,
+            rewardId: rewardId,
+            childId: childId,
+            actorUserId: 'actor-different',
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        await commandStore.deletePendingCommand('cmd-redeem-actor-1');
+      },
+    );
+
+    test('Redeem fail closed: cannot replay when existing command is quarantined or legacy unknown', () async {
+      // Quarantined
+      await commandStore.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.redeemReward,
+          commandId: 'cmd-redeem-quarantined',
+          familyId: familyId.value,
+          childId: childId.value,
+          rewardId: rewardId.value,
+          actorUserId: 'actor-child-1',
+          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
+          createdAt: DateTime.now().toUtc(),
+        ),
+      );
+
+      final redeemUseCase = RedeemStoreReward(server, commandStore);
+      await expectLater(
+        () => redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      await commandStore.deletePendingCommand('cmd-redeem-quarantined');
+
+      // Legacy unknown
+      await commandStore.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.redeemReward,
+          commandId: 'cmd-redeem-legacy',
+          familyId: familyId.value,
+          childId: childId.value,
+          rewardId: rewardId.value,
+          actorUserId: 'actor-child-1',
+          dispatchState: CommandDispatchState.unknownLegacy,
+          createdAt: DateTime.now().toUtc(),
+        ),
+      );
+      await expectLater(
+        () => redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      await commandStore.deletePendingCommand('cmd-redeem-legacy');
+    });
+
     test('Fulfill commit-response-loss: exactly 1 transition across failure and restart, subsequent action gets new command ID', () async {
       // Setup existing redemption
       final redeemUseCase = RedeemStoreReward(server, commandStore);
@@ -94,6 +213,7 @@ void main() {
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'actor-child-1',
       );
 
       // 1. Initial fulfill attempt with simulated timeout after server commit
@@ -142,6 +262,7 @@ void main() {
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        actorUserId: 'actor-child-1',
       );
       expect(server.childBalances[childId.value], 3500);
 
@@ -200,13 +321,76 @@ void main() {
       final redeemUseCase = RedeemStoreReward(server, commandStore);
 
       await expectLater(
-        redeemUseCase(familyId: familyId, rewardId: rewardId, childId: childId),
+        redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
         throwsA(isA<InvalidRewardException>()),
       );
 
       // Journal must NOT retain pending command on terminal business error
       expect(await commandStore.listPendingCommands(), isEmpty);
       expect(server.debitCount, 0);
+    });
+
+    test('Test D: missing or empty actor during new redemption fails closed, zero server calls, zero journal entries', () async {
+      server.redeemCallCount = 0;
+      server.debitCount = 0;
+      final redeemUseCase = RedeemStoreReward(server, commandStore);
+
+      // 1. null actor
+      await expectLater(
+        () => redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: null,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        server.redeemCallCount,
+        equals(0),
+        reason: 'Zero server calls on missing actor',
+      );
+      expect(
+        server.debitCount,
+        equals(0),
+        reason: 'Zero balance debits on missing actor',
+      );
+      expect(
+        await commandStore.listPendingCommands(),
+        isEmpty,
+        reason: 'Zero journal entries on missing actor',
+      );
+
+      // 2. empty actor
+      await expectLater(
+        () => redeemUseCase(
+          familyId: familyId,
+          rewardId: rewardId,
+          childId: childId,
+          actorUserId: '',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        server.redeemCallCount,
+        equals(0),
+        reason: 'Zero server calls on empty actor',
+      );
+      expect(
+        server.debitCount,
+        equals(0),
+        reason: 'Zero balance debits on empty actor',
+      );
+      expect(
+        await commandStore.listPendingCommands(),
+        isEmpty,
+        reason: 'Zero journal entries on empty actor',
+      );
     });
   });
 }

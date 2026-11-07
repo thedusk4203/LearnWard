@@ -25,8 +25,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   final _formKey = GlobalKey<FormState>();
 
   late String _localDraftId;
-  late String _createCommandId;
-  late String _submitCommandId;
+  String? _createCommandId;
+  String? _submitCommandId;
   String? _evidenceId;
   String? _serverAssessmentId;
 
@@ -42,12 +42,15 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   SelectedEvidenceFile? _selectedEvidence;
 
   bool _isSubmitting = false;
+  bool _isQuarantined = false;
+  bool _evidenceRemoved = false;
   String? _errorMessage;
   double? _liveNormalizedScore;
 
   @override
   void initState() {
     super.initState();
+    _evidenceRemoved = false;
     final draft = widget.initialDraft;
     if (draft != null) {
       _localDraftId = draft.localDraftId;
@@ -55,6 +58,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId = draft.submitCommandId;
       _evidenceId = draft.evidenceId;
       _serverAssessmentId = draft.serverAssessmentId;
+      _isQuarantined = draft.isLegacyUnknown;
       _selectedSubjectKey = draft.subjectKey;
       _subjectController = TextEditingController(text: draft.subject);
       _titleController = TextEditingController(text: draft.title);
@@ -76,6 +80,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId = generateUuid();
       _evidenceId = null;
       _serverAssessmentId = null;
+      _isQuarantined = false;
       _selectedSubjectKey = SubjectKey.math;
       _subjectController = TextEditingController(
         text: SubjectKey.math.displayLabel,
@@ -164,6 +169,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         bytes: file.bytes,
       );
       setState(() {
+        _evidenceRemoved = false;
         _evidenceId ??= generateUuid();
         _selectedEvidence = SelectedEvidenceFile(
           bytes: file.bytes,
@@ -175,6 +181,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       });
     } catch (_) {
       setState(() {
+        _evidenceRemoved = false;
         _evidenceId ??= generateUuid();
         _selectedEvidence = file;
         _errorMessage = null;
@@ -190,14 +197,82 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       } catch (_) {}
     }
     setState(() {
+      _evidenceRemoved = true;
       _selectedEvidence = null;
       _evidenceId = null;
     });
   }
 
+  static CommandDispatchState _resolveSafeDispatchState(
+    LocalAssessmentDraft? prior,
+  ) {
+    if (prior == null) {
+      return CommandDispatchState.neverDispatched;
+    }
+    if (prior.dispatchState == CommandDispatchState.unknownLegacy) {
+      return CommandDispatchState.unknownLegacy;
+    }
+    if (prior.dispatchState == CommandDispatchState.possiblyDispatched) {
+      return CommandDispatchState.possiblyDispatched;
+    }
+    if (prior.dispatchState == CommandDispatchState.confirmedCommitted) {
+      return CommandDispatchState.confirmedCommitted;
+    }
+    return CommandDispatchState.neverDispatched;
+  }
+
   Future<void> _saveLocalDraft() async {
     final activeChild = ref.read(activeChildModeProvider);
     if (activeChild == null) return;
+
+    final store = ref.read(localDraftStoreProvider);
+    final existingFromStore = await store.getLocalDraft(_localDraftId);
+    final prior = existingFromStore ?? widget.initialDraft;
+
+    final isLegacy =
+        (prior?.isLegacyUnknown ?? false) ||
+        _isQuarantined ||
+        (widget.initialDraft?.isLegacyUnknown ?? false);
+
+    if (isLegacy) {
+      _isQuarantined = true;
+    }
+
+    final String? resolvedCreateCommandId;
+    final String? resolvedSubmitCommandId;
+    final String? resolvedActorUserId;
+    final String? resolvedActorRole;
+    final CommandDispatchState resolvedDispatchState;
+
+    if (isLegacy) {
+      // For unknown_legacy drafts, preserve all existing command IDs, actor identity,
+      // and dispatchState exactly as stored. Preserve NULL as NULL.
+      // Never generate replacement command IDs or backfill actorUserId from the current user during ordinary local editing.
+      resolvedCreateCommandId = prior?.createCommandId;
+      resolvedSubmitCommandId = prior?.submitCommandId;
+      resolvedActorUserId = prior?.actorUserId;
+      resolvedActorRole = prior?.actorRole;
+      resolvedDispatchState = CommandDispatchState.unknownLegacy;
+    } else {
+      // Fresh v5 drafts generate and preserve stable command IDs for genuinely new operations.
+      _createCommandId ??= prior?.createCommandId ?? generateUuid();
+      _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
+      resolvedCreateCommandId = _createCommandId;
+      resolvedSubmitCommandId = _submitCommandId;
+      resolvedActorUserId =
+          prior?.actorUserId ?? ref.read(currentUserIdProvider);
+      resolvedActorRole = prior?.actorRole;
+      resolvedDispatchState = _resolveSafeDispatchState(prior);
+    }
+
+    final resolvedEvidenceId = _evidenceRemoved
+        ? null
+        : (_evidenceId ?? prior?.evidenceId);
+    final resolvedServerAssessmentId =
+        _serverAssessmentId ?? prior?.serverAssessmentId;
+    final resolvedPhotoPath = _evidenceRemoved
+        ? null
+        : (_selectedEvidence?.localPath ?? prior?.localPhotoPath);
 
     final raw = double.tryParse(_rawScoreController.text.trim()) ?? 0.0;
     final max = double.tryParse(_maxScoreController.text.trim()) ?? 10.0;
@@ -206,10 +281,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       localDraftId: _localDraftId,
       familyId: activeChild.familyId.value,
       childId: activeChild.id.value,
-      createCommandId: _createCommandId,
-      submitCommandId: _submitCommandId,
-      evidenceId: _evidenceId,
-      serverAssessmentId: _serverAssessmentId,
+      createCommandId: resolvedCreateCommandId,
+      submitCommandId: resolvedSubmitCommandId,
+      evidenceId: resolvedEvidenceId,
+      serverAssessmentId: resolvedServerAssessmentId,
       subjectKey: _selectedSubjectKey,
       subject: _subjectController.text.trim().isEmpty
           ? _selectedSubjectKey.displayLabel
@@ -221,13 +296,21 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       difficulty: _selectedDifficulty.value,
       rawScore: raw,
       maxScore: max,
-      localPhotoPath: _selectedEvidence?.localPath,
+      localPhotoPath: resolvedPhotoPath,
       occurredAt: _occurredAt,
       updatedAt: DateTime.now().toUtc(),
       entryContext: EntryContext.sharedChild,
+      serverEvidenceId: prior?.serverEvidenceId,
+      sha256Checksum: prior?.sha256Checksum,
+      localCompressedPhotoPath: prior?.localCompressedPhotoPath,
+      submissionStatus: prior?.submissionStatus ?? DraftSubmissionStatus.draft,
+      retryCount: prior?.retryCount ?? 0,
+      dispatchState: resolvedDispatchState,
+      lastErrorMessage: prior?.lastErrorMessage,
+      actorUserId: resolvedActorUserId,
+      actorRole: resolvedActorRole,
     );
 
-    final store = ref.read(localDraftStoreProvider);
     await store.saveLocalDraft(draft);
 
     if (mounted) {
@@ -237,6 +320,19 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   Future<void> _submitAssessment() async {
+    final store = ref.read(localDraftStoreProvider);
+    final existingFromStore = await store.getLocalDraft(_localDraftId);
+    final prior = existingFromStore ?? widget.initialDraft;
+
+    final isQuarantined = (prior?.isLegacyUnknown ?? false) || _isQuarantined;
+    if (isQuarantined) {
+      setState(() {
+        _isQuarantined = true;
+        _errorMessage = 'Cannot submit a quarantined legacy draft. Recovery reconciliation is required.';
+      });
+      return;
+    }
+
     if (!_formKey.currentState!.validate()) return;
 
     final activeChild = ref.read(activeChildModeProvider);
@@ -256,11 +352,14 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     try {
       final repo = ref.read(assessmentRepositoryProvider);
       final storage = ref.read(assessmentEvidenceStorageProvider);
-      final localStore = ref.read(localDraftStoreProvider);
 
       if (_selectedEvidence != null && _evidenceId == null) {
-        _evidenceId = generateUuid();
+        _evidenceId = prior?.evidenceId ?? generateUuid();
       }
+
+      _createCommandId ??= prior?.createCommandId ?? generateUuid();
+      _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
+      _serverAssessmentId ??= prior?.serverAssessmentId;
 
       // Persist local draft state before submitting so that any crash/drop
       // during or before submit preserves the stable command and evidence IDs.
@@ -287,13 +386,22 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         occurredAt: _occurredAt,
         updatedAt: DateTime.now().toUtc(),
         entryContext: EntryContext.sharedChild,
+        serverEvidenceId: prior?.serverEvidenceId,
+        sha256Checksum: prior?.sha256Checksum,
+        localCompressedPhotoPath: prior?.localCompressedPhotoPath,
+        submissionStatus: DraftSubmissionStatus.submittingAssessment,
+        retryCount: prior?.retryCount ?? 0,
+        dispatchState: CommandDispatchState.possiblyDispatched,
+        lastErrorMessage: null,
+        actorUserId: prior?.actorUserId ?? ref.read(currentUserIdProvider),
+        actorRole: prior?.actorRole,
       );
-      await localStore.saveLocalDraft(localDraft);
+      await store.saveLocalDraft(localDraft);
 
       final submitUseCase = SubmitAssessmentDraft(
         repository: repo,
         storage: storage,
-        localDraftStore: localStore,
+        localDraftStore: store,
       );
 
       final evidenceIdObj = _evidenceId != null
@@ -301,8 +409,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           : null;
 
       await submitUseCase(
-        createCommandId: _createCommandId,
-        submitCommandId: _submitCommandId,
+        createCommandId: _createCommandId!,
+        submitCommandId: _submitCommandId!,
         familyId: activeChild.familyId,
         childId: activeChild.id,
         subjectKey: _selectedSubjectKey,
@@ -391,6 +499,38 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (_isQuarantined ||
+                        (widget.initialDraft?.isLegacyUnknown ?? false)) ...[
+                      Card(
+                        key: const Key('legacy_draft_quarantine_banner'),
+                        color: theme.colorScheme.tertiaryContainer,
+                        child: Padding(
+                          padding: const EdgeInsets.all(AppSpacing.md),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.warning_amber_rounded,
+                                color: theme.colorScheme.onTertiaryContainer,
+                              ),
+                              const SizedBox(width: AppSpacing.md),
+                              Expanded(
+                                child: Text(
+                                  'This draft was preserved from an earlier app version with unverified sync state. '
+                                  'It has been quarantined for data safety and cannot be submitted directly. '
+                                  'You may review or edit its contents and save locally.',
+                                  style: TextStyle(
+                                    color:
+                                        theme.colorScheme.onTertiaryContainer,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                    ],
                     if (_errorMessage != null) ...[
                       Card(
                         color: theme.colorScheme.errorContainer,
@@ -683,7 +823,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                         Expanded(
                           child: FilledButton(
                             key: const Key('submit_assessment_button'),
-                            onPressed: _isSubmitting ? null : _submitAssessment,
+                            onPressed:
+                                (_isSubmitting ||
+                                    _isQuarantined ||
+                                    (widget.initialDraft?.isLegacyUnknown ??
+                                        false))
+                                ? null
+                                : _submitAssessment,
                             child: _isSubmitting
                                 ? const SizedBox(
                                     height: 20,

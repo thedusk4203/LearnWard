@@ -81,7 +81,11 @@ void main() {
       fakeServer.failAfterCommitResponseLost = true;
 
       await expectLater(
-        spinUseCaseA(familyId: familyId, childId: childId),
+        spinUseCaseA(
+          familyId: familyId,
+          childId: childId,
+          actorUserId: 'usr-child-1',
+        ),
         throwsA(isA<Exception>()),
       );
 
@@ -116,14 +120,20 @@ void main() {
       );
       expect(pendingOnDisk.familyId, equals(familyId.value));
       expect(pendingOnDisk.childId, equals(childId.value));
+      expect(pendingOnDisk.actorUserId, equals('usr-child-1'));
+      expect(
+        pendingOnDisk.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+      );
       final persistedCommandId = pendingOnDisk.commandId;
       expect(persistedCommandId, isNotEmpty);
 
-      // Retry spin with dbB on fresh app session
+      // Retry spin with dbB on fresh app session with matching actor
       final spinUseCaseB = SpinRewardWheel(fakeServer, dbB);
       final recoveredResult = await spinUseCaseB(
         familyId: familyId,
         childId: childId,
+        actorUserId: 'usr-child-1',
       );
 
       // Assert server deduplicated via command receipt: exactly 1 spin exists
@@ -147,6 +157,7 @@ void main() {
       final nextResult = await spinUseCaseC(
         familyId: familyId,
         childId: childId,
+        actorUserId: 'usr-child-1',
       );
 
       expect(nextResult.spinId, isNot(equals(originalSpinId)));
