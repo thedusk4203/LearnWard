@@ -11,149 +11,151 @@ void main() {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
   });
 
-  group('PendingRewardCommandStore Atomic CAS & Fencing (File-Backed SQLite)', () {
-    late Directory tempDir;
-    late File dbFile;
-    late AppDatabase database;
-    late AppDatabase database2;
-    final t0 = DateTime.utc(2026, 11, 7, 12, 0, 0);
+  group(
+    'PendingRewardCommandStore Atomic CAS & Fencing (File-Backed SQLite)',
+    () {
+      late Directory tempDir;
+      late File dbFile;
+      late AppDatabase database;
+      late AppDatabase database2;
+      final t0 = DateTime.utc(2026, 11, 7, 12, 0, 0);
 
-    setUp(() {
-      tempDir = Directory.systemTemp.createTempSync(
-        'learnward_atomic_cas_test_',
-      );
-      dbFile = File('${tempDir.path}/atomic_cas.sqlite');
-      database = AppDatabase(NativeDatabase(dbFile));
-      database2 = AppDatabase(NativeDatabase(dbFile));
-    });
+      setUp(() {
+        tempDir = Directory.systemTemp.createTempSync(
+          'learnward_atomic_cas_test_',
+        );
+        dbFile = File('${tempDir.path}/atomic_cas.sqlite');
+        database = AppDatabase(NativeDatabase(dbFile));
+        database2 = AppDatabase(NativeDatabase(dbFile));
+      });
 
-    tearDown(() async {
-      await database.close();
-      await database2.close();
-      if (tempDir.existsSync()) {
-        try {
-          tempDir.deleteSync(recursive: true);
-        } catch (_) {}
-      }
-    });
+      tearDown(() async {
+        await database.close();
+        await database2.close();
+        if (tempDir.existsSync()) {
+          try {
+            tempDir.deleteSync(recursive: true);
+          } catch (_) {}
+        }
+      });
 
-    test('simultaneous claim by two independent connections grants claim to one and rejects the other', () async {
-      final cmd = PendingRewardCommand(
-        operation: RewardCommandOperation.spinWheel,
-        commandId: 'cmd-spin-race',
-        familyId: 'fam-1',
-        childId: 'child-1',
-        actorUserId: 'actor-user-1',
-        actorRole: 'child',
-        createdAt: t0,
-        recoveryState: CommandRecoveryState.active,
-        dispatchState: CommandDispatchState.possiblyDispatched,
-      );
-      await database.savePendingCommand(cmd, now: t0);
-
-      // Competing simultaneous claim attempts from two separate AppDatabase connections
-      final results = await Future.wait([
-        database.acquireClaim(
+      test('simultaneous claim by two independent connections grants claim to one and rejects the other', () async {
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
           commandId: 'cmd-spin-race',
+          familyId: 'fam-1',
+          childId: 'child-1',
           actorUserId: 'actor-user-1',
+          actorRole: 'child',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        await database.savePendingCommand(cmd, now: t0);
+
+        final results = await Future.wait([
+          database.acquireClaim(
+            commandId: 'cmd-spin-race',
+            actorUserId: 'actor-user-1',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0,
+          ),
+          database2.acquireClaim(
+            commandId: 'cmd-spin-race',
+            actorUserId: 'actor-user-1',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0,
+          ),
+        ]);
+
+        final tokens = results.whereType<String>().toList();
+        expect(
+          tokens.length,
+          1,
+          reason: 'Exactly one worker must win the lease',
+        );
+        expect(
+          results.contains(null),
+          isTrue,
+          reason: 'The competing worker must receive null',
+        );
+      });
+
+      test('cross-actor claim is rejected at the query boundary', () async {
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.redeemReward,
+          commandId: 'cmd-redeem-cross-actor',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          rewardId: 'rew-1',
+          actorUserId: 'actor-user-1',
+          actorRole: 'child',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await database.savePendingCommand(cmd, now: t0);
+
+        final token = await database2.acquireClaim(
+          commandId: 'cmd-redeem-cross-actor',
+          actorUserId: 'actor-user-2',
           leaseDuration: const Duration(seconds: 30),
           now: t0,
-        ),
-        database2.acquireClaim(
-          commandId: 'cmd-spin-race',
+        );
+        expect(token, isNull);
+
+        final persisted = await database.getPendingCommand(
+          'cmd-redeem-cross-actor',
+        );
+        expect(persisted!.leaseToken, isNull);
+        expect(persisted.leaseExpiresAt, isNull);
+      });
+
+      test('lease expiry allows reclamation with a new lease token', () async {
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-lease-expiry',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'actor-user-1',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        await database.savePendingCommand(cmd, now: t0);
+
+        final token1 = await database.acquireClaim(
+          commandId: 'cmd-lease-expiry',
+          actorUserId: 'actor-user-1',
+          leaseDuration: const Duration(seconds: 15),
+          now: t0,
+        );
+        expect(token1, isNotNull);
+
+        final tokenMid = await database2.acquireClaim(
+          commandId: 'cmd-lease-expiry',
+          actorUserId: 'actor-user-1',
+          leaseDuration: const Duration(seconds: 15),
+          now: t0.add(const Duration(seconds: 10)),
+        );
+        expect(tokenMid, isNull);
+
+        final token2 = await database2.acquireClaim(
+          commandId: 'cmd-lease-expiry',
           actorUserId: 'actor-user-1',
           leaseDuration: const Duration(seconds: 30),
-          now: t0,
-        ),
-      ]);
+          now: t0.add(const Duration(seconds: 16)),
+        );
+        expect(token2, isNotNull);
+        expect(token2, isNot(equals(token1)));
+      });
 
-      final tokens = results.whereType<String>().toList();
-      expect(tokens.length, 1, reason: 'Exactly one worker must win the lease');
-      expect(
-        results.contains(null),
-        isTrue,
-        reason: 'The competing worker must receive null',
-      );
-    });
-
-    test('cross-actor claim is rejected at the query boundary', () async {
-      final cmd = PendingRewardCommand(
-        operation: RewardCommandOperation.redeemReward,
-        commandId: 'cmd-redeem-cross-actor',
-        familyId: 'fam-1',
-        childId: 'child-1',
-        rewardId: 'rew-1',
-        actorUserId: 'actor-user-1',
-        actorRole: 'child',
-        createdAt: t0,
-        recoveryState: CommandRecoveryState.active,
-        dispatchState: CommandDispatchState.neverDispatched,
-      );
-      await database.savePendingCommand(cmd, now: t0);
-
-      // Attempting to claim with actor-user-2 fails
-      final token = await database2.acquireClaim(
-        commandId: 'cmd-redeem-cross-actor',
-        actorUserId: 'actor-user-2',
-        leaseDuration: const Duration(seconds: 30),
-        now: t0,
-      );
-      expect(token, isNull);
-
-      // Stored row remains untouched and unclaimed
-      final persisted = await database.getPendingCommand(
-        'cmd-redeem-cross-actor',
-      );
-      expect(persisted!.leaseToken, isNull);
-      expect(persisted.leaseExpiresAt, isNull);
-    });
-
-    test('lease expiry allows reclamation with a new lease token', () async {
-      final cmd = PendingRewardCommand(
-        operation: RewardCommandOperation.spinWheel,
-        commandId: 'cmd-lease-expiry',
-        familyId: 'fam-1',
-        childId: 'child-1',
-        actorUserId: 'actor-user-1',
-        createdAt: t0,
-        recoveryState: CommandRecoveryState.active,
-        dispatchState: CommandDispatchState.possiblyDispatched,
-      );
-      await database.savePendingCommand(cmd, now: t0);
-
-      final token1 = await database.acquireClaim(
-        commandId: 'cmd-lease-expiry',
-        actorUserId: 'actor-user-1',
-        leaseDuration: const Duration(seconds: 15),
-        now: t0,
-      );
-      expect(token1, isNotNull);
-
-      // At t0 + 10s: lease is active -> connection 2 cannot claim
-      final tokenMid = await database2.acquireClaim(
-        commandId: 'cmd-lease-expiry',
-        actorUserId: 'actor-user-1',
-        leaseDuration: const Duration(seconds: 15),
-        now: t0.add(const Duration(seconds: 10)),
-      );
-      expect(tokenMid, isNull);
-
-      // At t0 + 16s: lease expired -> connection 2 can reclaim with new token
-      final token2 = await database2.acquireClaim(
-        commandId: 'cmd-lease-expiry',
-        actorUserId: 'actor-user-1',
-        leaseDuration: const Duration(seconds: 30),
-        now: t0.add(const Duration(seconds: 16)),
-      );
-      expect(token2, isNotNull);
-      expect(token2, isNot(equals(token1)));
-    });
-
-    test('partial lease metadata fails closed and prevents claiming', () async {
-      // Manually inject malformed lease states
-      final epochSeconds = t0.millisecondsSinceEpoch ~/ 1000;
-      await database.customStatement(
-        '''
+      test(
+        'partial lease metadata fails closed and prevents claiming',
+        () async {
+          final epochSeconds = t0.millisecondsSinceEpoch ~/ 1000;
+          await database.customStatement(
+            '''
           INSERT INTO pending_reward_commands (
             operation, command_id, family_id, child_id, created_at, actor_user_id,
             recovery_state, dispatch_state, retry_count, lease_token, lease_expires_at
@@ -161,381 +163,646 @@ void main() {
             ('spin_wheel', 'cmd-partial-1', 'fam-1', 'ch-1', ?, 'actor-user-1', 'active', 'possibly_dispatched', 0, 'tok-only', NULL),
             ('spin_wheel', 'cmd-partial-2', 'fam-1', 'ch-1', ?, 'actor-user-1', 'active', 'possibly_dispatched', 0, NULL, ?);
           ''',
-        [epochSeconds, epochSeconds, epochSeconds],
+            [epochSeconds, epochSeconds, epochSeconds],
+          );
+
+          final claim1 = await database.acquireClaim(
+            commandId: 'cmd-partial-1',
+            actorUserId: 'actor-user-1',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0,
+          );
+          expect(claim1, isNull);
+
+          final claim2 = await database.acquireClaim(
+            commandId: 'cmd-partial-2',
+            actorUserId: 'actor-user-1',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0,
+          );
+          expect(claim2, isNull);
+        },
       );
 
-      // Case 1: lease_token present but lease_expires_at is NULL -> fails closed
-      final claim1 = await database.acquireClaim(
-        commandId: 'cmd-partial-1',
-        actorUserId: 'actor-user-1',
-        leaseDuration: const Duration(seconds: 30),
-        now: t0,
-      );
-      expect(claim1, isNull);
+      test(
+        'stale worker cannot complete, release, or mutate newer claim',
+        () async {
+          final cmd = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-stale-fencing',
+            familyId: 'fam-1',
+            childId: 'child-1',
+            actorUserId: 'actor-user-1',
+            createdAt: t0,
+            recoveryState: CommandRecoveryState.active,
+            dispatchState: CommandDispatchState.possiblyDispatched,
+          );
+          await database.savePendingCommand(cmd, now: t0);
 
-      // Case 2: lease_token is NULL but lease_expires_at is present -> fails closed
-      final claim2 = await database.acquireClaim(
-        commandId: 'cmd-partial-2',
-        actorUserId: 'actor-user-1',
-        leaseDuration: const Duration(seconds: 30),
-        now: t0,
-      );
-      expect(claim2, isNull);
-    });
+          final tokenA = (await database.acquireClaim(
+            commandId: 'cmd-stale-fencing',
+            actorUserId: 'actor-user-1',
+            leaseDuration: const Duration(seconds: 10),
+            now: t0,
+          ))!;
 
-    test(
-      'stale worker cannot complete, release, or mutate newer claim',
-      () async {
-        final cmd = PendingRewardCommand(
-          operation: RewardCommandOperation.spinWheel,
-          commandId: 'cmd-stale-fencing',
-          familyId: 'fam-1',
-          childId: 'child-1',
-          actorUserId: 'actor-user-1',
-          createdAt: t0,
-          recoveryState: CommandRecoveryState.active,
-          dispatchState: CommandDispatchState.possiblyDispatched,
-        );
-        await database.savePendingCommand(cmd, now: t0);
+          final tokenB = (await database2.acquireClaim(
+            commandId: 'cmd-stale-fencing',
+            actorUserId: 'actor-user-1',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0.add(const Duration(seconds: 15)),
+          ))!;
+          expect(tokenB, isNot(equals(tokenA)));
 
-        // Worker 1 acquires claim A for 10s
-        final tokenA = (await database.acquireClaim(
-          commandId: 'cmd-stale-fencing',
-          actorUserId: 'actor-user-1',
-          leaseDuration: const Duration(seconds: 10),
-          now: t0,
-        ))!;
+          final completeResult = await database.completeCommand(
+            commandId: 'cmd-stale-fencing',
+            leaseToken: tokenA,
+          );
+          expect(completeResult, isFalse);
 
-        // Lease A expires. Worker 2 on database2 acquires claim B at t0 + 15s
-        final tokenB = (await database2.acquireClaim(
-          commandId: 'cmd-stale-fencing',
-          actorUserId: 'actor-user-1',
-          leaseDuration: const Duration(seconds: 30),
-          now: t0.add(const Duration(seconds: 15)),
-        ))!;
-        expect(tokenB, isNot(equals(tokenA)));
+          final releaseResult = await database.releaseClaim(
+            commandId: 'cmd-stale-fencing',
+            leaseToken: tokenA,
+            nextAttemptAt: t0.add(const Duration(minutes: 5)),
+          );
+          expect(releaseResult, isFalse);
 
-        // Worker 1 attempts completion with stale token A -> rejected
-        final completeResult = await database.completeCommand(
-          commandId: 'cmd-stale-fencing',
-          leaseToken: tokenA,
-        );
-        expect(completeResult, isFalse);
+          final transitionResult = await database.transitionRecoveryState(
+            commandId: 'cmd-stale-fencing',
+            leaseToken: tokenA,
+            newState: CommandRecoveryState.terminalError,
+          );
+          expect(transitionResult, isFalse);
 
-        // Worker 1 attempts release with stale token A -> rejected
-        final releaseResult = await database.releaseClaim(
-          commandId: 'cmd-stale-fencing',
-          leaseToken: tokenA,
-          nextAttemptAt: t0.add(const Duration(minutes: 5)),
-        );
-        expect(releaseResult, isFalse);
+          final current = await database.getPendingCommand('cmd-stale-fencing');
+          expect(current!.leaseToken, tokenB);
+          expect(current.recoveryState, CommandRecoveryState.active);
 
-        // Worker 1 attempts state transition with stale token A -> rejected
-        final transitionResult = await database.transitionRecoveryState(
-          commandId: 'cmd-stale-fencing',
-          leaseToken: tokenA,
-          newState: CommandRecoveryState.terminalError,
-        );
-        expect(transitionResult, isFalse);
-
-        // Row in DB still held by token B
-        final current = await database.getPendingCommand('cmd-stale-fencing');
-        expect(current!.leaseToken, tokenB);
-        expect(current.recoveryState, CommandRecoveryState.active);
-
-        // Worker 2 completes cleanly with token B
-        final validComplete = await database2.completeCommand(
-          commandId: 'cmd-stale-fencing',
-          leaseToken: tokenB,
-        );
-        expect(validComplete, isTrue);
-        expect(await database.getPendingCommand('cmd-stale-fencing'), isNull);
-      },
-    );
-
-    test('atomic retry counter increment directly within SQLite', () async {
-      final cmd = PendingRewardCommand(
-        operation: RewardCommandOperation.redeemReward,
-        commandId: 'cmd-retry-inc',
-        familyId: 'fam-1',
-        childId: 'child-1',
-        rewardId: 'rew-1',
-        actorUserId: 'actor-user-1',
-        createdAt: t0,
-        retryCount: 0,
-        recoveryState: CommandRecoveryState.active,
-        dispatchState: CommandDispatchState.neverDispatched,
-      );
-      await database.savePendingCommand(cmd, now: t0);
-
-      for (var i = 1; i <= 3; i++) {
-        final t = t0.add(Duration(minutes: i * 5));
-        final token = (await database.acquireClaim(
-          commandId: 'cmd-retry-inc',
-          actorUserId: 'actor-user-1',
-          leaseDuration: const Duration(seconds: 10),
-          now: t,
-        ))!;
-
-        final released = await database.releaseClaim(
-          commandId: 'cmd-retry-inc',
-          leaseToken: token,
-          nextAttemptAt: t.add(const Duration(minutes: 5)),
-          lastErrorMessage: 'Network error attempt $i',
-        );
-        expect(released, isTrue);
-
-        final row = await database.getPendingCommand('cmd-retry-inc');
-        expect(row!.retryCount, i);
-        expect(row.lastErrorMessage, 'Network error attempt $i');
-        expect(row.leaseToken, isNull);
-        expect(row.leaseExpiresAt, isNull);
-      }
-    });
-
-    test('retry schedule and backoff state persist across database close and reopen', () async {
-      final retryDeadline = t0.add(const Duration(minutes: 15));
-      final cmd = PendingRewardCommand(
-        operation: RewardCommandOperation.spinWheel,
-        commandId: 'cmd-persist-schedule',
-        familyId: 'fam-1',
-        childId: 'child-1',
-        actorUserId: 'actor-user-1',
-        createdAt: t0,
-        recoveryState: CommandRecoveryState.active,
-        dispatchState: CommandDispatchState.possiblyDispatched,
-      );
-      await database.savePendingCommand(cmd, now: t0);
-
-      final token = (await database.acquireClaim(
-        commandId: 'cmd-persist-schedule',
-        actorUserId: 'actor-user-1',
-        leaseDuration: const Duration(seconds: 10),
-        now: t0,
-      ))!;
-      await database.releaseClaim(
-        commandId: 'cmd-persist-schedule',
-        leaseToken: token,
-        nextAttemptAt: retryDeadline,
+          final validComplete = await database2.completeCommand(
+            commandId: 'cmd-stale-fencing',
+            leaseToken: tokenB,
+          );
+          expect(validComplete, isTrue);
+          expect(await database.getPendingCommand('cmd-stale-fencing'), isNull);
+        },
       );
 
-      // Close database and reopen from the same file
-      await database.close();
-      database = AppDatabase(NativeDatabase(dbFile));
-
-      final reloaded = await database.getPendingCommand('cmd-persist-schedule');
-      expect(reloaded, isNotNull);
-      expect(reloaded!.retryCount, 1);
-      expect(reloaded.nextAttemptAt, retryDeadline);
-      expect(reloaded.leaseToken, isNull);
-      expect(reloaded.leaseExpiresAt, isNull);
-
-      // Before deadline (t0 + 10m): not claimable
-      final claimableBefore = await database.listClaimableCommands(
-        actorUserId: 'actor-user-1',
-        limit: 10,
-        now: t0.add(const Duration(minutes: 10)),
-      );
-      expect(claimableBefore, isEmpty);
-
-      // At or past deadline (t0 + 16m): claimable
-      final claimableAfter = await database.listClaimableCommands(
-        actorUserId: 'actor-user-1',
-        limit: 10,
-        now: t0.add(const Duration(minutes: 16)),
-      );
-      expect(claimableAfter.length, 1);
-      expect(claimableAfter.first.commandId, 'cmd-persist-schedule');
-    });
-
-    test(
-      'actor mismatch pause and original actor resume non-dispatch CAS',
-      () async {
-        final cmd = PendingRewardCommand(
-          operation: RewardCommandOperation.spinWheel,
-          commandId: 'cmd-actor-cas',
-          familyId: 'fam-1',
-          childId: 'child-1',
-          actorUserId: 'original-actor-id',
-          createdAt: t0,
-          recoveryState: CommandRecoveryState.active,
-          dispatchState: CommandDispatchState.possiblyDispatched,
-        );
-        await database.savePendingCommand(cmd, now: t0);
-
-        // Discovered as mismatched candidate by scanner
-        final mismatched = await database.listMismatchedActiveCommands(
-          familyId: 'fam-1',
-          authenticatedActorId: 'new-actor-id',
-          limit: 10,
-          now: t0,
-        );
-        expect(mismatched.length, 1);
-        expect(mismatched.first.commandId, 'cmd-actor-cas');
-
-        // Atomically pause command to pending_original_actor
-        final paused = await database.pauseMismatchedActorCommand(
-          commandId: 'cmd-actor-cas',
-          familyId: 'fam-1',
-          authenticatedActorId: 'new-actor-id',
-          mismatchReason: 'Paused: authenticated as new-actor-id',
-          now: t0,
-        );
-        expect(paused, isTrue);
-
-        final pausedRow = await database.getPendingCommand('cmd-actor-cas');
-        expect(
-          pausedRow!.recoveryState,
-          CommandRecoveryState.pendingOriginalActor,
-        );
-        expect(pausedRow.actorUserId, 'original-actor-id');
-        expect(pausedRow.leaseToken, isNull);
-        expect(pausedRow.leaseExpiresAt, isNull);
-
-        // Original actor signs back in: discovered for resume
-        final resumeCandidates = await database.listPausedOriginalActorCommands(
-          familyId: 'fam-1',
-          authenticatedActorId: 'original-actor-id',
-          limit: 10,
-          now: t0.add(const Duration(minutes: 1)),
-        );
-        expect(resumeCandidates.length, 1);
-        expect(resumeCandidates.first.commandId, 'cmd-actor-cas');
-
-        // Atomically resume command to active
-        final resumed = await database.resumeOriginalActorCommand(
-          commandId: 'cmd-actor-cas',
-          familyId: 'fam-1',
-          authenticatedActorId: 'original-actor-id',
-          now: t0.add(const Duration(minutes: 1)),
-        );
-        expect(resumed, isTrue);
-
-        final resumedRow = await database.getPendingCommand('cmd-actor-cas');
-        expect(resumedRow!.recoveryState, CommandRecoveryState.active);
-        expect(resumedRow.lastErrorMessage, isNull);
-        expect(resumedRow.leaseToken, isNull);
-        expect(resumedRow.leaseExpiresAt, isNull);
-      },
-    );
-
-    test(
-      'pause versus claim race: active lease prevents mismatch pause',
-      () async {
+      test('atomic retry counter increment directly within SQLite', () async {
         final cmd = PendingRewardCommand(
           operation: RewardCommandOperation.redeemReward,
-          commandId: 'cmd-pause-race',
+          commandId: 'cmd-retry-inc',
           familyId: 'fam-1',
           childId: 'child-1',
           rewardId: 'rew-1',
           actorUserId: 'actor-user-1',
           createdAt: t0,
+          retryCount: 0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await database.savePendingCommand(cmd, now: t0);
+
+        for (var i = 1; i <= 3; i++) {
+          final t = t0.add(Duration(minutes: i * 5));
+          final token = (await database.acquireClaim(
+            commandId: 'cmd-retry-inc',
+            actorUserId: 'actor-user-1',
+            leaseDuration: const Duration(seconds: 10),
+            now: t,
+          ))!;
+
+          final released = await database.releaseClaim(
+            commandId: 'cmd-retry-inc',
+            leaseToken: token,
+            nextAttemptAt: t.add(const Duration(minutes: 5)),
+            lastErrorMessage: 'Network error attempt $i',
+          );
+          expect(released, isTrue);
+
+          final row = await database.getPendingCommand('cmd-retry-inc');
+          expect(row!.retryCount, i);
+          expect(row.lastErrorMessage, 'Network error attempt $i');
+          expect(row.leaseToken, isNull);
+          expect(row.leaseExpiresAt, isNull);
+        }
+      });
+
+      test('retry schedule and backoff state persist across database close and reopen', () async {
+        final retryDeadline = t0.add(const Duration(minutes: 15));
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-persist-schedule',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'actor-user-1',
+          createdAt: t0,
           recoveryState: CommandRecoveryState.active,
           dispatchState: CommandDispatchState.possiblyDispatched,
         );
         await database.savePendingCommand(cmd, now: t0);
 
-        // Worker claims command on connection 1
         final token = (await database.acquireClaim(
-          commandId: 'cmd-pause-race',
+          commandId: 'cmd-persist-schedule',
           actorUserId: 'actor-user-1',
+          leaseDuration: const Duration(seconds: 10),
+          now: t0,
+        ))!;
+        await database.releaseClaim(
+          commandId: 'cmd-persist-schedule',
+          leaseToken: token,
+          nextAttemptAt: retryDeadline,
+        );
+
+        await database.close();
+        database = AppDatabase(NativeDatabase(dbFile));
+
+        final reloaded = await database.getPendingCommand(
+          'cmd-persist-schedule',
+        );
+        expect(reloaded, isNotNull);
+        expect(reloaded!.retryCount, 1);
+        expect(reloaded.nextAttemptAt, retryDeadline);
+        expect(reloaded.leaseToken, isNull);
+        expect(reloaded.leaseExpiresAt, isNull);
+
+        final claimableBefore = await database.listClaimableCommands(
+          actorUserId: 'actor-user-1',
+          limit: 10,
+          now: t0.add(const Duration(minutes: 10)),
+        );
+        expect(claimableBefore, isEmpty);
+
+        final claimableAfter = await database.listClaimableCommands(
+          actorUserId: 'actor-user-1',
+          limit: 10,
+          now: t0.add(const Duration(minutes: 16)),
+        );
+        expect(claimableAfter.length, 1);
+        expect(claimableAfter.first.commandId, 'cmd-persist-schedule');
+      });
+
+      test(
+        'actor mismatch pause and original actor resume non-dispatch CAS',
+        () async {
+          final cmd = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-actor-cas',
+            familyId: 'fam-1',
+            childId: 'child-1',
+            actorUserId: 'original-actor-id',
+            createdAt: t0,
+            recoveryState: CommandRecoveryState.active,
+            dispatchState: CommandDispatchState.possiblyDispatched,
+          );
+          await database.savePendingCommand(cmd, now: t0);
+
+          final mismatched = await database.listMismatchedActiveCommands(
+            familyId: 'fam-1',
+            authenticatedActorId: 'new-actor-id',
+            limit: 10,
+            now: t0,
+          );
+          expect(mismatched.length, 1);
+          expect(mismatched.first.commandId, 'cmd-actor-cas');
+
+          final paused = await database.pauseMismatchedActorCommand(
+            commandId: 'cmd-actor-cas',
+            familyId: 'fam-1',
+            authenticatedActorId: 'new-actor-id',
+            mismatchReason: 'Paused: authenticated as new-actor-id',
+            now: t0,
+          );
+          expect(paused, isTrue);
+
+          final pausedRow = await database.getPendingCommand('cmd-actor-cas');
+          expect(
+            pausedRow!.recoveryState,
+            CommandRecoveryState.pendingOriginalActor,
+          );
+          expect(pausedRow.actorUserId, 'original-actor-id');
+          expect(pausedRow.leaseToken, isNull);
+          expect(pausedRow.leaseExpiresAt, isNull);
+
+          final resumeCandidates = await database
+              .listPausedOriginalActorCommands(
+                familyId: 'fam-1',
+                authenticatedActorId: 'original-actor-id',
+                limit: 10,
+                now: t0.add(const Duration(minutes: 1)),
+              );
+          expect(resumeCandidates.length, 1);
+          expect(resumeCandidates.first.commandId, 'cmd-actor-cas');
+
+          final resumed = await database.resumeOriginalActorCommand(
+            commandId: 'cmd-actor-cas',
+            familyId: 'fam-1',
+            authenticatedActorId: 'original-actor-id',
+            now: t0.add(const Duration(minutes: 1)),
+          );
+          expect(resumed, isTrue);
+
+          final resumedRow = await database.getPendingCommand('cmd-actor-cas');
+          expect(resumedRow!.recoveryState, CommandRecoveryState.active);
+          expect(resumedRow.lastErrorMessage, isNull);
+          expect(resumedRow.leaseToken, isNull);
+          expect(resumedRow.leaseExpiresAt, isNull);
+        },
+      );
+
+      test(
+        'pause versus claim race: active lease prevents mismatch pause',
+        () async {
+          final cmd = PendingRewardCommand(
+            operation: RewardCommandOperation.redeemReward,
+            commandId: 'cmd-pause-race',
+            familyId: 'fam-1',
+            childId: 'child-1',
+            rewardId: 'rew-1',
+            actorUserId: 'actor-user-1',
+            createdAt: t0,
+            recoveryState: CommandRecoveryState.active,
+            dispatchState: CommandDispatchState.possiblyDispatched,
+          );
+          await database.savePendingCommand(cmd, now: t0);
+
+          final token = (await database.acquireClaim(
+            commandId: 'cmd-pause-race',
+            actorUserId: 'actor-user-1',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0,
+          ))!;
+          expect(token, isNotNull);
+
+          final pauseAttempt = await database2.pauseMismatchedActorCommand(
+            commandId: 'cmd-pause-race',
+            familyId: 'fam-1',
+            authenticatedActorId: 'actor-user-2',
+            mismatchReason: 'Paused: authenticated as actor-user-2',
+            now: t0.add(const Duration(seconds: 5)),
+          );
+          expect(
+            pauseAttempt,
+            isFalse,
+            reason: 'Active lease must fence against concurrent pause',
+          );
+
+          final persisted = await database.getPendingCommand('cmd-pause-race');
+          expect(persisted!.recoveryState, CommandRecoveryState.active);
+          expect(persisted.leaseToken, token);
+        },
+      );
+
+      test('foreground savePendingCommand rejects overwriting active lease and partial leases', () async {
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-foreground-fence',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'user-A',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        await database.savePendingCommand(cmd, now: t0);
+
+        final token = (await database.acquireClaim(
+          commandId: 'cmd-foreground-fence',
+          actorUserId: 'user-A',
           leaseDuration: const Duration(seconds: 30),
           now: t0,
         ))!;
-        expect(token, isNotNull);
 
-        // Outbox scanner on connection 2 tries to pause while lease is active -> rejected
-        final pauseAttempt = await database2.pauseMismatchedActorCommand(
-          commandId: 'cmd-pause-race',
-          familyId: 'fam-1',
-          authenticatedActorId: 'actor-user-2',
-          mismatchReason: 'Paused: authenticated as actor-user-2',
-          now: t0.add(const Duration(seconds: 5)),
+        expect(
+          () => database2.savePendingCommand(
+            cmd,
+            now: t0.add(const Duration(seconds: 5)),
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        final partialToken = cmd.copyWith(leaseToken: token);
+        expect(
+          () => database2.savePendingCommand(
+            partialToken,
+            now: t0.add(const Duration(seconds: 5)),
+          ),
+          throwsA(isA<ArgumentError>()),
+        );
+
+        final fullLease = cmd.copyWith(
+          leaseToken: token,
+          leaseExpiresAt: t0.add(const Duration(seconds: 30)),
         );
         expect(
-          pauseAttempt,
-          isFalse,
-          reason: 'Active lease must fence against concurrent pause',
+          () => database2.savePendingCommand(
+            fullLease,
+            now: t0.add(const Duration(seconds: 5)),
+          ),
+          throwsA(isA<StateError>()),
         );
 
-        // Recovery state remains active under the lease
-        final persisted = await database.getPendingCommand('cmd-pause-race');
-        expect(persisted!.recoveryState, CommandRecoveryState.active);
-        expect(persisted.leaseToken, token);
-      },
-    );
+        // After lease expires, foreground save with identical identity succeeds and clears expired lease
+        final updatedForeground = cmd.copyWith(
+          lastErrorMessage: 'Retrying foreground',
+        );
+        await database2.savePendingCommand(
+          updatedForeground,
+          now: t0.add(const Duration(seconds: 35)),
+        );
 
-    test('foreground savePendingCommand rejects overwriting active lease and partial leases', () async {
-      final cmd = PendingRewardCommand(
-        operation: RewardCommandOperation.spinWheel,
-        commandId: 'cmd-foreground-fence',
-        familyId: 'fam-1',
-        childId: 'child-1',
-        actorUserId: 'user-A',
-        createdAt: t0,
-        recoveryState: CommandRecoveryState.active,
-        dispatchState: CommandDispatchState.possiblyDispatched,
+        final persisted = await database.getPendingCommand(
+          'cmd-foreground-fence',
+        );
+        expect(persisted!.lastErrorMessage, 'Retrying foreground');
+        expect(persisted.leaseToken, isNull);
+        expect(persisted.leaseExpiresAt, isNull);
+      });
+
+      test(
+        'HIGH 1: existing command identity fields are strictly immutable',
+        () async {
+          final original = PendingRewardCommand(
+            operation: RewardCommandOperation.redeemReward,
+            commandId: 'cmd-immutable-identity',
+            familyId: 'fam-1',
+            childId: 'child-1',
+            rewardId: 'reward-1',
+            redemptionId: 'redemption-1',
+            cancellationReason: 'cancelled-by-parent',
+            actorUserId: 'user-actor-1',
+            actorRole: 'parent',
+            createdAt: t0,
+            recoveryState: CommandRecoveryState.active,
+            dispatchState: CommandDispatchState.neverDispatched,
+          );
+          await database.savePendingCommand(original, now: t0);
+
+          // Attempt mutating operation
+          expect(
+            () => database.savePendingCommand(
+              original.copyWith(operation: RewardCommandOperation.spinWheel),
+              now: t0,
+            ),
+            throwsA(isA<StateError>()),
+          );
+
+          // Attempt mutating familyId
+          expect(
+            () => database.savePendingCommand(
+              original.copyWith(familyId: 'fam-2'),
+              now: t0,
+            ),
+            throwsA(isA<StateError>()),
+          );
+
+          // Attempt mutating childId (different string or null)
+          expect(
+            () => database.savePendingCommand(
+              original.copyWith(childId: 'child-2'),
+              now: t0,
+            ),
+            throwsA(isA<StateError>()),
+          );
+          expect(
+            () => database.savePendingCommand(
+              original.copyWith(childId: null),
+              now: t0,
+            ),
+            throwsA(isA<StateError>()),
+          );
+
+          // Attempt mutating rewardId
+          expect(
+            () => database.savePendingCommand(
+              original.copyWith(rewardId: 'reward-2'),
+              now: t0,
+            ),
+            throwsA(isA<StateError>()),
+          );
+
+          // Attempt mutating redemptionId
+          expect(
+            () => database.savePendingCommand(
+              original.copyWith(redemptionId: 'redemption-2'),
+              now: t0,
+            ),
+            throwsA(isA<StateError>()),
+          );
+
+          // Attempt mutating cancellationReason
+          expect(
+            () => database.savePendingCommand(
+              original.copyWith(cancellationReason: 'other-reason'),
+              now: t0,
+            ),
+            throwsA(isA<StateError>()),
+          );
+
+          // Attempt mutating actorUserId
+          expect(
+            () => database.savePendingCommand(
+              original.copyWith(actorUserId: 'user-actor-2'),
+              now: t0,
+            ),
+            throwsA(isA<StateError>()),
+          );
+
+          // Attempt mutating actorRole
+          expect(
+            () => database.savePendingCommand(
+              original.copyWith(actorRole: 'child'),
+              now: t0,
+            ),
+            throwsA(isA<StateError>()),
+          );
+
+          // Assert record in database remains byte-for-byte identical
+          final reloaded = await database.getPendingCommand(
+            'cmd-immutable-identity',
+          );
+          expect(reloaded!.operation, RewardCommandOperation.redeemReward);
+          expect(reloaded.familyId, 'fam-1');
+          expect(reloaded.childId, 'child-1');
+          expect(reloaded.rewardId, 'reward-1');
+          expect(reloaded.redemptionId, 'redemption-1');
+          expect(reloaded.cancellationReason, 'cancelled-by-parent');
+          expect(reloaded.actorUserId, 'user-actor-1');
+          expect(reloaded.actorRole, 'parent');
+
+          // Legitimate retry with identical identity payload succeeds
+          final retry = original.copyWith(
+            nextAttemptAt: t0.add(const Duration(minutes: 5)),
+          );
+          await database.savePendingCommand(retry, now: t0);
+          final postRetry = await database.getPendingCommand(
+            'cmd-immutable-identity',
+          );
+          expect(postRetry!.nextAttemptAt, t0.add(const Duration(minutes: 5)));
+          expect(postRetry.familyId, 'fam-1');
+        },
       );
-      await database.savePendingCommand(cmd, now: t0);
 
-      // Background dispatcher acquires claim on connection 1
-      final token = (await database.acquireClaim(
-        commandId: 'cmd-foreground-fence',
-        actorUserId: 'user-A',
-        leaseDuration: const Duration(seconds: 30),
-        now: t0,
-      ))!;
+      test('HIGH 2: irreversible dispatch provenance and legacy quarantine enforcement', () async {
+        // 1. Existing unknown_legacy with NULL actor -> save fresh-looking snapshot with actor and possibly_dispatched -> rejected
+        final legacyEpoch = t0.millisecondsSinceEpoch ~/ 1000;
+        await database.customStatement(
+          '''
+          INSERT INTO pending_reward_commands (
+            operation, command_id, family_id, child_id, created_at, actor_user_id,
+            recovery_state, dispatch_state, retry_count
+          ) VALUES
+            ('spin_wheel', 'cmd-legacy-quarantine', 'fam-1', 'ch-1', ?, NULL, 'active', 'unknown_legacy', 0);
+          ''',
+          [legacyEpoch],
+        );
 
-      // Connection 2 (foreground) attempts overwrite while lease is active -> throws StateError
-      expect(
-        () => database2.savePendingCommand(
-          cmd,
-          now: t0.add(const Duration(seconds: 5)),
-        ),
-        throwsA(isA<StateError>()),
-      );
+        final freshLooking = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-legacy-quarantine',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'fresh-user-1',
+          actorRole: 'parent',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        expect(
+          () => database.savePendingCommand(freshLooking, now: t0),
+          throwsA(isA<StateError>()),
+        );
+        final legacyRow = await database.getPendingCommand(
+          'cmd-legacy-quarantine',
+        );
+        expect(legacyRow!.dispatchState, CommandDispatchState.unknownLegacy);
+        expect(legacyRow.actorUserId, isNull);
 
-      // Passing matching leaseToken but missing leaseExpiresAt is rejected as partial lease
-      final partialToken = cmd.copyWith(leaseToken: token);
-      expect(
-        () => database2.savePendingCommand(
-          partialToken,
-          now: t0.add(const Duration(seconds: 5)),
-        ),
-        throwsA(isA<ArgumentError>()),
-      );
+        // 2. Existing confirmed_committed -> attempt possibly_dispatched -> rejected
+        await database.customStatement(
+          '''
+          INSERT INTO pending_reward_commands (
+            operation, command_id, family_id, child_id, created_at, actor_user_id,
+            recovery_state, dispatch_state, retry_count
+          ) VALUES
+            ('spin_wheel', 'cmd-committed', 'fam-1', 'ch-1', ?, 'user-1', 'active', 'confirmed_committed', 0);
+          ''',
+          [legacyEpoch],
+        );
+        final committedCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-committed',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        expect(
+          () => database.savePendingCommand(committedCmd, now: t0),
+          throwsA(isA<StateError>()),
+        );
+        final committedRow = await database.getPendingCommand('cmd-committed');
+        expect(
+          committedRow!.dispatchState,
+          CommandDispatchState.confirmedCommitted,
+        );
 
-      // Passing full lease with matching token is still rejected by savePendingCommand to protect active claim
-      final fullLease = cmd.copyWith(
-        leaseToken: token,
-        leaseExpiresAt: t0.add(const Duration(seconds: 30)),
-      );
-      expect(
-        () => database2.savePendingCommand(
-          fullLease,
-          now: t0.add(const Duration(seconds: 5)),
-        ),
-        throwsA(isA<StateError>()),
-      );
+        // 3. Existing possibly_dispatched -> attempt never_dispatched -> provenance cannot regress
+        final inFlightCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-inflight',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        await database.savePendingCommand(inFlightCmd, now: t0);
 
-      // After lease expires, foreground save succeeds and clears expired lease
-      final updatedForeground = cmd.copyWith(childId: 'child-1-updated');
-      await database2.savePendingCommand(
-        updatedForeground,
-        now: t0.add(const Duration(seconds: 35)),
-      );
+        final regressAttempt = inFlightCmd.copyWith(
+          dispatchState: CommandDispatchState.neverDispatched,
+          lastErrorMessage: 'Attempting downgrade',
+        );
+        await database.savePendingCommand(regressAttempt, now: t0);
+        final postDowngrade = await database.getPendingCommand('cmd-inflight');
+        expect(
+          postDowngrade!.dispatchState,
+          CommandDispatchState.possiblyDispatched,
+          reason: 'Provenance must remain possibly_dispatched and never regress to never_dispatched',
+        );
 
-      final persisted = await database.getPendingCommand(
-        'cmd-foreground-fence',
-      );
-      expect(persisted!.childId, 'child-1-updated');
-      expect(persisted.leaseToken, isNull);
-      expect(persisted.leaseExpiresAt, isNull);
-    });
+        // 4. Existing quarantined_unknown_outcome -> attempt active save -> rejected
+        final quarantinedCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-quarantine-rec',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        // Direct insert of quarantined state
+        await database.customStatement(
+          '''
+          INSERT INTO pending_reward_commands (
+            operation, command_id, family_id, child_id, created_at, actor_user_id,
+            recovery_state, dispatch_state, retry_count
+          ) VALUES
+            ('spin_wheel', 'cmd-quarantine-rec', 'fam-1', 'ch-1', ?, 'user-1', 'quarantined_unknown_outcome', 'possibly_dispatched', 0);
+          ''',
+          [legacyEpoch],
+        );
+        expect(
+          () => database.savePendingCommand(
+            quarantinedCmd.copyWith(recoveryState: CommandRecoveryState.active),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+        final stillQuarantined = await database.getPendingCommand(
+          'cmd-quarantine-rec',
+        );
+        expect(
+          stillQuarantined!.recoveryState,
+          CommandRecoveryState.quarantinedUnknownOutcome,
+        );
 
-    test(
-      'deletePendingCommand fences active, expired, and malformed lease states',
-      () async {
+        // 5. Fresh eligible command -> legitimate never_dispatched to possibly_dispatched works
+        final freshCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-fresh-dispatch',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await database.savePendingCommand(freshCmd, now: t0);
+        expect(
+          (await database.getPendingCommand('cmd-fresh-dispatch'))!
+              .dispatchState,
+          CommandDispatchState.neverDispatched,
+        );
+
+        // Legitimate pre-dispatch transition
+        await database.savePendingCommand(
+          freshCmd.copyWith(
+            dispatchState: CommandDispatchState.possiblyDispatched,
+          ),
+          now: t0,
+        );
+        expect(
+          (await database.getPendingCommand('cmd-fresh-dispatch'))!
+              .dispatchState,
+          CommandDispatchState.possiblyDispatched,
+        );
+      });
+
+      test('MEDIUM: deletePendingCommand fences active, genuinely expired, and malformed lease states', () async {
         // 1. Unclaimed: deleted successfully
         final unclaimed = PendingRewardCommand(
           operation: RewardCommandOperation.spinWheel,
@@ -565,19 +832,38 @@ void main() {
           leaseDuration: const Duration(seconds: 30),
           now: t0,
         ))!;
-
-        // Competing connection 2 tries deletePendingCommand -> row preserved
         await database2.deletePendingCommand('cmd-del-sqlite-active');
         expect(
           await database.getPendingCommand('cmd-del-sqlite-active'),
           isNotNull,
         );
 
-        // 3. Expired lease: deletePendingCommand does NOT delete (must use completeCommand or re-claim)
-        await database2.deletePendingCommand('cmd-del-sqlite-active');
+        // 3. Genuinely expired lease: construct an expired lease and verify deletePendingCommand does NOT delete
+        final expiredCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-del-sqlite-expired',
+          familyId: 'fam-1',
+          actorUserId: 'user-A',
+          createdAt: t0,
+        );
+        await database.savePendingCommand(expiredCmd, now: t0);
+        final expiredToken = (await database.acquireClaim(
+          commandId: 'cmd-del-sqlite-expired',
+          actorUserId: 'user-A',
+          leaseDuration: const Duration(seconds: 5),
+          now: t0,
+        ))!;
+        final effectiveExpiry = t0.add(const Duration(seconds: 10));
+        final rowBefore = await database.getPendingCommand(
+          'cmd-del-sqlite-expired',
+        );
+        expect(rowBefore!.leaseExpiresAt!.isBefore(effectiveExpiry), isTrue);
+
+        await database2.deletePendingCommand('cmd-del-sqlite-expired');
         expect(
-          await database.getPendingCommand('cmd-del-sqlite-active'),
+          await database.getPendingCommand('cmd-del-sqlite-expired'),
           isNotNull,
+          reason: 'Expired lease must not be deleted by deletePendingCommand; requires completeCommand or reclamation',
         );
 
         // 4. Malformed lease: manually create partial lease and assert delete fails to touch it
@@ -608,32 +894,42 @@ void main() {
           await database.getPendingCommand('cmd-del-sqlite-active'),
           isNull,
         );
-      },
-    );
 
-    test(
-      'quarantined, unknown legacy and terminal records cannot be claimed',
-      () async {
-        final quarantined = PendingRewardCommand(
-          operation: RewardCommandOperation.spinWheel,
-          commandId: 'cmd-quarantined',
-          familyId: 'fam-1',
-          childId: 'child-1',
-          actorUserId: 'user-A',
-          createdAt: t0,
-          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
-          dispatchState: CommandDispatchState.unknownLegacy,
+        final completedExpired = await database.completeCommand(
+          commandId: 'cmd-del-sqlite-expired',
+          leaseToken: expiredToken,
         );
-        await database.savePendingCommand(quarantined, now: t0);
+        expect(completedExpired, isTrue);
+        expect(
+          await database.getPendingCommand('cmd-del-sqlite-expired'),
+          isNull,
+        );
+      });
 
-        final token = await database2.acquireClaim(
-          commandId: 'cmd-quarantined',
-          actorUserId: 'user-A',
-          leaseDuration: const Duration(seconds: 30),
-          now: t0,
-        );
-        expect(token, isNull);
-      },
-    );
-  });
+      test(
+        'quarantined, unknown legacy and terminal records cannot be claimed',
+        () async {
+          final epochSeconds = t0.millisecondsSinceEpoch ~/ 1000;
+          await database.customStatement(
+            '''
+          INSERT INTO pending_reward_commands (
+            operation, command_id, family_id, child_id, created_at, actor_user_id,
+            recovery_state, dispatch_state, retry_count
+          ) VALUES
+            ('spin_wheel', 'cmd-quarantined', 'fam-1', 'ch-1', ?, 'user-A', 'quarantined_unknown_outcome', 'unknown_legacy', 0);
+          ''',
+            [epochSeconds],
+          );
+
+          final token = await database2.acquireClaim(
+            commandId: 'cmd-quarantined',
+            actorUserId: 'user-A',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0,
+          );
+          expect(token, isNull);
+        },
+      );
+    },
+  );
 }

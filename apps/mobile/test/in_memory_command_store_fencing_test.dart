@@ -6,7 +6,7 @@ void main() {
   group(
     'InMemoryRepositories PendingRewardCommandStore Invariants & Fencing',
     () {
-      late PendingRewardCommandStore store;
+      late InMemoryPendingRewardCommandStore store;
       final t0 = DateTime.utc(2026, 11, 7, 10, 0, 0);
 
       setUp(() {
@@ -267,14 +267,53 @@ void main() {
             isNotNull,
           );
 
-          // 3. Expired lease: deletePendingCommand does NOT delete
-          await store.deletePendingCommand('cmd-mobile-del-active');
+          // 3. Genuinely expired lease: construct an expired lease and verify deletePendingCommand does NOT delete
+          final expiredCmd = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-mobile-del-expired',
+            familyId: 'fam-1',
+            actorUserId: 'user-1',
+            createdAt: t0,
+          );
+          await store.savePendingCommand(expiredCmd, now: t0);
+          final expiredToken = (await store.acquireClaim(
+            commandId: 'cmd-mobile-del-expired',
+            actorUserId: 'user-1',
+            leaseDuration: const Duration(seconds: 5),
+            now: t0,
+          ))!;
+          // Advance time past lease expiration
+          final effectiveExpiry = t0.add(const Duration(seconds: 10));
+          final rowBefore = await store.getPendingCommand(
+            'cmd-mobile-del-expired',
+          );
+          expect(rowBefore!.leaseExpiresAt!.isBefore(effectiveExpiry), isTrue);
+
+          await store.deletePendingCommand('cmd-mobile-del-expired');
           expect(
-            await store.getPendingCommand('cmd-mobile-del-active'),
+            await store.getPendingCommand('cmd-mobile-del-expired'),
+            isNotNull,
+            reason: 'Expired lease must not be deleted by deletePendingCommand; requires completeCommand or reclamation',
+          );
+
+          // 4. Malformed lease: inject partial lease and assert deletePendingCommand fails to touch it
+          final malformedCmd = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-mobile-del-malformed',
+            familyId: 'fam-1',
+            actorUserId: 'user-1',
+            createdAt: t0,
+            leaseToken: 'malformed-token',
+            leaseExpiresAt: null,
+          );
+          store.seedRawCommand(malformedCmd);
+          await store.deletePendingCommand('cmd-mobile-del-malformed');
+          expect(
+            await store.getPendingCommand('cmd-mobile-del-malformed'),
             isNotNull,
           );
 
-          // completeCommand with valid token deletes it
+          // 5. Complete claimed command using completeCommand with valid token succeeds
           final completed = await store.completeCommand(
             commandId: 'cmd-mobile-del-active',
             leaseToken: token,
@@ -284,8 +323,353 @@ void main() {
             await store.getPendingCommand('cmd-mobile-del-active'),
             isNull,
           );
+
+          final completedExpired = await store.completeCommand(
+            commandId: 'cmd-mobile-del-expired',
+            leaseToken: expiredToken,
+          );
+          expect(completedExpired, isTrue);
+          expect(
+            await store.getPendingCommand('cmd-mobile-del-expired'),
+            isNull,
+          );
         },
       );
+
+      test('HIGH 1: existing command identity fields are strictly immutable in memory', () async {
+        final original = PendingRewardCommand(
+          operation: RewardCommandOperation.redeemReward,
+          commandId: 'cmd-mobile-immutable',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          rewardId: 'reward-1',
+          redemptionId: 'redemption-1',
+          cancellationReason: 'cancelled-by-parent',
+          actorUserId: 'user-actor-1',
+          actorRole: 'parent',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await store.savePendingCommand(original, now: t0);
+
+        // Attempt mutating operation
+        expect(
+          () => store.savePendingCommand(
+            original.copyWith(operation: RewardCommandOperation.spinWheel),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Attempt mutating familyId
+        expect(
+          () => store.savePendingCommand(
+            original.copyWith(familyId: 'fam-2'),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Attempt mutating childId
+        expect(
+          () => store.savePendingCommand(
+            original.copyWith(childId: 'child-2'),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+        expect(
+          () => store.savePendingCommand(
+            original.copyWith(childId: null),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Attempt mutating rewardId
+        expect(
+          () => store.savePendingCommand(
+            original.copyWith(rewardId: 'reward-2'),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Attempt mutating redemptionId
+        expect(
+          () => store.savePendingCommand(
+            original.copyWith(redemptionId: 'redemption-2'),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Attempt mutating cancellationReason
+        expect(
+          () => store.savePendingCommand(
+            original.copyWith(cancellationReason: 'other-reason'),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Attempt mutating actorUserId
+        expect(
+          () => store.savePendingCommand(
+            original.copyWith(actorUserId: 'user-actor-2'),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Attempt mutating actorRole
+        expect(
+          () => store.savePendingCommand(
+            original.copyWith(actorRole: 'child'),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // Assert stored record remains byte-for-byte identical
+        final reloaded = await store.getPendingCommand('cmd-mobile-immutable');
+        expect(reloaded!.operation, RewardCommandOperation.redeemReward);
+        expect(reloaded.familyId, 'fam-1');
+        expect(reloaded.childId, 'child-1');
+        expect(reloaded.rewardId, 'reward-1');
+        expect(reloaded.redemptionId, 'redemption-1');
+        expect(reloaded.cancellationReason, 'cancelled-by-parent');
+        expect(reloaded.actorUserId, 'user-actor-1');
+        expect(reloaded.actorRole, 'parent');
+
+        // Legitimate retry with identical identity payload succeeds
+        final retry = original.copyWith(
+          nextAttemptAt: t0.add(const Duration(minutes: 5)),
+        );
+        await store.savePendingCommand(retry, now: t0);
+        final postRetry = await store.getPendingCommand('cmd-mobile-immutable');
+        expect(postRetry!.nextAttemptAt, t0.add(const Duration(minutes: 5)));
+        expect(postRetry.familyId, 'fam-1');
+      });
+
+      test('HIGH 2: irreversible dispatch provenance and legacy quarantine enforcement in memory', () async {
+        // 1. Existing unknown_legacy with NULL actor -> save fresh-looking snapshot with actor and possibly_dispatched -> rejected
+        final legacy = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-legacy',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          createdAt: t0,
+          dispatchState: CommandDispatchState.unknownLegacy,
+        );
+        store.seedRawCommand(legacy);
+
+        final freshLooking = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-legacy',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'fresh-user-1',
+          actorRole: 'parent',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        expect(
+          () => store.savePendingCommand(freshLooking, now: t0),
+          throwsA(isA<StateError>()),
+        );
+        final legacyRow = await store.getPendingCommand('cmd-mobile-legacy');
+        expect(legacyRow!.dispatchState, CommandDispatchState.unknownLegacy);
+        expect(legacyRow.actorUserId, isNull);
+
+        // 2. Existing confirmed_committed -> attempt possibly_dispatched -> rejected
+        final committed = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-committed',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          dispatchState: CommandDispatchState.confirmedCommitted,
+        );
+        store.seedRawCommand(committed);
+
+        final committedAttempt = committed.copyWith(
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        expect(
+          () => store.savePendingCommand(committedAttempt, now: t0),
+          throwsA(isA<StateError>()),
+        );
+        final committedRow = await store.getPendingCommand(
+          'cmd-mobile-committed',
+        );
+        expect(
+          committedRow!.dispatchState,
+          CommandDispatchState.confirmedCommitted,
+        );
+
+        // 3. Existing possibly_dispatched -> attempt never_dispatched -> provenance cannot regress
+        final inFlightCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-inflight',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        await store.savePendingCommand(inFlightCmd, now: t0);
+
+        final regressAttempt = inFlightCmd.copyWith(
+          dispatchState: CommandDispatchState.neverDispatched,
+          lastErrorMessage: 'Attempting downgrade',
+        );
+        await store.savePendingCommand(regressAttempt, now: t0);
+        final postDowngrade = await store.getPendingCommand(
+          'cmd-mobile-inflight',
+        );
+        expect(
+          postDowngrade!.dispatchState,
+          CommandDispatchState.possiblyDispatched,
+          reason: 'Provenance must remain possibly_dispatched and never regress to never_dispatched',
+        );
+
+        // 4. Existing quarantined_unknown_outcome -> attempt active save -> rejected
+        final quarantinedCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-quarantine-rec',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        store.seedRawCommand(quarantinedCmd);
+        expect(
+          () => store.savePendingCommand(
+            quarantinedCmd.copyWith(recoveryState: CommandRecoveryState.active),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+        final stillQuarantined = await store.getPendingCommand(
+          'cmd-mobile-quarantine-rec',
+        );
+        expect(
+          stillQuarantined!.recoveryState,
+          CommandRecoveryState.quarantinedUnknownOutcome,
+        );
+
+        // 5. Fresh eligible command -> legitimate never_dispatched to possibly_dispatched works
+        final freshCmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-fresh',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await store.savePendingCommand(freshCmd, now: t0);
+        expect(
+          (await store.getPendingCommand('cmd-mobile-fresh'))!.dispatchState,
+          CommandDispatchState.neverDispatched,
+        );
+
+        // Legitimate pre-dispatch transition
+        await store.savePendingCommand(
+          freshCmd.copyWith(
+            dispatchState: CommandDispatchState.possiblyDispatched,
+          ),
+          now: t0,
+        );
+        expect(
+          (await store.getPendingCommand('cmd-mobile-fresh'))!.dispatchState,
+          CommandDispatchState.possiblyDispatched,
+        );
+      });
+
+      test('MEDIUM: malformed persisted lease fails closed in memory for save and claim', () async {
+        // 1. Partial lease: leaseToken present, leaseExpiresAt null
+        final partial1 = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-partial-1',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          leaseToken: 'tok-only',
+          leaseExpiresAt: null,
+        );
+        store.seedRawCommand(partial1);
+
+        // acquireClaim fails closed
+        expect(
+          await store.acquireClaim(
+            commandId: 'cmd-mobile-partial-1',
+            actorUserId: 'user-1',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0,
+          ),
+          isNull,
+        );
+
+        // savePendingCommand fails closed with StateError when existing row has malformed lease
+        expect(
+          () => store.savePendingCommand(
+            partial1.copyWith(
+              leaseToken: null,
+              leaseExpiresAt: null,
+              lastErrorMessage: 'Try update',
+            ),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // 2. Partial lease: leaseToken null, leaseExpiresAt present
+        final partial2 = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-partial-2',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          leaseToken: null,
+          leaseExpiresAt: t0.add(const Duration(seconds: 30)),
+        );
+        store.seedRawCommand(partial2);
+
+        // acquireClaim fails closed
+        expect(
+          await store.acquireClaim(
+            commandId: 'cmd-mobile-partial-2',
+            actorUserId: 'user-1',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0,
+          ),
+          isNull,
+        );
+
+        // savePendingCommand fails closed with StateError when existing row has malformed lease
+        expect(
+          () => store.savePendingCommand(
+            partial2.copyWith(
+              leaseToken: null,
+              leaseExpiresAt: null,
+              lastErrorMessage: 'Try update',
+            ),
+            now: t0,
+          ),
+          throwsA(isA<StateError>()),
+        );
+      });
     },
   );
 }

@@ -530,34 +530,98 @@ class AppDatabase extends _$AppDatabase
         return;
       }
 
+      // HIGH 1: Existing command identity must be immutable.
+      final isSameIdentity =
+          existing.operation == command.operation.wireValue &&
+          existing.familyId == command.familyId &&
+          existing.childId == command.childId &&
+          existing.rewardId == command.rewardId &&
+          existing.redemptionId == command.redemptionId &&
+          existing.cancellationReason == command.cancellationReason &&
+          existing.actorUserId == command.actorUserId &&
+          existing.actorRole == command.actorRole;
+
+      if (!isSameIdentity) {
+        throw StateError(
+          'Cannot mutate immutable identity fields of existing pending command ${command.commandId}',
+        );
+      }
+
+      // Active lease protection
+      final hasActiveLease =
+          existing.leaseToken != null &&
+          existing.leaseExpiresAt != null &&
+          existing.leaseExpiresAt!.isAfter(effectiveNow);
+      if (hasActiveLease) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: held by an active lease',
+        );
+      }
+
+      // MEDIUM: Malformed lease fail-close
+      final isMalformedLease =
+          (existing.leaseToken != null && existing.leaseExpiresAt == null) ||
+          (existing.leaseToken == null && existing.leaseExpiresAt != null);
+      if (isMalformedLease) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: existing lease is malformed',
+        );
+      }
+
+      // HIGH 2: Irreversible dispatch provenance & legacy quarantine checks
+      if (existing.dispatchState ==
+          CommandDispatchState.unknownLegacy.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is quarantined as unknown_legacy',
+        );
+      }
+      if (existing.dispatchState ==
+          CommandDispatchState.confirmedCommitted.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is already confirmed_committed',
+        );
+      }
+      if (existing.recoveryState ==
+          CommandRecoveryState.quarantinedUnknownOutcome.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is quarantined',
+        );
+      }
+      if (existing.recoveryState ==
+          CommandRecoveryState.pendingOriginalActor.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is paused for original actor',
+        );
+      }
+      if (existing.recoveryState ==
+          CommandRecoveryState.terminalError.wireValue) {
+        throw StateError(
+          'Cannot overwrite pending command ${command.commandId}: record is in terminal_error',
+        );
+      }
+
       final rowsAffected = await customUpdate(
         '''
         UPDATE pending_reward_commands
-        SET operation = ?,
-            family_id = ?,
-            child_id = COALESCE(?, child_id),
-            reward_id = COALESCE(?, reward_id),
-            redemption_id = COALESCE(?, redemption_id),
-            cancellation_reason = COALESCE(?, cancellation_reason),
-            actor_user_id = COALESCE(actor_user_id, ?),
-            actor_role = COALESCE(actor_role, ?),
-            recovery_state = CASE
-              WHEN recovery_state <> 'active' THEN recovery_state
-              ELSE ?
-            END,
-            dispatch_state = CASE
+        SET dispatch_state = CASE
               WHEN dispatch_state = 'possibly_dispatched' THEN 'possibly_dispatched'
               ELSE ?
             END,
-            retry_count = CASE
-              WHEN retry_count > ? THEN retry_count
-              ELSE ?
-            END,
-            next_attempt_at = COALESCE(next_attempt_at, ?),
-            last_error_message = COALESCE(last_error_message, ?),
+            next_attempt_at = COALESCE(?, next_attempt_at),
+            last_error_message = COALESCE(?, last_error_message),
             lease_token = NULL,
             lease_expires_at = NULL
         WHERE command_id = ?
+          AND operation = ?
+          AND family_id = ?
+          AND (child_id IS ?)
+          AND (reward_id IS ?)
+          AND (redemption_id IS ?)
+          AND (cancellation_reason IS ?)
+          AND (actor_user_id IS ?)
+          AND (actor_role IS ?)
+          AND dispatch_state NOT IN ('unknown_legacy', 'confirmed_committed')
+          AND recovery_state NOT IN ('quarantined_unknown_outcome', 'pending_original_actor', 'terminal_error')
           AND (
             (lease_token IS NULL AND lease_expires_at IS NULL)
             OR
@@ -565,6 +629,10 @@ class AppDatabase extends _$AppDatabase
           );
         ''',
         variables: [
+          Variable<String>(command.dispatchState.wireValue),
+          Variable<DateTime>(command.nextAttemptAt?.toUtc()),
+          Variable<String>(command.lastErrorMessage),
+          Variable<String>(command.commandId),
           Variable<String>(command.operation.wireValue),
           Variable<String>(command.familyId),
           Variable<String>(command.childId),
@@ -573,13 +641,6 @@ class AppDatabase extends _$AppDatabase
           Variable<String>(command.cancellationReason),
           Variable<String>(command.actorUserId),
           Variable<String>(command.actorRole),
-          Variable<String>(command.recoveryState.wireValue),
-          Variable<String>(command.dispatchState.wireValue),
-          Variable<int>(command.retryCount),
-          Variable<int>(command.retryCount),
-          Variable<DateTime>(command.nextAttemptAt?.toUtc()),
-          Variable<String>(command.lastErrorMessage),
-          Variable<String>(command.commandId),
           Variable<DateTime>(effectiveNow),
         ],
         updates: {pendingRewardCommands},
@@ -587,7 +648,7 @@ class AppDatabase extends _$AppDatabase
 
       if (rowsAffected == 0) {
         throw StateError(
-          'Cannot overwrite pending command ${command.commandId}: held by an active lease',
+          'Cannot update pending command ${command.commandId}: conflicting identity or conditional predicates not met',
         );
       }
     });

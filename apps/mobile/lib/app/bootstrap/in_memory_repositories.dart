@@ -150,12 +150,17 @@ final class InMemoryPendingRewardCommandStore
   }
 
   bool _isLeaseAvailable(PendingRewardCommand cmd, DateTime effectiveNow) {
-    final isUnleased = cmd.leaseToken == null && cmd.leaseExpiresAt == null;
+    final isUnclaimed = cmd.leaseToken == null && cmd.leaseExpiresAt == null;
     final isExpired =
         cmd.leaseToken != null &&
         cmd.leaseExpiresAt != null &&
         !cmd.leaseExpiresAt!.isAfter(effectiveNow);
-    return isUnleased || isExpired;
+    return isUnclaimed || isExpired;
+  }
+
+  /// Injects a raw command directly into the in-memory map for testing malformed records.
+  void seedRawCommand(PendingRewardCommand command) {
+    _commands[command.commandId] = command;
   }
 
   @override
@@ -186,39 +191,83 @@ final class InMemoryPendingRewardCommandStore
       return;
     }
 
+    // HIGH 1: Existing command identity must be immutable
+    final isSameIdentity =
+        existing.operation == command.operation &&
+        existing.familyId == command.familyId &&
+        existing.childId == command.childId &&
+        existing.rewardId == command.rewardId &&
+        existing.redemptionId == command.redemptionId &&
+        existing.cancellationReason == command.cancellationReason &&
+        existing.actorUserId == command.actorUserId &&
+        existing.actorRole == command.actorRole;
+
+    if (!isSameIdentity) {
+      throw StateError(
+        'Cannot mutate immutable identity fields of existing pending command ${command.commandId}',
+      );
+    }
+
+    // Active lease protection
     final hasActiveLease =
         existing.leaseToken != null &&
         existing.leaseExpiresAt != null &&
         existing.leaseExpiresAt!.isAfter(effectiveNow);
-
     if (hasActiveLease) {
       throw StateError(
         'Cannot overwrite pending command ${command.commandId}: held by an active lease',
       );
     }
 
+    // MEDIUM: Malformed lease check (fail closed on malformed existing lease)
+    final isMalformedLease =
+        (existing.leaseToken != null && existing.leaseExpiresAt == null) ||
+        (existing.leaseToken == null && existing.leaseExpiresAt != null);
+    if (isMalformedLease) {
+      throw StateError(
+        'Cannot overwrite pending command ${command.commandId}: existing lease is malformed',
+      );
+    }
+
+    // HIGH 2: Irreversible dispatch provenance & legacy quarantine checks
+    if (existing.dispatchState == CommandDispatchState.unknownLegacy) {
+      throw StateError(
+        'Cannot overwrite pending command ${command.commandId}: record is quarantined as unknown_legacy',
+      );
+    }
+    if (existing.dispatchState == CommandDispatchState.confirmedCommitted) {
+      throw StateError(
+        'Cannot overwrite pending command ${command.commandId}: record is already confirmed_committed',
+      );
+    }
+    if (existing.recoveryState ==
+        CommandRecoveryState.quarantinedUnknownOutcome) {
+      throw StateError(
+        'Cannot overwrite pending command ${command.commandId}: record is quarantined',
+      );
+    }
+    if (existing.recoveryState == CommandRecoveryState.pendingOriginalActor) {
+      throw StateError(
+        'Cannot overwrite pending command ${command.commandId}: record is paused for original actor',
+      );
+    }
+    if (existing.recoveryState == CommandRecoveryState.terminalError) {
+      throw StateError(
+        'Cannot overwrite pending command ${command.commandId}: record is in terminal_error',
+      );
+    }
+
+    // Allowed forward transition:
+    // If possibly_dispatched, never regress to never_dispatched.
+    final updatedDispatchState =
+        existing.dispatchState == CommandDispatchState.possiblyDispatched
+        ? CommandDispatchState.possiblyDispatched
+        : command.dispatchState;
+
     _commands[command.commandId] = existing.copyWith(
-      operation: command.operation,
-      familyId: command.familyId,
-      childId: command.childId ?? existing.childId,
-      rewardId: command.rewardId ?? existing.rewardId,
-      redemptionId: command.redemptionId ?? existing.redemptionId,
-      cancellationReason:
-          command.cancellationReason ?? existing.cancellationReason,
-      actorUserId: existing.actorUserId ?? command.actorUserId,
-      actorRole: existing.actorRole ?? command.actorRole,
-      recoveryState: existing.recoveryState != CommandRecoveryState.active
-          ? existing.recoveryState
-          : command.recoveryState,
-      dispatchState:
-          existing.dispatchState == CommandDispatchState.possiblyDispatched
-          ? CommandDispatchState.possiblyDispatched
-          : command.dispatchState,
-      retryCount: existing.retryCount > command.retryCount
-          ? existing.retryCount
-          : command.retryCount,
-      nextAttemptAt: existing.nextAttemptAt ?? command.nextAttemptAt?.toUtc(),
-      lastErrorMessage: existing.lastErrorMessage ?? command.lastErrorMessage,
+      dispatchState: updatedDispatchState,
+      nextAttemptAt: command.nextAttemptAt?.toUtc() ?? existing.nextAttemptAt,
+      lastErrorMessage: command.lastErrorMessage ?? existing.lastErrorMessage,
       leaseToken: null,
       leaseExpiresAt: null,
     );
