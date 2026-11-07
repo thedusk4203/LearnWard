@@ -97,17 +97,33 @@ UPDATE pending_reward_commands
 SET lease_token = :newLeaseToken,
     lease_expires_at = :leaseExpiresAt
 WHERE command_id = :commandId
+  AND actor_user_id = :authenticatedActorId
   AND recovery_state = 'active'
-  AND (next_attempt_at IS NULL OR next_attempt_at <= :now)
-  AND (lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= :now);
+  AND operation IN ('spin_wheel', 'redeem_reward')
+  AND dispatch_state IN (
+    'never_dispatched',
+    'possibly_dispatched'
+  )
+  AND (
+    next_attempt_at IS NULL
+    OR next_attempt_at <= :now
+  )
+  AND (
+    (lease_token IS NULL AND lease_expires_at IS NULL)
+    OR
+    (lease_token IS NOT NULL AND lease_expires_at <= :now)
+  );
 ```
 
 **Claim Invariants:**
 1. **Target Identity:** The command row must match `:commandId`.
-2. **Active State:** The command must be in `recovery_state = 'active'`. Commands in `quarantined_unknown_outcome`, `terminal_error`, or `pending_original_actor` can never be claimed.
-3. **Schedule Eligibility:** Current time must be past scheduled retry: `(next_attempt_at IS NULL OR next_attempt_at <= :now)`.
-4. **Lease Availability:** The command must be unclaimed or its lease expired: `(lease_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= :now)`.
-5. **Atomic Outcome:** Rows affected == 1 confirms acquisition. Rows affected == 0 indicates claim failure (command not found, ineligible, or actively owned by another worker); the worker immediately yields.
+2. **Actor Authentication:** `actor_user_id = :authenticatedActorId` guarantees that a command can only ever be claimed by its original authenticating actor at the database query boundary, preventing cross-actor claim race conditions.
+3. **Active Recovery State:** The command must be in `recovery_state = 'active'`. Commands in `quarantined_unknown_outcome`, `terminal_error`, or `pending_original_actor` can never be claimed.
+4. **Permitted Automated Operations:** `operation IN ('spin_wheel', 'redeem_reward')` strictly restricts automated recovery to proven idempotent economic operations (excluding fulfill/cancel until pre-dispatch markers are established in 4A-2).
+5. **Dispatch Provenance:** `dispatch_state IN ('never_dispatched', 'possibly_dispatched')` ensures that quarantined `unknown_legacy` records and terminal `confirmed_committed` rows can never be claimed for automated dispatch.
+6. **Schedule Eligibility:** Current time must be past scheduled retry backoff: `(next_attempt_at IS NULL OR next_attempt_at <= :now)`.
+7. **Strict Lease Exclusivity & Expiration:** `((lease_token IS NULL AND lease_expires_at IS NULL) OR (lease_token IS NOT NULL AND lease_expires_at <= :now))` enforces strict mutual exclusion: unclaimed rows require both token and expiration to be NULL; expired leases require an existing token with expiration $\le$ now. Any partial or active lease blocks acquisition.
+8. **Atomic Outcome:** Rows affected == 1 confirms exclusive acquisition. Rows affected == 0 indicates claim failure (command not found, actor mismatch, operation ineligible, or actively owned by another worker); the worker immediately yields.
 
 #### 2.3.2 Stale-Worker Fencing & Conditional Mutations
 Every subsequent mutation, state change, retry rescheduling, or journal clearance **MUST be conditional on `lease_token`**:
@@ -199,6 +215,10 @@ abstract interface class PendingRewardCommandStore {
   });
 
   /// Lists claimable commands due for execution by the authenticated actor.
+  /// Matches rows where actor_user_id == [actorUserId], recovery_state == 'active',
+  /// operation IN ('spin_wheel', 'redeem_reward'), dispatch_state IN ('never_dispatched', 'possibly_dispatched'),
+  /// (next_attempt_at IS NULL OR next_attempt_at <= clock.now()),
+  /// and ((lease_token IS NULL AND lease_expires_at IS NULL) OR (lease_token IS NOT NULL AND lease_expires_at <= clock.now())).
   Future<List<PendingRewardCommand>> listClaimableCommands({
     required String actorUserId,
     required int limit,
