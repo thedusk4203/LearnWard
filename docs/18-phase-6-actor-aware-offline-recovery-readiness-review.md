@@ -133,7 +133,7 @@ Every subsequent mutation, state change, retry rescheduling, or journal clearanc
    DELETE FROM pending_reward_commands
    WHERE command_id = :commandId AND lease_token = :leaseToken;
    ```
-2. **Retry Reschedule / Release on Failure:**
+2. **Retry Reschedule / Release on Failure (Authoritative SQLite Increment):**
    ```sql
    UPDATE pending_reward_commands
    SET retry_count = retry_count + 1,
@@ -143,7 +143,8 @@ Every subsequent mutation, state change, retry rescheduling, or journal clearanc
        lease_expires_at = NULL
    WHERE command_id = :commandId AND lease_token = :leaseToken;
    ```
-3. **State Transitions (e.g. `pending_original_actor` or `quarantined_unknown_outcome`):**
+   *Retry Counter Semantics:* The retry counter is atomically evaluated and incremented directly within the SQLite engine (`retry_count = retry_count + 1`). Callers never supply a retry count, ensuring that delayed or stale caller-side values cannot overwrite newer attempts.
+3. **State Transitions Under Active Lease (e.g. `quarantined_unknown_outcome`):**
    ```sql
    UPDATE pending_reward_commands
    SET recovery_state = :newRecoveryState,
@@ -182,6 +183,7 @@ abstract interface class PendingRewardCommandStore {
   
   /// Atomically attempts to acquire an exclusive execution claim lease.
   /// Returns granted leaseToken on success, or null if claim failed / already in-flight.
+  /// [actorUserId] MUST be sourced from the authenticated session context, NEVER copied from the pending command.
   Future<String?> acquireClaim({
     required String commandId,
     required String actorUserId,
@@ -189,12 +191,13 @@ abstract interface class PendingRewardCommandStore {
   });
 
   /// Releases an active claim back to scheduled retry with updated backoff.
+  /// Atomically increments the retry counter directly within SQLite (`retry_count = retry_count + 1`).
+  /// The caller MUST NOT supply a retryCount parameter.
   /// Conditional on [leaseToken].
   Future<bool> releaseClaim({
     required String commandId,
     required String leaseToken,
     required DateTime nextAttemptAt,
-    required int retryCount,
     String? lastErrorMessage,
   });
 
@@ -205,13 +208,32 @@ abstract interface class PendingRewardCommandStore {
     required String leaseToken,
   });
 
-  /// Transitions recovery state (e.g. to pendingOriginalActor or quarantinedUnknownOutcome).
+  /// Transitions recovery state (e.g. to quarantinedUnknownOutcome).
   /// Conditional on [leaseToken].
   Future<bool> transitionRecoveryState({
     required String commandId,
     required String leaseToken,
     required CommandRecoveryState newState,
     String? lastErrorMessage,
+  });
+
+  /// Atomically transitions an active mismatched command to pendingOriginalActor.
+  /// Non-dispatch SQLite CAS: requires actor_user_id IS NOT NULL AND actor_user_id <> [authenticatedActorId].
+  /// Respects unexpired active leases; clears lease metadata only on success.
+  Future<bool> pauseMismatchedActorCommand({
+    required String commandId,
+    required String familyId,
+    required String authenticatedActorId,
+    String? mismatchReason,
+  });
+
+  /// Atomically transitions a pendingOriginalActor command back to active upon original actor sign-in.
+  /// Non-dispatch SQLite CAS: requires actor_user_id == [authenticatedActorId].
+  /// Respects active leases; clears lease metadata only on success.
+  Future<bool> resumeOriginalActorCommand({
+    required String commandId,
+    required String familyId,
+    required String authenticatedActorId,
   });
 
   /// Lists claimable commands due for execution by the authenticated actor.
@@ -221,6 +243,22 @@ abstract interface class PendingRewardCommandStore {
   /// and ((lease_token IS NULL AND lease_expires_at IS NULL) OR (lease_token IS NOT NULL AND lease_expires_at <= clock.now())).
   Future<List<PendingRewardCommand>> listClaimableCommands({
     required String actorUserId,
+    required int limit,
+  });
+
+  /// Discovers active commands belonging to a different actor for the family.
+  /// Used by the outbox scanner to discover candidates for [pauseMismatchedActorCommand].
+  Future<List<PendingRewardCommand>> listMismatchedActiveCommands({
+    required String familyId,
+    required String authenticatedActorId,
+    required int limit,
+  });
+
+  /// Discovers paused commands belonging to the current actor for the family.
+  /// Used upon actor sign-in to discover candidates for [resumeOriginalActorCommand].
+  Future<List<PendingRewardCommand>> listPausedOriginalActorCommands({
+    required String familyId,
+    required String authenticatedActorId,
     required int limit,
   });
 }
@@ -236,29 +274,160 @@ Every outbox operation is bound to an immutable `actor_user_id`. Before any disp
 flowchart TD
     Start[Outbox Command Recovery] --> CheckActor{command.actorUserId == currentUserId?}
     CheckActor -- Missing / Null (v4) --> QuarantineV4[Set recoveryState = 'quarantined_unknown_outcome'; Halt]
-    CheckActor -- Mismatch (User B != User A) --> PauseActor[Persist recoveryState = 'pending_original_actor'; Halt]
+    CheckActor -- Mismatch (User B != User A) --> PauseActor[pauseMismatchedActorCommand to 'pending_original_actor'; Halt]
     CheckActor -- Match (User A == User A) --> CheckLease{Acquire SQLite Claim Lease?}
     CheckLease -- Lease Failed --> Yield[Skip; Already in-flight]
     CheckLease -- Lease Acquired --> DispatchRPC[Invoke Server RPC with original commandId]
     
     DispatchRPC --> CheckResult{RPC Result?}
     CheckResult -- 200 OK --> CommitSuccess[completeCommand with leaseToken; Confirmed Committed]
-    CheckResult -- Network Error / Timeout --> Backoff[releaseClaim with leaseToken; Set nextAttemptAt with Bounded Jitter]
+    CheckResult -- Network Error / Timeout --> Backoff[releaseClaim with leaseToken; SQLite increments retry_count; Set nextAttemptAt with Bounded Jitter]
     CheckResult -- SQLSTATE 42501 --> Disambiguate42501[Disambiguate 42501]
     CheckResult -- Terminal LW... Code --> Terminate[completeCommand / terminal_error with leaseToken; Surface UI]
     
     Disambiguate42501 --> CheckMsg{Error message?}
     CheckMsg -- Child profile is archived --> ChildArchived[transitionRecoveryState to 'quarantined_unknown_outcome']
-    CheckMsg -- Command caller mismatch --> PauseMismatch[transitionRecoveryState to 'pending_original_actor']
+    CheckMsg -- Command caller mismatch --> PauseMismatch[pauseMismatchedActorCommand to 'pending_original_actor']
     CheckMsg -- Paired Child Session --> CheckGrant{Query child_device_grants?}
     
     CheckGrant -- status = 'revoked' --> DeviceRevoked[transitionRecoveryState to 'quarantined_unknown_outcome'; Lock Shell]
     CheckGrant -- Network Fail / Active --> PauseActive[releaseClaim with leaseToken; Schedule Backoff]
 ```
 
-#### Safe Resumption Protocol:
-- When User B logs in, User A's pending commands are persisted with `recovery_state = 'pending_original_actor'` and skipped during queue drainage.
-- When User A logs back in, the dispatcher detects `actor_user_id == User_A.id AND recovery_state = 'pending_original_actor'`, resets them to `recovery_state = 'active'` with `next_attempt_at = now()`, and resumes execution.
+#### 2.4.1 Trusted Actor Sourcing & Authorization Boundary
+- **Trusted Session Context:** `:authenticatedActorId` **MUST** be positively established from the active, verified client authentication session (e.g. `AuthSessionState.currentUserId` or `supabase.auth.currentUser!.id`).
+- **Strict Prohibition Against Self-Validation:** `:authenticatedActorId` **MUST NEVER** be read, copied, or defaulted from `PendingRewardCommands.actorUserId` or the local command payload as proof of authorization. Sourcing identity from the pending record would create an unverified circular authorization vulnerability.
+- **Legacy Quarantine Isolation:** Commands migrated from v4 with `actor_user_id IS NULL` remain permanently quarantined in `unknown_legacy` / `recovery_state = 'quarantined_unknown_outcome'`. They are **never** transitioned to `pending_original_actor` and **never** reactivated to `active`.
+
+#### 2.4.2 Actor Mismatch State Transition CAS (`active` $\to$ `pending_original_actor`)
+When an active command belonging to User A is encountered while User B is signed in, the client executes an atomic, non-dispatch compare-and-swap transition:
+
+```sql
+UPDATE pending_reward_commands
+SET recovery_state = 'pending_original_actor',
+    last_error_message = :mismatchReason,
+    lease_token = NULL,
+    lease_expires_at = NULL
+WHERE command_id = :commandId
+  AND family_id = :familyId
+  AND actor_user_id IS NOT NULL
+  AND actor_user_id <> :authenticatedActorId
+  AND recovery_state = 'active'
+  AND operation IN ('spin_wheel', 'redeem_reward')
+  AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+  AND (
+    (lease_token IS NULL AND lease_expires_at IS NULL)
+    OR
+    (lease_token IS NOT NULL AND lease_expires_at <= :now)
+  );
+```
+
+**Mismatch Transition Invariants:**
+1. **Authenticated Session Actor:** `:authenticatedActorId` is sourced strictly from the trusted session context, never from the pending row.
+2. **Actor Mismatch Condition:** `actor_user_id IS NOT NULL AND actor_user_id <> :authenticatedActorId` guarantees that only commands positively authored by another distinct user are paused. Legacy rows with `actor_user_id IS NULL` cannot match and remain quarantined.
+3. **Family Boundary:** `family_id = :familyId` scopes the mutation strictly to the current active family context.
+4. **Operation Scope:** `operation IN ('spin_wheel', 'redeem_reward')` restricts pausing to supported Slice 4A-1 operations.
+5. **Dispatch Provenance:** `dispatch_state IN ('never_dispatched', 'possibly_dispatched')` requires eligible uncommitted provenance. Quarantined `unknown_legacy` and terminal `confirmed_committed` records are rejected.
+6. **Active State Precondition:** `recovery_state = 'active'` prevents mutating rows that are already paused (`pending_original_actor`), quarantined (`quarantined_unknown_outcome`), or terminal (`terminal_error`).
+7. **Lease Protection:** `((lease_token IS NULL AND lease_expires_at IS NULL) OR (lease_token IS NOT NULL AND lease_expires_at <= :now))` prevents modifying an unexpired active lease held by an in-flight worker.
+8. **Conditional Lease Clearance:** `lease_token = NULL, lease_expires_at = NULL` clears lease metadata **only** when the conditional transition succeeds. If rows affected == 0, active lease metadata is untouched.
+9. **History & Identity Preservation:** `command_id`, `actor_user_id`, `actor_role`, `dispatch_state`, and `retry_count` are strictly preserved.
+10. **Zero Network RPC:** Pure local SQLite state transition; zero network requests are dispatched.
+
+#### 2.4.3 Discovery Strategy for Mismatched Active Commands
+Because `listClaimableCommands(:authenticatedActorId)` filters strictly by `actor_user_id = :authenticatedActorId`, mismatched commands belonging to another actor are invisible to the primary drainage query. To guarantee timely transition to `pending_original_actor`:
+
+1. **Discovery Query (`listMismatchedActiveCommands`):**
+   ```sql
+   SELECT command_id, actor_user_id, operation, created_at
+   FROM pending_reward_commands
+   WHERE family_id = :familyId
+     AND actor_user_id IS NOT NULL
+     AND actor_user_id <> :authenticatedActorId
+     AND recovery_state = 'active'
+     AND operation IN ('spin_wheel', 'redeem_reward')
+     AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+     AND (
+       (lease_token IS NULL AND lease_expires_at IS NULL)
+       OR
+       (lease_token IS NOT NULL AND lease_expires_at <= :now)
+     )
+   ORDER BY created_at ASC
+   LIMIT :limit;
+   ```
+2. **Execution Triggers:**
+   - **Session Initialization / Profile Switch:** Run immediately whenever authentication state changes or the active profile switches.
+   - **Pre-Drainage Maintenance Sweep:** Run as a prerequisite step before draining claimable commands, ensuring commands from previous sessions are safely paused before new claims are granted.
+3. **Execution Loop:**
+   For each discovered command, the worker invokes `pauseMismatchedActorCommand(...)`. If the row was concurrently claimed or modified (rows affected == 0), the worker yields without throwing.
+
+#### 2.4.4 Original Actor Resumption CAS (`pending_original_actor` $\to$ `active`)
+When the original author (`:authenticatedActorId`) logs back in, paused commands are atomically reactivated for recovery:
+
+```sql
+UPDATE pending_reward_commands
+SET recovery_state = 'active',
+    last_error_message = NULL,
+    lease_token = NULL,
+    lease_expires_at = NULL
+WHERE command_id = :commandId
+  AND family_id = :familyId
+  AND actor_user_id = :authenticatedActorId
+  AND recovery_state = 'pending_original_actor'
+  AND operation IN ('spin_wheel', 'redeem_reward')
+  AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+  AND (
+    (lease_token IS NULL AND lease_expires_at IS NULL)
+    OR
+    (lease_token IS NOT NULL AND lease_expires_at <= :now)
+  );
+```
+
+**Resumption Invariants:**
+1. **Original Actor Identity:** `actor_user_id = :authenticatedActorId` requires positive identity match with the trusted active session.
+2. **Family Scope:** `family_id = :familyId` scopes resumption strictly to the current active family context.
+3. **Paused State Precondition:** `recovery_state = 'pending_original_actor'` targets only paused commands. Records in `quarantined_unknown_outcome` or `unknown_legacy` can **never** be reactivated.
+4. **Operation & Provenance:** Requires supported operation and eligible dispatch state (`never_dispatched`, `possibly_dispatched`).
+5. **Lease Mutual Exclusion:** Respects active leases; ensures clean lease state upon transition.
+6. **Command Identity Preservation:** Preserves original `command_id`, preserving exact idempotency contracts on subsequent dispatch.
+7. **Zero RPC Side-Effect:** State reactivation is strictly local. It does **not** trigger network RPC calls as a side effect.
+8. **Subsequent Execution Gate:** Once reactivated to `recovery_state = 'active'`, the command becomes visible to `listClaimableCommands(:authenticatedActorId)` and must acquire an exclusive lease via `acquireClaim(...)` before any dispatch attempt.
+
+#### 2.4.5 Discovery Strategy for Paused Original Actor Commands
+To discover paused commands ready for reactivation when the original actor authenticates:
+
+1. **Resumption Discovery Query (`listPausedOriginalActorCommands`):**
+   ```sql
+   SELECT command_id, operation, created_at
+   FROM pending_reward_commands
+   WHERE family_id = :familyId
+     AND actor_user_id = :authenticatedActorId
+     AND recovery_state = 'pending_original_actor'
+     AND operation IN ('spin_wheel', 'redeem_reward')
+     AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+     AND (
+       (lease_token IS NULL AND lease_expires_at IS NULL)
+       OR
+       (lease_token IS NOT NULL AND lease_expires_at <= :now)
+     )
+   ORDER BY created_at ASC
+   LIMIT :limit;
+   ```
+2. **Execution Triggers:**
+   - **Actor Sign-In / Re-Authentication:** Triggered on session bootstrap when `auth.currentUserId` matches stored pending commands.
+   - **Online Network Recovery:** Executed on connectivity restoration when draining outbox queues.
+3. **Execution Loop:**
+   For each discovered command, the client calls `resumeOriginalActorCommand(...)`. Successfully transitioned rows (`rowsAffected == 1`) immediately enter the claimable pool for execution.
+
+#### 2.4.6 Concurrency & Race Hazard Testing Matrix (Pause, Resume, Claim)
+The combination of atomic predicates and SQLite row locks guarantees strict serializability across concurrent operations:
+
+| Race Scenario | Worker 1 Action | Worker 2 Action | Serialization & Guaranteed Outcome |
+| :--- | :--- | :--- | :--- |
+| **Pause vs Claim Race** | User B session runs `pauseMismatchedActorCommand` | User A session runs `acquireClaim` | SQLite serializes updates on the single row:<br>• If Worker 2 claims first: `lease_token` is set; Worker 1's lease availability check fails (`rowsAffected == 0`), yielding safely.<br>• If Worker 1 pauses first: `recovery_state` becomes `'pending_original_actor'`; Worker 2's claim precondition `recovery_state = 'active'` fails (`rowsAffected == 0`), preventing in-flight dispatch. |
+| **Resume vs Pause Race** | Process 1 attempts `resumeOriginalActorCommand` (Session A) | Process 2 attempts `pauseMismatchedActorCommand` (Session B) | For any single session actor, `actor_user_id = :id` and `actor_user_id <> :id` are mutually exclusive. Across concurrent processes with different session tokens, SQLite serializes the writes: whichever commits first sets the state; the subsequent query's `recovery_state` precondition matches or fails cleanly with 0 rows affected. |
+| **Resume vs Claim Race** | Worker 1 runs `resumeOriginalActorCommand` | Worker 2 runs `acquireClaim` | Worker 2 cannot claim until Worker 1 commits (`recovery_state` is `'pending_original_actor'`). Once Worker 1 commits, `recovery_state = 'active'`, allowing Worker 2's claim to succeed atomically. |
+| **Fenced Stale Release vs Pause** | Stale Worker with expired lease runs `releaseClaim` | Outbox maintenance runs `pauseMismatchedActorCommand` | If Worker lease expired and Pause committed, Worker's conditional update on `:staleLeaseToken` affects 0 rows, preventing state corruption. |
 
 ---
 
@@ -331,7 +500,7 @@ flowchart LR
     - `pending_reward_commands`: add `retry_count`, `next_attempt_at`, `last_error_message`, `lease_token`, `lease_expires_at`.
     - `local_assessment_drafts`: add `next_attempt_at`, `lease_token`, `lease_expires_at`.
   - Atomic migration code in `AppDatabase.migration.onUpgrade` applying missing historical steps and v6 additions in order, wrapped in an explicit SQLite `transaction()` with foreign keys safely toggled (`PRAGMA foreign_keys = OFF / ON`).
-  - Store-port API extensions on `PendingRewardCommandStore` (`acquireClaim`, `releaseClaim`, `completeCommand`, `transitionRecoveryState`, `listClaimableCommands`).
+  - Store-port API extensions on `PendingRewardCommandStore` (`acquireClaim`, `releaseClaim`, `completeCommand`, `transitionRecoveryState`, `pauseMismatchedActorCommand`, `resumeOriginalActorCommand`, `listClaimableCommands`, `listMismatchedActiveCommands`, `listPausedOriginalActorCommands`).
   - Multi-version migration test matrix:
     - **v1 $\to$ v6:** Direct migration from initial schema to v6.
     - **v2 $\to$ v6:** Direct migration from v2 schema to v6.
@@ -393,9 +562,10 @@ flowchart LR
 
 Before Slice 4A-1 can be accepted:
 
-1. **Different Authenticated Actors:**
-   - Command queued by User A remains untouched and persisted as `pending_original_actor` when User B runs the dispatcher.
-   - When User A signs in, the command transitions back to `active` and executes cleanly.
+1. **Different Authenticated Actors & State Resumption:**
+   - Active command queued by User A is discovered via `listMismatchedActiveCommands` and transitioned to `pending_original_actor` via atomic mismatch CAS when User B runs the outbox scanner; zero network RPC is dispatched.
+   - When User A signs in, the command is discovered via `listPausedOriginalActorCommands`, transitioned back to `active` via atomic resumption CAS without network RPC, and subsequently claimed via `acquireClaim` for normal execution.
+   - Simultaneous pause, resume, and claim races are tested and verified serializable without journal corruption.
 2. **Missing Original Actor:**
    - Migrated legacy command with `actorUserId == null` is stamped `quarantined_unknown_outcome` and is never automatically replayed.
 3. **App Crash Between Local Commit and Request:**
