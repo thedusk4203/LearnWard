@@ -1,6 +1,6 @@
 # Phase 6 Dependency & Readiness Review — Actor-Aware Offline Command Recovery
 
-**Status:** READY FOR IMPLEMENTATION PLANNING  
+**Status:** READY FOR IMPLEMENTATION PLANNING (REFINED & AUDITED)  
 **Date:** 2026-11-07  
 **Target:** Phase 6 Slice 4 — Actor-Aware Offline Command Recovery & Outbox Architecture  
 **Upstream Contracts:**
@@ -14,13 +14,11 @@
 
 Following the successful merge and verification of PR #21 (Drift v5 Foundation @ `7b0d6ce9d179a7945bcb217f15dcd32274d649b0`), the local SQLite persistence layer has been safely upgraded with non-destructive additive schemas, atomic multi-version migrations, legacy quarantine markers, and fail-closed actor matching.
 
-The next engineering priority is **Actor-Aware Offline Command Recovery**, enabling the mobile application to reliably process outbox commands across network drops, app restarts, actor switches, child profile archival, and device lifecycle transitions without risking duplicate economic operations or privacy violations.
-
-This review formalizes the exact architectural contracts, state machines, lifecycle policies, and testing requirements before implementation begins.
+This document formalizes the resolved architectural dependencies, durable state machine, concurrency-claim protocol, and implementation slicing for **Actor-Aware Offline Command Recovery (Phase 6 Slice 4)**.
 
 ---
 
-## 2. Core Architectural Contracts
+## 2. Core Architectural Contracts & Resolved Dependencies
 
 ### 2.1 Durable Outbox Dispatch State Machine
 
@@ -53,7 +51,7 @@ stateDiagram-v2
 
 ---
 
-### 2.2 Dual State Machine: `RecoveryState` vs. `DispatchState`
+### 2.2 Dual State Machine & Schema Harmonization Decision
 
 To prevent conflating network transmission history with authorization and lifecycle readiness, the outbox enforces two orthogonal dimensions:
 
@@ -62,50 +60,114 @@ To prevent conflating network transmission history with authorization and lifecy
 | **Network Dispatch** | `dispatch_state` | Physical network boundary tracking | `unknown_legacy`, `never_dispatched`, `possibly_dispatched`, `confirmed_committed` |
 | **Lifecycle & Recovery** | `recovery_state` | Execution eligibility & authorization | `active`, `pending_original_actor`, `quarantined_unknown_outcome`, `terminal_error` |
 
-#### Valid State Combinations:
-1. `(never_dispatched, active)`: Newly created draft/command, eligible for initial transmission by current actor.
-2. `(possibly_dispatched, active)`: Dispatched but interrupted; eligible for idempotent retry by the bound actor.
-3. `(possibly_dispatched, pending_original_actor)`: Interrupted under Actor A; current user is Actor B. Paused until Actor A logs in.
-4. `(unknown_legacy, quarantined_unknown_outcome)`: Migrated v4 record with unknown network status; permanently quarantined from automated dispatch.
-5. `(possibly_dispatched, quarantined_unknown_outcome)`: Target child was archived or operation encountered an unresolvable authorization barrier. Preserved locally for parental audit/export.
-6. `(*, terminal_error)`: Permanent business error (e.g. `LW202: Insufficient RP`, `LW203: Daily cap reached`).
+#### Analysis of Drift v5 Schema Asymmetry & Additive v6 Decision:
+- **`pending_reward_commands` (Drift v5):** Contains `recovery_state`, `dispatch_state`, `actor_user_id`, `actor_role`. It does **not** persist `retry_count`, `next_attempt_at`, or `last_error_message`.
+- **`local_assessment_drafts` (Drift v5):** Contains `submission_status`, `retry_count`, `dispatch_state`, `last_error_message`, `actor_user_id`, `actor_role`. It does **not** persist `next_attempt_at` or `recovery_state`.
+
+#### Architectural Decision for Sub-Slice 4A-0:
+To guarantee **restart-safe bounded exponential backoff** without resetting timers on application restart or memory pressure:
+1. An explicitly versioned additive Drift migration (**schemaVersion = 6**, `from == 5`) is introduced in sub-slice 4A-0.
+2. `pending_reward_commands` adds:
+   - `retry_count`: `INTEGER NOT NULL DEFAULT 0`
+   - `next_attempt_at`: `DATETIME NULL`
+   - `last_error_message`: `TEXT NULL`
+3. `local_assessment_drafts` adds:
+   - `next_attempt_at`: `DATETIME NULL`
+4. Draft recovery status maps directly to its existing `submission_status` (`draft`, `failed_retryable`, `terminal_error`) and `dispatch_state` (`unknown_legacy` $\implies$ quarantined); no redundant `recovery_state` column is required on drafts.
 
 ---
 
-### 2.3 Original-Actor Session Verification & Error Disambiguation
+### 2.3 Concurrency Claims & Foreground/Background Coordination
+
+To prevent race conditions where a background recovery timer and a user foreground action attempt to dispatch the same command concurrently:
+
+1. **Atomic Claim Lease Pattern:**
+   Before a worker (background dispatcher or foreground use case) dispatches a command, it acquires an atomic lease in SQLite:
+   ```sql
+   UPDATE pending_reward_commands
+   SET next_attempt_at = :leaseExpiresAt
+   WHERE command_id = :id
+     AND recovery_state = 'active'
+     AND (next_attempt_at IS NULL OR next_attempt_at <= :now);
+   ```
+   If 0 rows are affected, another invocation is currently processing this command; the worker immediately yields.
+2. **Foreground Use Case Protection:**
+   When `spinRewardWheel` or `redeemStoreReward` is invoked by the user, it checks `_commandStore.findPending...`. If an unresolved command exists with an active lease, the foreground action does not overwrite the journal entry or launch a duplicate network call; it safely waits for the in-flight claim or returns an actionable in-progress notification.
+
+---
+
+### 2.4 Original-Actor Verification & State Resumption Protocol
 
 Every outbox operation is bound to an immutable `actor_user_id`. Before any dispatch or replay attempt, the dispatcher executes the following authorization pipeline:
 
 ```mermaid
 flowchart TD
     Start[Outbox Command Recovery] --> CheckActor{command.actorUserId == currentUserId?}
-    CheckActor -- No / Missing --> PauseActor[Set recoveryState = 'pending_original_actor'; Halt Command]
-    CheckActor -- Yes --> DispatchRPC[Invoke Server RPC with original commandId]
+    CheckActor -- Missing / Null (v4) --> QuarantineV4[Set recoveryState = 'quarantined_unknown_outcome'; Halt]
+    CheckActor -- Mismatch (User B != User A) --> PauseActor[Persist recoveryState = 'pending_original_actor'; Halt]
+    CheckActor -- Match (User A == User A) --> CheckLease{Acquire SQLite Claim Lease?}
+    CheckLease -- Lease Failed --> Yield[Skip; Already in-flight]
+    CheckLease -- Lease Acquired --> DispatchRPC[Invoke Server RPC with original commandId]
     
     DispatchRPC --> CheckResult{RPC Result?}
-    CheckResult -- 200 OK --> CommitSuccess[Set dispatchState = 'confirmed_committed'; Delete / Sync]
-    CheckResult -- Network Error / Timeout --> Backoff[Increment retryCount; Schedule Bounded Backoff]
+    CheckResult -- 200 OK --> CommitSuccess[Set dispatchState = 'confirmed_committed'; Delete Journal]
+    CheckResult -- Network Error / Timeout --> Backoff[Increment retryCount; Set nextAttemptAt with Bounded Jitter]
     CheckResult -- SQLSTATE 42501 --> Disambiguate42501[Disambiguate 42501]
     CheckResult -- Terminal LW... Code --> Terminate[Mark terminal_error; Clean Journal; Surface UI Message]
     
-    Disambiguate42501 --> CheckGrant{Query own child_device_grants?}
+    Disambiguate42501 --> CheckMsg{Error message?}
+    CheckMsg -- Child profile is archived --> ChildArchived[Set recoveryState = 'quarantined_unknown_outcome'; Stop Retry]
+    CheckMsg -- Command caller mismatch --> PauseMismatch[Set recoveryState = 'pending_original_actor'; Halt]
+    CheckMsg -- Paired Child Session --> CheckGrant{Query child_device_grants?}
+    
     CheckGrant -- status = 'revoked' --> DeviceRevoked[Set recoveryState = 'quarantined_unknown_outcome'; Lock Shell]
-    CheckGrant -- Child Archived --> ChildArchived[Set recoveryState = 'quarantined_unknown_outcome'; Stop Retry]
-    CheckGrant -- Network Fail / Active --> Pause42501[Retain in pending_original_actor / active backoff]
+    CheckGrant -- Network Fail / Active --> PauseActive[Retain active; Schedule Backoff]
 ```
 
-#### SQLSTATE `42501` Disambiguation Rules:
-- **Rule 1 — Never Infer Revocation from 42501 Alone:** `42501 (insufficient_privilege)` is returned by PostgreSQL for RLS policy rejections, child archival, caller mismatches, role mismatches, and revoked grants.
-- **Rule 2 — Positive Proof of Device Revocation:** For a paired child device, revocation is confirmed **only** by querying its own grant row:
-  ```sql
-  SELECT id, status, revoked_at FROM public.child_device_grants WHERE auth_user_id = auth.uid();
-  ```
-  If and only if `status = 'revoked' AND revoked_at IS NOT NULL`, the client confirms `DEVICE_REVOKED`.
-- **Rule 3 — Child Archival Detection:** When a child profile is archived, server mutation RPCs return `42501: Child profile is archived`. The dispatcher catches this specific error and transitions the outbox entry to `quarantined_unknown_outcome`.
+#### Safe Resumption Protocol:
+- When User B logs in, User A's pending commands are persisted with `recovery_state = 'pending_original_actor'` and skipped during queue drainage.
+- When User A logs back in, the dispatcher detects `actor_user_id == User_A.id AND recovery_state = 'pending_original_actor'`, resets them to `recovery_state = 'active'` with `next_attempt_at = now()`, and resumes execution.
 
 ---
 
-### 2.4 Bounded Exponential Backoff & Retry Classification
+### 2.5 Authoritative Error Code Classification & SQLSTATE `42501` Disambiguation
+
+The server returns SQLSTATE `42501 (insufficient_privilege)` across diverse authorization conditions. The client **MUST NOT** treat all `42501` errors as device revocation.
+
+#### Verified PostgreSQL Error Codes:
+- **`LW201`:** Insufficient RP balance (terminal business error)
+- **`LW202`:** Daily wheel spin cap reached (terminal business error)
+- **`LW203`:** Insufficient eligible rewards in wheel pool (terminal business error)
+- **`LW204`:** Reward redemption is already in a terminal state / invalid transition
+- **`LW205`:** Reward no longer available
+- **`LW206`:** Celebration wheel is disabled for this family
+
+#### Disambiguation Rules:
+1. **Rule 1 — Never Infer Revocation from 42501 Alone:** A raw `42501` can mean child archival, caller mismatch, role mismatch, or RLS block.
+2. **Rule 2 — Child Archival Detection:** When the error message indicates `Child profile is archived`, the dispatcher transitions the outbox entry to `quarantined_unknown_outcome` and halts retries permanently.
+3. **Rule 3 — Positive Proof of Device Revocation:** For a paired child device, revocation is confirmed **only** by querying its own grant row:
+   ```sql
+   SELECT id, status, revoked_at FROM public.child_device_grants WHERE auth_user_id = auth.uid();
+   ```
+   If and only if `status = 'revoked' AND revoked_at IS NOT NULL`, the client confirms `DEVICE_REVOKED`.
+4. **Rule 4 — Terminal Business Codes:** On `LW201`, `LW202`, `LW203`, `LW204`, `LW205`, `LW206`, the command is permanently rejected. The journal entry is deleted (or stamped `terminal_error`), and a user-friendly error is surfaced.
+
+---
+
+### 2.6 Operation Safety & Scope Partitioning
+
+- **Safe to Dispatch in Slice 4A-1:**
+  - `spinRewardWheel`: Already accepts `actorUserId`, validates caller match, commits `possibly_dispatched` before RPC.
+  - `redeemStoreReward`: Already accepts `actorUserId`, validates caller match, commits `possibly_dispatched` before RPC.
+- **Requires Instrumentation in Slice 4A-2:**
+  - `fulfillRewardRedemption`: Does not currently accept or persist `actorUserId`; does not commit `possibly_dispatched`.
+  - `cancelRewardRedemption`: Does not currently accept or persist `actorUserId`; does not commit `possibly_dispatched`.
+- **Excluded from Slice 4A-1:**
+  - `local_assessment_drafts`: Draft submission requires prior evidence compression, Storage upload (`upsert: false`), and database registration (`register_assessment_evidence`). Attempting automated submission of drafts with unresolved evidence before Slice 4B is strictly prohibited.
+
+---
+
+### 2.7 Bounded Exponential Backoff & Retry Classification
 
 Retries must prevent server thundering herds while remaining responsive after transient drops:
 - **Base delay:** $t_{\text{base}} = 2\text{ seconds}$.
@@ -116,107 +178,101 @@ Retries must prevent server thundering herds while remaining responsive after tr
 
 ---
 
-### 2.5 Assessment Evidence & Storage Reconciliation Dependencies
+## 3. Refined Implementation Slicing
 
-The draft submission flow involves three coordinated steps:
-1. **Local Compression:** Generate stably compressed JPEG ($\le 1.5\text{ MB}$ target) and compute SHA-256 hash. Store hash and compressed path in `local_assessment_drafts`.
-2. **Storage Upload:** Upload bytes via `uploadBinary` with `upsert: false` to `assessment-evidence` bucket at `familyId/childId/clientEvidenceUuid.jpg`.
-   - **HTTP 409 Resolution:** If storage reports object already exists, download the object bytes, verify length and SHA-256 digest against the local record.
-   - If SHA-256 matches: proceed to database registration.
-   - If SHA-256 differs: mark `evidence_conflict`; do not overwrite or replace UUID.
-3. **Database Registration:** Call `register_assessment_evidence` with `p_assessment_id`.
-   - If registration response is lost, query `public.assessment_evidence` for matching `storage_path`.
-   - If row exists: record `serverEvidenceId` without mutation.
-   - If assessment was submitted by another device before registration completed: enter `registration_unresolved` without retrying registration.
-
----
-
-### 2.6 Per-Data-Class Device Containment & Session Lifecycle
-
-A blanket `clearAllTables()` wipe on sign-out is strictly prohibited. The system enforces the lifecycle matrix established in [ADR 0008 §3.4](adr/0008-phase-6-pilot-hardening.md):
-
-| Data Class | Storage Medium | User Sign-Out | Family Switch | Child Mode Exit | Paired Child Revoked | Account Deletion |
-|---|---|---|---|---|---|---|
-| **Parent PIN Hash & Salt** | `local_metadata_entries` | **Retained** | **Retained** | **Purged** | **Retained** | **Purged** |
-| **Active Child Session** | `local_metadata_entries` | **Purged** | **Purged** | **Purged** | **Purged** | **Purged** |
-| **Assessment Drafts** | `local_assessment_drafts` | **Retained** | **Retained** | **Purged** | **Quarantined** | **Purged** |
-| **Pending Reward Commands** | `pending_reward_commands` | **Paused** (`pending_original_actor`) | **Paused** | **Purged** | **Quarantined** | **Purged** |
-| **Evidence Photo Files** | App Documents Dir | **Retained** | **Retained** | **Purged** | **Quarantined** | **Purged** |
-| **Cached Read Models** | SQLite Read Tables | **Purged** | **Purged** | **Purged** | **Purged** | **Purged** |
-
----
-
-### 2.7 Manual Recovery Actions for Quarantined Records
-
-For records in `quarantined_unknown_outcome` or `unknown_legacy`, automated network retry is disabled. The UI must provide three explicit, safe user choices:
-1. **Keep Quarantined:** Leaves the record preserved in local SQLite without attempting network mutations.
-2. **Export Unsynced Work:** Exports the draft text, scores, subject, timestamps, and local photos to an external portable JSON bundle via the platform share sheet.
-3. **Abandon Local Copy:** Discards the local record from SQLite after displaying an explicit cautionary confirmation dialog warning that if a remote server operation occurred, its remote effects remain committed.
-
----
-
-## 3. Minimal Implementation Slice Decomposition
-
-To ensure safe, testable, and non-breaking incremental delivery, Phase 6 Client Recovery is divided into three distinct PR slices:
+To maintain strict architectural boundaries and incremental testability, Slice 4 is decomposed into the following sequence:
 
 ```mermaid
 flowchart LR
-    Slice4A["Slice 4A (PR #22)<br/>Outbox Dispatcher & Recovery Engine<br/>(Application & Data)"] --> Slice4B["Slice 4B (PR #23)<br/>Evidence Resumability & Storage 409<br/>(Storage Reconciliation)"]
-    Slice4B --> Slice4C["Slice 4C (PR #24)<br/>Session Lifecycle & Manual Recovery UI<br/>(Mobile & Design System)"]
+    Slice4A0["Slice 4A-0<br/>Durable Retry & Claim Schema<br/>(Drift v6 Migration)"] --> Slice4A1["Slice 4A-1<br/>Actor-Aware Spin/Redeem Recovery<br/>(Core Dispatcher)"]
+    Slice4A1 --> Slice4A2["Slice 4A-2<br/>Fulfill/Cancel Instrumentation<br/>(Adult Reward Operations)"]
+    Slice4A2 --> Slice4B["Slice 4B<br/>Evidence Resumability & Storage 409<br/>(Storage Reconciliation)"]
+    Slice4B --> Slice4C["Slice 4C<br/>Session Lifecycle & Manual Recovery UI<br/>(Mobile & Design System)"]
 ```
 
 ---
 
-### Slice 4A: Application & Data Actor-Aware Outbox Recovery Dispatcher (Recommended Next PR)
+### Sub-Slice 4A-0: Durable Retry Foundation & Concurrency Claim Schema
+- **Scope:** `packages/learnward_data` and `packages/learnward_application`.
+- **Deliverables:**
+  - Additive Drift schema migration v5 $\to$ v6:
+    - `pending_reward_commands`: add `retry_count`, `next_attempt_at`, `last_error_message`.
+    - `local_assessment_drafts`: add `next_attempt_at`.
+  - Atomic migration unit tests (v1 $\to$ v6, v4 $\to$ v6, v5 $\to$ v6).
+  - Concurrency lease query and claim methods on `PendingRewardCommandStore`.
+- **Target:** Smallest safe prerequisite PR.
 
-- **Target Package:** `packages/learnward_application` and `packages/learnward_data`.
-- **Exact Scope:**
-  1. Define `OutboxRecoveryDispatcher` and `PendingCommandRecoveryService` interfaces.
-  2. Implement queue drainage for `PendingRewardCommands` and `LocalAssessmentDrafts`:
-     - Verification of bound `actorUserId == currentUserId`.
-     - Transition of mismatched commands to `pending_original_actor`.
-     - Pre-dispatch SQLite marker update (`possibly_dispatched`).
-     - Invocation of repository mutation with exact original `commandId`.
-     - Authoritative idempotent outcome handling and journal clearance.
-     - Detection of child archival (`42501`) and transition to `quarantined_unknown_outcome`.
-     - Bounded exponential backoff with jitter and retry count increments.
-  3. Real SQLite test suite with simulated network crashes, actor switches, and response loss.
-- **Known Limitations & Deferrals:**
-  - Zero UI components or Flutter widgets (handled in Slice 4C).
-  - Storage byte download and SHA-256 verification deferred to Slice 4B.
-  - Zero modifications to frozen Supabase migrations.
+---
+
+### Sub-Slice 4A-1: Actor-Aware Recovery Dispatcher for Spin & Redeem (Core Recovery Engine)
+- **Scope:** `packages/learnward_application` and `packages/learnward_data`.
+- **Deliverables:**
+  - `OutboxRecoveryDispatcher` service.
+  - Queue drainage for `spinWheel` and `redeemReward`.
+  - Original actor identity verification (`currentUserId` check).
+  - Persistence of `recovery_state = 'pending_original_actor'` on mismatch.
+  - Re-invoking server mutation RPC with original `commandId`.
+  - Bounded exponential backoff with jitter and persistent `next_attempt_at`.
+  - Archived-child detection (`42501`) and transition to `quarantined_unknown_outcome`.
+  - Positive device revocation query handling for paired children.
+  - Comprehensive unit and integration tests with real SQLite files and simulated network drops.
+- **Explicit Limit:** No draft auto-submission; no fulfill/cancel dispatching; zero UI changes.
+
+---
+
+### Sub-Slice 4A-2: Fulfill & Cancel Reward Instrumentation
+- **Scope:** `packages/learnward_application` and `packages/learnward_data`.
+- **Deliverables:**
+  - Instrument `fulfillRewardRedemption` and `cancelRewardRedemption` with actor identity and pre-dispatch `possibly_dispatched` marker.
+  - Extend `OutboxRecoveryDispatcher` to handle adult fulfillment/cancellation operations.
 
 ---
 
 ### Slice 4B: Evidence Resumability, Storage 409 & Registration Reconciliation
-
-- **Target Package:** `packages/learnward_application`, `packages/learnward_data`, and `apps/mobile`.
-- **Exact Scope:**
-  1. Adaptive image compression service maintaining handwriting legibility.
-  2. Storage upload with `upsert: false`.
-  3. HTTP 409 conflict detection: private byte download, length and SHA-256 verification.
-  4. Database registration reconciliation on lost response without duplicate rows.
-  5. Handling non-draft/submitted assessment transitions (`registration_unresolved`).
+- **Scope:** `packages/learnward_application`, `packages/learnward_data`, and `apps/mobile`.
+- **Deliverables:**
+  - Adaptive JPEG compression preserving handwriting legibility.
+  - Storage upload with `upsert: false`.
+  - HTTP 409 conflict detection: byte download and SHA-256 verification.
+  - Database registration reconciliation without duplicate rows.
+  - Handling `registration_unresolved` when assessment is already submitted.
 
 ---
 
 ### Slice 4C: Session Lifecycle, Device Containment & Manual Recovery UI
-
-- **Target Package:** `apps/mobile` and `packages/learnward_design_system`.
-- **Exact Scope:**
-  1. `AppLifecycleManager` implementing the Per-Data-Class sign-out/switch/revocation matrix.
-  2. Positive revocation check on `child_device_grants`.
-  3. `AppErrorStateWidget`, `AppOfflineBanner`, and `RetryActionCard`.
-  4. Manual recovery dialogs: Keep quarantined, Export unsynced work, Abandon local copy.
+- **Scope:** `apps/mobile` and `packages/learnward_design_system`.
+- **Deliverables:**
+  - `AppLifecycleManager` implementing Per-Data-Class sign-out/switch/revocation matrix.
+  - `AppErrorStateWidget`, `AppOfflineBanner`, and `RetryActionCard`.
+  - Manual recovery dialogs: Keep quarantined, Export unsynced work, Abandon local copy.
 
 ---
 
-## 4. Acceptance Criteria & Test Verification Plan for Slice 4A
+## 4. Acceptance Criteria & Test Verification Plan for Slice 4A-1
 
-Before Slice 4A can be accepted:
-1. **Actor Mismatch Test:** Command queued by User A remains untouched and paused in `pending_original_actor` when User B runs the dispatcher.
-2. **Crash Before Send Test:** Pre-dispatch SQLite marker persists across forced process death; restart reuses identical command ID.
-3. **Response Loss Test:** Server commits command; client experiences simulated network timeout; dispatcher retries with identical command ID; server returns committed receipt; journal clears without double debit/spin.
-4. **Archived Child Test:** Mutation on archived child receives `42501`; command transitions to `quarantined_unknown_outcome`; automated retry ceases permanently.
-5. **Backoff Schedule Test:** Verifies backoff interval doubles with jitter and respects 60-second ceiling.
-6. **Zero Churn:** Frozen migrations, ADR 0008, and Phase 0–5 contracts remain unchanged.
+Before Slice 4A-1 can be accepted:
+
+1. **Different Authenticated Actors:**
+   - Command queued by User A remains untouched and persisted as `pending_original_actor` when User B runs the dispatcher.
+   - When User A signs in, the command transitions back to `active` and executes cleanly.
+2. **Missing Original Actor:**
+   - Migrated legacy command with `actorUserId == null` is stamped `quarantined_unknown_outcome` and is never automatically replayed.
+3. **App Crash Between Local Commit and Request:**
+   - Pre-dispatch marker (`possibly_dispatched`) is written to SQLite before RPC dispatch.
+   - Forced process death before network call leaves command intact; restart reuses identical `commandId`.
+4. **Response Lost After Server Commit:**
+   - Server commits RPC and records `command_receipts`, but client times out before receiving HTTP response.
+   - Dispatcher retries with identical `commandId`.
+   - Server returns existing committed outcome; client marks `confirmed_committed` and deletes journal row with zero double debit/spin.
+5. **Concurrent Foreground and Background Processing:**
+   - Dispatcher acquiring claim lease prevents duplicate foreground execution.
+   - User attempting foreground operation while background recovery is in-flight does not duplicate network call or corrupt journal.
+6. **Archived Children:**
+   - Mutation RPC on archived child profile receives `42501 (Child profile is archived)`.
+   - Command transitions to `quarantined_unknown_outcome`; automated retry ceases permanently.
+7. **Permission Errors & Revoked Devices:**
+   - For paired child devices receiving `42501`, dispatcher executes dedicated `child_device_grants` query.
+   - Revocation confirmed only upon positive proof (`status = 'revoked' AND revoked_at IS NOT NULL`).
+8. **Restart-Safe Backoff & Zero Economic Duplication:**
+   - Bounded exponential backoff persists `next_attempt_at` and `retry_count` in SQLite across app restarts.
+   - Ledger parity and daily cap invariance verified across 100% of test scenarios.

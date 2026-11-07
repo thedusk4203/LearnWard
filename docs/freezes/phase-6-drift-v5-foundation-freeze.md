@@ -29,9 +29,9 @@ Final verified test totals from post-merge main CI run [`42337689222`](https://g
 | - *learnward_design_system* | 2 | 2 | **PASS** | — |
 | - *apps/mobile* widget & flow tests | 57 | 57 | **PASS** | — |
 | - *Drift build_runner diff assertion* | Clean (0 diff) | Clean | **PASS** | — |
-| **Supabase migrations & RLS security** | 659 pgTAP + 14 scripts | All | **PASS** | 2m 31s |
-| - *pgTAP Test Files* (9 files) | 659 | 659 | **PASS** | — |
-| - *Concurrency & Integration Scripts* | 14 | 14 | **PASS** | — |
+| **Supabase migrations & RLS security** | 659 pgTAP + 19 scripts | All | **PASS** | 2m 31s |
+| - *pgTAP Test Files* (11 files) | 659 | 659 | **PASS** | — |
+| - *Concurrency & Integration Scripts* | 19 | 19 | **PASS** | — |
 | **iOS simulator compile** | Flutter build ios --simulator | Success | **PASS** | 2m 29s |
 | **Android debug build** | Gradle assembleDebug | Success | **PASS** | 4m 36s |
 
@@ -48,6 +48,7 @@ Final verified test totals from post-merge main CI run [`42337689222`](https://g
    - `schema_version`: `INTEGER NOT NULL DEFAULT 1`.
    - `recovery_state`: `TEXT NOT NULL DEFAULT 'active'` — Lifecycle recovery state (`active`, `pending_original_actor`, `quarantined_unknown_outcome`, `terminal_error`).
    - `dispatch_state`: `TEXT NOT NULL DEFAULT 'unknown_legacy'` — Network dispatch marker (`unknown_legacy`, `never_dispatched`, `possibly_dispatched`, `confirmed_committed`).
+   - *(Note: Drift v5 does not currently persist `retry_count`, `next_attempt_at`, or `last_error` on reward commands; see Section 4).*
 
 2. **`local_assessment_drafts` Table (v5 Additions):**
    - Preserves existing v4 nullable columns (`create_command_id`, `submit_command_id`, `evidence_id`, `server_assessment_id`, `local_photo_path`).
@@ -60,6 +61,7 @@ Final verified test totals from post-merge main CI run [`42337689222`](https://g
    - `last_error_message`: `TEXT NULL` — Sanitized, user-facing error message.
    - `actor_user_id`: `TEXT NULL` — Bound authenticated actor who initiated draft creation/submission.
    - `actor_role`: `TEXT NULL` — Bound actor role.
+   - *(Note: `local_assessment_drafts` does not contain a dedicated `recovery_state` column; see Section 4).*
 
 ---
 
@@ -67,7 +69,7 @@ Final verified test totals from post-merge main CI run [`42337689222`](https://g
 
 1. **Atomic SQLite Transaction Wrapping:**
    - Every schema change and data backfill statement executes within an explicit SQLite `transaction()` with foreign keys safely toggled (`PRAGMA foreign_keys = OFF` during structural modification, restored `ON` in a strict `finally` block).
-   - If an upgrade step is interrupted midway (power failure, process crash, exception), SQLite rolls back the transaction completely, leaving user database at its prior `user_version` with zero orphaned columns and zero corrupted records.
+   - If an upgrade step is interrupted midway (simulated via an injected Dart exception in test `CrashingAppDatabase`), SQLite rolls back the transaction completely, leaving user database at its prior `user_version` with zero orphaned columns and zero corrupted records. (Note: this verifies transaction rollback semantics; it is not an OS power-loss or hardware-fault test).
    - Reopening the database cleanly retries the migration from the prior version to v5.
 
 2. **Supported Historical Upgrade Paths:**
@@ -112,7 +114,8 @@ Final verified test totals from post-merge main CI run [`42337689222`](https://g
      `command.actorUserId != null && currentUserId != null && command.actorUserId == currentUserId`
    - Commands with missing actor identity (`actorUserId == null`) or mismatched actor identity are strictly blocked from automated execution:
      - New command execution fails closed with `StateError` before any network or SQLite journaling.
-     - Existing commands pause in `recoveryState = 'pending_original_actor'` without mutating remote state or regenerating command IDs.
+     - Existing commands fail closed in memory (`canAutoReplay == false`), throwing `StateError` to prevent automated replay under another actor. (Note: actively mutating and persisting `recoveryState = 'pending_original_actor'` to the SQLite row upon detecting a mismatch is part of the Slice 4A outbox dispatcher scope).
+     - Furthermore, fulfillment and cancellation use cases (`fulfillRewardRedemption`, `cancelRewardRedemption`) have not yet been instrumented with actor identity or `possibly_dispatched` markers (scheduled for Slice 4A-2).
 
 ---
 
@@ -132,3 +135,13 @@ The following components are **explicitly deferred** to subsequent Phase 6 clien
 - **Accepted ADR Compliance:** Complies with [ADR 0008](../adr/0008-phase-6-pilot-hardening.md) Decisions 1 and 2.
 - **Economic Invariance:** Zero duplicate ledger debits, zero duplicate wheel spins, zero unverified learning event side effects.
 - **Clean Toolchain:** Drift `build_runner` outputs 0 diff against checked-in code; `flutter analyze` reports 0 warnings/errors.
+
+---
+
+## 4. Traceable Clarifications & Implementation Notes (Post-Audit Errata)
+
+1. **Test Suite Inventory:** The Supabase security job executes 11 pgTAP test files (659 total assertions across `supabase/tests/database/01_auth_simulation_test.sql` through `11_phase6_family_data_export_test.sql`) and 19 integration, concurrency, parity, and security scripts.
+2. **Actor Mismatch Persistence vs. In-Memory Rejection:** PR #21 hardened `spinRewardWheel` and `redeemStoreReward` to fail closed in memory against mismatched actors by throwing a descriptive `StateError`. Mutating the persistent SQLite row to `recoveryState = 'pending_original_actor'` upon encountering a mismatch is assigned to the Slice 4A outbox dispatcher.
+3. **Fulfill & Cancel Instrumentation Scope:** Full actor binding and pre-dispatch markers were verified for `spinRewardWheel` and `redeemStoreReward`. `fulfillRewardRedemption` and `cancelRewardRedemption` do not yet accept or persist actor identity or pre-dispatch markers; they are scheduled for instrumentation in Slice 4A-2.
+4. **Table Schema Asymmetry:** In Drift schema v5, `pending_reward_commands` includes `recovery_state` and `dispatch_state` (omitting `retry_count`, `next_attempt_at`, and `last_error`), while `local_assessment_drafts` includes `submission_status`, `retry_count`, `dispatch_state`, and `last_error_message` (omitting `recovery_state` and `next_attempt_at`).
+5. **Migration Interruption Validation:** Interrupted upgrade recovery was validated by injecting Dart exceptions midway through migrator transactions (`CrashingAppDatabase`) to verify SQLite transaction rollback, not through operating system power disruption.
