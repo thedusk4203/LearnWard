@@ -876,6 +876,38 @@ class AppDatabase extends _$AppDatabase
   }
 
   @override
+  Future<bool> markPossiblyDispatched({
+    required String commandId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime now,
+  }) async {
+    final effectiveNow = now.toUtc();
+    final rowsAffected = await customUpdate(
+      '''
+      UPDATE pending_reward_commands
+      SET dispatch_state = 'possibly_dispatched'
+      WHERE command_id = ?
+        AND lease_token = ?
+        AND lease_expires_at > ?
+        AND actor_user_id = ?
+        AND recovery_state = 'active'
+        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched');
+      ''',
+      variables: [
+        Variable<String>(commandId),
+        Variable<String>(leaseToken),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(authenticatedActorId),
+      ],
+      updates: {pendingRewardCommands},
+    );
+
+    return rowsAffected == 1;
+  }
+
+  @override
   Future<bool> completeCommand({
     required String commandId,
     required String leaseToken,
@@ -1008,6 +1040,7 @@ class AppDatabase extends _$AppDatabase
     required String actorUserId,
     required int limit,
     DateTime? now,
+    String? familyId,
   }) async {
     final effectiveNow = (now ?? DateTime.now()).toUtc();
 
@@ -1015,6 +1048,7 @@ class AppDatabase extends _$AppDatabase
       '''
       SELECT * FROM pending_reward_commands
       WHERE actor_user_id = ?
+        ${familyId != null ? 'AND family_id = ?' : ''}
         AND recovery_state = 'active'
         AND operation IN ('spin_wheel', 'redeem_reward')
         AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
@@ -1029,6 +1063,7 @@ class AppDatabase extends _$AppDatabase
       ''',
       variables: [
         Variable<String>(actorUserId),
+        if (familyId != null) Variable<String>(familyId),
         Variable<DateTime>(effectiveNow),
         Variable<DateTime>(effectiveNow),
         Variable<int>(limit),

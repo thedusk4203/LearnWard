@@ -930,6 +930,117 @@ void main() {
           expect(token, isNull);
         },
       );
+
+      test(
+        'markPossiblyDispatched commits pre-dispatch marker under active lease and rejects wrong token, expired lease, or wrong actor',
+        () async {
+          final cmd = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-mark-dispatch-1',
+            familyId: 'fam-1',
+            childId: 'ch-1',
+            actorUserId: 'user-A',
+            createdAt: t0,
+            dispatchState: CommandDispatchState.neverDispatched,
+          );
+          await database.savePendingCommand(cmd, now: t0);
+
+          final token = (await database.acquireClaim(
+            commandId: 'cmd-mark-dispatch-1',
+            actorUserId: 'user-A',
+            leaseDuration: const Duration(seconds: 30),
+            now: t0,
+          ))!;
+
+          // Rejects wrong token
+          final wrongTokenResult = await database2.markPossiblyDispatched(
+            commandId: 'cmd-mark-dispatch-1',
+            leaseToken: 'wrong-token',
+            authenticatedActorId: 'user-A',
+            now: t0.add(const Duration(seconds: 5)),
+          );
+          expect(wrongTokenResult, isFalse);
+
+          // Rejects wrong actor
+          final wrongActorResult = await database2.markPossiblyDispatched(
+            commandId: 'cmd-mark-dispatch-1',
+            leaseToken: token,
+            authenticatedActorId: 'user-B',
+            now: t0.add(const Duration(seconds: 5)),
+          );
+          expect(wrongActorResult, isFalse);
+
+          // Rejects expired lease
+          final expiredResult = await database2.markPossiblyDispatched(
+            commandId: 'cmd-mark-dispatch-1',
+            leaseToken: token,
+            authenticatedActorId: 'user-A',
+            now: t0.add(const Duration(seconds: 35)),
+          );
+          expect(expiredResult, isFalse);
+
+          // Valid call succeeds
+          final successResult = await database2.markPossiblyDispatched(
+            commandId: 'cmd-mark-dispatch-1',
+            leaseToken: token,
+            authenticatedActorId: 'user-A',
+            now: t0.add(const Duration(seconds: 10)),
+          );
+          expect(successResult, isTrue);
+
+          // Verify row is now possibly_dispatched while retaining active lease
+          final persisted = await database.getPendingCommand('cmd-mark-dispatch-1');
+          expect(persisted!.dispatchState, CommandDispatchState.possiblyDispatched);
+          expect(persisted.leaseToken, token);
+          expect(persisted.leaseExpiresAt, isNotNull);
+        },
+      );
+
+      test(
+        'listClaimableCommands filters by familyId preventing cross-family starvation',
+        () async {
+          final cmdFam1 = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-fam-1',
+            familyId: 'fam-1',
+            childId: 'ch-1',
+            actorUserId: 'user-shared',
+            createdAt: t0,
+            dispatchState: CommandDispatchState.neverDispatched,
+          );
+          final cmdFam2 = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-fam-2',
+            familyId: 'fam-2',
+            childId: 'ch-2',
+            actorUserId: 'user-shared',
+            createdAt: t0.subtract(const Duration(minutes: 5)), // Older row
+            dispatchState: CommandDispatchState.neverDispatched,
+          );
+          await database.savePendingCommand(cmdFam2, now: t0);
+          await database.savePendingCommand(cmdFam1, now: t0);
+
+          // Querying for fam-1 returns only fam-1 row despite fam-2 row being older
+          final fam1List = await database.listClaimableCommands(
+            actorUserId: 'user-shared',
+            limit: 10,
+            familyId: 'fam-1',
+            now: t0,
+          );
+          expect(fam1List.length, 1);
+          expect(fam1List.first.commandId, 'cmd-fam-1');
+
+          // Querying for fam-2 returns only fam-2 row
+          final fam2List = await database.listClaimableCommands(
+            actorUserId: 'user-shared',
+            limit: 10,
+            familyId: 'fam-2',
+            now: t0,
+          );
+          expect(fam2List.length, 1);
+          expect(fam2List.first.commandId, 'cmd-fam-2');
+        },
+      );
     },
   );
 }

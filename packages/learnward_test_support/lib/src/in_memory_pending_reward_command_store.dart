@@ -299,6 +299,38 @@ final class InMemoryPendingRewardCommandStore
   }
 
   @override
+  Future<bool> markPossiblyDispatched({
+    required String commandId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime now,
+  }) async {
+    final effectiveNow = now.toUtc();
+    final cmd = _commands[commandId];
+    if (cmd == null) return false;
+    if (cmd.leaseToken != leaseToken) return false;
+    if (cmd.leaseExpiresAt == null ||
+        !cmd.leaseExpiresAt!.isAfter(effectiveNow)) {
+      return false;
+    }
+    if (cmd.actorUserId != authenticatedActorId) return false;
+    if (cmd.recoveryState != CommandRecoveryState.active) return false;
+    if (cmd.operation != RewardCommandOperation.spinWheel &&
+        cmd.operation != RewardCommandOperation.redeemReward) {
+      return false;
+    }
+    if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
+        cmd.dispatchState != CommandDispatchState.possiblyDispatched) {
+      return false;
+    }
+
+    _commands[commandId] = cmd.copyWith(
+      dispatchState: CommandDispatchState.possiblyDispatched,
+    );
+    return true;
+  }
+
+  @override
   Future<bool> completeCommand({
     required String commandId,
     required String leaseToken,
@@ -411,9 +443,11 @@ final class InMemoryPendingRewardCommandStore
     required String actorUserId,
     required int limit,
     DateTime? now,
+    String? familyId,
   }) async {
     final effectiveNow = (now ?? DateTime.now()).toUtc();
     final list = _commands.values.where((cmd) {
+      if (familyId != null && cmd.familyId != familyId) return false;
       if (cmd.actorUserId != actorUserId) return false;
       if (cmd.recoveryState != CommandRecoveryState.active) return false;
       if (cmd.operation != RewardCommandOperation.spinWheel &&
