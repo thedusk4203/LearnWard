@@ -41,3 +41,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+hooks:
+  user_defines:
+    sqlite3:
+      source:
+        linux: system
+        default: sqlite3

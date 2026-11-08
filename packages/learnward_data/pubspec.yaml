@@ -23,3 +23,10 @@ dev_dependencies:
     path: ../learnward_test_support
   sqlite3: ^3.8.0
   test: 1.31.1
+
+hooks:
+  user_defines:
+    sqlite3:
+      source:
+        linux: system
+        default: sqlite3
