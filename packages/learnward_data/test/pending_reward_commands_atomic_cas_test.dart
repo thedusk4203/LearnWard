@@ -1126,6 +1126,371 @@ void main() {
       // Authoritative remote RPC was dispatched exactly once
       expect(wheelRepo.spinCallCount, equals(1));
     });
+
+    test('R24-5-01: pre-claim active-family mismatch does NOT release or mutate unexpired lease', () async {
+      final familyId = FamilyId('fam-lease-protect-1');
+      final otherFamilyId = FamilyId('fam-other-2');
+      final childId = ChildId('child-lease-1');
+      const cmdId = 'cmd-lease-protect-1';
+
+      final sampleRewards = [
+        Reward(
+          id: RewardId('rew-1'),
+          familyId: familyId,
+          title: 'Prize 1',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.common,
+          iconKey: 'star',
+          createdAt: t0,
+          updatedAt: t0,
+        ),
+        Reward(
+          id: RewardId('rew-2'),
+          familyId: familyId,
+          title: 'Prize 2',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.special,
+          iconKey: 'star',
+          createdAt: t0,
+          updatedAt: t0,
+        ),
+        Reward(
+          id: RewardId('rew-3'),
+          familyId: familyId,
+          title: 'Prize 3',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.rare,
+          iconKey: 'star',
+          createdAt: t0,
+          updatedAt: t0,
+        ),
+      ];
+
+      final wheelRepo = FakeWheelRepository(initialRewards: sampleRewards);
+      final authPortB = FakeAuthSessionPort(
+        activeUserId: 'worker-B',
+        sessionGeneration: 'gen-B',
+      );
+
+      // Seed initial command in SQLite
+      final initialCmd = PendingRewardCommand(
+        operation: RewardCommandOperation.spinWheel,
+        commandId: cmdId,
+        familyId: familyId.value,
+        childId: childId.value,
+        actorUserId: 'worker-A',
+        createdAt: t0,
+        recoveryState: CommandRecoveryState.active,
+        dispatchState: CommandDispatchState.neverDispatched,
+      );
+      await database.savePendingCommand(initialCmd, now: t0);
+
+      // Worker A acquires an unexpired lease via database (Connection 1)
+      final leaseTokenA = await database.acquireClaim(
+        commandId: cmdId,
+        actorUserId: 'worker-A',
+        leaseDuration: const Duration(seconds: 30),
+        now: t0,
+      );
+      expect(leaseTokenA, isNotNull);
+
+      // Worker B uses database2 (Connection 2) with active family set to otherFamilyId
+      final coordB = RecoveryCoordinator(
+        commandStore: database2,
+        wheelRepository: wheelRepo,
+        authSessionPort: authPortB,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () => otherFamilyId.value,
+      );
+
+      // Worker B attempts to execute referencing the same command ID
+      final resultB = await coordB.execute(
+        operation: RewardCommandOperation.spinWheel,
+        familyId: familyId.value,
+        childId: childId.value,
+        requestedCommandId: cmdId,
+      );
+
+      // Assert B gets family mismatch, 0 RPC
+      expect(resultB, isA<CommandFamilyMismatchResult>());
+      expect(wheelRepo.spinCallCount, 0);
+
+      // Assert the lease in SQLite is completely untouched:
+      // identical lease token and expiry, unchanged retry count, no premature reclamation
+      final row = await database.getPendingCommand(cmdId);
+      expect(row, isNotNull);
+      expect(row!.leaseToken, equals(leaseTokenA));
+      expect(row.leaseExpiresAt, equals(t0.add(const Duration(seconds: 30))));
+      expect(row.retryCount, equals(0));
+      expect(row.lastErrorMessage, isNull);
+
+      // Premature reclamation is blocked: Worker B cannot claim the unexpired lease
+      final prematureClaim = await database2.acquireClaim(
+        commandId: cmdId,
+        actorUserId: 'worker-B',
+        leaseDuration: const Duration(seconds: 30),
+        now: t0,
+      );
+      expect(prematureClaim, isNull);
+    });
+
+    test('R24-5-02: two coordinator executions for the same command ID allow at most one mutating RPC (Spin)', () async {
+      final familyId = FamilyId('fam-r24-5-02-spin');
+      final childId = ChildId('child-r24-5-02-spin');
+      const cmdId = 'cmd-spin-concurrent-claim';
+
+      final sampleRewards = [
+        Reward(
+          id: RewardId('rew-1'),
+          familyId: familyId,
+          title: 'Prize 1',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.common,
+          iconKey: 'star',
+          createdAt: t0,
+          updatedAt: t0,
+        ),
+        Reward(
+          id: RewardId('rew-2'),
+          familyId: familyId,
+          title: 'Prize 2',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.special,
+          iconKey: 'star',
+          createdAt: t0,
+          updatedAt: t0,
+        ),
+        Reward(
+          id: RewardId('rew-3'),
+          familyId: familyId,
+          title: 'Prize 3',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.rare,
+          iconKey: 'star',
+          createdAt: t0,
+          updatedAt: t0,
+        ),
+      ];
+
+      final wheelRepo = _DelayedFakeWheelRepository(
+        initialRewards: sampleRewards,
+        delay: const Duration(milliseconds: 50),
+      );
+      final authPort = FakeAuthSessionPort(
+        activeUserId: 'actor-claim',
+        sessionGeneration: 'gen-claim',
+      );
+
+      // Seed the command in SQLite
+      await database.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: cmdId,
+          familyId: familyId.value,
+          childId: childId.value,
+          actorUserId: 'actor-claim',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        ),
+        now: t0,
+      );
+
+      final coord1 = RecoveryCoordinator(
+        commandStore: database, // Connection 1
+        wheelRepository: wheelRepo,
+        authSessionPort: authPort,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () => familyId.value,
+      );
+      final coord2 = RecoveryCoordinator(
+        commandStore: database2, // Connection 2
+        wheelRepository: wheelRepo,
+        authSessionPort: authPort,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () => familyId.value,
+      );
+
+      // Concurrently execute with the same command ID
+      final results = await Future.wait([
+        coord1.execute(
+          operation: RewardCommandOperation.spinWheel,
+          familyId: familyId.value,
+          childId: childId.value,
+          requestedCommandId: cmdId,
+        ),
+        coord2.execute(
+          operation: RewardCommandOperation.spinWheel,
+          familyId: familyId.value,
+          childId: childId.value,
+          requestedCommandId: cmdId,
+        ),
+      ]);
+
+      final committed = results.whereType<CommandCommittedResult>().toList();
+      final inFlight = results
+          .whereType<CommandAlreadyInFlightResult>()
+          .toList();
+
+      expect(committed.length, equals(1));
+      expect(inFlight.length, equals(1));
+      expect(wheelRepo.spinCallCount, equals(1));
+    });
+
+    test('R24-5-02: two coordinator executions for the same command ID allow at most one mutating RPC (Redeem)', () async {
+      final familyId = FamilyId('fam-r24-5-02-redeem');
+      final childId = ChildId('child-r24-5-02-redeem');
+      final rewardId = RewardId('rew-redeem-1');
+      const cmdId = 'cmd-redeem-concurrent-claim';
+
+      final rewardRepo = _DelayedMockServerRewardRepository(
+        delay: const Duration(milliseconds: 50),
+      );
+      rewardRepo.childBalances[childId.value] = 5000;
+
+      final authPort = FakeAuthSessionPort(
+        activeUserId: 'actor-redeem',
+        sessionGeneration: 'gen-redeem',
+      );
+
+      // Seed the command in SQLite
+      await database.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.redeemReward,
+          commandId: cmdId,
+          familyId: familyId.value,
+          childId: childId.value,
+          rewardId: rewardId.value,
+          actorUserId: 'actor-redeem',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        ),
+        now: t0,
+      );
+
+      final coord1 = RecoveryCoordinator(
+        commandStore: database, // Connection 1
+        rewardRepository: rewardRepo,
+        authSessionPort: authPort,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () => familyId.value,
+      );
+      final coord2 = RecoveryCoordinator(
+        commandStore: database2, // Connection 2
+        rewardRepository: rewardRepo,
+        authSessionPort: authPort,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () => familyId.value,
+      );
+
+      // Concurrently execute with the same command ID
+      final results = await Future.wait([
+        coord1.execute(
+          operation: RewardCommandOperation.redeemReward,
+          familyId: familyId.value,
+          childId: childId.value,
+          rewardId: rewardId.value,
+          requestedCommandId: cmdId,
+        ),
+        coord2.execute(
+          operation: RewardCommandOperation.redeemReward,
+          familyId: familyId.value,
+          childId: childId.value,
+          rewardId: rewardId.value,
+          requestedCommandId: cmdId,
+        ),
+      ]);
+
+      final committed = results.whereType<CommandCommittedResult>().toList();
+      final inFlight = results
+          .whereType<CommandAlreadyInFlightResult>()
+          .toList();
+
+      expect(committed.length, equals(1));
+      expect(inFlight.length, equals(1));
+      expect(rewardRepo.debitCount, equals(1));
+    });
+
+    group('R24-5-03: Fresh-command unresolved-state matrix (recoveryState × dispatchState)', () {
+      for (final recovery in CommandRecoveryState.values) {
+        for (final dispatch in CommandDispatchState.values) {
+          test('registerFreshCommand predicate for $recovery × $dispatch in SQLite', () async {
+            final cmdId = 'cmd-matrix-${recovery.name}-${dispatch.name}';
+            final existing = PendingRewardCommand(
+              operation: RewardCommandOperation.spinWheel,
+              commandId: cmdId,
+              familyId: 'fam-matrix',
+              childId: 'child-matrix',
+              actorUserId: 'actor-matrix',
+              createdAt: t0,
+              recoveryState: recovery,
+              dispatchState: dispatch,
+            );
+            await database.savePendingCommand(existing, now: t0);
+
+            final freshCandidate = PendingRewardCommand(
+              operation: RewardCommandOperation.spinWheel,
+              commandId: 'cmd-fresh-candidate',
+              familyId: 'fam-matrix',
+              childId: 'child-matrix',
+              actorUserId: 'actor-matrix',
+              createdAt: t0,
+              recoveryState: CommandRecoveryState.active,
+              dispatchState: CommandDispatchState.neverDispatched,
+            );
+
+            final result = await database.registerFreshCommand(
+              command: freshCandidate,
+              now: t0,
+            );
+
+            final expectedUnresolved = isCommandUnresolved(
+              recoveryState: recovery,
+              dispatchState: dispatch,
+            );
+
+            if (expectedUnresolved) {
+              expect(
+                result,
+                isA<PreexistingCommandFound>(),
+                reason:
+                    '$recovery × $dispatch is unresolved and MUST block duplicate fresh commands',
+              );
+            } else {
+              expect(
+                result,
+                isA<FreshCommandRegistered>(),
+                reason:
+                    '$recovery × $dispatch is confirmed terminal and MUST allow fresh user intent',
+              );
+            }
+
+            // Cleanup row for next combination
+            await database.customStatement(
+              'DELETE FROM pending_reward_commands WHERE command_id = ?',
+              [cmdId],
+            );
+            await database.customStatement(
+              'DELETE FROM pending_reward_commands WHERE command_id = ?',
+              ['cmd-fresh-candidate'],
+            );
+          });
+        }
+      }
+    });
   });
 }
 
@@ -1147,6 +1512,35 @@ final class _DelayedFakeWheelRepository implements WheelRepository {
   }) async {
     await Future<void>.delayed(delay);
     return _inner.spinRewardWheel(commandId: commandId, childId: childId);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      _inner.noSuchMethod(invocation);
+}
+
+final class _DelayedMockServerRewardRepository implements RewardRepository {
+  _DelayedMockServerRewardRepository({required this.delay})
+    : _inner = MockServerRewardRepository();
+
+  final MockServerRewardRepository _inner;
+  final Duration delay;
+
+  int get debitCount => _inner.debitCount;
+  Map<String, int> get childBalances => _inner.childBalances;
+
+  @override
+  Future<RewardRedemption> redeemStoreReward({
+    required String commandId,
+    required RewardId rewardId,
+    required ChildId childId,
+  }) async {
+    await Future<void>.delayed(delay);
+    return _inner.redeemStoreReward(
+      commandId: commandId,
+      rewardId: rewardId,
+      childId: childId,
+    );
   }
 
   @override

@@ -508,17 +508,16 @@ class AppDatabase extends _$AppDatabase
 
           final candidates = await query.get();
           for (final candidate in candidates) {
-            final isUnresolved =
-                candidate.recoveryState ==
-                    CommandRecoveryState.active.wireValue ||
-                candidate.dispatchState ==
-                    CommandDispatchState.possiblyDispatched.wireValue ||
-                candidate.dispatchState ==
-                    CommandDispatchState.neverDispatched.wireValue ||
-                candidate.dispatchState ==
-                    CommandDispatchState.confirmedCommitted.wireValue;
-
-            if (isUnresolved) {
+            final recState = CommandRecoveryState.fromString(
+              candidate.recoveryState,
+            );
+            final dispState = CommandDispatchState.fromString(
+              candidate.dispatchState,
+            );
+            if (isCommandUnresolved(
+              recoveryState: recState,
+              dispatchState: dispState,
+            )) {
               return PreexistingCommandFound(
                 _mapRowToPendingCommand(candidate),
               );

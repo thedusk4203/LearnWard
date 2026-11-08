@@ -195,13 +195,7 @@ final class InMemoryPendingRewardCommandStore
               existing.rewardId == command.rewardId);
 
       if (matchesOperation) {
-        final isUnresolved =
-            existing.recoveryState == CommandRecoveryState.active ||
-            existing.dispatchState == CommandDispatchState.possiblyDispatched ||
-            existing.dispatchState == CommandDispatchState.neverDispatched ||
-            existing.dispatchState == CommandDispatchState.confirmedCommitted;
-
-        if (isUnresolved) {
+        if (existing.isUnresolved) {
           return PreexistingCommandFound(existing);
         }
       }

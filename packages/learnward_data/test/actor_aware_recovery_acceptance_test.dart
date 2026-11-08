@@ -525,14 +525,24 @@ void main() {
       );
 
       // Command remains healthy in SQLite journal (recoveryState remains active, not quarantined!)
+      // R24-5-01: Pre-claim family mismatch must NOT release or mutate another execution's lease!
       final preserved = await database.getPendingCommand('cmd-a08-fam1');
       expect(
         preserved!.recoveryState,
         CommandRecoveryState.active,
         reason: 'Family mismatch must never quarantine valid journal commands',
       );
+      expect(
+        preserved.leaseToken,
+        equals(claimToken),
+        reason:
+            'Preflight mismatch must NOT release an unexpired lease (R24-5-01)',
+      );
+      expect(preserved.retryCount, equals(0));
 
-      // Switch back to family1: command can now be executed normally without being lost or corrupted
+      // Switch back to family1 after the lease duration expires:
+      // Independent coordinator execution acquires claim and commits normally.
+      clock.advance(const Duration(seconds: 31));
       currentActiveFamily = family1;
       final successResult = await coordinator2.execute(
         operation: RewardCommandOperation.spinWheel,

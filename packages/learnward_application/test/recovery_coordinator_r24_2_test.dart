@@ -4,8 +4,12 @@ import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:test/test.dart';
 
 final class _TestClock implements Clock {
-  const _TestClock(this.nowUtc);
-  final DateTime nowUtc;
+  _TestClock(this.nowUtc);
+  DateTime nowUtc;
+
+  void advance(Duration d) {
+    nowUtc = nowUtc.add(d);
+  }
 
   @override
   DateTime now() => nowUtc;
@@ -269,15 +273,26 @@ void main() {
       expect(result, isA<CommandAlreadyInFlightResult>());
       expect(wheelRepo.spinCallCount, 0);
 
-      // But if the caller explicitly supplies its owned matching unexpired lease token, it succeeds
-      final ownedResult = await coordinator.execute(
+      // Second execution cannot adopt preexisting lease and cannot bypass via caller token (R24-5-02)
+      final secondResult = await coordinator.execute(
         operation: RewardCommandOperation.spinWheel,
         familyId: familyId.value,
         childId: childId.value,
         requestedCommandId: 'cmd-preleased',
-        callerOwnedLeaseToken: 'preexisting-token',
       );
-      expect(ownedResult, isA<CommandCommittedResult>());
+      expect(secondResult, isA<CommandAlreadyInFlightResult>());
+      expect(wheelRepo.spinCallCount, 0);
+
+      // After the preexisting lease expires, independent coordinator execution
+      // acquires its own exclusive claim through the approved execution path and commits.
+      clock.advance(const Duration(seconds: 31));
+      final recoveredResult = await coordinator.execute(
+        operation: RewardCommandOperation.spinWheel,
+        familyId: familyId.value,
+        childId: childId.value,
+        requestedCommandId: 'cmd-preleased',
+      );
+      expect(recoveredResult, isA<CommandCommittedResult>());
       expect(wheelRepo.spinCallCount, 1);
     });
 

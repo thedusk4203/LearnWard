@@ -76,6 +76,13 @@ final class PendingRewardCommand {
       actorUserId != null &&
       actorUserId!.isNotEmpty;
 
+  /// Whether this command represents an unresolved operation that must block
+  /// fresh command creation for the same logical target (R24-5-03).
+  bool get isUnresolved => isCommandUnresolved(
+    recoveryState: recoveryState,
+    dispatchState: dispatchState,
+  );
+
   PendingRewardCommand copyWith({
     Object? id = _sentinel,
     RewardCommandOperation? operation,
@@ -152,6 +159,44 @@ sealed class RegisterFreshCommandResult {
   const RegisterFreshCommandResult();
 }
 
+/// Checks whether a command's state combination represents an unresolved operation
+/// that must block fresh command creation for the same logical target (R24-5-03).
+///
+/// Matrix rules:
+/// - Confirmed terminal outcomes do not block legitimate fresh user intent indefinitely.
+/// - Quarantined or unknown outcomes are not bypassed with a new UUID before required reconciliation.
+/// - Existing active/possibly-dispatched commands continue to block duplicate logical operations.
+bool isCommandUnresolved({
+  required CommandRecoveryState recoveryState,
+  required CommandDispatchState dispatchState,
+}) {
+  // Confirmed terminal outcomes do not block legitimate fresh user intent indefinitely.
+  if (recoveryState == CommandRecoveryState.terminalError) {
+    return false;
+  }
+  if (dispatchState == CommandDispatchState.confirmedCommitted) {
+    return false;
+  }
+
+  // Quarantined or unknown outcomes are not bypassed with a new UUID before required reconciliation.
+  if (recoveryState == CommandRecoveryState.quarantinedUnknownOutcome ||
+      dispatchState == CommandDispatchState.unknownLegacy) {
+    return true;
+  }
+
+  // Existing active/possibly-dispatched commands continue to block duplicate logical operations.
+  if (recoveryState == CommandRecoveryState.active ||
+      recoveryState == CommandRecoveryState.pendingOriginalActor) {
+    return true;
+  }
+  if (dispatchState == CommandDispatchState.neverDispatched ||
+      dispatchState == CommandDispatchState.possiblyDispatched) {
+    return true;
+  }
+
+  return false;
+}
+
 /// A fresh command was successfully inserted because no active unresolved
 /// command existed for this logical operation.
 final class FreshCommandRegistered extends RegisterFreshCommandResult {
@@ -169,8 +214,8 @@ final class PreexistingCommandFound extends RegisterFreshCommandResult {
 /// Port for durable local journal of pending reward commands.
 abstract interface class PendingRewardCommandStore {
   /// Atomically registers a fresh pending command only if no unresolved pending command
-  /// (recovery_state == 'active' or dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed'))
-  /// already exists for the same logical operation (familyId, childId, operation, and optional rewardId).
+  /// (as evaluated by [isCommandUnresolved], R24-5-03) already exists for the same
+  /// logical operation (familyId, childId, operation, and optional rewardId).
   ///
   /// Serialized in SQLite via transaction, preventing check-then-insert races between concurrent calls (R24-4-01).
   Future<RegisterFreshCommandResult> registerFreshCommand({

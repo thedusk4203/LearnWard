@@ -208,7 +208,6 @@ final class RecoveryCoordinator {
     String? requestedCommandId,
     CommandExecutionTrigger trigger = CommandExecutionTrigger.foreground,
     Duration? overrideLeaseDuration,
-    String? callerOwnedLeaseToken,
   }) async {
     final now = _clock.now().toUtc();
     final leaseDuration = overrideLeaseDuration ?? _defaultLeaseDuration;
@@ -221,23 +220,11 @@ final class RecoveryCoordinator {
       );
     }
 
-    // Active UI family match pre-check (R24-3-03, R24-4-05)
+    // Active UI family match pre-check (R24-3-03, R24-4-05, R24-5-01)
+    // Pre-claim family mismatch must return without mutating the journal or releasing other leases.
     if (_activeFamilyIdProvider != null) {
       final currentActiveFamily = _activeFamilyIdProvider();
       if (currentActiveFamily == null || currentActiveFamily != familyId) {
-        if (requestedCommandId != null) {
-          final existing = await _commandStore.getPendingCommand(
-            requestedCommandId,
-          );
-          if (existing != null && existing.leaseToken != null) {
-            await _commandStore.releaseClaim(
-              commandId: existing.commandId,
-              leaseToken: existing.leaseToken!,
-              nextAttemptAt: _clock.now().toUtc(),
-              lastErrorMessage: 'Active family mismatch: $currentActiveFamily',
-            );
-          }
-        }
         return CommandFamilyMismatchResult(
           commandId: requestedCommandId ?? 'unassigned',
           commandFamilyId: familyId,
@@ -426,25 +413,15 @@ final class RecoveryCoordinator {
       );
     }
 
-    // STEP 2 — ATOMICALLY ACQUIRE EXCLUSIVE CLAIM LEASE (R24-4-02)
-    // Every independent execution attempt must acquire its own exclusive claim,
-    // or prove ownership through an explicitly controlled caller-owned lease token.
-    String? leaseToken;
-    if (callerOwnedLeaseToken != null) {
-      final isCallerLeaseValid =
-          command.leaseToken == callerOwnedLeaseToken &&
-          command.leaseExpiresAt != null &&
-          command.leaseExpiresAt!.isAfter(now) &&
-          command.actorUserId == context.userId;
-      leaseToken = isCallerLeaseValid ? callerOwnedLeaseToken : null;
-    } else {
-      leaseToken = await _commandStore.acquireClaim(
-        commandId: command.commandId,
-        actorUserId: context.userId,
-        leaseDuration: leaseDuration,
-        now: now,
-      );
-    }
+    // STEP 2 — ATOMICALLY ACQUIRE EXCLUSIVE CLAIM LEASE (R24-4-02, R24-5-02)
+    // Every independent coordinator execution must acquire an exclusive claim.
+    // Supplying or adopting an existing lease without acquiring an exclusive claim is prohibited.
+    final leaseToken = await _commandStore.acquireClaim(
+      commandId: command.commandId,
+      actorUserId: context.userId,
+      leaseDuration: leaseDuration,
+      now: now,
+    );
 
     if (leaseToken == null) {
       final latest = await _commandStore.getPendingCommand(command.commandId);
