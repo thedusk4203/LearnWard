@@ -257,7 +257,8 @@ final class InMemoryPendingRewardCommandStore
       return null;
     }
     if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
-        cmd.dispatchState != CommandDispatchState.possiblyDispatched) {
+        cmd.dispatchState != CommandDispatchState.possiblyDispatched &&
+        cmd.dispatchState != CommandDispatchState.confirmedCommitted) {
       return null;
     }
     if (cmd.nextAttemptAt != null && cmd.nextAttemptAt!.isAfter(effectiveNow)) {

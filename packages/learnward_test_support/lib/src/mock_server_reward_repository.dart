@@ -34,7 +34,10 @@ class MockServerRewardRepository implements RewardRepository {
     const cost = 1500;
     final current = childBalances[childId.value] ?? 5000;
     if (current < cost) {
-      throw const InvalidRewardException('LW201: Insufficient RP balance');
+      throw const InvalidRewardException(
+        'Insufficient RP balance',
+        code: 'LW201',
+      );
     }
     childBalances[childId.value] = current - cost;
     debitCount++;

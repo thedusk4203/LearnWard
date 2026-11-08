@@ -30,6 +30,8 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
   StreamSubscription<AuthState>? _sub;
 
   String? _currentGeneration;
+  String? _boundUserId;
+  String? _boundAccessToken;
   int _epoch = 0;
   bool _isStickyInvalid = false;
 
@@ -40,10 +42,14 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
 
     if (currentSession != null && !currentSession.isExpired) {
       _epoch++;
-      _currentGeneration = _buildGeneration(currentSession.user.id, _epoch);
+      _boundUserId = currentSession.user.id;
+      _boundAccessToken = currentSession.accessToken;
+      _currentGeneration = _buildGeneration(_boundUserId!, _epoch);
       _isStickyInvalid = false;
     } else {
       _isStickyInvalid = true;
+      _boundUserId = null;
+      _boundAccessToken = null;
       _currentGeneration = null;
     }
 
@@ -55,10 +61,14 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
             data.event == AuthChangeEvent.signedOut ||
             session.isExpired) {
           _isStickyInvalid = true;
+          _boundUserId = null;
+          _boundAccessToken = null;
           _currentGeneration = null;
         } else {
           _isStickyInvalid = false;
           _epoch++;
+          _boundUserId = session.user.id;
+          _boundAccessToken = session.accessToken;
           _currentGeneration = _buildGeneration(session.user.id, _epoch);
         }
         _controller.add(_currentGeneration);
@@ -66,6 +76,8 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
       onError: (Object _) {
         // Sticky fail-closed on auth stream errors, token refresh failures, or stream disruption:
         _isStickyInvalid = true;
+        _boundUserId = null;
+        _boundAccessToken = null;
         _currentGeneration = null;
         _controller.add(null);
       },
@@ -96,6 +108,19 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
 
     if (session == null || session.isExpired) {
       _isStickyInvalid = true;
+      _boundUserId = null;
+      _boundAccessToken = null;
+      _currentGeneration = null;
+      _controller.add(null);
+      return null;
+    }
+
+    // R24-3-07: Live session must match the generation-bound credentials
+    if (session.user.id != _boundUserId ||
+        session.accessToken != _boundAccessToken) {
+      _isStickyInvalid = true;
+      _boundUserId = null;
+      _boundAccessToken = null;
       _currentGeneration = null;
       _controller.add(null);
       return null;

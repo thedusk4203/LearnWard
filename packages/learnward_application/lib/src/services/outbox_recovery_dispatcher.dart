@@ -14,7 +14,7 @@ final class OutboxRecoveryDispatcher {
     required PendingRewardCommandStore commandStore,
     required RecoveryCoordinator coordinator,
     required AuthSessionPort authSessionPort,
-    String? Function()? activeFamilyIdProvider,
+    required String? Function() activeFamilyIdProvider,
     Clock clock = const SystemClock(),
     this.maxConcurrentRpcs = 2,
     this.minimumDrainInterval = const Duration(seconds: 1),
@@ -27,7 +27,7 @@ final class OutboxRecoveryDispatcher {
   final PendingRewardCommandStore _commandStore;
   final RecoveryCoordinator _coordinator;
   final AuthSessionPort _authSessionPort;
-  final String? Function()? _activeFamilyIdProvider;
+  final String? Function() _activeFamilyIdProvider;
   final Clock _clock;
   final int maxConcurrentRpcs;
   final Duration minimumDrainInterval;
@@ -77,12 +77,10 @@ final class OutboxRecoveryDispatcher {
         return 0;
       }
 
-      // Live active family check prior to querying (R24-2-03)
-      if (_activeFamilyIdProvider != null) {
-        final currentActive = _activeFamilyIdProvider();
-        if (currentActive == null || currentActive != activeFamilyId) {
-          return 0;
-        }
+      // Live active family check prior to querying (R24-2-03, R24-3-03)
+      final currentActive = _activeFamilyIdProvider();
+      if (currentActive == null || currentActive != activeFamilyId) {
+        return 0;
       }
 
       // 1. Pause any active commands in this family that belong to a different actor
@@ -136,22 +134,17 @@ final class OutboxRecoveryDispatcher {
         if (cmd.childId == null) continue;
 
         // Verify active family hasn't switched mid-drain
-        if (_activeFamilyIdProvider != null) {
-          final currentActive = _activeFamilyIdProvider();
-          if (currentActive != cmd.familyId) {
-            continue;
-          }
+        final currentActiveMidDrain = _activeFamilyIdProvider();
+        if (currentActiveMidDrain != cmd.familyId) {
+          continue;
         }
 
         late final Future<void> future;
         future = () async {
           try {
             // Live active family check immediately prior to coordinator execution
-            if (_activeFamilyIdProvider != null) {
-              final currentActive = _activeFamilyIdProvider();
-              if (currentActive != cmd.familyId) {
-                return;
-              }
+            if (_activeFamilyIdProvider() != cmd.familyId) {
+              return;
             }
 
             await _coordinator.execute(

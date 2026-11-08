@@ -31,5 +31,4 @@ hooks:
         linux: system
         macos: system
         ios: system
-        android: system
         default: sqlite3

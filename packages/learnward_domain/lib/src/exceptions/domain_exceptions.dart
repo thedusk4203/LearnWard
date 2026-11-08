@@ -34,6 +34,26 @@ abstract interface class BackendRpcError {
   String get message;
 }
 
+/// Authoritative backend RPC error carrying an explicit structured code.
+final class BackendRpcException implements Exception, BackendRpcError {
+  const BackendRpcException({
+    required this.message,
+    required this.code,
+    this.details,
+  });
+
+  @override
+  final String message;
+
+  @override
+  final String? code;
+
+  final Object? details;
+
+  @override
+  String toString() => 'BackendRpcException(code: $code, message: $message)';
+}
+
 /// Raised when reward catalog invariants are violated.
 final class InvalidRewardException implements Exception, BackendRpcError {
   const InvalidRewardException(this.message, {String? code})
@@ -45,11 +65,7 @@ final class InvalidRewardException implements Exception, BackendRpcError {
   final String? _explicitCode;
 
   @override
-  String? get code {
-    if (_explicitCode != null) return _explicitCode;
-    final match = RegExp(r'\b(LW\d{3})\b').firstMatch(message);
-    return match?.group(1);
-  }
+  String? get code => _explicitCode;
 
   @override
   String toString() => 'InvalidRewardException: $message';
@@ -76,11 +92,7 @@ final class InvalidWheelException implements Exception, BackendRpcError {
   final String? _explicitCode;
 
   @override
-  String? get code {
-    if (_explicitCode != null) return _explicitCode;
-    final match = RegExp(r'\b(LW\d{3})\b').firstMatch(message);
-    return match?.group(1);
-  }
+  String? get code => _explicitCode;
 
   @override
   String toString() => 'InvalidWheelException: $message';

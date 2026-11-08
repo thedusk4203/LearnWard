@@ -270,10 +270,7 @@ final recoveryAuthorizationPortProvider = Provider<RecoveryAuthorizationPort>((
   final config = ref.watch(appConfigProvider);
   final client = ref.watch(supabaseClientProvider);
   if (client != null) {
-    return SupabaseRecoveryAuthorizationAdapter(
-      client,
-      activeFamilyIdProvider: () => ref.read(activeFamilyProvider)?.id.value,
-    );
+    return SupabaseRecoveryAuthorizationAdapter(client);
   }
   if (config.canUseLocalDemoRepositories) {
     return const InMemoryRecoveryAuthorizationPort();
@@ -296,6 +293,7 @@ final recoveryCoordinatorProvider = Provider<RecoveryCoordinator>((ref) {
     rewardRepository: rewardRepo,
     authSessionPort: authPort,
     authorizationPort: authzPort,
+    activeFamilyIdProvider: () => ref.read(activeFamilyProvider)?.id.value,
     jitterSource: config.canUseLocalDemoRepositories
         ? const DeterministicJitterSource(0.0)
         : const RandomJitterSource(),

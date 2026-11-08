@@ -470,6 +470,7 @@ void main() {
         commandStore: database,
         coordinator: coordinator,
         authSessionPort: authPort,
+        activeFamilyIdProvider: () => family2,
         clock: clock,
       );
 
@@ -484,13 +485,14 @@ void main() {
       final dormant = await database.getPendingCommand('cmd-a08-fam1');
       expect(dormant!.recoveryState, CommandRecoveryState.active);
 
-      // Part 2 (M04): Active family switch while command is claimed mid-flow
-      final dynamicAuthz = _SwitchingFamilyAuthzPort(activeFamily: family1);
+      // Part 2 (R24-3-03): Active family switch while command is claimed mid-flow
+      var currentActiveFamily = family1;
       final coordinator2 = RecoveryCoordinator(
         commandStore: database,
         wheelRepository: wheelRepo,
         authSessionPort: authPort,
-        authorizationPort: dynamicAuthz,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () => currentActiveFamily,
         clock: clock,
       );
 
@@ -504,38 +506,43 @@ void main() {
       expect(claimToken, isNotNull);
 
       // Switch active family to family2 mid-flow
-      dynamicAuthz.activeFamily = family2;
+      currentActiveFamily = family2;
 
-      // Executing while active lease is held reports CAS failure as in-flight (R24-2-05)
-      final inFlightResult = await coordinator2.execute(
+      // Executing while active family is switched reports family mismatch and releases claim
+      // ZERO RPC and ZERO QUARANTINE! (R24-3-03)
+      final mismatchResult = await coordinator2.execute(
         operation: RewardCommandOperation.spinWheel,
         familyId: family1,
         childId: child1,
         requestedCommandId: 'cmd-a08-fam1',
         trigger: CommandExecutionTrigger.recovery,
       );
-      expect(inFlightResult, isA<CommandAlreadyInFlightResult>());
+      expect(mismatchResult, isA<CommandFamilyMismatchResult>());
       expect(
         wheelRepo.spinCallCount,
         0,
-        reason: 'Zero RPC while command is held under active lease',
+        reason: 'Zero RPC while active family does not match command family',
       );
 
-      // Once lease expires, preflight denial acquires claim and transitions to quarantine
-      clock.advance(const Duration(seconds: 31));
-      final quarantinedResult = await coordinator2.execute(
+      // Command remains healthy in SQLite journal (recoveryState remains active, not quarantined!)
+      final preserved = await database.getPendingCommand('cmd-a08-fam1');
+      expect(
+        preserved!.recoveryState,
+        CommandRecoveryState.active,
+        reason: 'Family mismatch must never quarantine valid journal commands',
+      );
+
+      // Switch back to family1: command can now be executed normally without being lost or corrupted
+      currentActiveFamily = family1;
+      final successResult = await coordinator2.execute(
         operation: RewardCommandOperation.spinWheel,
         familyId: family1,
         childId: child1,
         requestedCommandId: 'cmd-a08-fam1',
         trigger: CommandExecutionTrigger.recovery,
       );
-      expect(quarantinedResult, isA<CommandQuarantinedResult>());
-      expect(
-        wheelRepo.spinCallCount,
-        0,
-        reason: 'Zero RPC for switched family',
-      );
+      expect(successResult, isA<CommandCommittedResult>());
+      expect(wheelRepo.spinCallCount, 1);
     });
 
     // -----------------------------------------------------------------------
@@ -699,6 +706,7 @@ void main() {
         commandStore: database,
         coordinator: coordinator,
         authSessionPort: authPortB,
+        activeFamilyIdProvider: () => 'fam-shared',
         clock: clock,
       );
 
@@ -751,6 +759,7 @@ void main() {
         commandStore: database,
         coordinator: coordinator,
         authSessionPort: authPortA,
+        activeFamilyIdProvider: () => familyId.value,
         clock: clock,
       );
 
@@ -1487,12 +1496,10 @@ void main() {
         trigger: CommandExecutionTrigger.recovery,
       );
 
-      expect(staleResult, isA<CommandQuarantinedResult>());
-      final quarantined = staleResult as CommandQuarantinedResult;
-      expect(
-        quarantined.reason,
-        contains('Lost lease ownership during completion'),
-      );
+      // CAS failure during completion returns in-flight, never fabricates quarantine (R24-3-04)
+      expect(staleResult, isA<CommandAlreadyInFlightResult>());
+      final inFlight = staleResult as CommandAlreadyInFlightResult;
+      expect(inFlight.commandId, equals('cmd-a24-coord-stale'));
     });
   });
 }
@@ -1576,7 +1583,10 @@ final class _UnavailableRewardRepository implements RewardRepository {
     required RewardId rewardId,
     required ChildId childId,
   }) async {
-    throw const InvalidRewardException('LW205: Reward is no longer available');
+    throw const InvalidRewardException(
+      'LW205: Reward is no longer available',
+      code: 'LW205',
+    );
   }
 
   @override
@@ -1649,25 +1659,6 @@ final class _FailingThenSucceedingRewardRepository implements RewardRepository {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-final class _SwitchingFamilyAuthzPort implements RecoveryAuthorizationPort {
-  _SwitchingFamilyAuthzPort({required this.activeFamily});
-
-  String activeFamily;
-
-  @override
-  Future<TargetAuthorizationStatus> verifyTarget({
-    required ValidatedActorContext context,
-    required String familyId,
-    required String childId,
-    required RewardCommandOperation operation,
-  }) async {
-    if (familyId == activeFamily) {
-      return TargetAuthorizationStatus.authorized;
-    }
-    return TargetAuthorizationStatus.definitelyDenied;
-  }
 }
 
 final class _InFlightLogoutWheelRepository implements WheelRepository {

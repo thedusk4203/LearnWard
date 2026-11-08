@@ -250,27 +250,9 @@ void main() {
 
       expect(status, equals(TargetAuthorizationStatus.unverified));
     });
-
-    test('9. R24-2-03: returns definitelyDenied when active family provider indicates UI family switched', () async {
-      const currentActiveFamily = 'fam-active';
-      final switchingAdapter = SupabaseRecoveryAuthorizationAdapter(
-        client,
-        activeFamilyIdProvider: () => currentActiveFamily,
-      );
-
-      // Verify target command for fam-inactive
-      final status = await switchingAdapter.verifyTarget(
-        context: context,
-        familyId: 'fam-inactive',
-        childId: 'ch-1',
-        operation: RewardCommandOperation.spinWheel,
-      );
-
-      expect(status, equals(TargetAuthorizationStatus.definitelyDenied));
-    });
   });
 
-  group('SupabaseAuthSessionAdapter Stream Error Fail-Closed Contract (R24-2-01, A21, M04)', () {
+  group('SupabaseAuthSessionAdapter Stream Error Fail-Closed Contract (R24-2-01, R24-3-07, A21, M04)', () {
     test(
       'validateForMutation returns null when client has no session',
       () async {
@@ -286,6 +268,78 @@ void main() {
         expect(validated, isNull);
       },
     );
+
+    test('R24-3-07: validateForMutation fails closed when cached session does not match bound identity', () async {
+      final client = SupabaseClient(
+        'https://test.supabase.co',
+        'test-anon-key',
+      );
+      final authStreamController = StreamController<AuthState>.broadcast();
+      addTearDown(authStreamController.close);
+
+      final user1 = User(
+        id: 'user-r24-bound-1',
+        appMetadata: {'role': 'parent'},
+        userMetadata: {},
+        aud: 'authenticated',
+        createdAt: DateTime.now().toIso8601String(),
+      );
+      final session1 = Session(
+        accessToken: 'token-bound-1',
+        tokenType: 'bearer',
+        user: user1,
+        expiresIn: 3600,
+      );
+      Session? liveSession = session1;
+
+      final authAdapter = SupabaseAuthSessionAdapter(
+        client,
+        authStateStream: authStreamController.stream,
+        currentSessionProvider: () => liveSession,
+      );
+      addTearDown(authAdapter.dispose);
+
+      // Initially matches bound session identity
+      expect(
+        authAdapter.currentSessionGeneration,
+        equals('gen-user-r24-bound-1-1'),
+      );
+      final valid = await authAdapter.validateForMutation();
+      expect(valid, isNotNull);
+      expect(valid!.userId, equals('user-r24-bound-1'));
+
+      // Live session accessToken changed before stream event is delivered
+      final mismatchedSession = Session(
+        accessToken: 'token-new-before-stream-event',
+        tokenType: 'bearer',
+        user: user1,
+        expiresIn: 3600,
+      );
+      liveSession = mismatchedSession;
+
+      // validateForMutation strictly fails closed on identity mismatch!
+      final resultOnMismatch = await authAdapter.validateForMutation();
+      expect(
+        resultOnMismatch,
+        isNull,
+        reason: 'Live session mismatch with bound session must fail closed',
+      );
+      expect(authAdapter.currentSessionGeneration, isNull);
+
+      // When the stream event arrives for the new session, generation rotates to epoch 2
+      authStreamController.add(
+        AuthState(AuthChangeEvent.tokenRefreshed, mismatchedSession),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(
+        authAdapter.currentSessionGeneration,
+        equals('gen-user-r24-bound-1-2'),
+      );
+      final recovered = await authAdapter.validateForMutation();
+      expect(recovered, isNotNull);
+      expect(recovered!.sessionGeneration, equals('gen-user-r24-bound-1-2'));
+    });
 
     test('R24-2-01: stream error with cached non-expired session fails closed sticky without resurrection', () async {
       final client = SupabaseClient(

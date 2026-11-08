@@ -98,6 +98,13 @@ final class SpinRewardWheel {
       CommandAlreadyInFlightResult(commandId: final id) => throw StateError(
         'Command $id is already in flight',
       ),
+      CommandFamilyMismatchResult(
+        commandFamilyId: final cf,
+        activeFamilyId: final af,
+      ) =>
+        throw StateError(
+          'Command belongs to family $cf but active family is $af',
+        ),
       CommandAuthUnavailableResult(reason: final r) => throw StateError(r),
     };
   }

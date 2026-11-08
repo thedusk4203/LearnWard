@@ -5,19 +5,20 @@ import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:test/test.dart';
 
-/// Simulates a PostgrestException from Supabase client carrying typed properties.
-final class _FakePostgrestException implements Exception {
-  const _FakePostgrestException({required this.message, required this.code});
+/// Untrusted object simulating an arbitrary exception that happens to have a `code` property.
+final class _UntrustedObjectWithCode implements Exception {
+  const _UntrustedObjectWithCode({required this.message, required this.code});
 
   final String message;
-  final String? code;
+  final String code;
 
   @override
-  String toString() => 'PostgrestException(message: $message, code: $code)';
+  String toString() =>
+      '_UntrustedObjectWithCode(code: $code, message: $message)';
 }
 
 void main() {
-  group('RecoveryErrorClassifier Typed Backend Error Evidence (R24-2-02)', () {
+  group('RecoveryErrorClassifier Typed Backend Error Evidence (R24-2-02 & R24-3-01)', () {
     test('ambiguous transport error containing LW201 substring is transientRetryable, NOT terminal', () {
       final err = Exception('timeout LW201');
       final classified = RecoveryErrorClassifier.classify(err);
@@ -50,8 +51,47 @@ void main() {
       );
     });
 
-    test('genuine typed PostgrestException with LW201 is classified as terminalWhitelisted', () {
-      final err = const _FakePostgrestException(
+    test('InvalidRewardException with message-embedded LW201 does NOT produce terminal deletion (R24-3-01)', () {
+      final err = const InvalidRewardException(
+        'ambiguous LW201 text entered by user',
+      );
+      expect(err.code, isNull);
+
+      final classified = RecoveryErrorClassifier.classify(err);
+      expect(
+        classified.action,
+        equals(ClassifiedErrorAction.quarantineUnknownOutcome),
+      );
+      expect(classified.errorCode, isNot(equals('LW201')));
+    });
+
+    test('InvalidWheelException with message-embedded LW206 does NOT produce terminal deletion (R24-3-01)', () {
+      final err = const InvalidWheelException('LW206 in text');
+      expect(err.code, isNull);
+
+      final classified = RecoveryErrorClassifier.classify(err);
+      expect(
+        classified.action,
+        equals(ClassifiedErrorAction.quarantineUnknownOutcome),
+      );
+      expect(classified.errorCode, isNot(equals('LW206')));
+    });
+
+    test('untrusted object with code=LW201 not implementing BackendRpcError fails closed (R24-3-01)', () {
+      final err = const _UntrustedObjectWithCode(
+        message: 'Random failure',
+        code: 'LW201',
+      );
+      final classified = RecoveryErrorClassifier.classify(err);
+      expect(
+        classified.action,
+        equals(ClassifiedErrorAction.quarantineUnknownOutcome),
+      );
+      expect(classified.errorCode, isNot(equals('LW201')));
+    });
+
+    test('genuine typed BackendRpcException with LW201 is classified as terminalWhitelisted', () {
+      final err = const BackendRpcException(
         message: 'Insufficient RP balance',
         code: 'LW201',
       );
@@ -67,7 +107,7 @@ void main() {
     test('all whitelisted terminal business codes (LW201, LW202, LW203, LW205, LW206) with typed signals classify as terminalWhitelisted', () {
       final codes = ['LW201', 'LW202', 'LW203', 'LW205', 'LW206'];
       for (final code in codes) {
-        final err = _FakePostgrestException(
+        final err = BackendRpcException(
           message: 'Definitive terminal error',
           code: code,
         );
@@ -82,7 +122,7 @@ void main() {
       }
     });
 
-    test('domain exceptions implementing BackendRpcError classify as terminalWhitelisted when whitelisted', () {
+    test('domain exceptions with explicit code parameter classify as terminalWhitelisted when whitelisted', () {
       final rewardErr = const InvalidRewardException(
         'Insufficient RP balance',
         code: 'LW201',
@@ -109,10 +149,7 @@ void main() {
     test('typed non-whitelisted code (LW204, P0002, 22000) classifies as quarantineUnknownOutcome', () {
       final nonWhitelisted = ['LW204', 'P0002', '22000'];
       for (final code in nonWhitelisted) {
-        final err = _FakePostgrestException(
-          message: 'Domain error',
-          code: code,
-        );
+        final err = BackendRpcException(message: 'Domain error', code: code);
         final classified = RecoveryErrorClassifier.classify(err);
 
         expect(
@@ -126,7 +163,7 @@ void main() {
     test(
       'authorization denial (42501) classifies as quarantineUnknownOutcome',
       () {
-        final err = const _FakePostgrestException(
+        final err = const BackendRpcException(
           message: 'permission denied for table child_device_grants',
           code: '42501',
         );

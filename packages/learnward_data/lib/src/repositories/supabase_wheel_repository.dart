@@ -69,12 +69,20 @@ final class SupabaseWheelRepository implements WheelRepository {
     required String commandId,
     required ChildId childId,
   }) async {
-    final response = await _client.rpc<Map<String, dynamic>>(
-      'spin_reward_wheel',
-      params: {'p_command_id': commandId, 'p_child_id': childId.value},
-    );
+    try {
+      final response = await _client.rpc<Map<String, dynamic>>(
+        'spin_reward_wheel',
+        params: {'p_command_id': commandId, 'p_child_id': childId.value},
+      );
 
-    return WheelSpinResult.fromJson(response);
+      return WheelSpinResult.fromJson(response);
+    } on PostgrestException catch (e) {
+      throw BackendRpcException(
+        message: e.message,
+        code: e.code,
+        details: e.details,
+      );
+    }
   }
 
   @override

@@ -824,7 +824,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id = ?
         AND recovery_state = 'active'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
@@ -975,7 +975,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id <> ?
         AND recovery_state = 'active'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
           OR
@@ -1016,7 +1016,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id = ?
         AND recovery_state = 'pending_original_actor'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
           OR
@@ -1051,7 +1051,7 @@ class AppDatabase extends _$AppDatabase
         ${familyId != null ? 'AND family_id = ?' : ''}
         AND recovery_state = 'active'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
@@ -1095,7 +1095,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id <> ?
         AND recovery_state = 'active'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
           OR
@@ -1136,7 +1136,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id = ?
         AND recovery_state = 'pending_original_actor'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
           OR

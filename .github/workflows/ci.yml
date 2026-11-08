@@ -172,44 +172,16 @@ jobs:
       - name: Resolve workspace dependencies
         run: flutter pub get
 
-      - name: Configure Gradle mirrors and pre-fetch distribution
+      - name: Pre-fetch Gradle 9.3.1 distribution with SHA-256 verification
         run: |
-          mkdir -p ~/.gradle/init.d
-          cat << 'EOF' > ~/.gradle/init.d/01-maven-mirror.init.gradle
-          gradle.beforeSettings { settings ->
-              settings.pluginManagement.repositories.all { repo ->
-                  if (repo instanceof MavenArtifactRepository && (repo.url.toString().contains("maven.apache.org") || repo.url.toString().contains("repo1.maven.org") || repo.url.toString().contains("repo.maven.org"))) {
-                      repo.url = uri("https://maven.aliyun.com/repository/public")
-                  }
-              }
-              settings.dependencyResolutionManagement.repositories.all { repo ->
-                  if (repo instanceof MavenArtifactRepository && (repo.url.toString().contains("maven.apache.org") || repo.url.toString().contains("repo1.maven.org") || repo.url.toString().contains("repo.maven.org"))) {
-                      repo.url = uri("https://maven.aliyun.com/repository/public")
-                  }
-              }
-          }
-          gradle.allprojects { project ->
-              project.buildscript.repositories.all { repo ->
-                  if (repo instanceof MavenArtifactRepository && (repo.url.toString().contains("maven.apache.org") || repo.url.toString().contains("repo1.maven.org") || repo.url.toString().contains("repo.maven.org"))) {
-                      repo.url = uri("https://maven.aliyun.com/repository/public")
-                  }
-              }
-              project.repositories.all { repo ->
-                  if (repo instanceof MavenArtifactRepository && (repo.url.toString().contains("maven.apache.org") || repo.url.toString().contains("repo1.maven.org") || repo.url.toString().contains("repo.maven.org"))) {
-                      repo.url = uri("https://maven.aliyun.com/repository/public")
-                  }
-              }
-          }
-          EOF
           WRAPPER_DIR="$HOME/.gradle/wrapper/dists/gradle-9.3.1-all/9ot9r568e8zfvvd4mn8rbu1j0"
+          mkdir -p "$WRAPPER_DIR"
+          ZIP_PATH="$WRAPPER_DIR/gradle-9.3.1-all.zip"
+          EXPECTED_SHA256="17f277867f6914d61b1aa02efab1ba7bb439ad652ca485cd8ca6842fccec6e43"
           if [ ! -f "$WRAPPER_DIR/gradle-9.3.1-all.zip.ok" ]; then
-            echo "Pre-fetching Gradle 9.3.1 distribution..."
-            mkdir -p "$WRAPPER_DIR"
-            ZIP_PATH="$WRAPPER_DIR/gradle-9.3.1-all.zip"
-            if ! curl -fSL --retry 3 --retry-delay 2 "https://services.gradle.org/distributions/gradle-9.3.1-all.zip" -o "$ZIP_PATH"; then
-              echo "Primary distribution URL timed out, falling back to mirror..."
-              curl -fSL --retry 3 --retry-delay 2 "https://mirrors.cloud.tencent.com/gradle/gradle-9.3.1-all.zip" -o "$ZIP_PATH"
-            fi
+            echo "Downloading Gradle 9.3.1 distribution..."
+            curl -fSL --retry 3 --retry-delay 2 "https://services.gradle.org/distributions/gradle-9.3.1-all.zip" -o "$ZIP_PATH"
+            echo "$EXPECTED_SHA256  $ZIP_PATH" | sha256sum -c -
             unzip -q -o "$ZIP_PATH" -d "$WRAPPER_DIR"
             touch "$WRAPPER_DIR/gradle-9.3.1-all.zip.ok"
             touch "$WRAPPER_DIR/gradle-9.3.1-all.zip.lck"

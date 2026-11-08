@@ -64,7 +64,6 @@ final class RecoveryErrorClassifier {
   ///   are never treated as terminal rejections.
   static ClassifiedError classify(Object error) {
     final str = error.toString();
-    final dynamic err = error;
 
     // 1. Transient network / timeout / transport errors FIRST
     if (error is TimeoutException ||
@@ -96,18 +95,6 @@ final class RecoveryErrorClassifier {
     if (error is BackendRpcError) {
       code = error.code;
       message = error.message;
-    } else {
-      try {
-        // ignore: avoid_dynamic_calls
-        final dynamic c = err.code ?? err.errorCode;
-        if (c != null) code = c.toString();
-      } catch (_) {}
-
-      try {
-        // ignore: avoid_dynamic_calls
-        final dynamic m = err.message;
-        if (m != null) message = m.toString();
-      } catch (_) {}
     }
 
     message ??= str;

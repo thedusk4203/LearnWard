@@ -143,16 +143,24 @@ final class SupabaseRewardRepository implements RewardRepository {
     required RewardId rewardId,
     required ChildId childId,
   }) async {
-    final response = await _client.rpc<Map<String, dynamic>>(
-      'redeem_store_reward',
-      params: {
-        'p_reward_id': rewardId.value,
-        'p_command_id': commandId,
-        'p_child_id': childId.value,
-      },
-    );
+    try {
+      final response = await _client.rpc<Map<String, dynamic>>(
+        'redeem_store_reward',
+        params: {
+          'p_reward_id': rewardId.value,
+          'p_command_id': commandId,
+          'p_child_id': childId.value,
+        },
+      );
 
-    return _mapRedemption(response);
+      return _mapRedemption(response);
+    } on PostgrestException catch (e) {
+      throw BackendRpcException(
+        message: e.message,
+        code: e.code,
+        details: e.details,
+      );
+    }
   }
 
   @override
