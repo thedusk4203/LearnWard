@@ -15,3 +15,10 @@ workspace:
 
 dev_dependencies:
   flutter_lints: ^6.0.0
+
+hooks:
+  user_defines:
+    sqlite3:
+      source:
+        linux: system
+        default: sqlite3
