@@ -21,9 +21,13 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 ///   network failures, timeouts, or ambiguous errors. NEVER fails open.
 final class SupabaseRecoveryAuthorizationAdapter
     implements RecoveryAuthorizationPort {
-  const SupabaseRecoveryAuthorizationAdapter(this._client);
+  const SupabaseRecoveryAuthorizationAdapter(
+    this._client, {
+    this._activeFamilyIdProvider,
+  });
 
   final SupabaseClient _client;
+  final String? Function()? _activeFamilyIdProvider;
 
   @override
   Future<TargetAuthorizationStatus> verifyTarget({
@@ -33,6 +37,14 @@ final class SupabaseRecoveryAuthorizationAdapter
     required RewardCommandOperation operation,
   }) async {
     try {
+      // 0. Enforce active UI family match if active family provider is bound
+      if (_activeFamilyIdProvider != null) {
+        final currentActiveFamily = _activeFamilyIdProvider();
+        if (currentActiveFamily != null && currentActiveFamily != familyId) {
+          return TargetAuthorizationStatus.definitelyDenied;
+        }
+      }
+
       // 1. Check child device grant for the authenticated actor.
       // Under RLS policy child_device_grants_select, the actor can always select
       // its own grant row where auth_user_id = auth.uid().

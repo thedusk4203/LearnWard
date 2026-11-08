@@ -28,11 +28,28 @@ final class InvalidAssessmentException implements Exception {
   String toString() => 'InvalidAssessmentException: $message';
 }
 
-/// Raised when reward catalog invariants are violated.
-final class InvalidRewardException implements Exception {
-  const InvalidRewardException(this.message);
+/// Interface for authoritative backend error signals carrying structured codes.
+abstract interface class BackendRpcError {
+  String? get code;
+  String get message;
+}
 
+/// Raised when reward catalog invariants are violated.
+final class InvalidRewardException implements Exception, BackendRpcError {
+  const InvalidRewardException(this.message, {String? code})
+    : _explicitCode = code;
+
+  @override
   final String message;
+
+  final String? _explicitCode;
+
+  @override
+  String? get code {
+    if (_explicitCode != null) return _explicitCode;
+    final match = RegExp(r'\b(LW\d{3})\b').firstMatch(message);
+    return match?.group(1);
+  }
 
   @override
   String toString() => 'InvalidRewardException: $message';
@@ -49,10 +66,21 @@ final class InvalidRedemptionException implements Exception {
 }
 
 /// Raised when wheel or wheel settings domain invariants are violated.
-final class InvalidWheelException implements Exception {
-  const InvalidWheelException(this.message);
+final class InvalidWheelException implements Exception, BackendRpcError {
+  const InvalidWheelException(this.message, {String? code})
+    : _explicitCode = code;
 
+  @override
   final String message;
+
+  final String? _explicitCode;
+
+  @override
+  String? get code {
+    if (_explicitCode != null) return _explicitCode;
+    final match = RegExp(r'\b(LW\d{3})\b').firstMatch(message);
+    return match?.group(1);
+  }
 
   @override
   String toString() => 'InvalidWheelException: $message';

@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:learnward_domain/learnward_domain.dart';
+
 /// Prescribed disposition action for classified recovery errors.
 enum ClassifiedErrorAction {
   /// Definitive, whitelisted business failure (LW201, LW202, LW203, LW205, LW206).
@@ -52,30 +54,65 @@ final class RecoveryErrorClassifier {
     'LW206',
   };
 
-  /// Classifies [error] according to the authoritative Section 8 error taxonomy.
+  /// Classifies [error] according to authoritative typed backend evidence.
+  ///
+  /// Enforces:
+  /// - Transport/timeout/socket exceptions are transient retryable, even if their
+  ///   message happens to mention an error code substring (R24-2-02).
+  /// - Terminal business rejection REQUIRES an authoritative, positively typed
+  ///   error code signal from the backend RPC adapter. Arbitrary string matches
+  ///   are never treated as terminal rejections.
   static ClassifiedError classify(Object error) {
     final str = error.toString();
     final dynamic err = error;
 
-    // 1. Extract structured code and message if available
+    // 1. Transient network / timeout / transport errors FIRST
+    if (error is TimeoutException ||
+        error.runtimeType.toString().contains('SocketException') ||
+        error.runtimeType.toString().contains('ClientException') ||
+        error.runtimeType.toString().contains('HttpException') ||
+        str.contains('TimeoutException') ||
+        str.contains('timeout') ||
+        str.contains('SocketException') ||
+        str.contains('ClientException') ||
+        str.contains('connection reset') ||
+        str.contains('connection refused') ||
+        str.contains('Network is unreachable') ||
+        str.contains('500') ||
+        str.contains('502') ||
+        str.contains('503') ||
+        str.contains('504')) {
+      return const ClassifiedError(
+        action: ClassifiedErrorAction.transientRetryable,
+        sanitizedMessage: 'Network communication failure. Retrying scheduled.',
+        errorCode: 'TRANSIENT_NETWORK',
+      );
+    }
+
+    // 2. Extract structured authoritative code and message if available
     String? code;
     String? message;
 
-    try {
-      // ignore: avoid_dynamic_calls
-      final dynamic c = err.code;
-      if (c != null) code = c.toString();
-    } catch (_) {}
+    if (error is BackendRpcError) {
+      code = error.code;
+      message = error.message;
+    } else {
+      try {
+        // ignore: avoid_dynamic_calls
+        final dynamic c = err.code ?? err.errorCode;
+        if (c != null) code = c.toString();
+      } catch (_) {}
 
-    try {
-      // ignore: avoid_dynamic_calls
-      final dynamic m = err.message;
-      if (m != null) message = m.toString();
-    } catch (_) {}
+      try {
+        // ignore: avoid_dynamic_calls
+        final dynamic m = err.message;
+        if (m != null) message = m.toString();
+      } catch (_) {}
+    }
 
     message ??= str;
 
-    // 2. Check for whitelisted terminal business codes
+    // 3. Check for whitelisted terminal business codes ONLY via structured code
     if (code != null && _terminalWhitelistedCodes.contains(code)) {
       return ClassifiedError(
         action: ClassifiedErrorAction.terminalWhitelisted,
@@ -84,17 +121,7 @@ final class RecoveryErrorClassifier {
       );
     }
 
-    for (final terminalCode in _terminalWhitelistedCodes) {
-      if (str.contains(terminalCode)) {
-        return ClassifiedError(
-          action: ClassifiedErrorAction.terminalWhitelisted,
-          sanitizedMessage: _sanitizeMessage(message),
-          errorCode: terminalCode,
-        );
-      }
-    }
-
-    // 3. Authorization or permission denied (ambiguous, never infer device revocation from strings)
+    // 4. Authorization or permission denied (ambiguous, never infer device revocation from strings)
     // 42501 or permission denied halts retry loops without deletion.
     if (code == '42501' ||
         str.contains('42501') ||
@@ -108,39 +135,19 @@ final class RecoveryErrorClassifier {
       );
     }
 
-    // 6. Non-whitelisted backend codes (LW204, P0002, 22000, unknown LW*)
-    if (str.contains('LW204') ||
-        str.contains('P0002') ||
-        str.contains('22000') ||
-        RegExp(r'LW\d{3}').hasMatch(str)) {
+    // 5. Non-whitelisted backend codes (LW204, P0002, 22000, unknown LW*)
+    if (code == 'LW204' ||
+        code == 'P0002' ||
+        code == '22000' ||
+        (code != null && RegExp(r'^LW\d{3}$').hasMatch(code))) {
       return ClassifiedError(
         action: ClassifiedErrorAction.quarantineUnknownOutcome,
         sanitizedMessage: _sanitizeMessage(message),
-        errorCode: code ?? 'UNKNOWN_DOMAIN_REJECTION',
+        errorCode: code,
       );
     }
 
-    // 7. Transient network / timeout / transport errors
-    if (error is TimeoutException ||
-        str.contains('TimeoutException') ||
-        str.contains('timeout') ||
-        str.contains('SocketException') ||
-        str.contains('ClientException') ||
-        str.contains('connection reset') ||
-        str.contains('connection refused') ||
-        str.contains('Network is unreachable') ||
-        str.contains('500') ||
-        str.contains('502') ||
-        str.contains('503') ||
-        str.contains('504')) {
-      return ClassifiedError(
-        action: ClassifiedErrorAction.transientRetryable,
-        sanitizedMessage: 'Network communication failure. Retrying scheduled.',
-        errorCode: 'TRANSIENT_NETWORK',
-      );
-    }
-
-    // 8. Fail-closed fallback: quarantine unknown outcome to prevent data corruption
+    // 6. Fail-closed fallback: quarantine unknown outcome to prevent data corruption
     return ClassifiedError(
       action: ClassifiedErrorAction.quarantineUnknownOutcome,
       sanitizedMessage: _sanitizeMessage(message),

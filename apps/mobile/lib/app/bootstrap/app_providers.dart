@@ -270,7 +270,10 @@ final recoveryAuthorizationPortProvider = Provider<RecoveryAuthorizationPort>((
   final config = ref.watch(appConfigProvider);
   final client = ref.watch(supabaseClientProvider);
   if (client != null) {
-    return SupabaseRecoveryAuthorizationAdapter(client);
+    return SupabaseRecoveryAuthorizationAdapter(
+      client,
+      activeFamilyIdProvider: () => ref.read(activeFamilyProvider)?.id.value,
+    );
   }
   if (config.canUseLocalDemoRepositories) {
     return const InMemoryRecoveryAuthorizationPort();
@@ -311,6 +314,7 @@ final outboxRecoveryDispatcherProvider = Provider<OutboxRecoveryDispatcher>((
     commandStore: commandStore,
     coordinator: coordinator,
     authSessionPort: authPort,
+    activeFamilyIdProvider: () => ref.read(activeFamilyProvider)?.id.value,
   );
 });
 

@@ -74,7 +74,8 @@ final class SpinRewardWheel {
     );
 
     return switch (result) {
-      CommandCommittedResult(wheelResult: final res) => res!,
+      CommandCommittedResult(wheelResult: final res) =>
+        res ?? (throw StateError('Command committed without domain result')),
       CommandTerminalRejectionResult(
         originalError: final err,
         errorMessage: final msg,

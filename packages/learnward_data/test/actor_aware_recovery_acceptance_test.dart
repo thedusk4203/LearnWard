@@ -469,6 +469,7 @@ void main() {
       final dispatcher = OutboxRecoveryDispatcher(
         commandStore: database,
         coordinator: coordinator,
+        authSessionPort: authPort,
         clock: clock,
       );
 
@@ -505,15 +506,31 @@ void main() {
       // Switch active family to family2 mid-flow
       dynamicAuthz.activeFamily = family2;
 
-      // Executing claimed command fails closed because active family switched
-      final midFlowResult = await coordinator2.execute(
+      // Executing while active lease is held reports CAS failure as in-flight (R24-2-05)
+      final inFlightResult = await coordinator2.execute(
         operation: RewardCommandOperation.spinWheel,
         familyId: family1,
         childId: child1,
         requestedCommandId: 'cmd-a08-fam1',
         trigger: CommandExecutionTrigger.recovery,
       );
-      expect(midFlowResult, isA<CommandQuarantinedResult>());
+      expect(inFlightResult, isA<CommandAlreadyInFlightResult>());
+      expect(
+        wheelRepo.spinCallCount,
+        0,
+        reason: 'Zero RPC while command is held under active lease',
+      );
+
+      // Once lease expires, preflight denial acquires claim and transitions to quarantine
+      clock.advance(const Duration(seconds: 31));
+      final quarantinedResult = await coordinator2.execute(
+        operation: RewardCommandOperation.spinWheel,
+        familyId: family1,
+        childId: child1,
+        requestedCommandId: 'cmd-a08-fam1',
+        trigger: CommandExecutionTrigger.recovery,
+      );
+      expect(quarantinedResult, isA<CommandQuarantinedResult>());
       expect(
         wheelRepo.spinCallCount,
         0,
@@ -681,6 +698,7 @@ void main() {
       final dispatcher = OutboxRecoveryDispatcher(
         commandStore: database,
         coordinator: coordinator,
+        authSessionPort: authPortB,
         clock: clock,
       );
 
@@ -732,6 +750,7 @@ void main() {
       final dispatcher = OutboxRecoveryDispatcher(
         commandStore: database,
         coordinator: coordinator,
+        authSessionPort: authPortA,
         clock: clock,
       );
 

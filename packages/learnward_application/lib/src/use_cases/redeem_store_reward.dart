@@ -76,7 +76,8 @@ final class RedeemStoreReward {
     );
 
     return switch (result) {
-      CommandCommittedResult(redemption: final res) => res!,
+      CommandCommittedResult(redemption: final res) =>
+        res ?? (throw StateError('Command committed without domain result')),
       CommandTerminalRejectionResult(
         originalError: final err,
         errorMessage: final msg,

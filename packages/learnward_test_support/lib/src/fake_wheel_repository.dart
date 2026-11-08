@@ -174,7 +174,10 @@ final class FakeWheelRepository implements WheelRepository {
 
     if (failWithInvalidWheel) {
       failWithInvalidWheel = false;
-      throw const InvalidWheelException('Wheel is disabled (LW206)');
+      throw const InvalidWheelException(
+        'Wheel is disabled (LW206)',
+        code: 'LW206',
+      );
     }
 
     // 3. Resolve family & settings
@@ -198,12 +201,14 @@ final class FakeWheelRepository implements WheelRepository {
     if (!settings.isEnabled) {
       throw const InvalidWheelException(
         'Wheel is currently disabled for this family (LW206)',
+        code: 'LW206',
       );
     }
 
     if (eligibleRewards.length < 3) {
       throw InvalidWheelException(
         'Wheel requires at least 3 active eligible rewards (LW203). Found: ${eligibleRewards.length}',
+        code: 'LW203',
       );
     }
 
@@ -214,6 +219,7 @@ final class FakeWheelRepository implements WheelRepository {
     if (todaySpins >= settings.dailySpinCap) {
       throw InvalidWheelException(
         'Daily spin limit reached ($todaySpins/${settings.dailySpinCap}) (LW202)',
+        code: 'LW202',
       );
     }
 

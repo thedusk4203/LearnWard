@@ -227,13 +227,19 @@ final class RecoveryCoordinator {
             leaseDuration: const Duration(seconds: 10),
             now: now,
           );
-          if (claimToken != null) {
-            await _commandStore.transitionRecoveryState(
-              commandId: existing.commandId,
-              leaseToken: claimToken,
-              newState: CommandRecoveryState.quarantinedUnknownOutcome,
-              lastErrorMessage: denialReason,
-            );
+          if (claimToken == null) {
+            // CAS failure: command is currently leased or locked by another worker
+            return CommandAlreadyInFlightResult(commandId: existing.commandId);
+          }
+          final transitioned = await _commandStore.transitionRecoveryState(
+            commandId: existing.commandId,
+            leaseToken: claimToken,
+            newState: CommandRecoveryState.quarantinedUnknownOutcome,
+            lastErrorMessage: denialReason,
+          );
+          if (!transitioned) {
+            // CAS failure: state transition failed (e.g. lease expired or preempted)
+            return CommandAlreadyInFlightResult(commandId: existing.commandId);
           }
         }
       }
@@ -350,7 +356,61 @@ final class RecoveryCoordinator {
     }
 
     if (command.dispatchState == CommandDispatchState.confirmedCommitted) {
-      return CommandCommittedResult(commandId: command.commandId);
+      // Reconcile domain result from authoritative idempotent backend receipt (R24-2-05)
+      try {
+        if (command.operation == RewardCommandOperation.spinWheel) {
+          final wheelRepo = _wheelRepository;
+          if (wheelRepo == null) {
+            return CommandQuarantinedResult(
+              commandId: command.commandId,
+              reason: 'Wheel repository unavailable to reconcile confirmed command.',
+            );
+          }
+          final result = await wheelRepo.spinRewardWheel(
+            commandId: command.commandId,
+            childId: ChildId(command.childId!),
+          );
+          if (command.leaseToken != null) {
+            await _commandStore.completeCommand(
+              commandId: command.commandId,
+              leaseToken: command.leaseToken!,
+            );
+          }
+          return CommandCommittedResult(
+            commandId: command.commandId,
+            wheelResult: result,
+          );
+        } else if (command.operation == RewardCommandOperation.redeemReward) {
+          final rewardRepo = _rewardRepository;
+          if (rewardRepo == null) {
+            return CommandQuarantinedResult(
+              commandId: command.commandId,
+              reason: 'Reward repository unavailable to reconcile confirmed command.',
+            );
+          }
+          final result = await rewardRepo.redeemStoreReward(
+            commandId: command.commandId,
+            childId: ChildId(command.childId!),
+            rewardId: RewardId(command.rewardId!),
+          );
+          if (command.leaseToken != null) {
+            await _commandStore.completeCommand(
+              commandId: command.commandId,
+              leaseToken: command.leaseToken!,
+            );
+          }
+          return CommandCommittedResult(
+            commandId: command.commandId,
+            redemption: result,
+          );
+        }
+      } catch (e) {
+        return CommandQuarantinedResult(
+          commandId: command.commandId,
+          reason: 'Command marked confirmed_committed could not be reconciled with server receipt.',
+          originalError: e,
+        );
+      }
     }
 
     // Check actor match

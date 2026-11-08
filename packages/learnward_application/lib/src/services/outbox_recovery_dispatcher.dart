@@ -13,18 +13,21 @@ final class OutboxRecoveryDispatcher {
   OutboxRecoveryDispatcher({
     required PendingRewardCommandStore commandStore,
     required RecoveryCoordinator coordinator,
-    AuthSessionPort? authSessionPort,
+    required AuthSessionPort authSessionPort,
+    String? Function()? activeFamilyIdProvider,
     Clock clock = const SystemClock(),
     this.maxConcurrentRpcs = 2,
     this.minimumDrainInterval = const Duration(seconds: 1),
   }) : _commandStore = commandStore,
        _coordinator = coordinator,
        _authSessionPort = authSessionPort,
+       _activeFamilyIdProvider = activeFamilyIdProvider,
        _clock = clock;
 
   final PendingRewardCommandStore _commandStore;
   final RecoveryCoordinator _coordinator;
-  final AuthSessionPort? _authSessionPort;
+  final AuthSessionPort _authSessionPort;
+  final String? Function()? _activeFamilyIdProvider;
   final Clock _clock;
   final int maxConcurrentRpcs;
   final Duration minimumDrainInterval;
@@ -40,8 +43,9 @@ final class OutboxRecoveryDispatcher {
   /// Guarantees:
   /// - At most one drain runs at a time for this dispatcher instance.
   /// - Enforces a scheduler flood guard of at least [minimumDrainInterval] between drain passes.
-  /// - Obtains and re-validates trusted current auth context itself (M02).
+  /// - Mandatory trusted session validation using [_authSessionPort].
   /// - Only commands belonging to [activeFamilyId] are queried (no cross-family starvation).
+  /// - Aborts immediately if the active UI family switches mid-drain.
   /// - Mismatched actor commands in this family are safely paused.
   /// - Returning original actor commands in this family are safely resumed.
   /// - At most [maxConcurrentRpcs] are executed concurrently (flood guard).
@@ -63,14 +67,20 @@ final class OutboxRecoveryDispatcher {
     _isDraining = true;
 
     try {
-      // Re-read and validate current trusted session context if port is provided (M02)
-      if (_authSessionPort != null) {
-        final freshContext = await _authSessionPort.validateForMutation();
-        if (freshContext == null ||
-            freshContext.userId != validatedContext.userId ||
-            freshContext.sessionGeneration !=
-                validatedContext.sessionGeneration) {
-          // Stale, lost, or mismatched context snapshot: abort drain safely
+      // Mandatory trusted session revalidation (R24-2-04)
+      final freshContext = await _authSessionPort.validateForMutation();
+      if (freshContext == null ||
+          freshContext.userId != validatedContext.userId ||
+          freshContext.sessionGeneration !=
+              validatedContext.sessionGeneration) {
+        // Stale, lost, or mismatched context snapshot: abort drain safely
+        return 0;
+      }
+
+      // Live active family check prior to querying (R24-2-03)
+      if (_activeFamilyIdProvider != null) {
+        final currentActive = _activeFamilyIdProvider();
+        if (currentActive == null || currentActive != activeFamilyId) {
           return 0;
         }
       }
@@ -125,9 +135,25 @@ final class OutboxRecoveryDispatcher {
       for (final cmd in claimable) {
         if (cmd.childId == null) continue;
 
+        // Verify active family hasn't switched mid-drain
+        if (_activeFamilyIdProvider != null) {
+          final currentActive = _activeFamilyIdProvider();
+          if (currentActive != cmd.familyId) {
+            continue;
+          }
+        }
+
         late final Future<void> future;
         future = () async {
           try {
+            // Live active family check immediately prior to coordinator execution
+            if (_activeFamilyIdProvider != null) {
+              final currentActive = _activeFamilyIdProvider();
+              if (currentActive != cmd.familyId) {
+                return;
+              }
+            }
+
             await _coordinator.execute(
               operation: cmd.operation,
               familyId: cmd.familyId,
