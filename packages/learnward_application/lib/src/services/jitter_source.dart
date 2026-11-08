@@ -7,11 +7,13 @@ abstract interface class JitterSource {
 
 /// Production [JitterSource] backed by [Random].
 final class RandomJitterSource implements JitterSource {
-  RandomJitterSource([Random? random]) : _random = random ?? Random();
-  final Random _random;
+  const RandomJitterSource([Random? random]) : _random = random;
+  final Random? _random;
+
+  static final Random _defaultRandom = Random();
 
   @override
-  double sampleUniform() => _random.nextDouble();
+  double sampleUniform() => (_random ?? _defaultRandom).nextDouble();
 }
 
 /// Deterministic [JitterSource] for reproducible tests.

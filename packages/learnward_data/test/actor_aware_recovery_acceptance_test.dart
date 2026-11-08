@@ -308,15 +308,20 @@ void main() {
         trigger: CommandExecutionTrigger.foreground,
       );
       expect(res1, isA<CommandScheduledResult>());
+      final scheduledRes = res1 as CommandScheduledResult;
       expect(rewardRepo.debitCount, 1);
 
-      // Retry same intent
+      // Advance clock past retry backoff deadline
+      clock.advance(const Duration(seconds: 5));
+
+      // Retry same intent using strict retry command ID
       final res2 = await coordinator.execute(
         operation: RewardCommandOperation.redeemReward,
         familyId: familyId.value,
         childId: childId.value,
         rewardId: 'rew-1',
-        trigger: CommandExecutionTrigger.foreground,
+        requestedCommandId: scheduledRes.commandId,
+        trigger: CommandExecutionTrigger.foregroundRetry,
       );
       expect(res2, isA<CommandCommittedResult>());
       expect(rewardRepo.debitCount, 1); // No double debit
@@ -477,6 +482,43 @@ void main() {
       expect(wheelRepo.spinCallCount, 0);
       final dormant = await database.getPendingCommand('cmd-a08-fam1');
       expect(dormant!.recoveryState, CommandRecoveryState.active);
+
+      // Part 2 (M04): Active family switch while command is claimed mid-flow
+      final dynamicAuthz = _SwitchingFamilyAuthzPort(activeFamily: family1);
+      final coordinator2 = RecoveryCoordinator(
+        commandStore: database,
+        wheelRepository: wheelRepo,
+        authSessionPort: authPort,
+        authorizationPort: dynamicAuthz,
+        clock: clock,
+      );
+
+      // Claim the command under family1
+      final claimToken = await database.acquireClaim(
+        commandId: 'cmd-a08-fam1',
+        actorUserId: 'actor-a08',
+        leaseDuration: const Duration(seconds: 30),
+        now: t0,
+      );
+      expect(claimToken, isNotNull);
+
+      // Switch active family to family2 mid-flow
+      dynamicAuthz.activeFamily = family2;
+
+      // Executing claimed command fails closed because active family switched
+      final midFlowResult = await coordinator2.execute(
+        operation: RewardCommandOperation.spinWheel,
+        familyId: family1,
+        childId: child1,
+        requestedCommandId: 'cmd-a08-fam1',
+        trigger: CommandExecutionTrigger.recovery,
+      );
+      expect(midFlowResult, isA<CommandQuarantinedResult>());
+      expect(
+        wheelRepo.spinCallCount,
+        0,
+        reason: 'Zero RPC for switched family',
+      );
     });
 
     // -----------------------------------------------------------------------
@@ -560,6 +602,50 @@ void main() {
 
         expect(res, isA<CommandAuthUnavailableResult>());
         expect(wheelRepo.spinCallCount, 0);
+
+        // Part 2 (M04): In-flight logout during network call
+        final inFlightAuthPort = FakeAuthSessionPort(
+          activeUserId: 'actor-a10-inflight',
+          sessionGeneration: 'gen-inflight-1',
+          clock: clock,
+        );
+        final inFlightWheelRepo = _InFlightLogoutWheelRepository(
+          onPreRpc: () {
+            inFlightAuthPort
+                .signOut(); // User logs out during in-flight network call
+          },
+        );
+
+        final cmdInFlight = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-a10-inflight',
+          familyId: familyId.value,
+          childId: childId.value,
+          actorUserId: 'actor-a10-inflight',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await database.savePendingCommand(cmdInFlight, now: t0);
+
+        final inFlightCoordinator = RecoveryCoordinator(
+          commandStore: database,
+          wheelRepository: inFlightWheelRepo,
+          authSessionPort: inFlightAuthPort,
+          authorizationPort: FakeRecoveryAuthorizationPort(),
+          clock: clock,
+        );
+
+        // Execute: committed outcome is safely recorded; journal is completed and cleaned up
+        final inFlightRes = await inFlightCoordinator.execute(
+          operation: RewardCommandOperation.spinWheel,
+          familyId: familyId.value,
+          childId: childId.value,
+          requestedCommandId: 'cmd-a10-inflight',
+          trigger: CommandExecutionTrigger.recovery,
+        );
+        expect(inFlightRes, isA<CommandCommittedResult>());
+        expect(await database.getPendingCommand('cmd-a10-inflight'), isNull);
       },
     );
 
@@ -706,6 +792,60 @@ void main() {
 
         expect(res, isA<CommandQuarantinedResult>());
         expect(wheelRepo.spinCallCount, 0);
+
+        // M01 / M04: Assert persisted recovery_state in SQLite
+        final persisted = await database.getPendingCommand('cmd-a13');
+        expect(persisted, isNotNull);
+        expect(
+          persisted!.recoveryState,
+          CommandRecoveryState.quarantinedUnknownOutcome,
+        );
+
+        // Part 2: Confirmed device revocation via own child_device_grants evidence (H05)
+        final cmdRevoked = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-a13-revoked',
+          familyId: 'fam-a13',
+          childId: 'child-a13',
+          actorUserId: 'actor-a13',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await database.savePendingCommand(cmdRevoked, now: t0);
+
+        final authzRevoked = FakeRecoveryAuthorizationPort(
+          defaultStatus: TargetAuthorizationStatus.confirmedRevoked,
+        );
+        final coordinatorRevoked = RecoveryCoordinator(
+          commandStore: database,
+          wheelRepository: wheelRepo,
+          authSessionPort: authPort,
+          authorizationPort: authzRevoked,
+          clock: clock,
+        );
+
+        final resRevoked = await coordinatorRevoked.execute(
+          operation: RewardCommandOperation.spinWheel,
+          familyId: 'fam-a13',
+          childId: 'child-a13',
+          requestedCommandId: 'cmd-a13-revoked',
+          trigger: CommandExecutionTrigger.recovery,
+        );
+
+        expect(resRevoked, isA<CommandQuarantinedResult>());
+        expect(wheelRepo.spinCallCount, 0);
+        final persistedRevoked = await database.getPendingCommand(
+          'cmd-a13-revoked',
+        );
+        expect(
+          persistedRevoked!.recoveryState,
+          CommandRecoveryState.quarantinedUnknownOutcome,
+        );
+        expect(
+          persistedRevoked.lastErrorMessage,
+          contains('Device grant confirmed revoked'),
+        );
       },
     );
 
@@ -1057,7 +1197,22 @@ void main() {
         final rewardRepo = MockServerRewardRepository();
         rewardRepo.childBalances[childId.value] = 5000;
 
-        final spinUseCase = SpinRewardWheel(wheelRepo, database, clock: clock);
+        final authPort = FakeAuthSessionPort(
+          activeUserId: 'actor-a20',
+          sessionGeneration: 'gen-a20',
+          clock: clock,
+        );
+        final authzPort = FakeRecoveryAuthorizationPort(
+          defaultStatus: TargetAuthorizationStatus.authorized,
+        );
+
+        final spinUseCase = SpinRewardWheel(
+          wheelRepo,
+          database,
+          authSessionPort: authPort,
+          authorizationPort: authzPort,
+          clock: clock,
+        );
         final spinResult = await spinUseCase(
           familyId: familyId,
           childId: childId,
@@ -1069,6 +1224,8 @@ void main() {
         final redeemUseCase = RedeemStoreReward(
           rewardRepo,
           database,
+          authSessionPort: authPort,
+          authorizationPort: authzPort,
           clock: clock,
         );
         final redeemResult = await redeemUseCase(
@@ -1269,8 +1426,128 @@ void main() {
       final remaining = await database.getPendingCommand('cmd-a24');
       expect(remaining, isNotNull);
       expect(remaining!.leaseToken, tokenB);
+
+      // Part 2 (M04): Coordinator surfaces lost lease ownership during stale completion
+      final staleCompletingStore = _StaleCompletionStore(database);
+      final authPort = FakeAuthSessionPort(
+        activeUserId: 'actor-a24',
+        sessionGeneration: 'gen-a24',
+        clock: clock,
+      );
+      final wheelRepo = FakeWheelRepository(
+        initialRewards: buildSampleRewards(
+          FamilyId('fam-a24'),
+          ChildId('child-a24'),
+        ),
+      );
+      final coordinator = RecoveryCoordinator(
+        commandStore: staleCompletingStore,
+        wheelRepository: wheelRepo,
+        authSessionPort: authPort,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        clock: clock,
+      );
+
+      final cmdStale = PendingRewardCommand(
+        operation: RewardCommandOperation.spinWheel,
+        commandId: 'cmd-a24-coord-stale',
+        familyId: 'fam-a24',
+        childId: 'child-a24',
+        actorUserId: 'actor-a24',
+        createdAt: t0,
+        recoveryState: CommandRecoveryState.active,
+        dispatchState: CommandDispatchState.neverDispatched,
+      );
+      await database.savePendingCommand(cmdStale, now: t0);
+
+      final staleResult = await coordinator.execute(
+        operation: RewardCommandOperation.spinWheel,
+        familyId: 'fam-a24',
+        childId: 'child-a24',
+        requestedCommandId: 'cmd-a24-coord-stale',
+        trigger: CommandExecutionTrigger.recovery,
+      );
+
+      expect(staleResult, isA<CommandQuarantinedResult>());
+      final quarantined = staleResult as CommandQuarantinedResult;
+      expect(
+        quarantined.reason,
+        contains('Lost lease ownership during completion'),
+      );
     });
   });
+}
+
+final class _StaleCompletionStore implements PendingRewardCommandStore {
+  _StaleCompletionStore(this._inner);
+  final AppDatabase _inner;
+
+  @override
+  Future<bool> completeCommand({
+    required String commandId,
+    required String leaseToken,
+  }) async => false;
+
+  @override
+  Future<String?> acquireClaim({
+    required String commandId,
+    required String actorUserId,
+    required Duration leaseDuration,
+    DateTime? now,
+    String? overrideLeaseToken,
+  }) => _inner.acquireClaim(
+    commandId: commandId,
+    actorUserId: actorUserId,
+    leaseDuration: leaseDuration,
+    now: now ?? DateTime.now().toUtc(),
+    overrideLeaseToken: overrideLeaseToken,
+  );
+
+  @override
+  Future<PendingRewardCommand?> getPendingCommand(String commandId) =>
+      _inner.getPendingCommand(commandId);
+
+  @override
+  Future<bool> markPossiblyDispatched({
+    required String commandId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime now,
+  }) => _inner.markPossiblyDispatched(
+    commandId: commandId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    now: now,
+  );
+
+  @override
+  Future<bool> releaseClaim({
+    required String commandId,
+    required String leaseToken,
+    required DateTime nextAttemptAt,
+    String? lastErrorMessage,
+  }) => _inner.releaseClaim(
+    commandId: commandId,
+    leaseToken: leaseToken,
+    nextAttemptAt: nextAttemptAt,
+    lastErrorMessage: lastErrorMessage,
+  );
+
+  @override
+  Future<bool> transitionRecoveryState({
+    required String commandId,
+    required String leaseToken,
+    required CommandRecoveryState newState,
+    String? lastErrorMessage,
+  }) => _inner.transitionRecoveryState(
+    commandId: commandId,
+    leaseToken: leaseToken,
+    newState: newState,
+    lastErrorMessage: lastErrorMessage,
+  );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 final class _UnavailableRewardRepository implements RewardRepository {
@@ -1348,6 +1625,66 @@ final class _FailingThenSucceedingRewardRepository implements RewardRepository {
       rewardSnapshot: const {'title': 'Test Reward', 'cost': 1500},
       createdAt: now,
       updatedAt: now,
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _SwitchingFamilyAuthzPort implements RecoveryAuthorizationPort {
+  _SwitchingFamilyAuthzPort({required this.activeFamily});
+
+  String activeFamily;
+
+  @override
+  Future<TargetAuthorizationStatus> verifyTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+    required RewardCommandOperation operation,
+  }) async {
+    if (familyId == activeFamily) {
+      return TargetAuthorizationStatus.authorized;
+    }
+    return TargetAuthorizationStatus.definitelyDenied;
+  }
+}
+
+final class _InFlightLogoutWheelRepository implements WheelRepository {
+  _InFlightLogoutWheelRepository({required this.onPreRpc});
+
+  final void Function() onPreRpc;
+
+  @override
+  Future<WheelSpinResult> spinRewardWheel({
+    required String commandId,
+    required ChildId childId,
+  }) async {
+    onPreRpc();
+    final now = DateTime.now().toUtc();
+    return WheelSpinResult(
+      spinId: WheelSpinId('spin-inflight'),
+      redemptionId: RewardRedemptionId('red-inflight'),
+      familyId: FamilyId('fam-a10'),
+      childId: childId,
+      rewardId: RewardId('rew-1'),
+      rewardTitle: 'Reward In-Flight',
+      rewardCategory: RewardCategory.item,
+      rewardIconKey: 'star',
+      wheelTier: WheelTier.common,
+      spinCostMinor: 1000,
+      newBalanceMinor: 4000,
+      selectionSnapshot: WheelSelectionSnapshot(
+        wheelConfigVersion: 'v1',
+        spinCostMinor: 1000,
+        deterministicOrdering: 'id_asc',
+        totalWeight: 100,
+        randomDraw: 42,
+        winningRewardId: RewardId('rew-1'),
+        orderedPool: const [],
+      ),
+      createdAt: now,
     );
   }
 

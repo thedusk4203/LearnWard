@@ -13,18 +13,24 @@ final class OutboxRecoveryDispatcher {
   OutboxRecoveryDispatcher({
     required PendingRewardCommandStore commandStore,
     required RecoveryCoordinator coordinator,
+    AuthSessionPort? authSessionPort,
     Clock clock = const SystemClock(),
     this.maxConcurrentRpcs = 2,
+    this.minimumDrainInterval = const Duration(seconds: 1),
   }) : _commandStore = commandStore,
        _coordinator = coordinator,
+       _authSessionPort = authSessionPort,
        _clock = clock;
 
   final PendingRewardCommandStore _commandStore;
   final RecoveryCoordinator _coordinator;
+  final AuthSessionPort? _authSessionPort;
   final Clock _clock;
   final int maxConcurrentRpcs;
+  final Duration minimumDrainInterval;
 
   bool _isDraining = false;
+  DateTime? _lastDrainCompletedAt;
 
   /// Whether a drain pass is currently in-flight.
   bool get isDraining => _isDraining;
@@ -33,6 +39,8 @@ final class OutboxRecoveryDispatcher {
   ///
   /// Guarantees:
   /// - At most one drain runs at a time for this dispatcher instance.
+  /// - Enforces a scheduler flood guard of at least [minimumDrainInterval] between drain passes.
+  /// - Obtains and re-validates trusted current auth context itself (M02).
   /// - Only commands belonging to [activeFamilyId] are queried (no cross-family starvation).
   /// - Mismatched actor commands in this family are safely paused.
   /// - Returning original actor commands in this family are safely resumed.
@@ -43,10 +51,29 @@ final class OutboxRecoveryDispatcher {
     int limit = 10,
   }) async {
     if (_isDraining) return 0;
+
+    final now = _clock.now().toUtc();
+
+    // Flood guard: enforce minimum interval between successive drain passes
+    if (_lastDrainCompletedAt != null &&
+        now.difference(_lastDrainCompletedAt!) < minimumDrainInterval) {
+      return 0;
+    }
+
     _isDraining = true;
 
     try {
-      final now = _clock.now().toUtc();
+      // Re-read and validate current trusted session context if port is provided (M02)
+      if (_authSessionPort != null) {
+        final freshContext = await _authSessionPort.validateForMutation();
+        if (freshContext == null ||
+            freshContext.userId != validatedContext.userId ||
+            freshContext.sessionGeneration !=
+                validatedContext.sessionGeneration) {
+          // Stale, lost, or mismatched context snapshot: abort drain safely
+          return 0;
+        }
+      }
 
       // 1. Pause any active commands in this family that belong to a different actor
       final mismatched = await _commandStore.listMismatchedActiveCommands(
@@ -128,6 +155,7 @@ final class OutboxRecoveryDispatcher {
 
       return processedCount;
     } finally {
+      _lastDrainCompletedAt = _clock.now().toUtc();
       _isDraining = false;
     }
   }

@@ -312,7 +312,16 @@ void main() {
       'RedeemStoreReward creates pending redemption and forwards commandId',
       () async {
         final commandStore = InMemoryPendingRewardCommandStore();
-        final redeem = RedeemStoreReward(repository, commandStore);
+        final authPort = FakeAuthSessionPort(activeUserId: 'usr-parent-1');
+        final authzPort = FakeRecoveryAuthorizationPort(
+          defaultStatus: TargetAuthorizationStatus.authorized,
+        );
+        final redeem = RedeemStoreReward(
+          repository,
+          commandStore,
+          authSessionPort: authPort,
+          authorizationPort: authzPort,
+        );
 
         repository.rewards['rew-10'] = Reward(
           id: RewardId('rew-10'),
@@ -327,7 +336,6 @@ void main() {
         );
 
         final redemption = await redeem(
-          commandId: 'cmd-redeem-1',
           familyId: familyId,
           rewardId: RewardId('rew-10'),
           childId: childId,
@@ -337,7 +345,7 @@ void main() {
         expect(repository.redeemCallCount, 1);
         expect(redemption.status, RewardRedemptionStatus.pendingFulfillment);
         expect(redemption.rpCostMinor, 1500);
-        expect(repository.commandIds.contains('cmd-redeem-1'), isTrue);
+        expect(repository.commandIds.isNotEmpty, isTrue);
       },
     );
 

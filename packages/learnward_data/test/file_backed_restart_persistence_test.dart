@@ -13,6 +13,8 @@ void main() {
     late Directory tempDir;
     late File dbFile;
     late MockServerRewardRepository server;
+    late FakeAuthSessionPort defaultAuth;
+    late FakeRecoveryAuthorizationPort defaultAuthz;
 
     final familyId = FamilyId('fam-restart-1');
     final childId = ChildId('child-restart-1');
@@ -23,6 +25,13 @@ void main() {
       dbFile = File('${tempDir.path}/commands_restart.sqlite');
       server = MockServerRewardRepository();
       server.childBalances[childId.value] = 5000; // 50.00 RP
+      defaultAuth = FakeAuthSessionPort(
+        activeUserId: 'usr-child-1',
+        role: 'child',
+      );
+      defaultAuthz = FakeRecoveryAuthorizationPort(
+        defaultStatus: TargetAuthorizationStatus.authorized,
+      );
     });
 
     tearDown(() {
@@ -36,7 +45,13 @@ void main() {
     test('Redeem: persists command to disk, survives AppDatabase restart, retries safely with exactly 1 debit and clears disk journal', () async {
       // --- Process / Session 1: Initial Attempt with response-loss ---
       final dbA = AppDatabase(NativeDatabase(dbFile));
-      final redeemUseCaseA = RedeemStoreReward(server, dbA);
+      final redeemUseCaseA = RedeemStoreReward(
+        server,
+        dbA,
+        authSessionPort: defaultAuth,
+        authorizationPort: defaultAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
@@ -85,8 +100,15 @@ void main() {
       expect(pendingOnDisk.actorUserId, 'usr-child-1');
 
       // Retry redemption with dbB on fresh app session
-      final redeemUseCaseB = RedeemStoreReward(server, dbB);
+      final redeemUseCaseB = RedeemStoreReward(
+        server,
+        dbB,
+        authSessionPort: defaultAuth,
+        authorizationPort: defaultAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       final recovered = await redeemUseCaseB(
+        commandId: persistedCommandId,
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
@@ -128,7 +150,13 @@ void main() {
     test('Cancel: persists original cancellation reason to disk, survives restart, retries safely with exactly 1 refund and preserves reason', () async {
       // Initial setup: create an existing redemption on the server
       final initialDb = AppDatabase(NativeDatabase(dbFile));
-      final initialRedeem = RedeemStoreReward(server, initialDb);
+      final initialRedeem = RedeemStoreReward(
+        server,
+        initialDb,
+        authSessionPort: defaultAuth,
+        authorizationPort: defaultAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       final redemption = await initialRedeem(
         familyId: familyId,
         rewardId: rewardId,
@@ -204,7 +232,13 @@ void main() {
     test('Fulfill: persists command to disk, survives restart, retries safely without duplicate fulfillment and clears disk journal', () async {
       // Initial setup: create redemption
       final initialDb = AppDatabase(NativeDatabase(dbFile));
-      final initialRedeem = RedeemStoreReward(server, initialDb);
+      final initialRedeem = RedeemStoreReward(
+        server,
+        initialDb,
+        authSessionPort: defaultAuth,
+        authorizationPort: defaultAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       final redemption = await initialRedeem(
         familyId: familyId,
         rewardId: rewardId,
@@ -283,7 +317,13 @@ void main() {
       // Balance drops to 0, causing LW201 terminal error on retry
       server.childBalances[childId.value] = 0;
 
-      final redeemUseCaseB = RedeemStoreReward(server, dbB);
+      final redeemUseCaseB = RedeemStoreReward(
+        server,
+        dbB,
+        authSessionPort: defaultAuth,
+        authorizationPort: defaultAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       await expectLater(
         redeemUseCaseB(
           commandId: 'cmd-term-001',

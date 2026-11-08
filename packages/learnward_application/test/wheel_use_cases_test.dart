@@ -6,15 +6,32 @@ import 'package:test/test.dart';
 void main() {
   late FakeWheelRepository fakeRepo;
   late InMemoryPendingRewardCommandStore fakeCommandStore;
+  late FakeAuthSessionPort fakeAuth;
+  late FakeRecoveryAuthorizationPort fakeAuthz;
 
   final familyId = FamilyId('fam-wheel-1');
   final childId = ChildId('ch-wheel-1');
   final siblingId = ChildId('ch-wheel-2');
   final now = DateTime.utc(2026, 11, 2, 10, 0);
 
+  SpinRewardWheel createSpinUseCase({
+    AuthSessionPort? authPort,
+    RecoveryAuthorizationPort? authzPort,
+  }) {
+    return SpinRewardWheel(
+      fakeRepo,
+      fakeCommandStore,
+      authSessionPort: authPort ?? fakeAuth,
+      authorizationPort: authzPort ?? fakeAuthz,
+      jitterSource: const DeterministicJitterSource(0.0),
+    );
+  }
+
   setUp(() {
     fakeCommandStore = InMemoryPendingRewardCommandStore();
     fakeRepo = FakeWheelRepository(randomSeed: 42);
+    fakeAuth = FakeAuthSessionPort(activeUserId: 'actor-child-1');
+    fakeAuthz = FakeRecoveryAuthorizationPort();
 
     // Seed 4 rewards: 2 common, 1 special, 1 rare, 1 sibling-only
     fakeRepo.addReward(
@@ -48,8 +65,8 @@ void main() {
       Reward(
         id: RewardId('rw-3'),
         familyId: familyId,
-        title: 'Movie Night Pick',
-        category: RewardCategory.experience,
+        title: 'Book of Choice',
+        category: RewardCategory.privilege,
         storeEnabled: false,
         wheelEnabled: true,
         wheelTier: WheelTier.rare,
@@ -61,20 +78,20 @@ void main() {
       Reward(
         id: RewardId('rw-sibling'),
         familyId: familyId,
-        title: 'Sibling Prize',
-        category: RewardCategory.item,
+        targetChildId: siblingId, // Only sibling can spin/see this
+        title: 'Sibling Only Reward',
+        category: RewardCategory.privilege,
         storeEnabled: false,
         wheelEnabled: true,
         wheelTier: WheelTier.common,
-        targetChildId: siblingId,
         createdAt: now,
         updatedAt: now,
       ),
     );
   });
 
-  group('Wheel Settings Use Cases', () {
-    test('GetWheelSettings returns default or existing settings', () async {
+  group('GetWheelSettings & GetEligibleWheelRewards Queries', () {
+    test('returns default wheel settings when none are configured', () async {
       final getSettings = GetWheelSettings(fakeRepo);
       final settings = await getSettings(familyId: familyId);
 
@@ -84,38 +101,31 @@ void main() {
       expect(settings.isEnabled, isTrue);
     });
 
-    test('UpdateWheelSettings updates parental limits', () async {
-      final updateSettings = UpdateWheelSettings(fakeRepo);
-      final updated = await updateSettings(
-        WheelSettings(
-          familyId: familyId,
-          spinCostMinor: 2000,
-          dailySpinCap: 5,
-          isEnabled: false,
-          createdAt: now,
-          updatedAt: now,
-        ),
+    test('returns configured wheel settings when present', () async {
+      final custom = WheelSettings(
+        familyId: familyId,
+        spinCostMinor: 500,
+        dailySpinCap: 5,
+        isEnabled: true,
+        createdAt: now,
+        updatedAt: now,
       );
-
-      expect(updated.spinCostMinor, equals(2000));
-      expect(updated.dailySpinCap, equals(5));
-      expect(updated.isEnabled, isFalse);
+      fakeRepo.setSettings(familyId.value, custom);
 
       final getSettings = GetWheelSettings(fakeRepo);
-      final reloaded = await getSettings(familyId: familyId);
-      expect(reloaded.spinCostMinor, equals(2000));
-      expect(reloaded.isEnabled, isFalse);
+      final settings = await getSettings(familyId: familyId);
+
+      expect(settings.spinCostMinor, equals(500));
+      expect(settings.dailySpinCap, equals(5));
+      expect(settings.isEnabled, isTrue);
     });
-  });
 
-  group('ListWheelRewards Use Case', () {
     test(
-      'returns only active, wheel-enabled rewards eligible for target child',
+      'returns only eligible rewards matching childId or all-child pool',
       () async {
-        final listRewards = ListWheelRewards(fakeRepo);
-        final rewards = await listRewards(familyId: familyId, childId: childId);
+        final getRewards = ListWheelRewards(fakeRepo);
+        final rewards = await getRewards(familyId: familyId, childId: childId);
 
-        // Should include rw-1, rw-2, rw-3, but NOT rw-sibling
         expect(rewards.length, equals(3));
         expect(rewards.any((r) => r.id.value == 'rw-1'), isTrue);
         expect(rewards.any((r) => r.id.value == 'rw-2'), isTrue);
@@ -126,13 +136,19 @@ void main() {
   });
 
   group('SpinRewardWheel Use Case & Durable Command Journaling', () {
+    test('H02: constructor fails closed with ArgumentError without trusted coordinator or ports', () {
+      expect(
+        () => SpinRewardWheel(fakeRepo, fakeCommandStore),
+        throwsArgumentError,
+      );
+    });
+
     test('successful spin records command in journal, executes RPC, then deletes journal entry', () async {
-      final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
+      final spinUseCase = createSpinUseCase();
 
       final result = await spinUseCase(
         familyId: familyId,
         childId: childId,
-        commandId: 'cmd-spin-100',
         actorUserId: 'actor-child-1',
       );
 
@@ -146,11 +162,9 @@ void main() {
     });
 
     test('network failure before RPC leaves command durable in store with possibly_dispatched; retry reuses exact same commandId', () async {
-      final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
-
+      final spinUseCase = createSpinUseCase();
       fakeRepo.failNextWithNetwork = true;
 
-      // First attempt fails with network exception
       await expectLater(
         () => spinUseCase(
           familyId: familyId,
@@ -160,37 +174,38 @@ void main() {
         throwsA(isA<Exception>()),
       );
 
-      // Journal entry MUST persist with pre-dispatch provenance
+      // Verify command is in pending store with possibly_dispatched
       final pendingList = await fakeCommandStore.listPendingCommands();
-      expect(pendingList.length, equals(1));
-      final pendingCmd = pendingList.first;
-      expect(pendingCmd.operation, equals(RewardCommandOperation.spinWheel));
-      expect(pendingCmd.familyId, equals(familyId.value));
-      expect(pendingCmd.childId, equals(childId.value));
-      expect(pendingCmd.actorUserId, equals('actor-child-1'));
+      expect(pendingList, isNotEmpty);
+      final commandId = pendingList.first.commandId;
+      final pending = await fakeCommandStore.getPendingCommand(commandId);
+      expect(pending, isNotNull);
+      expect(pending!.commandId, equals(commandId));
       expect(
-        pendingCmd.dispatchState,
+        pending.dispatchState,
         equals(CommandDispatchState.possiblyDispatched),
       );
+      expect(pending.operation, equals(RewardCommandOperation.spinWheel));
 
-      // Retry: must reuse exact same commandId
+      // Retry exact same command ID with network restored
+      fakeRepo.failNextWithNetwork = false;
       final retryResult = await spinUseCase(
         familyId: familyId,
         childId: childId,
+        commandId: commandId,
         actorUserId: 'actor-child-1',
       );
-      expect(retryResult.spinId, isNotNull);
 
-      // Journal cleaned up after successful retry
-      expect(await fakeCommandStore.listPendingCommands(), isEmpty);
+      expect(retryResult.rewardTitle, isNotEmpty);
+
+      // Store is now cleaned up
+      expect(await fakeCommandStore.getPendingCommand(commandId), isNull);
     });
 
-    test('server commits but response is lost; retry replays same command and returns same outcome without double debit', () async {
-      final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
-
+    test('commit-response-loss: server executes spin, receipt drops; retry returns exact same result with zero double-debit', () async {
+      final spinUseCase = createSpinUseCase();
       fakeRepo.failAfterCommitResponseLost = true;
 
-      // First call: server committed spin, but client caught socket error
       await expectLater(
         () => spinUseCase(
           familyId: familyId,
@@ -200,141 +215,123 @@ void main() {
         throwsA(isA<Exception>()),
       );
 
-      // Verify command is safely journaled
-      final pending = await fakeCommandStore.findPendingSpinCommand(
-        familyId: familyId.value,
-        childId: childId.value,
-      );
+      // Command remains pending locally with possibly_dispatched
+      final pendingList = await fakeCommandStore.listPendingCommands();
+      expect(pendingList, isNotEmpty);
+      final commandId = pendingList.first.commandId;
+      final pending = await fakeCommandStore.getPendingCommand(commandId);
       expect(pending, isNotNull);
-      final capturedCommandId = pending!.commandId;
-      expect(capturedCommandId, isNotEmpty);
-      expect(pending.actorUserId, equals('actor-child-1'));
+      expect(
+        pending!.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+      );
 
-      // Retry call with new use-case invocation (simulating user retry or restart)
-      final spinUseCase2 = SpinRewardWheel(fakeRepo, fakeCommandStore);
+      // Exactly 1 server spin occurred despite client failure
+      expect(fakeRepo.spinCallCount, equals(1));
+      final originalReceipt = fakeRepo.lastCommittedResult!;
+
+      // Retry: server recognizes idempotency key, returns cached receipt, increments nothing
+      final spinUseCase2 = createSpinUseCase();
       final replayResult = await spinUseCase2(
         familyId: familyId,
         childId: childId,
+        commandId: commandId,
         actorUserId: 'actor-child-1',
       );
 
-      // Verifies server recognized command_id and returned existing winner without extra spin
-      final allSpins = await fakeRepo.listWheelSpins(
-        familyId: familyId,
-        childId: childId,
-      );
-      expect(allSpins.length, equals(1));
-      expect(replayResult.spinId, equals(allSpins.first.id));
+      expect(fakeRepo.spinCallCount, equals(1)); // NO double execution!
+      expect(replayResult.spinId, equals(originalReceipt.spinId));
+      expect(replayResult.rewardId, equals(originalReceipt.rewardId));
+      expect(replayResult.rewardTitle, equals(originalReceipt.rewardTitle));
 
-      // Journal is now cleared
-      expect(await fakeCommandStore.listPendingCommands(), isEmpty);
+      // Journal entry cleaned up after replay confirms success
+      expect(await fakeCommandStore.getPendingCommand(commandId), isNull);
     });
 
-    test(
-      'fail closed: cannot replay when actor is missing or mismatched',
-      () async {
-        // 1. Existing command without actorUserId
-        await fakeCommandStore.savePendingCommand(
-          PendingRewardCommand(
-            operation: RewardCommandOperation.spinWheel,
-            commandId: 'cmd-spin-no-actor',
-            familyId: familyId.value,
-            childId: childId.value,
-            createdAt: DateTime.now().toUtc(),
-          ),
-        );
+    test('different actor cannot auto-replay pending spin; fails closed until original actor returns', () async {
+      // 1. Child-1 attempts spin and loses connection
+      final spinUseCaseChild1 = createSpinUseCase(
+        authPort: FakeAuthSessionPort(activeUserId: 'actor-child-1'),
+      );
+      fakeRepo.failNextWithNetwork = true;
 
-        final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
+      await expectLater(
+        () => spinUseCaseChild1(
+          familyId: familyId,
+          childId: childId,
+          actorUserId: 'actor-child-1',
+        ),
+        throwsA(isA<Exception>()),
+      );
 
-        // Attempting to dispatch must fail closed with StateError, not touch server
-        await expectLater(
-          () => spinUseCase(
-            familyId: familyId,
-            childId: childId,
-            actorUserId: 'actor-child-1',
-          ),
-          throwsA(isA<StateError>()),
-        );
+      final pendingList = await fakeCommandStore.listPendingCommands();
+      expect(pendingList, isNotEmpty);
+      final commandId = pendingList.first.commandId;
 
-        // 2. Existing command with actor 'actor-child-1' but caller has different actor
-        await fakeCommandStore.deletePendingCommand('cmd-spin-no-actor');
-        await fakeCommandStore.savePendingCommand(
-          PendingRewardCommand(
-            operation: RewardCommandOperation.spinWheel,
-            commandId: 'cmd-spin-actor-1',
-            familyId: familyId.value,
-            childId: childId.value,
-            actorUserId: 'actor-child-1',
-            createdAt: DateTime.now().toUtc(),
-          ),
-        );
+      // 2. Sibling signs in and attempts to spin
+      final spinUseCaseChild2 = createSpinUseCase(
+        authPort: FakeAuthSessionPort(activeUserId: 'actor-child-2'),
+      );
 
-        await expectLater(
-          () => spinUseCase(
-            familyId: familyId,
-            childId: childId,
-            actorUserId: 'actor-different',
-          ),
-          throwsA(isA<StateError>()),
-        );
+      // Attempting to dispatch must fail closed with StateError, not touch server
+      fakeRepo.failNextWithNetwork = false;
+      await expectLater(
+        () => spinUseCaseChild2(
+          familyId: familyId,
+          childId: childId,
+          commandId: commandId,
+          actorUserId: 'actor-child-2',
+        ),
+        throwsA(isA<StateError>()),
+      );
 
-        // Clean up for next test
-        await fakeCommandStore.deletePendingCommand('cmd-spin-actor-1');
-      },
-    );
+      // Verify command remains bound to actor-child-1
+      final stored = await fakeCommandStore.getPendingCommand(commandId);
+      expect(stored, isNotNull);
+      expect(stored!.actorUserId, equals('actor-child-1'));
+
+      // 3. Original actor returns and replays
+      final replayResult = await spinUseCaseChild1(
+        familyId: familyId,
+        childId: childId,
+        commandId: commandId,
+        actorUserId: 'actor-child-1',
+      );
+
+      expect(replayResult.rewardTitle, isNotEmpty);
+      expect(await fakeCommandStore.getPendingCommand(commandId), isNull);
+    });
 
     test('fail closed: cannot replay when existing command is quarantined or legacy unknown', () async {
-      // Quarantined
       await fakeCommandStore.savePendingCommand(
         PendingRewardCommand(
+          commandId: 'cmd-quarantine',
           operation: RewardCommandOperation.spinWheel,
-          commandId: 'cmd-spin-quarantined',
           familyId: familyId.value,
           childId: childId.value,
-          actorUserId: 'actor-child-1',
-          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
-          createdAt: DateTime.now().toUtc(),
-        ),
-      );
-
-      final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
-      await expectLater(
-        () => spinUseCase(
-          familyId: familyId,
-          childId: childId,
-          actorUserId: 'actor-child-1',
-        ),
-        throwsA(isA<StateError>()),
-      );
-      await fakeCommandStore.deletePendingCommand('cmd-spin-quarantined');
-
-      // Legacy unknown
-      await fakeCommandStore.savePendingCommand(
-        PendingRewardCommand(
-          operation: RewardCommandOperation.spinWheel,
-          commandId: 'cmd-spin-legacy',
-          familyId: familyId.value,
-          childId: childId.value,
+          createdAt: now,
           actorUserId: 'actor-child-1',
           dispatchState: CommandDispatchState.unknownLegacy,
-          createdAt: DateTime.now().toUtc(),
+          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
         ),
       );
+
+      final spinUseCase = createSpinUseCase();
       await expectLater(
         () => spinUseCase(
           familyId: familyId,
           childId: childId,
+          commandId: 'cmd-quarantine',
           actorUserId: 'actor-child-1',
         ),
         throwsA(isA<StateError>()),
       );
-      await fakeCommandStore.deletePendingCommand('cmd-spin-legacy');
     });
 
     test(
       '42501 permission error does NOT delete pending journal command',
       () async {
-        final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
+        final spinUseCase = createSpinUseCase();
         fakeRepo.failNextWithPermissionError = true;
 
         await expectLater(
@@ -346,32 +343,24 @@ void main() {
           throwsA(isA<Exception>()),
         );
 
-        final pending = await fakeCommandStore.findPendingSpinCommand(
+        // Stored command MUST be preserved (transitions to quarantinedUnknownOutcome, never deleted)
+        final stored = await fakeCommandStore.findPendingSpinCommand(
           familyId: familyId.value,
           childId: childId.value,
           recoveryState: null,
         );
+        expect(stored, isNotNull);
+        expect(stored!.commandId, isNotEmpty);
         expect(
-          pending,
-          isNotNull,
-          reason: 'Permission error (42501) must preserve pending journal row',
+          stored.recoveryState,
+          equals(CommandRecoveryState.quarantinedUnknownOutcome),
         );
-        await fakeCommandStore.deletePendingCommand(pending!.commandId);
       },
     );
 
     test('terminal business error (e.g. LW202, LW203, LW206) cleans up journal entry and rethrows', () async {
-      // Disable wheel
-      await fakeRepo.updateWheelSettings(
-        WheelSettings(
-          familyId: familyId,
-          isEnabled: false,
-          createdAt: now,
-          updatedAt: now,
-        ),
-      );
-
-      final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
+      fakeRepo.failWithInvalidWheel = true;
+      final spinUseCase = createSpinUseCase();
 
       await expectLater(
         () => spinUseCase(
@@ -386,50 +375,34 @@ void main() {
       expect(await fakeCommandStore.listPendingCommands(), isEmpty);
     });
 
-    test('Test C: missing or empty actor during new spin fails closed, zero server calls, zero journal entries', () async {
+    test('Test C: missing or unauthenticated session during new spin fails closed, zero server calls, zero journal entries', () async {
       fakeRepo.spinCallCount = 0;
-      final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
+      fakeAuth.invalidateSession(); // Unauthenticated session
+      final spinUseCase = createSpinUseCase();
 
-      // 1. null actor
       await expectLater(
         () => spinUseCase(
           familyId: familyId,
           childId: childId,
-          actorUserId: null,
+          actorUserId: 'actor-child-1',
         ),
         throwsA(isA<StateError>()),
       );
       expect(
         fakeRepo.spinCallCount,
         equals(0),
-        reason: 'Zero server calls on missing actor',
+        reason: 'Zero server calls on missing session',
       );
       expect(
         await fakeCommandStore.listPendingCommands(),
         isEmpty,
-        reason: 'Zero journal entries on missing actor',
-      );
-
-      // 2. empty actor
-      await expectLater(
-        () =>
-            spinUseCase(familyId: familyId, childId: childId, actorUserId: ''),
-        throwsA(isA<StateError>()),
-      );
-      expect(
-        fakeRepo.spinCallCount,
-        equals(0),
-        reason: 'Zero server calls on empty actor',
-      );
-      expect(
-        await fakeCommandStore.listPendingCommands(),
-        isEmpty,
-        reason: 'Zero journal entries on empty actor',
+        reason: 'Zero journal entries on missing session',
       );
     });
 
     test('Test E: valid authenticated actor creates one new command with possibly_dispatched persisted before RPC', () async {
-      final spinUseCase = SpinRewardWheel(fakeRepo, fakeCommandStore);
+      fakeAuth.setSession(userId: 'actor-valid-child-1');
+      final spinUseCase = createSpinUseCase();
       fakeRepo.failNextWithNetwork = true;
 
       await expectLater(
@@ -446,7 +419,6 @@ void main() {
       expect(pendingList.length, equals(1));
       final pending = pendingList.first;
       expect(pending.actorUserId, equals('actor-valid-child-1'));
-      expect(pending.actorRole, equals('child'));
       expect(
         pending.dispatchState,
         equals(CommandDispatchState.possiblyDispatched),

@@ -12,6 +12,8 @@ void main() {
     late Directory tempDir;
     late File dbFile;
     late FakeWheelRepository fakeServer;
+    late FakeAuthSessionPort defaultAuth;
+    late FakeRecoveryAuthorizationPort defaultAuthz;
 
     final familyId = FamilyId('fam-wheel-restart-1');
     final childId = ChildId('ch-wheel-restart-1');
@@ -21,6 +23,13 @@ void main() {
       tempDir = Directory.systemTemp.createTempSync('learnward_wheel_restart_');
       dbFile = File('${tempDir.path}/wheel_commands.sqlite');
       fakeServer = FakeWheelRepository(randomSeed: 123);
+      defaultAuth = FakeAuthSessionPort(
+        activeUserId: 'usr-child-1',
+        role: 'child',
+      );
+      defaultAuthz = FakeRecoveryAuthorizationPort(
+        defaultStatus: TargetAuthorizationStatus.authorized,
+      );
 
       // Seed 3 active eligible wheel rewards
       fakeServer.addReward(
@@ -76,7 +85,13 @@ void main() {
     test('Spin: persists command to real SQLite file, survives process restart, retries safely without duplicate spin, and cleans disk journal', () async {
       // --- Process / Session 1: Initial Spin Attempt with commit-response-loss ---
       final dbA = AppDatabase(NativeDatabase(dbFile));
-      final spinUseCaseA = SpinRewardWheel(fakeServer, dbA);
+      final spinUseCaseA = SpinRewardWheel(
+        fakeServer,
+        dbA,
+        authSessionPort: defaultAuth,
+        authorizationPort: defaultAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
 
       fakeServer.failAfterCommitResponseLost = true;
 
@@ -129,8 +144,15 @@ void main() {
       expect(persistedCommandId, isNotEmpty);
 
       // Retry spin with dbB on fresh app session with matching actor
-      final spinUseCaseB = SpinRewardWheel(fakeServer, dbB);
+      final spinUseCaseB = SpinRewardWheel(
+        fakeServer,
+        dbB,
+        authSessionPort: defaultAuth,
+        authorizationPort: defaultAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       final recoveredResult = await spinUseCaseB(
+        commandId: persistedCommandId,
         familyId: familyId,
         childId: childId,
         actorUserId: 'usr-child-1',
@@ -153,7 +175,13 @@ void main() {
       expect(remainingOnDisk, isEmpty);
 
       // --- Process / Session 3: Subsequent User Action gets a BRAND NEW command ID ---
-      final spinUseCaseC = SpinRewardWheel(fakeServer, dbB);
+      final spinUseCaseC = SpinRewardWheel(
+        fakeServer,
+        dbB,
+        authSessionPort: defaultAuth,
+        authorizationPort: defaultAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       final nextResult = await spinUseCaseC(
         familyId: familyId,
         childId: childId,

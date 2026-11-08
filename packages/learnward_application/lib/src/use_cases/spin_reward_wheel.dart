@@ -24,8 +24,16 @@ final class SpinRewardWheel {
   }) : _authSessionPort = authSessionPort,
        _authorizationPort = authorizationPort,
        _clock = clock ?? const SystemClock(),
-       _jitterSource = jitterSource ?? const DeterministicJitterSource(),
-       _coordinator = coordinator;
+       _jitterSource = jitterSource ?? const RandomJitterSource(),
+       _coordinator = coordinator {
+    if (_coordinator == null &&
+        (_authSessionPort == null || _authorizationPort == null)) {
+      throw ArgumentError(
+        'SpinRewardWheel requires either an explicit RecoveryCoordinator or both '
+        'trusted AuthSessionPort and RecoveryAuthorizationPort.',
+      );
+    }
+  }
 
   final WheelRepository _repository;
   final PendingRewardCommandStore _commandStore;
@@ -40,57 +48,18 @@ final class SpinRewardWheel {
     required FamilyId familyId,
     required ChildId childId,
     String? commandId,
+    @Deprecated('Actor identity must be obtained from trusted AuthSessionPort')
     String? actorUserId,
+    @Deprecated('Actor role must be obtained from trusted AuthSessionPort')
     String? actorRole,
   }) async {
-    final existing = await _commandStore.findPendingSpinCommand(
-      familyId: familyId.value,
-      childId: childId.value,
-      recoveryState: null,
-    );
-
-    if (existing != null) {
-      final canReplayExisting =
-          actorUserId != null &&
-          actorUserId.isNotEmpty &&
-          existing.actorUserId != null &&
-          existing.actorUserId == actorUserId &&
-          existing.canAutoReplay;
-
-      if (!canReplayExisting) {
-        throw StateError(
-          'Cannot dispatch reward command: an unresolved pending command exists '
-          '(id: ${existing.commandId}, recoveryState: ${existing.recoveryState.wireValue}, '
-          'dispatchState: ${existing.dispatchState.wireValue}) that is ineligible for automatic replay. '
-          'Reconciliation is required.',
-        );
-      }
-    } else {
-      if (actorUserId == null || actorUserId.isEmpty) {
-        throw StateError(
-          'Cannot dispatch reward command: authenticated actor identity is required but was missing or empty.',
-        );
-      }
-    }
-
-    final effectiveAuthPort =
-        _authSessionPort ??
-        _DirectActorSessionPort(
-          actorUserId: actorUserId,
-          role: actorRole,
-          clock: _clock,
-        );
-
-    final effectiveAuthzPort =
-        _authorizationPort ?? const _PermissiveAuthorizationPort();
-
     final coordinator =
         _coordinator ??
         RecoveryCoordinator(
           commandStore: _commandStore,
           wheelRepository: _repository,
-          authSessionPort: effectiveAuthPort,
-          authorizationPort: effectiveAuthzPort,
+          authSessionPort: _authSessionPort!,
+          authorizationPort: _authorizationPort!,
           clock: _clock,
           jitterSource: _jitterSource,
           uuidGenerator: uuidGenerator,
@@ -130,50 +99,5 @@ final class SpinRewardWheel {
       ),
       CommandAuthUnavailableResult(reason: final r) => throw StateError(r),
     };
-  }
-}
-
-final class _DirectActorSessionPort implements AuthSessionPort {
-  const _DirectActorSessionPort({
-    required this.actorUserId,
-    this.role,
-    required this.clock,
-  });
-
-  final String? actorUserId;
-  final String? role;
-  final Clock clock;
-
-  @override
-  String? get currentSessionGeneration =>
-      actorUserId != null ? 'gen-$actorUserId' : null;
-
-  @override
-  Stream<String?> get sessionGenerationStream =>
-      Stream.value(currentSessionGeneration);
-
-  @override
-  Future<ValidatedActorContext?> validateForMutation() async {
-    if (actorUserId == null || actorUserId!.isEmpty) return null;
-    return ValidatedActorContext(
-      userId: actorUserId!,
-      sessionGeneration: currentSessionGeneration!,
-      observedAt: clock.now().toUtc(),
-      role: role,
-    );
-  }
-}
-
-final class _PermissiveAuthorizationPort implements RecoveryAuthorizationPort {
-  const _PermissiveAuthorizationPort();
-
-  @override
-  Future<TargetAuthorizationStatus> verifyTarget({
-    required ValidatedActorContext context,
-    required String familyId,
-    required String childId,
-    required RewardCommandOperation operation,
-  }) async {
-    return TargetAuthorizationStatus.authorized;
   }
 }

@@ -45,6 +45,21 @@ final class FakeAuthSessionPort implements AuthSessionPort {
 
   void signOut() => invalidateSession();
 
+  void setSession({
+    required String userId,
+    String? role,
+    String? sessionGeneration,
+  }) {
+    setContext(
+      ValidatedActorContext(
+        userId: userId,
+        sessionGeneration: sessionGeneration ?? 'gen-$userId',
+        observedAt: DateTime.now().toUtc(),
+        role: role,
+      ),
+    );
+  }
+
   void setSessionGeneration(String gen) {
     _sessionGeneration = gen;
     if (_currentContext != null) {

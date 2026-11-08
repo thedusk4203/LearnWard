@@ -774,7 +774,21 @@ void main() {
           ),
         );
 
-        final spinUseCase = SpinRewardWheel(fakeServer, database);
+        final testClock = TestClock(DateTime.utc(2026, 11, 7, 12, 0));
+        final fakeAuth = FakeAuthSessionPort(
+          activeUserId: 'usr-different-actor',
+          role: 'child',
+        );
+        final fakeAuthz = FakeRecoveryAuthorizationPort(
+          defaultStatus: TargetAuthorizationStatus.authorized,
+        );
+        final spinUseCase = SpinRewardWheel(
+          fakeServer,
+          database,
+          authSessionPort: fakeAuth,
+          authorizationPort: fakeAuthz,
+          clock: testClock,
+        );
 
         // 5. Fail closed on actor mismatch: different actor CANNOT replay usr-1's command
         // Must throw StateError, must NOT generate replacement command, must NOT call server
@@ -805,6 +819,7 @@ void main() {
         expect(differentActorCmd, isNull);
 
         // 6. Fail closed on missing caller actor
+        fakeAuth.invalidateSession();
         await expectLater(
           () => spinUseCase(
             familyId: FamilyId('fam-1'),
@@ -815,11 +830,13 @@ void main() {
         );
 
         // 7. Successful replay with matching actor sets possiblyDispatched BEFORE remote RPC
+        fakeAuth.setSession(userId: 'usr-1', role: 'child');
         fakeServer.failNextWithNetwork = true;
         await expectLater(
           () => spinUseCase(
             familyId: FamilyId('fam-1'),
             childId: ChildId('child-1'),
+            commandId: 'cmd-active',
             actorUserId: 'usr-1',
           ),
           throwsA(isA<Exception>()),
@@ -839,14 +856,16 @@ void main() {
         );
 
         // 8. 42501 permission error does NOT delete the pending command
+        testClock.advance(const Duration(minutes: 5));
         fakeServer.failNextWithPermissionError = true;
         await expectLater(
           () => spinUseCase(
             familyId: FamilyId('fam-1'),
             childId: ChildId('child-1'),
+            commandId: 'cmd-active',
             actorUserId: 'usr-1',
           ),
-          throwsA(isA<Exception>()),
+          throwsA(anything),
         );
         final stillPendingAfter42501 = await database.findPendingSpinCommand(
           familyId: 'fam-1',

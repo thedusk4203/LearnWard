@@ -285,6 +285,7 @@ final recoveryCoordinatorProvider = Provider<RecoveryCoordinator>((ref) {
   final rewardRepo = ref.watch(rewardRepositoryProvider);
   final authPort = ref.watch(authSessionPortProvider);
   final authzPort = ref.watch(recoveryAuthorizationPortProvider);
+  final config = ref.watch(appConfigProvider);
 
   return RecoveryCoordinator(
     commandStore: commandStore,
@@ -292,6 +293,9 @@ final recoveryCoordinatorProvider = Provider<RecoveryCoordinator>((ref) {
     rewardRepository: rewardRepo,
     authSessionPort: authPort,
     authorizationPort: authzPort,
+    jitterSource: config.canUseLocalDemoRepositories
+        ? const DeterministicJitterSource(0.0)
+        : const RandomJitterSource(),
   );
 });
 
@@ -301,10 +305,12 @@ final outboxRecoveryDispatcherProvider = Provider<OutboxRecoveryDispatcher>((
 ) {
   final commandStore = ref.watch(pendingRewardCommandStoreProvider);
   final coordinator = ref.watch(recoveryCoordinatorProvider);
+  final authPort = ref.watch(authSessionPortProvider);
 
   return OutboxRecoveryDispatcher(
     commandStore: commandStore,
     coordinator: coordinator,
+    authSessionPort: authPort,
   );
 });
 

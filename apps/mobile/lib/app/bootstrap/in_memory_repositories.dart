@@ -2189,7 +2189,11 @@ final class InMemoryAuthSessionPort implements AuthSessionPort {
 /// Lightweight in-memory fallback for [RecoveryAuthorizationPort] in local development.
 final class InMemoryRecoveryAuthorizationPort
     implements RecoveryAuthorizationPort {
-  const InMemoryRecoveryAuthorizationPort();
+  const InMemoryRecoveryAuthorizationPort({
+    this.defaultStatus = TargetAuthorizationStatus.authorized,
+  });
+
+  final TargetAuthorizationStatus defaultStatus;
 
   @override
   Future<TargetAuthorizationStatus> verifyTarget({
@@ -2198,6 +2202,6 @@ final class InMemoryRecoveryAuthorizationPort
     required String childId,
     required RewardCommandOperation operation,
   }) async {
-    return TargetAuthorizationStatus.authorized;
+    return defaultStatus;
   }
 }

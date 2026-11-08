@@ -44,8 +44,9 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
         _controller.add(_currentGeneration);
       },
       onError: (Object _) {
-        // Fail-closed on offline refresh errors or network disruption:
-        // Do not advance generation; leave current state unchanged
+        // Fail-closed on auth stream errors, token refresh failures, or stream disruption:
+        _currentGeneration = null;
+        _controller.add(null);
       },
     );
   }

@@ -94,35 +94,17 @@ final class RecoveryErrorClassifier {
       }
     }
 
-    // 3. Positive device revocation signal
-    if (str.contains('DEVICE_REVOKED') ||
-        (str.contains('grant') && str.contains('revoked'))) {
-      return ClassifiedError(
-        action: ClassifiedErrorAction.deviceRevoked,
-        sanitizedMessage: 'Device access has been revoked.',
-        errorCode: 'DEVICE_REVOKED',
-      );
-    }
-
-    // 4. Archived child check (42501 with archived message)
-    if (str.contains('Child profile is archived') ||
-        (code == '42501' && str.contains('archived'))) {
-      return ClassifiedError(
-        action: ClassifiedErrorAction.quarantineUnknownOutcome,
-        sanitizedMessage: 'Child profile is archived.',
-        errorCode: '42501_ARCHIVED',
-      );
-    }
-
-    // 5. General 42501 or permission denied (ambiguous, never retry in tight loop)
+    // 3. Authorization or permission denied (ambiguous, never infer device revocation from strings)
+    // 42501 or permission denied halts retry loops without deletion.
     if (code == '42501' ||
         str.contains('42501') ||
         str.contains('permission denied') ||
-        str.contains('violates row-level security')) {
+        str.contains('violates row-level security') ||
+        str.contains('unauthorized')) {
       return ClassifiedError(
         action: ClassifiedErrorAction.quarantineUnknownOutcome,
-        sanitizedMessage: 'Operation authorization denied or ambiguous.',
-        errorCode: '42501',
+        sanitizedMessage: 'Authorization failure or permission denied.',
+        errorCode: code ?? '42501',
       );
     }
 

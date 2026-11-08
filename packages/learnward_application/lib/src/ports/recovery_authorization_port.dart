@@ -6,8 +6,11 @@ enum TargetAuthorizationStatus {
   /// Positive proof of authorization for the target family and child.
   authorized,
 
-  /// Definitive denial (e.g. child archived, not a family member, grant revoked).
+  /// Definitive denial (e.g. child archived, not a family member).
   definitelyDenied,
+
+  /// Positive proof of child device grant revocation (status = 'revoked' AND revoked_at != null).
+  confirmedRevoked,
 
   /// Ambiguous or network failure; cannot definitively confirm or deny.
   unverified,

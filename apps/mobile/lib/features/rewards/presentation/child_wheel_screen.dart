@@ -207,11 +207,9 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
       );
 
       // 2. Server-Authoritative RPC invocation with durable idempotency
-      final actorUserId = ref.read(currentUserIdProvider);
       final result = await spinUseCase(
         familyId: activeChild.familyId,
         childId: activeChild.id,
-        actorUserId: actorUserId,
       );
 
       _lastSpinResult = result;
@@ -265,12 +263,10 @@ class _ChildWheelScreenState extends ConsumerState<ChildWheelScreen>
         coordinator: coordinator,
       );
 
-      final actorUserId = ref.read(currentUserIdProvider);
       final result = await spinUseCase(
         familyId: activeChild.familyId,
         childId: activeChild.id,
         commandId: _pendingCommand!.commandId,
-        actorUserId: actorUserId,
       );
 
       setState(() {
