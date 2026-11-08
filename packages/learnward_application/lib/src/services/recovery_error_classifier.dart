@@ -57,30 +57,69 @@ final class RecoveryErrorClassifier {
   /// Classifies [error] according to authoritative typed backend evidence.
   ///
   /// Enforces:
-  /// - Transport/timeout/socket exceptions are transient retryable, even if their
-  ///   message happens to mention an error code substring (R24-2-02).
+  /// - Authoritative structured backend codes take absolute precedence over message text (R24-4-04).
   /// - Terminal business rejection REQUIRES an authoritative, positively typed
   ///   error code signal from the backend RPC adapter. Arbitrary string matches
   ///   are never treated as terminal rejections.
+  /// - Transport/timeout/socket exceptions are transient retryable only when no
+  ///   authoritative terminal code is present.
   static ClassifiedError classify(Object error) {
+    // 1. Authoritative structured backend code takes precedence over untrusted message text (R24-4-04)
+    if (error is BackendRpcError && error.code != null) {
+      final code = error.code!;
+      final message = _sanitizeMessage(error.message);
+
+      if (_terminalWhitelistedCodes.contains(code)) {
+        return ClassifiedError(
+          action: ClassifiedErrorAction.terminalWhitelisted,
+          sanitizedMessage: message,
+          errorCode: code,
+        );
+      }
+
+      if (code == '42501') {
+        return const ClassifiedError(
+          action: ClassifiedErrorAction.quarantineUnknownOutcome,
+          sanitizedMessage: 'Authorization failure or permission denied.',
+          errorCode: '42501',
+        );
+      }
+
+      if (code == '500' || code == '502' || code == '503' || code == '504') {
+        return ClassifiedError(
+          action: ClassifiedErrorAction.transientRetryable,
+          sanitizedMessage:
+              'Network communication failure. Retrying scheduled.',
+          errorCode: code,
+        );
+      }
+
+      // Non-whitelisted backend codes (LW204, P0002, 22000, unknown LW*)
+      return ClassifiedError(
+        action: ClassifiedErrorAction.quarantineUnknownOutcome,
+        sanitizedMessage: message,
+        errorCode: code,
+      );
+    }
+
     final str = error.toString();
 
-    // 1. Transient network / timeout / transport errors FIRST
+    // 2. Transient network / timeout / transport errors (when no structured code exists)
     if (error is TimeoutException ||
         error.runtimeType.toString().contains('SocketException') ||
         error.runtimeType.toString().contains('ClientException') ||
         error.runtimeType.toString().contains('HttpException') ||
         str.contains('TimeoutException') ||
-        str.contains('timeout') ||
         str.contains('SocketException') ||
         str.contains('ClientException') ||
         str.contains('connection reset') ||
         str.contains('connection refused') ||
         str.contains('Network is unreachable') ||
-        str.contains('500') ||
-        str.contains('502') ||
-        str.contains('503') ||
-        str.contains('504')) {
+        RegExp(r'\b(500|502|503|504)\b').hasMatch(str) ||
+        RegExp(
+          r'\b(timed out|timeout)\b',
+          caseSensitive: false,
+        ).hasMatch(str)) {
       return const ClassifiedError(
         action: ClassifiedErrorAction.transientRetryable,
         sanitizedMessage: 'Network communication failure. Retrying scheduled.',
@@ -88,57 +127,23 @@ final class RecoveryErrorClassifier {
       );
     }
 
-    // 2. Extract structured authoritative code and message if available
-    String? code;
-    String? message;
-
-    if (error is BackendRpcError) {
-      code = error.code;
-      message = error.message;
-    }
-
-    message ??= str;
-
-    // 3. Check for whitelisted terminal business codes ONLY via structured code
-    if (code != null && _terminalWhitelistedCodes.contains(code)) {
-      return ClassifiedError(
-        action: ClassifiedErrorAction.terminalWhitelisted,
-        sanitizedMessage: _sanitizeMessage(message),
-        errorCode: code,
-      );
-    }
-
-    // 4. Authorization or permission denied (ambiguous, never infer device revocation from strings)
-    // 42501 or permission denied halts retry loops without deletion.
-    if (code == '42501' ||
-        str.contains('42501') ||
+    // 3. Authorization or permission denied fallback (untyped)
+    if (str.contains('42501') ||
         str.contains('permission denied') ||
         str.contains('violates row-level security') ||
         str.contains('unauthorized')) {
-      return ClassifiedError(
+      return const ClassifiedError(
         action: ClassifiedErrorAction.quarantineUnknownOutcome,
         sanitizedMessage: 'Authorization failure or permission denied.',
-        errorCode: code ?? '42501',
+        errorCode: '42501',
       );
     }
 
-    // 5. Non-whitelisted backend codes (LW204, P0002, 22000, unknown LW*)
-    if (code == 'LW204' ||
-        code == 'P0002' ||
-        code == '22000' ||
-        (code != null && RegExp(r'^LW\d{3}$').hasMatch(code))) {
-      return ClassifiedError(
-        action: ClassifiedErrorAction.quarantineUnknownOutcome,
-        sanitizedMessage: _sanitizeMessage(message),
-        errorCode: code,
-      );
-    }
-
-    // 6. Fail-closed fallback: quarantine unknown outcome to prevent data corruption
+    // 4. Fail-closed fallback: quarantine unknown outcome to prevent data corruption
     return ClassifiedError(
       action: ClassifiedErrorAction.quarantineUnknownOutcome,
-      sanitizedMessage: _sanitizeMessage(message),
-      errorCode: code ?? 'UNKNOWN_ERROR',
+      sanitizedMessage: _sanitizeMessage(str),
+      errorCode: 'UNKNOWN_ERROR',
     );
   }
 

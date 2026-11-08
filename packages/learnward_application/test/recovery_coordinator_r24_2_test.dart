@@ -221,5 +221,177 @@ void main() {
       expect(spinResult, isNotNull);
       expect(spinResult.familyId.value, equals('fam-1'));
     });
+
+    test('R24-4-02: preexisting live lease cannot be adopted by another execution attempt to initiate RPC', () async {
+      final store = InMemoryPendingRewardCommandStore();
+      final familyId = FamilyId('fam-1');
+      final childId = ChildId('child-1');
+      final wheelRepo = FakeWheelRepository(
+        initialRewards: buildSampleRewards(familyId, childId),
+      );
+      final authPort = FakeAuthSessionPort(
+        activeUserId: 'actor-1',
+        sessionGeneration: 'gen-1',
+        clock: clock,
+      );
+
+      // Prepopulate an unexpired lease held in the database
+      final cmd = PendingRewardCommand(
+        operation: RewardCommandOperation.spinWheel,
+        commandId: 'cmd-preleased',
+        familyId: familyId.value,
+        childId: childId.value,
+        actorUserId: 'actor-1',
+        createdAt: t0,
+        recoveryState: CommandRecoveryState.active,
+        dispatchState: CommandDispatchState.neverDispatched,
+        leaseToken: 'preexisting-token',
+        leaseExpiresAt: t0.add(const Duration(seconds: 30)),
+      );
+      store.seedRawCommand(cmd);
+
+      final coordinator = RecoveryCoordinator(
+        commandStore: store,
+        wheelRepository: wheelRepo,
+        authSessionPort: authPort,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        clock: clock,
+      );
+
+      final result = await coordinator.execute(
+        operation: RewardCommandOperation.spinWheel,
+        familyId: familyId.value,
+        childId: childId.value,
+        requestedCommandId: 'cmd-preleased',
+      );
+
+      // Must NOT adopt the preexisting lease and must NOT dispatch an RPC!
+      expect(result, isA<CommandAlreadyInFlightResult>());
+      expect(wheelRepo.spinCallCount, 0);
+
+      // But if the caller explicitly supplies its owned matching unexpired lease token, it succeeds
+      final ownedResult = await coordinator.execute(
+        operation: RewardCommandOperation.spinWheel,
+        familyId: familyId.value,
+        childId: childId.value,
+        requestedCommandId: 'cmd-preleased',
+        callerOwnedLeaseToken: 'preexisting-token',
+      );
+      expect(ownedResult, isA<CommandCommittedResult>());
+      expect(wheelRepo.spinCallCount, 1);
+    });
+
+    test('R24-4-05: null active-family provider fails closed with zero RPC and no quarantine', () async {
+      final store = InMemoryPendingRewardCommandStore();
+      final familyId = FamilyId('fam-active-null');
+      final childId = ChildId('child-1');
+      final wheelRepo = FakeWheelRepository(
+        initialRewards: buildSampleRewards(familyId, childId),
+      );
+      final authPort = FakeAuthSessionPort(
+        activeUserId: 'actor-1',
+        sessionGeneration: 'gen-1',
+        clock: clock,
+      );
+
+      final coordinator = RecoveryCoordinator(
+        commandStore: store,
+        wheelRepository: wheelRepo,
+        authSessionPort: authPort,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () =>
+            null, // Explicit null active family selection
+        clock: clock,
+      );
+
+      final result = await coordinator.execute(
+        operation: RewardCommandOperation.spinWheel,
+        familyId: familyId.value,
+        childId: childId.value,
+      );
+
+      expect(result, isA<CommandFamilyMismatchResult>());
+      final mismatch = result as CommandFamilyMismatchResult;
+      expect(mismatch.commandFamilyId, equals('fam-active-null'));
+      expect(mismatch.activeFamilyId, isNull);
+      expect(wheelRepo.spinCallCount, 0);
+
+      // Verify SpinRewardWheel use-case throws StateError
+      final spinUseCase = SpinRewardWheel(
+        wheelRepo,
+        store,
+        coordinator: coordinator,
+        authSessionPort: authPort,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+      );
+
+      expect(
+        () => spinUseCase(familyId: familyId, childId: childId),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains(
+              'Command belongs to family fam-active-null but active family is null',
+            ),
+          ),
+        ),
+      );
+    });
+
+    test('R24-4-05: attempting to execute stale-family command returns mismatch and releases claim without RPC', () async {
+      final store = InMemoryPendingRewardCommandStore();
+      final staleFamilyId = FamilyId('fam-stale');
+      final activeFamilyId = FamilyId('fam-current');
+      final childId = ChildId('child-1');
+      final wheelRepo = FakeWheelRepository(
+        initialRewards: buildSampleRewards(staleFamilyId, childId),
+      );
+      final authPort = FakeAuthSessionPort(
+        activeUserId: 'actor-1',
+        sessionGeneration: 'gen-1',
+        clock: clock,
+      );
+
+      final cmd = PendingRewardCommand(
+        operation: RewardCommandOperation.spinWheel,
+        commandId: 'cmd-stale-family',
+        familyId: staleFamilyId.value,
+        childId: childId.value,
+        actorUserId: 'actor-1',
+        createdAt: t0,
+        recoveryState: CommandRecoveryState.active,
+        dispatchState: CommandDispatchState.neverDispatched,
+      );
+      await store.savePendingCommand(cmd, now: t0);
+
+      final coordinator = RecoveryCoordinator(
+        commandStore: store,
+        wheelRepository: wheelRepo,
+        authSessionPort: authPort,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () => activeFamilyId.value,
+        clock: clock,
+      );
+
+      final result = await coordinator.execute(
+        operation: RewardCommandOperation.spinWheel,
+        familyId: staleFamilyId.value,
+        childId: childId.value,
+        requestedCommandId: 'cmd-stale-family',
+        trigger: CommandExecutionTrigger.recovery,
+      );
+
+      expect(result, isA<CommandFamilyMismatchResult>());
+      final mismatch = result as CommandFamilyMismatchResult;
+      expect(mismatch.commandFamilyId, equals('fam-stale'));
+      expect(mismatch.activeFamilyId, equals('fam-current'));
+      expect(wheelRepo.spinCallCount, 0);
+
+      // Verify command is intact and not quarantined
+      final retained = await store.getPendingCommand('cmd-stale-family');
+      expect(retained, isNotNull);
+      expect(retained!.recoveryState, equals(CommandRecoveryState.active));
+    });
   });
 }

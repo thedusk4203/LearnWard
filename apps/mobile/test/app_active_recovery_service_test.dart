@@ -159,6 +159,9 @@ void main() {
 
         final container = ProviderContainer(
           overrides: [
+            localMetadataStoreProvider.overrideWithValue(
+              InMemoryLocalMetadataStore(),
+            ),
             authSessionPortProvider.overrideWithValue(fakeAuth),
             pendingRewardCommandStoreProvider.overrideWithValue(fakeStore),
             wheelRepositoryProvider.overrideWithValue(fakeWheel),
@@ -228,6 +231,112 @@ void main() {
         // 3. Foreground resume triggers drain pass without errors
         service.didChangeAppLifecycleState(AppLifecycleState.resumed);
         await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+
+      test('Child Mode: activeChildModeProvider provides active family when activeFamilyProvider is null (R24-4-05)', () async {
+        final fakeAuth = FakeAuthSessionPort(
+          activeUserId: 'child-user-1',
+          sessionGeneration: 'gen-child-1',
+        );
+        final fakeStore = InMemoryPendingRewardCommandStore();
+
+        final cmdChild = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-service-child',
+          familyId: 'fam-child-1',
+          childId: 'child-1',
+          actorUserId: 'child-user-1',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await fakeStore.savePendingCommand(cmdChild, now: t0);
+
+        final sampleRewards = [
+          Reward(
+            id: RewardId('rew-1'),
+            familyId: FamilyId('fam-child-1'),
+            title: 'Prize',
+            category: RewardCategory.privilege,
+            storeEnabled: false,
+            wheelEnabled: true,
+            wheelTier: WheelTier.common,
+            iconKey: 'star',
+            createdAt: t0,
+            updatedAt: t0,
+          ),
+          Reward(
+            id: RewardId('rew-2'),
+            familyId: FamilyId('fam-child-1'),
+            title: 'Prize 2',
+            category: RewardCategory.privilege,
+            storeEnabled: false,
+            wheelEnabled: true,
+            wheelTier: WheelTier.special,
+            iconKey: 'star',
+            createdAt: t0,
+            updatedAt: t0,
+          ),
+          Reward(
+            id: RewardId('rew-3'),
+            familyId: FamilyId('fam-child-1'),
+            title: 'Prize 3',
+            category: RewardCategory.privilege,
+            storeEnabled: false,
+            wheelEnabled: true,
+            wheelTier: WheelTier.rare,
+            iconKey: 'star',
+            createdAt: t0,
+            updatedAt: t0,
+          ),
+        ];
+
+        final container = ProviderContainer(
+          overrides: [
+            localMetadataStoreProvider.overrideWithValue(
+              InMemoryLocalMetadataStore(),
+            ),
+            pendingRewardCommandStoreProvider.overrideWithValue(fakeStore),
+            authSessionPortProvider.overrideWithValue(fakeAuth),
+            wheelRepositoryProvider.overrideWithValue(
+              FakeWheelRepository(initialRewards: sampleRewards),
+            ),
+            recoveryAuthorizationPortProvider.overrideWithValue(
+              FakeRecoveryAuthorizationPort(),
+            ),
+            appActiveRecoveryServiceProvider.overrideWith((ref) {
+              final service = AppActiveRecoveryService(
+                ref,
+                enabledOverride: true,
+              );
+              ref.onDispose(service.dispose);
+              return service;
+            }),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        // Instantiate recovery service
+        container.read(appActiveRecoveryServiceProvider);
+
+        // activeFamilyProvider remains null!
+        expect(container.read(activeFamilyProvider), isNull);
+
+        // Entering Child Mode with activeChildModeProvider triggers drain for the child's family
+        final childProfile = ChildProfile(
+          id: ChildId('child-1'),
+          familyId: FamilyId('fam-child-1'),
+          displayName: 'Kiddo',
+          avatarKey: 'avatar-1',
+          createdAt: DateTime.utc(2026, 11, 8),
+        );
+        await container
+            .read(activeChildModeProvider.notifier)
+            .selectChild(childProfile);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        // cmdChild was drained and completed via Child Mode family!
+        expect(await fakeStore.getPendingCommand('cmd-service-child'), isNull);
       });
     },
   );

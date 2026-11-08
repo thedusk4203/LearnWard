@@ -23,6 +23,7 @@ final class AppActiveRecoveryService with WidgetsBindingObserver {
   final bool? _enabledOverride;
   StreamSubscription<String?>? _authSub;
   ProviderSubscription<Family?>? _familySub;
+  ProviderSubscription<ChildProfile?>? _childModeSub;
   Timer? _periodicTimer;
   bool _isDisposed = false;
 
@@ -44,6 +45,15 @@ final class AppActiveRecoveryService with WidgetsBindingObserver {
 
     _familySub = _ref.listen<Family?>(activeFamilyProvider, (previous, next) {
       if (next != null && next.id != previous?.id) {
+        _triggerDrain();
+      }
+    });
+
+    _childModeSub = _ref.listen<ChildProfile?>(activeChildModeProvider, (
+      previous,
+      next,
+    ) {
+      if (next != null && next.familyId != previous?.familyId) {
         _triggerDrain();
       }
     });
@@ -70,13 +80,15 @@ final class AppActiveRecoveryService with WidgetsBindingObserver {
     final context = await authPort.validateForMutation();
     if (context == null) return;
 
-    final activeFamily = _ref.read(activeFamilyProvider);
-    if (activeFamily == null) return;
+    final activeFamilyId =
+        _ref.read(activeFamilyProvider)?.id.value ??
+        _ref.read(activeChildModeProvider)?.familyId.value;
+    if (activeFamilyId == null) return;
 
     final dispatcher = _ref.read(outboxRecoveryDispatcherProvider);
     await dispatcher.drainOnce(
       validatedContext: context,
-      activeFamilyId: activeFamily.id.value,
+      activeFamilyId: activeFamilyId,
     );
   }
 
@@ -85,6 +97,7 @@ final class AppActiveRecoveryService with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _authSub?.cancel();
     _familySub?.close();
+    _childModeSub?.close();
     _periodicTimer?.cancel();
   }
 }

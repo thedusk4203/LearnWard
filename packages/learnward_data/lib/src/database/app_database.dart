@@ -321,10 +321,14 @@ class AppDatabase extends _$AppDatabase
         });
       } finally {
         await customStatement('PRAGMA foreign_keys = ON');
+        await customStatement('PRAGMA busy_timeout = 5000');
+        await customStatement('PRAGMA journal_mode = WAL');
       }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
+      await customStatement('PRAGMA busy_timeout = 5000');
+      await customStatement('PRAGMA journal_mode = WAL');
     },
   );
 
@@ -478,6 +482,84 @@ class AppDatabase extends _$AppDatabase
     values[8] = (values[8] & 0x3f) | 0x80;
     final hex = values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
+  }
+
+  @override
+  Future<RegisterFreshCommandResult> registerFreshCommand({
+    required PendingRewardCommand command,
+    DateTime? now,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    for (var attempt = 0; attempt < 5; attempt++) {
+      try {
+        return await transaction(() async {
+          final query = select(pendingRewardCommands)
+            ..where((t) => t.familyId.equals(command.familyId))
+            ..where((t) => t.operation.equals(command.operation.wireValue));
+
+          if (command.childId != null) {
+            query.where((t) => t.childId.equals(command.childId!));
+          }
+          if (command.operation == RewardCommandOperation.redeemReward &&
+              command.rewardId != null) {
+            query.where((t) => t.rewardId.equals(command.rewardId!));
+          }
+
+          final candidates = await query.get();
+          for (final candidate in candidates) {
+            final isUnresolved =
+                candidate.recoveryState ==
+                    CommandRecoveryState.active.wireValue ||
+                candidate.dispatchState ==
+                    CommandDispatchState.possiblyDispatched.wireValue ||
+                candidate.dispatchState ==
+                    CommandDispatchState.neverDispatched.wireValue ||
+                candidate.dispatchState ==
+                    CommandDispatchState.confirmedCommitted.wireValue;
+
+            if (isUnresolved) {
+              return PreexistingCommandFound(
+                _mapRowToPendingCommand(candidate),
+              );
+            }
+          }
+
+          await into(pendingRewardCommands).insert(
+            PendingRewardCommandsCompanion.insert(
+              operation: command.operation.wireValue,
+              commandId: command.commandId,
+              familyId: command.familyId,
+              childId: Value(command.childId),
+              rewardId: Value(command.rewardId),
+              redemptionId: Value(command.redemptionId),
+              cancellationReason: Value(command.cancellationReason),
+              createdAt: effectiveNow,
+              actorUserId: Value(command.actorUserId),
+              actorRole: Value(command.actorRole),
+              schemaVersion: Value(command.schemaVersion),
+              recoveryState: Value(command.recoveryState.wireValue),
+              dispatchState: Value(command.dispatchState.wireValue),
+              retryCount: Value(command.retryCount),
+              nextAttemptAt: Value(command.nextAttemptAt?.toUtc()),
+              lastErrorMessage: Value(command.lastErrorMessage),
+              leaseToken: const Value(null),
+              leaseExpiresAt: const Value(null),
+            ),
+            mode: InsertMode.insert,
+          );
+
+          return FreshCommandRegistered(command);
+        });
+      } catch (e) {
+        if (e.toString().contains('database is locked') && attempt < 4) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          continue;
+        }
+        rethrow;
+      }
+    }
+    throw StateError('Failed to register fresh command after retries');
   }
 
   @override

@@ -208,6 +208,7 @@ final class RecoveryCoordinator {
     String? requestedCommandId,
     CommandExecutionTrigger trigger = CommandExecutionTrigger.foreground,
     Duration? overrideLeaseDuration,
+    String? callerOwnedLeaseToken,
   }) async {
     final now = _clock.now().toUtc();
     final leaseDuration = overrideLeaseDuration ?? _defaultLeaseDuration;
@@ -220,10 +221,23 @@ final class RecoveryCoordinator {
       );
     }
 
-    // Active UI family match pre-check (R24-3-03)
+    // Active UI family match pre-check (R24-3-03, R24-4-05)
     if (_activeFamilyIdProvider != null) {
       final currentActiveFamily = _activeFamilyIdProvider();
-      if (currentActiveFamily != null && currentActiveFamily != familyId) {
+      if (currentActiveFamily == null || currentActiveFamily != familyId) {
+        if (requestedCommandId != null) {
+          final existing = await _commandStore.getPendingCommand(
+            requestedCommandId,
+          );
+          if (existing != null && existing.leaseToken != null) {
+            await _commandStore.releaseClaim(
+              commandId: existing.commandId,
+              leaseToken: existing.leaseToken!,
+              nextAttemptAt: _clock.now().toUtc(),
+              lastErrorMessage: 'Active family mismatch: $currentActiveFamily',
+            );
+          }
+        }
         return CommandFamilyMismatchResult(
           commandId: requestedCommandId ?? 'unassigned',
           commandFamilyId: familyId,
@@ -330,35 +344,7 @@ final class RecoveryCoordinator {
         );
       }
 
-      // Fresh foreground user intent: check if an unresolved command already exists
-      PendingRewardCommand? existingPending;
-      if (operation == RewardCommandOperation.spinWheel) {
-        existingPending = await _commandStore.findPendingSpinCommand(
-          familyId: familyId,
-          childId: childId,
-          recoveryState: null,
-        );
-      } else if (operation == RewardCommandOperation.redeemReward &&
-          rewardId != null) {
-        existingPending = await _commandStore.findPendingRedeemCommand(
-          familyId: familyId,
-          childId: childId,
-          rewardId: rewardId,
-          recoveryState: null,
-        );
-      }
-
-      if (existingPending != null &&
-          (existingPending.recoveryState == CommandRecoveryState.active ||
-              existingPending.dispatchState ==
-                  CommandDispatchState.possiblyDispatched)) {
-        // Unresolved pending command exists for this target. Cannot create replacement command!
-        return CommandAlreadyInFlightResult(
-          commandId: existingPending.commandId,
-        );
-      }
-
-      // Truly fresh foreground intent: generate new UUID and save as never_dispatched
+      // Truly fresh foreground intent: generate candidate UUID and atomically register (R24-4-01)
       final newCommandId = _generateUuid();
       final freshCmd = PendingRewardCommand(
         operation: operation,
@@ -373,8 +359,19 @@ final class RecoveryCoordinator {
         dispatchState: CommandDispatchState.neverDispatched,
       );
 
-      await _commandStore.savePendingCommand(freshCmd, now: now);
-      command = freshCmd;
+      final regResult = await _commandStore.registerFreshCommand(
+        command: freshCmd,
+        now: now,
+      );
+
+      switch (regResult) {
+        case FreshCommandRegistered(command: final newlyCreated):
+          command = newlyCreated;
+        case PreexistingCommandFound(existingCommand: final existing):
+          // An unresolved pending command already exists for this logical operation.
+          // Cannot allocate or dispatch distinct UUIDs!
+          return CommandAlreadyInFlightResult(commandId: existing.commandId);
+      }
     }
 
     // Validate existing command invariants
@@ -406,10 +403,10 @@ final class RecoveryCoordinator {
       );
     }
 
-    // Active family check on loaded command (R24-3-03)
+    // Active family check on loaded command (R24-3-03, R24-4-05)
     if (_activeFamilyIdProvider != null) {
       final currentActive = _activeFamilyIdProvider();
-      if (currentActive != null && currentActive != command.familyId) {
+      if (currentActive == null || currentActive != command.familyId) {
         return CommandFamilyMismatchResult(
           commandId: command.commandId,
           commandFamilyId: command.familyId,
@@ -429,16 +426,17 @@ final class RecoveryCoordinator {
       );
     }
 
-    // STEP 2 — ATOMICALLY ACQUIRE CLAIM (OR REUSE ACTIVE UNEXPIRED CLAIM HELD BY CALLER)
+    // STEP 2 — ATOMICALLY ACQUIRE EXCLUSIVE CLAIM LEASE (R24-4-02)
+    // Every independent execution attempt must acquire its own exclusive claim,
+    // or prove ownership through an explicitly controlled caller-owned lease token.
     String? leaseToken;
-    final isExistingLeaseValid =
-        command.leaseToken != null &&
-        command.leaseExpiresAt != null &&
-        command.leaseExpiresAt!.isAfter(now) &&
-        command.actorUserId == context.userId;
-
-    if (isExistingLeaseValid) {
-      leaseToken = command.leaseToken;
+    if (callerOwnedLeaseToken != null) {
+      final isCallerLeaseValid =
+          command.leaseToken == callerOwnedLeaseToken &&
+          command.leaseExpiresAt != null &&
+          command.leaseExpiresAt!.isAfter(now) &&
+          command.actorUserId == context.userId;
+      leaseToken = isCallerLeaseValid ? callerOwnedLeaseToken : null;
     } else {
       leaseToken = await _commandStore.acquireClaim(
         commandId: command.commandId,
@@ -513,16 +511,17 @@ final class RecoveryCoordinator {
       );
     }
 
-    // In-flight active UI family recheck immediately before RPC (R24-3-03)
+    // In-flight active UI family recheck immediately before RPC (R24-3-03, R24-4-05)
     if (_activeFamilyIdProvider != null) {
       final currentActive = _activeFamilyIdProvider();
-      if (currentActive != null && currentActive != command.familyId) {
+      if (currentActive == null || currentActive != command.familyId) {
         await _commandStore.releaseClaim(
           commandId: command.commandId,
           leaseToken: leaseToken,
           nextAttemptAt: _clock.now().toUtc(),
-          lastErrorMessage:
-              'Active family changed to $currentActive prior to remote RPC.',
+          lastErrorMessage: currentActive == null
+              ? 'Active family selection cleared prior to remote RPC.'
+              : 'Active family changed to $currentActive prior to remote RPC.',
         );
         return CommandFamilyMismatchResult(
           commandId: command.commandId,
@@ -593,6 +592,27 @@ final class RecoveryCoordinator {
           childId: ChildId(command.childId!),
         );
 
+        // Validate auth session post-RPC (R24-4-03):
+        // If actor logged out or session generation changed during in-flight RPC,
+        // a stale session MUST NOT finalize the command. Retain unresolved journal state!
+        final postRpcContext = await _authSessionPort.validateForMutation();
+        if (postRpcContext == null ||
+            postRpcContext.userId != context.userId ||
+            _authSessionPort.currentSessionGeneration !=
+                context.sessionGeneration) {
+          await _commandStore.releaseClaim(
+            commandId: command.commandId,
+            leaseToken: leaseToken,
+            nextAttemptAt: _clock.now().toUtc().add(const Duration(seconds: 1)),
+            lastErrorMessage:
+                'Session invalidated or actor logged out while RPC in-flight.',
+          );
+          return const CommandAuthUnavailableResult(
+            reason:
+                'Session invalidated or actor logged out while RPC in-flight.',
+          );
+        }
+
         // STEP 7A — DEFINITIVE SUCCESS UNDER CURRENT LEASE
         final completed = await _commandStore.completeCommand(
           commandId: command.commandId,
@@ -622,6 +642,27 @@ final class RecoveryCoordinator {
           rewardId: RewardId(command.rewardId!),
         );
 
+        // Validate auth session post-RPC (R24-4-03):
+        // If actor logged out or session generation changed during in-flight RPC,
+        // a stale session MUST NOT finalize the command. Retain unresolved journal state!
+        final postRpcContext = await _authSessionPort.validateForMutation();
+        if (postRpcContext == null ||
+            postRpcContext.userId != context.userId ||
+            _authSessionPort.currentSessionGeneration !=
+                context.sessionGeneration) {
+          await _commandStore.releaseClaim(
+            commandId: command.commandId,
+            leaseToken: leaseToken,
+            nextAttemptAt: _clock.now().toUtc().add(const Duration(seconds: 1)),
+            lastErrorMessage:
+                'Session invalidated or actor logged out while RPC in-flight.',
+          );
+          return const CommandAuthUnavailableResult(
+            reason:
+                'Session invalidated or actor logged out while RPC in-flight.',
+          );
+        }
+
         // STEP 7A — DEFINITIVE SUCCESS UNDER CURRENT LEASE
         final completed = await _commandStore.completeCommand(
           commandId: command.commandId,
@@ -643,6 +684,28 @@ final class RecoveryCoordinator {
         );
       }
     } catch (e) {
+      // Validate auth session post-RPC (R24-4-03):
+      // If actor logged out or session generation changed during in-flight RPC,
+      // a stale session MUST NOT finalize or quarantine another actor's recovery.
+      // Retain unresolved journal state!
+      final postRpcContext = await _authSessionPort.validateForMutation();
+      if (postRpcContext == null ||
+          postRpcContext.userId != context.userId ||
+          _authSessionPort.currentSessionGeneration !=
+              context.sessionGeneration) {
+        await _commandStore.releaseClaim(
+          commandId: command.commandId,
+          leaseToken: leaseToken,
+          nextAttemptAt: _clock.now().toUtc().add(const Duration(seconds: 1)),
+          lastErrorMessage:
+              'Session invalidated or actor logged out while RPC in-flight.',
+        );
+        return const CommandAuthUnavailableResult(
+          reason:
+              'Session invalidated or actor logged out while RPC in-flight.',
+        );
+      }
+
       // STEP 7B — ERROR DISPOSITION UNDER CURRENT LEASE
       final classified = RecoveryErrorClassifier.classify(e);
 

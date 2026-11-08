@@ -27,8 +27,17 @@ final databaseProvider = Provider<AppDatabase>((ref) {
   return database;
 });
 
+/// In-memory local metadata store provider for testing/local demo.
+final inMemoryLocalMetadataStoreProvider = Provider<LocalMetadataStore>((ref) {
+  return InMemoryMobileMetadataStore();
+});
+
 /// Local metadata store provider (defaults to SQLite database in production).
 final localMetadataStoreProvider = Provider<LocalMetadataStore>((ref) {
+  final config = ref.watch(appConfigProvider);
+  if (config.canUseLocalDemoRepositories) {
+    return ref.watch(inMemoryLocalMetadataStoreProvider);
+  }
   return ref.watch(databaseProvider);
 });
 
@@ -293,7 +302,9 @@ final recoveryCoordinatorProvider = Provider<RecoveryCoordinator>((ref) {
     rewardRepository: rewardRepo,
     authSessionPort: authPort,
     authorizationPort: authzPort,
-    activeFamilyIdProvider: () => ref.read(activeFamilyProvider)?.id.value,
+    activeFamilyIdProvider: () =>
+        ref.read(activeFamilyProvider)?.id.value ??
+        ref.read(activeChildModeProvider)?.familyId.value,
     jitterSource: config.canUseLocalDemoRepositories
         ? const DeterministicJitterSource(0.0)
         : const RandomJitterSource(),
@@ -312,7 +323,9 @@ final outboxRecoveryDispatcherProvider = Provider<OutboxRecoveryDispatcher>((
     commandStore: commandStore,
     coordinator: coordinator,
     authSessionPort: authPort,
-    activeFamilyIdProvider: () => ref.read(activeFamilyProvider)?.id.value,
+    activeFamilyIdProvider: () =>
+        ref.read(activeFamilyProvider)?.id.value ??
+        ref.read(activeChildModeProvider)?.familyId.value,
   );
 });
 

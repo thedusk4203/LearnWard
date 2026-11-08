@@ -90,6 +90,32 @@ void main() {
       expect(classified.errorCode, isNot(equals('LW201')));
     });
 
+    test('adversarial R24-4-04: typed LW201 with message containing 500 must NOT be classified as transient retryable', () {
+      final err = const BackendRpcException(
+        code: 'LW201',
+        message: 'Current points balance 500 is insufficient for cost 1500',
+      );
+      final classified = RecoveryErrorClassifier.classify(err);
+      expect(
+        classified.action,
+        equals(ClassifiedErrorAction.terminalWhitelisted),
+      );
+      expect(classified.errorCode, equals('LW201'));
+    });
+
+    test('adversarial R24-4-04: typed LW205 with message containing timeout and 504 must be terminalWhitelisted', () {
+      final err = const BackendRpcException(
+        code: 'LW205',
+        message: 'Reward redemption timed out after 504 ms of inactivity',
+      );
+      final classified = RecoveryErrorClassifier.classify(err);
+      expect(
+        classified.action,
+        equals(ClassifiedErrorAction.terminalWhitelisted),
+      );
+      expect(classified.errorCode, equals('LW205'));
+    });
+
     test('genuine typed BackendRpcException with LW201 is classified as terminalWhitelisted', () {
       final err = const BackendRpcException(
         message: 'Insufficient RP balance',

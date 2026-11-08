@@ -4,6 +4,8 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_data/learnward_data.dart';
+import 'package:learnward_domain/learnward_domain.dart';
+import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -1015,5 +1017,139 @@ void main() {
       expect(fam2List.length, 1);
       expect(fam2List.first.commandId, 'cmd-fam-2');
     });
+
+    test('R24-4-01: concurrent foreground fresh-command creation across independent SQLite connections cannot allocate distinct UUIDs', () async {
+      final familyId = FamilyId('fam-race-1');
+      final childId = ChildId('child-race-1');
+
+      final sampleRewards = [
+        Reward(
+          id: RewardId('rew-1'),
+          familyId: familyId,
+          title: 'Prize 1',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.common,
+          iconKey: 'star',
+          createdAt: t0,
+          updatedAt: t0,
+        ),
+        Reward(
+          id: RewardId('rew-2'),
+          familyId: familyId,
+          title: 'Prize 2',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.special,
+          iconKey: 'star',
+          createdAt: t0,
+          updatedAt: t0,
+        ),
+        Reward(
+          id: RewardId('rew-3'),
+          familyId: familyId,
+          title: 'Prize 3',
+          category: RewardCategory.privilege,
+          storeEnabled: false,
+          wheelEnabled: true,
+          wheelTier: WheelTier.rare,
+          iconKey: 'star',
+          createdAt: t0,
+          updatedAt: t0,
+        ),
+      ];
+
+      final wheelRepo = _DelayedFakeWheelRepository(
+        initialRewards: sampleRewards,
+        delay: const Duration(milliseconds: 50),
+      );
+      final authPort1 = FakeAuthSessionPort(
+        activeUserId: 'actor-race-1',
+        sessionGeneration: 'gen-1',
+      );
+      final authPort2 = FakeAuthSessionPort(
+        activeUserId: 'actor-race-1',
+        sessionGeneration: 'gen-1',
+      );
+
+      final coord1 = RecoveryCoordinator(
+        commandStore: database, // Connection 1
+        wheelRepository: wheelRepo,
+        authSessionPort: authPort1,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () => familyId.value,
+      );
+
+      final coord2 = RecoveryCoordinator(
+        commandStore: database2, // Connection 2 on the exact same SQLite file
+        wheelRepository: wheelRepo,
+        authSessionPort: authPort2,
+        authorizationPort: FakeRecoveryAuthorizationPort(),
+        activeFamilyIdProvider: () => familyId.value,
+      );
+
+      // Concurrently execute fresh foreground spin intent (requestedCommandId is null!)
+      final results = await Future.wait([
+        coord1.execute(
+          operation: RewardCommandOperation.spinWheel,
+          familyId: familyId.value,
+          childId: childId.value,
+          trigger: CommandExecutionTrigger.foreground,
+        ),
+        coord2.execute(
+          operation: RewardCommandOperation.spinWheel,
+          familyId: familyId.value,
+          childId: childId.value,
+          trigger: CommandExecutionTrigger.foreground,
+        ),
+      ]);
+
+      // Exactly ONE coordinator call creates the command and executes the RPC
+      // The concurrent call returns CommandAlreadyInFlightResult
+      final committed = results.whereType<CommandCommittedResult>().toList();
+      final inFlight = results
+          .whereType<CommandAlreadyInFlightResult>()
+          .toList();
+
+      expect(committed.length, equals(1));
+      expect(inFlight.length, equals(1));
+
+      // BOTH results reference the EXACT SAME command ID (never two distinct UUIDs!)
+      expect(inFlight.first.commandId, equals(committed.first.commandId));
+
+      // In the SQLite database, exactly ONE command row was ever inserted
+      final allCommands = await database.listPendingCommands();
+      expect(allCommands.length, lessThanOrEqualTo(1));
+
+      // Authoritative remote RPC was dispatched exactly once
+      expect(wheelRepo.spinCallCount, equals(1));
+    });
   });
+}
+
+final class _DelayedFakeWheelRepository implements WheelRepository {
+  _DelayedFakeWheelRepository({
+    required List<Reward> initialRewards,
+    required this.delay,
+  }) : _inner = FakeWheelRepository(initialRewards: initialRewards);
+
+  final FakeWheelRepository _inner;
+  final Duration delay;
+
+  int get spinCallCount => _inner.spinCallCount;
+
+  @override
+  Future<WheelSpinResult> spinRewardWheel({
+    required String commandId,
+    required ChildId childId,
+  }) async {
+    await Future<void>.delayed(delay);
+    return _inner.spinRewardWheel(commandId: commandId, childId: childId);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      _inner.noSuchMethod(invocation);
 }

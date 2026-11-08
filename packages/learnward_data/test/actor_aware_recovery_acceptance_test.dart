@@ -660,7 +660,7 @@ void main() {
           clock: clock,
         );
 
-        // Execute: committed outcome is safely recorded; journal is completed and cleaned up
+        // Execute: in-flight logout prevents finalizing/deleting the journal; retains unresolved outcome
         final inFlightRes = await inFlightCoordinator.execute(
           operation: RewardCommandOperation.spinWheel,
           familyId: familyId.value,
@@ -668,8 +668,14 @@ void main() {
           requestedCommandId: 'cmd-a10-inflight',
           trigger: CommandExecutionTrigger.recovery,
         );
-        expect(inFlightRes, isA<CommandCommittedResult>());
-        expect(await database.getPendingCommand('cmd-a10-inflight'), isNull);
+        expect(inFlightRes, isA<CommandAuthUnavailableResult>());
+        final retained = await database.getPendingCommand('cmd-a10-inflight');
+        expect(retained, isNotNull);
+        expect(
+          retained!.dispatchState,
+          equals(CommandDispatchState.possiblyDispatched),
+        );
+        expect(retained.recoveryState, equals(CommandRecoveryState.active));
       },
     );
 
@@ -1507,6 +1513,12 @@ void main() {
 final class _StaleCompletionStore implements PendingRewardCommandStore {
   _StaleCompletionStore(this._inner);
   final AppDatabase _inner;
+
+  @override
+  Future<RegisterFreshCommandResult> registerFreshCommand({
+    required PendingRewardCommand command,
+    DateTime? now,
+  }) => _inner.registerFreshCommand(command: command, now: now);
 
   @override
   Future<bool> completeCommand({

@@ -110,6 +110,23 @@ final class InMemoryChildProfileRepository implements ChildProfileRepository {
   }
 }
 
+/// Lightweight in-memory fallback for [LocalMetadataStore] in test and local demo modes.
+final class InMemoryMobileMetadataStore implements LocalMetadataStore {
+  final Map<String, String> _metadata = {};
+
+  @override
+  Future<String?> readMetadata(String key) async => _metadata[key];
+
+  @override
+  Future<void> writeMetadata({
+    required String key,
+    required String value,
+    required DateTime updatedAt,
+  }) async {
+    _metadata[key] = value;
+  }
+}
+
 /// Lightweight in-memory fallback for [LocalDraftStore] in test and local demo modes.
 final class InMemoryLocalDraftStore implements LocalDraftStore {
   final Map<String, LocalAssessmentDraft> _drafts = {};
@@ -161,6 +178,42 @@ final class InMemoryPendingRewardCommandStore
   /// Injects a raw command directly into the in-memory map for testing malformed records.
   void seedRawCommand(PendingRewardCommand command) {
     _commands[command.commandId] = command;
+  }
+
+  @override
+  Future<RegisterFreshCommandResult> registerFreshCommand({
+    required PendingRewardCommand command,
+    DateTime? now,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+    for (final existing in _commands.values) {
+      final matchesOperation =
+          existing.familyId == command.familyId &&
+          existing.operation == command.operation &&
+          (command.childId == null || existing.childId == command.childId) &&
+          (command.operation != RewardCommandOperation.redeemReward ||
+              existing.rewardId == command.rewardId);
+
+      if (matchesOperation) {
+        final isUnresolved =
+            existing.recoveryState == CommandRecoveryState.active ||
+            existing.dispatchState == CommandDispatchState.possiblyDispatched ||
+            existing.dispatchState == CommandDispatchState.neverDispatched ||
+            existing.dispatchState == CommandDispatchState.confirmedCommitted;
+
+        if (isUnresolved) {
+          return PreexistingCommandFound(existing);
+        }
+      }
+    }
+
+    _commands[command.commandId] = command.copyWith(
+      createdAt: effectiveNow,
+      nextAttemptAt: command.nextAttemptAt?.toUtc(),
+      leaseToken: null,
+      leaseExpiresAt: null,
+    );
+    return FreshCommandRegistered(command);
   }
 
   @override

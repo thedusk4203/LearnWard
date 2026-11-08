@@ -147,8 +147,37 @@ final class PendingRewardCommand {
 
 const Object _sentinel = Object();
 
+/// Result of an atomic attempt to register a fresh foreground pending command (R24-4-01).
+sealed class RegisterFreshCommandResult {
+  const RegisterFreshCommandResult();
+}
+
+/// A fresh command was successfully inserted because no active unresolved
+/// command existed for this logical operation.
+final class FreshCommandRegistered extends RegisterFreshCommandResult {
+  const FreshCommandRegistered(this.command);
+  final PendingRewardCommand command;
+}
+
+/// An active unresolved command already exists for this logical operation.
+/// The fresh command was NOT inserted; the preexisting unresolved command is returned.
+final class PreexistingCommandFound extends RegisterFreshCommandResult {
+  const PreexistingCommandFound(this.existingCommand);
+  final PendingRewardCommand existingCommand;
+}
+
 /// Port for durable local journal of pending reward commands.
 abstract interface class PendingRewardCommandStore {
+  /// Atomically registers a fresh pending command only if no unresolved pending command
+  /// (recovery_state == 'active' or dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed'))
+  /// already exists for the same logical operation (familyId, childId, operation, and optional rewardId).
+  ///
+  /// Serialized in SQLite via transaction, preventing check-then-insert races between concurrent calls (R24-4-01).
+  Future<RegisterFreshCommandResult> registerFreshCommand({
+    required PendingRewardCommand command,
+    DateTime? now,
+  });
+
   /// Saves a pending command into the durable local journal.
   Future<void> savePendingCommand(
     PendingRewardCommand command, {
