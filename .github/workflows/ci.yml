@@ -178,25 +178,25 @@ jobs:
           cat << 'EOF' > ~/.gradle/init.d/01-maven-mirror.init.gradle
           gradle.beforeSettings { settings ->
               settings.pluginManagement.repositories.all { repo ->
-                  if (repo instanceof MavenArtifactRepository && repo.url.toString().contains("repo.maven.apache.org")) {
-                      repo.url = uri("https://repo1.maven.org/maven2/")
+                  if (repo instanceof MavenArtifactRepository && (repo.url.toString().contains("maven.apache.org") || repo.url.toString().contains("repo1.maven.org") || repo.url.toString().contains("repo.maven.org"))) {
+                      repo.url = uri("https://maven.aliyun.com/repository/public")
                   }
               }
               settings.dependencyResolutionManagement.repositories.all { repo ->
-                  if (repo instanceof MavenArtifactRepository && repo.url.toString().contains("repo.maven.apache.org")) {
-                      repo.url = uri("https://repo1.maven.org/maven2/")
+                  if (repo instanceof MavenArtifactRepository && (repo.url.toString().contains("maven.apache.org") || repo.url.toString().contains("repo1.maven.org") || repo.url.toString().contains("repo.maven.org"))) {
+                      repo.url = uri("https://maven.aliyun.com/repository/public")
                   }
               }
           }
           gradle.allprojects { project ->
               project.buildscript.repositories.all { repo ->
-                  if (repo instanceof MavenArtifactRepository && repo.url.toString().contains("repo.maven.apache.org")) {
-                      repo.url = uri("https://repo1.maven.org/maven2/")
+                  if (repo instanceof MavenArtifactRepository && (repo.url.toString().contains("maven.apache.org") || repo.url.toString().contains("repo1.maven.org") || repo.url.toString().contains("repo.maven.org"))) {
+                      repo.url = uri("https://maven.aliyun.com/repository/public")
                   }
               }
               project.repositories.all { repo ->
-                  if (repo instanceof MavenArtifactRepository && repo.url.toString().contains("repo.maven.apache.org")) {
-                      repo.url = uri("https://repo1.maven.org/maven2/")
+                  if (repo instanceof MavenArtifactRepository && (repo.url.toString().contains("maven.apache.org") || repo.url.toString().contains("repo1.maven.org") || repo.url.toString().contains("repo.maven.org"))) {
+                      repo.url = uri("https://maven.aliyun.com/repository/public")
                   }
               }
           }
