@@ -110,6 +110,23 @@ final class InMemoryChildProfileRepository implements ChildProfileRepository {
   }
 }
 
+/// Lightweight in-memory fallback for [LocalMetadataStore] in test and local demo modes.
+final class InMemoryMobileMetadataStore implements LocalMetadataStore {
+  final Map<String, String> _metadata = {};
+
+  @override
+  Future<String?> readMetadata(String key) async => _metadata[key];
+
+  @override
+  Future<void> writeMetadata({
+    required String key,
+    required String value,
+    required DateTime updatedAt,
+  }) async {
+    _metadata[key] = value;
+  }
+}
+
 /// Lightweight in-memory fallback for [LocalDraftStore] in test and local demo modes.
 final class InMemoryLocalDraftStore implements LocalDraftStore {
   final Map<String, LocalAssessmentDraft> _drafts = {};
@@ -161,6 +178,36 @@ final class InMemoryPendingRewardCommandStore
   /// Injects a raw command directly into the in-memory map for testing malformed records.
   void seedRawCommand(PendingRewardCommand command) {
     _commands[command.commandId] = command;
+  }
+
+  @override
+  Future<RegisterFreshCommandResult> registerFreshCommand({
+    required PendingRewardCommand command,
+    DateTime? now,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+    for (final existing in _commands.values) {
+      final matchesOperation =
+          existing.familyId == command.familyId &&
+          existing.operation == command.operation &&
+          (command.childId == null || existing.childId == command.childId) &&
+          (command.operation != RewardCommandOperation.redeemReward ||
+              existing.rewardId == command.rewardId);
+
+      if (matchesOperation) {
+        if (existing.isUnresolved) {
+          return PreexistingCommandFound(existing);
+        }
+      }
+    }
+
+    _commands[command.commandId] = command.copyWith(
+      createdAt: effectiveNow,
+      nextAttemptAt: command.nextAttemptAt?.toUtc(),
+      leaseToken: null,
+      leaseExpiresAt: null,
+    );
+    return FreshCommandRegistered(command);
   }
 
   @override
@@ -432,6 +479,38 @@ final class InMemoryPendingRewardCommandStore
   }
 
   @override
+  Future<bool> markPossiblyDispatched({
+    required String commandId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime now,
+  }) async {
+    final effectiveNow = now.toUtc();
+    final cmd = _commands[commandId];
+    if (cmd == null) return false;
+    if (cmd.leaseToken != leaseToken) return false;
+    if (cmd.leaseExpiresAt == null ||
+        !cmd.leaseExpiresAt!.isAfter(effectiveNow)) {
+      return false;
+    }
+    if (cmd.actorUserId != authenticatedActorId) return false;
+    if (cmd.recoveryState != CommandRecoveryState.active) return false;
+    if (cmd.operation != RewardCommandOperation.spinWheel &&
+        cmd.operation != RewardCommandOperation.redeemReward) {
+      return false;
+    }
+    if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
+        cmd.dispatchState != CommandDispatchState.possiblyDispatched) {
+      return false;
+    }
+
+    _commands[commandId] = cmd.copyWith(
+      dispatchState: CommandDispatchState.possiblyDispatched,
+    );
+    return true;
+  }
+
+  @override
   Future<bool> completeCommand({
     required String commandId,
     required String leaseToken,
@@ -544,9 +623,11 @@ final class InMemoryPendingRewardCommandStore
     required String actorUserId,
     required int limit,
     DateTime? now,
+    String? familyId,
   }) async {
     final effectiveNow = (now ?? DateTime.now()).toUtc();
     final list = _commands.values.where((cmd) {
+      if (familyId != null && cmd.familyId != familyId) return false;
       if (cmd.actorUserId != actorUserId) return false;
       if (cmd.recoveryState != CommandRecoveryState.active) return false;
       if (cmd.operation != RewardCommandOperation.spinWheel &&
@@ -2123,5 +2204,51 @@ final class InMemoryLearningRepository implements LearningRepository {
       subjectKeyFilter: subjectKey?.value,
       limit: limit,
     );
+  }
+}
+
+/// Lightweight in-memory fallback for [AuthSessionPort] in local development.
+final class InMemoryAuthSessionPort implements AuthSessionPort {
+  InMemoryAuthSessionPort({String? activeUserId, String? sessionGeneration})
+    : _userId = activeUserId ?? 'local-parent-user',
+      _generation = sessionGeneration ?? 'demo-generation-1';
+
+  final String _userId;
+  final String _generation;
+
+  @override
+  String? get currentSessionGeneration => _generation;
+
+  @override
+  Stream<String?> get sessionGenerationStream => Stream.value(_generation);
+
+  @override
+  Future<ValidatedActorContext?> validateForMutation() async {
+    return ValidatedActorContext(
+      userId: _userId,
+      sessionGeneration: _generation,
+      observedAt: DateTime.now().toUtc(),
+      role: 'parent',
+    );
+  }
+}
+
+/// Lightweight in-memory fallback for [RecoveryAuthorizationPort] in local development.
+final class InMemoryRecoveryAuthorizationPort
+    implements RecoveryAuthorizationPort {
+  const InMemoryRecoveryAuthorizationPort({
+    this.defaultStatus = TargetAuthorizationStatus.authorized,
+  });
+
+  final TargetAuthorizationStatus defaultStatus;
+
+  @override
+  Future<TargetAuthorizationStatus> verifyTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+    required RewardCommandOperation operation,
+  }) async {
+    return defaultStatus;
   }
 }

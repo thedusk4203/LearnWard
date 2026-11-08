@@ -76,6 +76,13 @@ final class PendingRewardCommand {
       actorUserId != null &&
       actorUserId!.isNotEmpty;
 
+  /// Whether this command represents an unresolved operation that must block
+  /// fresh command creation for the same logical target (R24-5-03).
+  bool get isUnresolved => isCommandUnresolved(
+    recoveryState: recoveryState,
+    dispatchState: dispatchState,
+  );
+
   PendingRewardCommand copyWith({
     Object? id = _sentinel,
     RewardCommandOperation? operation,
@@ -147,8 +154,90 @@ final class PendingRewardCommand {
 
 const Object _sentinel = Object();
 
+/// Result of an atomic attempt to register a fresh foreground pending command (R24-4-01).
+sealed class RegisterFreshCommandResult {
+  const RegisterFreshCommandResult();
+}
+
+/// Checks whether a command's state combination represents an unresolved operation
+/// that must block fresh command creation for the same logical target (R24-5-03, R24-6-01).
+///
+/// Precedence contract:
+/// 1. Uncertain provenance fails closed: Any command with [CommandRecoveryState.quarantinedUnknownOutcome]
+///    or [CommandDispatchState.unknownLegacy] is quarantined until server-authorized reconciliation,
+///    even if paired with confirmedCommitted or terminalError.
+/// 2. Actor binding fails closed: Any command paused under [CommandRecoveryState.pendingOriginalActor]
+///    must not be bypassed with a new UUID by another session.
+/// 3. Definitively resolved terminal failure: [CommandRecoveryState.terminalError] on non-legacy,
+///    non-quarantined commands permits legitimate fresh user intent.
+/// 4. Definitively resolved terminal success: [CommandDispatchState.confirmedCommitted] on active,
+///    non-legacy, non-quarantined commands permits legitimate fresh user intent.
+/// 5. Active uncommitted commands: [CommandRecoveryState.active] with [CommandDispatchState.neverDispatched]
+///    or [CommandDispatchState.possiblyDispatched] continue to block duplicate logical operations.
+bool isCommandUnresolved({
+  required CommandRecoveryState recoveryState,
+  required CommandDispatchState dispatchState,
+}) {
+  // 1. Quarantined or unknown legacy outcomes fail closed until explicit reconciliation.
+  // Uncertain provenance takes precedence over confirmedCommitted and terminalError (R24-6-01).
+  if (recoveryState == CommandRecoveryState.quarantinedUnknownOutcome ||
+      dispatchState == CommandDispatchState.unknownLegacy) {
+    return true;
+  }
+
+  // 2. Commands paused pending the original authenticated actor fail closed.
+  // Another session cannot bypass the pending command by allocating a new UUID (R24-6-01).
+  if (recoveryState == CommandRecoveryState.pendingOriginalActor) {
+    return true;
+  }
+
+  // 3. Definitively resolved terminal errors (on non-quarantined, non-legacy commands).
+  if (recoveryState == CommandRecoveryState.terminalError) {
+    return false;
+  }
+
+  // 4. Definitively resolved terminal success (confirmed committed by server/receipt).
+  if (dispatchState == CommandDispatchState.confirmedCommitted) {
+    return false;
+  }
+
+  // 5. Existing active/possibly-dispatched commands continue to block duplicate logical operations.
+  if (recoveryState == CommandRecoveryState.active) {
+    if (dispatchState == CommandDispatchState.neverDispatched ||
+        dispatchState == CommandDispatchState.possiblyDispatched) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/// A fresh command was successfully inserted because no active unresolved
+/// command existed for this logical operation.
+final class FreshCommandRegistered extends RegisterFreshCommandResult {
+  const FreshCommandRegistered(this.command);
+  final PendingRewardCommand command;
+}
+
+/// An active unresolved command already exists for this logical operation.
+/// The fresh command was NOT inserted; the preexisting unresolved command is returned.
+final class PreexistingCommandFound extends RegisterFreshCommandResult {
+  const PreexistingCommandFound(this.existingCommand);
+  final PendingRewardCommand existingCommand;
+}
+
 /// Port for durable local journal of pending reward commands.
 abstract interface class PendingRewardCommandStore {
+  /// Atomically registers a fresh pending command only if no unresolved pending command
+  /// (as evaluated by [isCommandUnresolved], R24-5-03) already exists for the same
+  /// logical operation (familyId, childId, operation, and optional rewardId).
+  ///
+  /// Serialized in SQLite via transaction, preventing check-then-insert races between concurrent calls (R24-4-01).
+  Future<RegisterFreshCommandResult> registerFreshCommand({
+    required PendingRewardCommand command,
+    DateTime? now,
+  });
+
   /// Saves a pending command into the durable local journal.
   Future<void> savePendingCommand(
     PendingRewardCommand command, {
@@ -220,6 +309,20 @@ abstract interface class PendingRewardCommandStore {
     String? lastErrorMessage,
   });
 
+  /// Atomically commits a token-fenced pre-dispatch marker ('possibly_dispatched')
+  /// directly before remote mutating RPC execution.
+  ///
+  /// Requires matching [leaseToken], unexpired lease ([now] < lease_expires_at),
+  /// actor_user_id == [authenticatedActorId], recovery_state == 'active',
+  /// operation IN ('spin_wheel', 'redeem_reward'), and
+  /// dispatch_state IN ('never_dispatched', 'possibly_dispatched').
+  Future<bool> markPossiblyDispatched({
+    required String commandId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime now,
+  });
+
   /// Deletes a successfully completed command from the journal.
   /// Conditional on [leaseToken].
   Future<bool> completeCommand({
@@ -262,10 +365,12 @@ abstract interface class PendingRewardCommandStore {
   /// operation IN ('spin_wheel', 'redeem_reward'), dispatch_state IN ('never_dispatched', 'possibly_dispatched'),
   /// (next_attempt_at IS NULL OR next_attempt_at <= clock.now()),
   /// and ((lease_token IS NULL AND lease_expires_at IS NULL) OR (lease_token IS NOT NULL AND lease_expires_at <= clock.now())).
+  /// When [familyId] is provided, additionally filters by family_id == [familyId].
   Future<List<PendingRewardCommand>> listClaimableCommands({
     required String actorUserId,
     required int limit,
     DateTime? now,
+    String? familyId,
   });
 
   /// Discovers active commands belonging to a different actor for the family.

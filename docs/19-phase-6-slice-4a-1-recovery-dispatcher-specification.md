@@ -1,12 +1,17 @@
 # Phase 6 Slice 4A-1 Implementation Specification — Actor-Aware Recovery Dispatcher (Spin & Redeem)
 
-**Status:** READY FOR IMPLEMENTATION (PENDING AUDIT APPROVAL)  
+> [!NOTE]
+> **SUPERSEDED BY AUTHORITATIVE CONTRACT:**  
+> This specification document is superseded by [20-phase-6-slice-4a-1-final-implementation-contract.md](20-phase-6-slice-4a-1-final-implementation-contract.md). All implementation details, ports, error policies, SQL predicates, and acceptance criteria A01–A24 follow `docs/20-...` exactly.
+
+**Status:** SUPERSEDED BY CONTRACT 20 (REFERENCE ARCHITECTURE)  
 **Date:** 2026-11-07  
 **Target:** Phase 6 Slice 4A-1 — Core Actor-Aware Recovery Engine for `spinRewardWheel` and `redeemStoreReward`  
 **Prerequisite:** [Phase 6 Slice 4A-0 Drift v6 Foundation Freeze](freezes/phase-6-slice-4a-0-drift-v6-foundation-freeze.md) (`FROZEN` @ `88908ac309cda0eddcd549121ea0638c6979a384`)  
 **Upstream Contracts:**
 - [ADR 0008 — Phase 6 Pilot Hardening](adr/0008-phase-6-pilot-hardening.md) (`ACCEPTED`)
 - [Phase 6 Actor-Aware Offline Recovery Readiness Review](18-phase-6-actor-aware-offline-recovery-readiness-review.md) (`ACCEPTED`)
+- [Phase 6 Slice 4A-1 Final Implementation Contract](20-phase-6-slice-4a-1-final-implementation-contract.md) (`AUTHORITATIVE`)
 
 ---
 
@@ -94,12 +99,12 @@ To prevent thundering herds on recovery:
 
 ### 2.10 Archived-Child Fail-Closed Handling
 - If a child profile is archived while a reward command is pending:
-  - The server mutation RPC returns PostgreSQL error `LW301` or `42501` indicating child archival.
+  - The server mutation RPC returns PostgreSQL error `42501` with message `Child profile is archived`.
   - The dispatcher catches this terminal condition, halts retry loops, transitions the command to `quarantined_unknown_outcome` (or deletes if definitely uncommitted), and logs a sanitized diagnostic message.
 
 ### 2.11 Error Classification (SQLSTATE 42501 vs. Revocation vs. Domain Errors)
 - **Domain Errors (`LW201`–`LW206`):**
-  - Definite business rule rejections (e.g. `LW201: Insufficient points`, `LW202: Daily spin limit reached`, `LW203: Out of stock`).
+  - Definite business rule rejections (e.g. `LW201: Insufficient points`, `LW202: Daily spin limit reached`, `LW203: Insufficient eligible wheel pool`, `LW205: Reward unavailable`, `LW206: Wheel disabled`). Note: `LW204` is not on the terminal deletion whitelist.
   - Terminal $\implies$ complete command or stamp `terminal_error`, delete journal, display user-friendly error without retry.
 - **SQLSTATE `42501` (Permission Denied):**
   - Step 1: For paired child devices, query `public.child_device_grants` (`SELECT status, revoked_at WHERE auth_user_id = auth.uid()`).
@@ -130,11 +135,11 @@ Existing use cases (`SpinRewardWheel` in `spin_reward_wheel.dart` and `RedeemSto
 - **Refactoring:**
   1. Fresh command creation: Call `savePendingCommand()` with `dispatchState = CommandDispatchState.neverDispatched`.
   2. Dispatch preparation: Call `acquireClaim(commandId, actorUserId, leaseDuration)`.
-  3. Commit pre-dispatch marker with lease token: `savePendingCommand()` with `dispatchState = CommandDispatchState.possiblyDispatched`.
+  3. Commit pre-dispatch marker with lease token: Call `markPossiblyDispatched(commandId, leaseToken, authenticatedActorId, now)`. (Direct `savePendingCommand` is forbidden because active lease blocks generic overwrites).
   4. Remote RPC execution: Pass `commandId` to Supabase RPC.
   5. On Success: Call `completeCommand(commandId, leaseToken)`.
   6. On Retryable Failure: Call `releaseClaim(commandId, leaseToken, nextAttemptAt, lastErrorMessage)`.
-  7. On Terminal Business Failure: Call `completeCommand(commandId, leaseToken)`.
+  7. On Terminal Whitelisted Business Failure (`LW201`, `LW202`, `LW203`, `LW205`, `LW206`): Call `completeCommand(commandId, leaseToken)`.
 
 ### 3.2 Restricting Generic State Transitions
 - Direct calls to `savePendingCommand` must not bypass active leases or scheduled retries.

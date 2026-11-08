@@ -161,16 +161,16 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
       setState(() => _inFlightRewardIds.add(reward.id.value));
       try {
         final commandStore = ref.read(pendingRewardCommandStoreProvider);
+        final coordinator = ref.read(recoveryCoordinatorProvider);
         final redeemUseCase = RedeemStoreReward(
           ref.read(rewardRepositoryProvider),
           commandStore,
+          coordinator: coordinator,
         );
-        final actorUserId = ref.read(currentUserIdProvider);
         await redeemUseCase(
           familyId: family.id,
           rewardId: reward.id,
           childId: activeChild.id,
-          actorUserId: actorUserId,
         );
 
         if (mounted) {
@@ -216,17 +216,17 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
     setState(() => _inFlightRewardIds.add(pending.rewardId!));
     try {
       final commandStore = ref.read(pendingRewardCommandStoreProvider);
+      final coordinator = ref.read(recoveryCoordinatorProvider);
       final redeemUseCase = RedeemStoreReward(
         ref.read(rewardRepositoryProvider),
         commandStore,
+        coordinator: coordinator,
       );
-      final actorUserId = ref.read(currentUserIdProvider);
       await redeemUseCase(
         commandId: pending.commandId,
         familyId: family.id,
         rewardId: RewardId(pending.rewardId!),
         childId: activeChild.id,
-        actorUserId: actorUserId,
       );
 
       if (mounted) {

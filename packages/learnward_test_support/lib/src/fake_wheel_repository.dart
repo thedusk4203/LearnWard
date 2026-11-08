@@ -26,6 +26,9 @@ final class FakeWheelRepository implements WheelRepository {
   final List<WheelSpin> _spins = [];
   final Map<String, WheelSpinResult> _receipts = {};
 
+  WheelSpinResult? get lastCommittedResult =>
+      _receipts.values.isEmpty ? null : _receipts.values.last;
+
   int spinCallCount = 0;
 
   late final Random _rng;
@@ -34,8 +37,12 @@ final class FakeWheelRepository implements WheelRepository {
   bool failNextWithNetwork = false;
   bool failAfterCommitResponseLost = false;
   bool failNextWithPermissionError = false;
+  bool failWithInvalidWheel = false;
 
   void addReward(Reward reward) => _rewards.add(reward);
+
+  void setSettings(String familyId, WheelSettings settings) =>
+      _settings[familyId] = settings;
 
   @override
   Future<WheelSettings> getWheelSettings({required FamilyId familyId}) async {
@@ -144,13 +151,13 @@ final class FakeWheelRepository implements WheelRepository {
     required String commandId,
     required ChildId childId,
   }) async {
-    spinCallCount++;
-
     // 1. Replay check
     final existingResult = _receipts[commandId];
     if (existingResult != null) {
       return existingResult;
     }
+
+    spinCallCount++;
 
     // 2. Simulated network failure before server execution
     if (failNextWithNetwork) {
@@ -163,6 +170,14 @@ final class FakeWheelRepository implements WheelRepository {
     if (failNextWithPermissionError) {
       failNextWithPermissionError = false;
       throw Exception('PostgreSQL error 42501: permission denied');
+    }
+
+    if (failWithInvalidWheel) {
+      failWithInvalidWheel = false;
+      throw const InvalidWheelException(
+        'Wheel is disabled (LW206)',
+        code: 'LW206',
+      );
     }
 
     // 3. Resolve family & settings
@@ -186,12 +201,14 @@ final class FakeWheelRepository implements WheelRepository {
     if (!settings.isEnabled) {
       throw const InvalidWheelException(
         'Wheel is currently disabled for this family (LW206)',
+        code: 'LW206',
       );
     }
 
     if (eligibleRewards.length < 3) {
       throw InvalidWheelException(
         'Wheel requires at least 3 active eligible rewards (LW203). Found: ${eligibleRewards.length}',
+        code: 'LW203',
       );
     }
 
@@ -202,6 +219,7 @@ final class FakeWheelRepository implements WheelRepository {
     if (todaySpins >= settings.dailySpinCap) {
       throw InvalidWheelException(
         'Daily spin limit reached ($todaySpins/${settings.dailySpinCap}) (LW202)',
+        code: 'LW202',
       );
     }
 

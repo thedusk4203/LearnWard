@@ -321,10 +321,14 @@ class AppDatabase extends _$AppDatabase
         });
       } finally {
         await customStatement('PRAGMA foreign_keys = ON');
+        await customStatement('PRAGMA busy_timeout = 5000');
+        await customStatement('PRAGMA journal_mode = WAL');
       }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
+      await customStatement('PRAGMA busy_timeout = 5000');
+      await customStatement('PRAGMA journal_mode = WAL');
     },
   );
 
@@ -478,6 +482,83 @@ class AppDatabase extends _$AppDatabase
     values[8] = (values[8] & 0x3f) | 0x80;
     final hex = values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
+  }
+
+  @override
+  Future<RegisterFreshCommandResult> registerFreshCommand({
+    required PendingRewardCommand command,
+    DateTime? now,
+  }) async {
+    final effectiveNow = (now ?? DateTime.now()).toUtc();
+
+    for (var attempt = 0; attempt < 5; attempt++) {
+      try {
+        return await transaction(() async {
+          final query = select(pendingRewardCommands)
+            ..where((t) => t.familyId.equals(command.familyId))
+            ..where((t) => t.operation.equals(command.operation.wireValue));
+
+          if (command.childId != null) {
+            query.where((t) => t.childId.equals(command.childId!));
+          }
+          if (command.operation == RewardCommandOperation.redeemReward &&
+              command.rewardId != null) {
+            query.where((t) => t.rewardId.equals(command.rewardId!));
+          }
+
+          final candidates = await query.get();
+          for (final candidate in candidates) {
+            final recState = CommandRecoveryState.fromString(
+              candidate.recoveryState,
+            );
+            final dispState = CommandDispatchState.fromString(
+              candidate.dispatchState,
+            );
+            if (isCommandUnresolved(
+              recoveryState: recState,
+              dispatchState: dispState,
+            )) {
+              return PreexistingCommandFound(
+                _mapRowToPendingCommand(candidate),
+              );
+            }
+          }
+
+          await into(pendingRewardCommands).insert(
+            PendingRewardCommandsCompanion.insert(
+              operation: command.operation.wireValue,
+              commandId: command.commandId,
+              familyId: command.familyId,
+              childId: Value(command.childId),
+              rewardId: Value(command.rewardId),
+              redemptionId: Value(command.redemptionId),
+              cancellationReason: Value(command.cancellationReason),
+              createdAt: effectiveNow,
+              actorUserId: Value(command.actorUserId),
+              actorRole: Value(command.actorRole),
+              schemaVersion: Value(command.schemaVersion),
+              recoveryState: Value(command.recoveryState.wireValue),
+              dispatchState: Value(command.dispatchState.wireValue),
+              retryCount: Value(command.retryCount),
+              nextAttemptAt: Value(command.nextAttemptAt?.toUtc()),
+              lastErrorMessage: Value(command.lastErrorMessage),
+              leaseToken: const Value(null),
+              leaseExpiresAt: const Value(null),
+            ),
+            mode: InsertMode.insert,
+          );
+
+          return FreshCommandRegistered(command);
+        });
+      } catch (e) {
+        if (e.toString().contains('database is locked') && attempt < 4) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          continue;
+        }
+        rethrow;
+      }
+    }
+    throw StateError('Failed to register fresh command after retries');
   }
 
   @override
@@ -824,7 +905,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id = ?
         AND recovery_state = 'active'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
@@ -868,6 +949,38 @@ class AppDatabase extends _$AppDatabase
         Variable<String>(lastErrorMessage),
         Variable<String>(commandId),
         Variable<String>(leaseToken),
+      ],
+      updates: {pendingRewardCommands},
+    );
+
+    return rowsAffected == 1;
+  }
+
+  @override
+  Future<bool> markPossiblyDispatched({
+    required String commandId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime now,
+  }) async {
+    final effectiveNow = now.toUtc();
+    final rowsAffected = await customUpdate(
+      '''
+      UPDATE pending_reward_commands
+      SET dispatch_state = 'possibly_dispatched'
+      WHERE command_id = ?
+        AND lease_token = ?
+        AND lease_expires_at > ?
+        AND actor_user_id = ?
+        AND recovery_state = 'active'
+        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched');
+      ''',
+      variables: [
+        Variable<String>(commandId),
+        Variable<String>(leaseToken),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(authenticatedActorId),
       ],
       updates: {pendingRewardCommands},
     );
@@ -943,7 +1056,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id <> ?
         AND recovery_state = 'active'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
           OR
@@ -984,7 +1097,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id = ?
         AND recovery_state = 'pending_original_actor'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
           OR
@@ -1008,6 +1121,7 @@ class AppDatabase extends _$AppDatabase
     required String actorUserId,
     required int limit,
     DateTime? now,
+    String? familyId,
   }) async {
     final effectiveNow = (now ?? DateTime.now()).toUtc();
 
@@ -1015,9 +1129,10 @@ class AppDatabase extends _$AppDatabase
       '''
       SELECT * FROM pending_reward_commands
       WHERE actor_user_id = ?
+        ${familyId != null ? 'AND family_id = ?' : ''}
         AND recovery_state = 'active'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
@@ -1029,6 +1144,7 @@ class AppDatabase extends _$AppDatabase
       ''',
       variables: [
         Variable<String>(actorUserId),
+        if (familyId != null) Variable<String>(familyId),
         Variable<DateTime>(effectiveNow),
         Variable<DateTime>(effectiveNow),
         Variable<int>(limit),
@@ -1060,7 +1176,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id <> ?
         AND recovery_state = 'active'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
           OR
@@ -1101,7 +1217,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id = ?
         AND recovery_state = 'pending_original_actor'
         AND operation IN ('spin_wheel', 'redeem_reward')
-        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
           OR

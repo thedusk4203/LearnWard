@@ -10,20 +10,44 @@ void main() {
   group('Durable Reward Command Idempotency across Restarts', () {
     late InMemoryPendingRewardCommandStore commandStore;
     late MockServerRewardRepository server;
+    late FakeAuthSessionPort authPort;
+    late FakeRecoveryAuthorizationPort authzPort;
 
     final familyId = FamilyId('fam-test-1');
     final childId = ChildId('child-test-1');
     final rewardId = RewardId('rew-test-1');
 
+    RedeemStoreReward createRedeemUseCase({
+      AuthSessionPort? auth,
+      RecoveryAuthorizationPort? authz,
+    }) {
+      return RedeemStoreReward(
+        server,
+        commandStore,
+        authSessionPort: auth ?? authPort,
+        authorizationPort: authz ?? authzPort,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
+    }
+
     setUp(() {
       commandStore = InMemoryPendingRewardCommandStore();
       server = MockServerRewardRepository();
       server.childBalances[childId.value] = 5000; // 50.00 RP
+      authPort = FakeAuthSessionPort(activeUserId: 'actor-child-1');
+      authzPort = FakeRecoveryAuthorizationPort();
+    });
+
+    test('H02: RedeemStoreReward constructor fails closed with ArgumentError without trusted coordinator or ports', () {
+      expect(
+        () => RedeemStoreReward(server, commandStore),
+        throwsArgumentError,
+      );
     });
 
     test('Redeem commit-response-loss: exactly 1 debit across failure and restart, subsequent action gets new command ID', () async {
       // 1. Initial attempt with simulated response loss and authenticated actor
-      var redeemUseCase = RedeemStoreReward(server, commandStore);
+      var redeemUseCase = createRedeemUseCase();
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
@@ -54,13 +78,14 @@ void main() {
       );
 
       // 2. Simulate complete application restart (new use case instance reading persistent store)
-      redeemUseCase = RedeemStoreReward(server, commandStore);
+      redeemUseCase = createRedeemUseCase();
 
-      // 3. User retries claim or screen recovers with matching actor
+      // 3. User retries claim or screen recovers with matching actor and explicit commandId
       final recoveredRedemption = await redeemUseCase(
         familyId: familyId,
         rewardId: rewardId,
         childId: childId,
+        commandId: firstCommandId,
         actorUserId: 'actor-child-1',
       );
 
@@ -113,7 +138,7 @@ void main() {
           ),
         );
 
-        final redeemUseCase = RedeemStoreReward(server, commandStore);
+        final redeemUseCase = createRedeemUseCase();
 
         // Attempting to dispatch must fail closed with StateError, not touch server
         await expectLater(
@@ -121,6 +146,7 @@ void main() {
             familyId: familyId,
             rewardId: rewardId,
             childId: childId,
+            commandId: 'cmd-redeem-no-actor',
             actorUserId: 'actor-child-1',
           ),
           throwsA(isA<StateError>()),
@@ -140,11 +166,16 @@ void main() {
           ),
         );
 
+        final redeemUseCaseDiffActor = createRedeemUseCase(
+          auth: FakeAuthSessionPort(activeUserId: 'actor-different'),
+        );
+
         await expectLater(
-          () => redeemUseCase(
+          () => redeemUseCaseDiffActor(
             familyId: familyId,
             rewardId: rewardId,
             childId: childId,
+            commandId: 'cmd-redeem-actor-1',
             actorUserId: 'actor-different',
           ),
           throwsA(isA<StateError>()),
@@ -169,12 +200,13 @@ void main() {
         ),
       );
 
-      final redeemUseCase = RedeemStoreReward(server, commandStore);
+      final redeemUseCase = createRedeemUseCase();
       await expectLater(
         () => redeemUseCase(
           familyId: familyId,
           rewardId: rewardId,
           childId: childId,
+          commandId: 'cmd-redeem-quarantined',
           actorUserId: 'actor-child-1',
         ),
         throwsA(isA<StateError>()),
@@ -199,6 +231,7 @@ void main() {
           familyId: familyId,
           rewardId: rewardId,
           childId: childId,
+          commandId: 'cmd-redeem-legacy',
           actorUserId: 'actor-child-1',
         ),
         throwsA(isA<StateError>()),
@@ -208,7 +241,7 @@ void main() {
 
     test('Fulfill commit-response-loss: exactly 1 transition across failure and restart, subsequent action gets new command ID', () async {
       // Setup existing redemption
-      final redeemUseCase = RedeemStoreReward(server, commandStore);
+      final redeemUseCase = createRedeemUseCase();
       final redemption = await redeemUseCase(
         familyId: familyId,
         rewardId: rewardId,
@@ -257,7 +290,7 @@ void main() {
 
     test('Cancel commit-response-loss: exactly 1 refund across failure and restart with preserved reason', () async {
       // Setup existing redemption
-      final redeemUseCase = RedeemStoreReward(server, commandStore);
+      final redeemUseCase = createRedeemUseCase();
       final redemption = await redeemUseCase(
         familyId: familyId,
         rewardId: rewardId,
@@ -318,7 +351,7 @@ void main() {
       // Balance is 0
       server.childBalances[childId.value] = 0;
 
-      final redeemUseCase = RedeemStoreReward(server, commandStore);
+      final redeemUseCase = createRedeemUseCase();
 
       await expectLater(
         redeemUseCase(
@@ -335,61 +368,35 @@ void main() {
       expect(server.debitCount, 0);
     });
 
-    test('Test D: missing or empty actor during new redemption fails closed, zero server calls, zero journal entries', () async {
+    test('Test D: missing or unauthenticated session during new redemption fails closed, zero server calls, zero journal entries', () async {
       server.redeemCallCount = 0;
       server.debitCount = 0;
-      final redeemUseCase = RedeemStoreReward(server, commandStore);
+      authPort.invalidateSession(); // Unauthenticated session
+      final redeemUseCase = createRedeemUseCase();
 
-      // 1. null actor
       await expectLater(
         () => redeemUseCase(
           familyId: familyId,
           rewardId: rewardId,
           childId: childId,
-          actorUserId: null,
+          actorUserId: 'actor-child-1',
         ),
         throwsA(isA<StateError>()),
       );
       expect(
         server.redeemCallCount,
         equals(0),
-        reason: 'Zero server calls on missing actor',
+        reason: 'Zero server calls on missing session',
       );
       expect(
         server.debitCount,
         equals(0),
-        reason: 'Zero balance debits on missing actor',
+        reason: 'Zero debits on missing session',
       );
       expect(
         await commandStore.listPendingCommands(),
         isEmpty,
-        reason: 'Zero journal entries on missing actor',
-      );
-
-      // 2. empty actor
-      await expectLater(
-        () => redeemUseCase(
-          familyId: familyId,
-          rewardId: rewardId,
-          childId: childId,
-          actorUserId: '',
-        ),
-        throwsA(isA<StateError>()),
-      );
-      expect(
-        server.redeemCallCount,
-        equals(0),
-        reason: 'Zero server calls on empty actor',
-      );
-      expect(
-        server.debitCount,
-        equals(0),
-        reason: 'Zero balance debits on empty actor',
-      );
-      expect(
-        await commandStore.listPendingCommands(),
-        isEmpty,
-        reason: 'Zero journal entries on empty actor',
+        reason: 'Zero journal entries on missing session',
       );
     });
   });

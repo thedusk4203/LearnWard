@@ -670,6 +670,119 @@ void main() {
           throwsA(isA<StateError>()),
         );
       });
+
+      test('markPossiblyDispatched commits pre-dispatch marker under active lease and rejects wrong token, expired lease, or wrong actor in mobile store', () async {
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-mark-1',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-1',
+          createdAt: t0,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await store.savePendingCommand(cmd, now: t0);
+
+        final token = (await store.acquireClaim(
+          commandId: 'cmd-mobile-mark-1',
+          actorUserId: 'user-1',
+          leaseDuration: const Duration(seconds: 30),
+          now: t0,
+        ))!;
+
+        // Rejects wrong token
+        expect(
+          await store.markPossiblyDispatched(
+            commandId: 'cmd-mobile-mark-1',
+            leaseToken: 'wrong-token',
+            authenticatedActorId: 'user-1',
+            now: t0.add(const Duration(seconds: 5)),
+          ),
+          isFalse,
+        );
+
+        // Rejects wrong actor
+        expect(
+          await store.markPossiblyDispatched(
+            commandId: 'cmd-mobile-mark-1',
+            leaseToken: token,
+            authenticatedActorId: 'user-different',
+            now: t0.add(const Duration(seconds: 5)),
+          ),
+          isFalse,
+        );
+
+        // Rejects expired lease
+        expect(
+          await store.markPossiblyDispatched(
+            commandId: 'cmd-mobile-mark-1',
+            leaseToken: token,
+            authenticatedActorId: 'user-1',
+            now: t0.add(const Duration(seconds: 35)),
+          ),
+          isFalse,
+        );
+
+        // Valid call succeeds
+        expect(
+          await store.markPossiblyDispatched(
+            commandId: 'cmd-mobile-mark-1',
+            leaseToken: token,
+            authenticatedActorId: 'user-1',
+            now: t0.add(const Duration(seconds: 10)),
+          ),
+          isTrue,
+        );
+
+        final persisted = await store.getPendingCommand('cmd-mobile-mark-1');
+        expect(
+          persisted!.dispatchState,
+          CommandDispatchState.possiblyDispatched,
+        );
+        expect(persisted.leaseToken, token);
+        expect(persisted.leaseExpiresAt, isNotNull);
+      });
+
+      test('listClaimableCommands filters by familyId in mobile store preventing cross-family starvation', () async {
+        final cmdFam1 = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-fam-1',
+          familyId: 'fam-1',
+          childId: 'ch-1',
+          actorUserId: 'user-shared',
+          createdAt: t0,
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        final cmdFam2 = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-mobile-fam-2',
+          familyId: 'fam-2',
+          childId: 'ch-2',
+          actorUserId: 'user-shared',
+          createdAt: t0.subtract(const Duration(minutes: 5)),
+          dispatchState: CommandDispatchState.neverDispatched,
+        );
+        await store.savePendingCommand(cmdFam2, now: t0);
+        await store.savePendingCommand(cmdFam1, now: t0);
+
+        final fam1List = await store.listClaimableCommands(
+          actorUserId: 'user-shared',
+          limit: 10,
+          familyId: 'fam-1',
+          now: t0,
+        );
+        expect(fam1List.length, 1);
+        expect(fam1List.first.commandId, 'cmd-mobile-fam-1');
+
+        final fam2List = await store.listClaimableCommands(
+          actorUserId: 'user-shared',
+          limit: 10,
+          familyId: 'fam-2',
+          now: t0,
+        );
+        expect(fam2List.length, 1);
+        expect(fam2List.first.commandId, 'cmd-mobile-fam-2');
+      });
     },
   );
 }

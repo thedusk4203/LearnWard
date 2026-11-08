@@ -172,6 +172,47 @@ jobs:
       - name: Resolve workspace dependencies
         run: flutter pub get
 
+      - name: Pre-fetch Gradle 9.3.1 distribution with SHA-256 verification
+        run: |
+          WRAPPER_DIR="$HOME/.gradle/wrapper/dists/gradle-9.3.1-all/9ot9r568e8zfvvd4mn8rbu1j0"
+          mkdir -p "$WRAPPER_DIR"
+          ZIP_PATH="$WRAPPER_DIR/gradle-9.3.1-all.zip"
+          EXPECTED_SHA256="17f277867f6914d61b1aa02efab1ba7bb439ad652ca485cd8ca6842fccec6e43"
+          if [ ! -f "$WRAPPER_DIR/gradle-9.3.1-all.zip.ok" ]; then
+            echo "Downloading Gradle 9.3.1 distribution..."
+            curl -fSL --retry 3 --retry-delay 2 "https://services.gradle.org/distributions/gradle-9.3.1-all.zip" -o "$ZIP_PATH"
+            echo "$EXPECTED_SHA256  $ZIP_PATH" | sha256sum -c -
+            unzip -q -o "$ZIP_PATH" -d "$WRAPPER_DIR"
+            touch "$WRAPPER_DIR/gradle-9.3.1-all.zip.ok"
+            touch "$WRAPPER_DIR/gradle-9.3.1-all.zip.lck"
+          fi
+
+      - name: Pre-fetch verified Android SQLite native binaries
+        run: |
+          ASSETS=(
+            "libsqlite3.arm.android.so:d0d6eeaf4fa1e833c9344dafce3f8cb00c952f633175e1ec224bd6d05fceecf3"
+            "libsqlite3.arm64.android.so:3e6fb0d96f0848a42a023311b4ced7cfb58007ff6aadc7307b2ad5a44e1dc7d1"
+            "libsqlite3.x64.android.so:3adb7821b2688ad1be4e9db3a08e51e066f91d1b958564c28cedccd1f18f48fd"
+            "libsqlite3.ia32.android.so:2dd56b75bbe70cff44add077ace9ae4cba908c58f38d8bc6b6ab06c6a93e8522"
+          )
+          BASE_CACHE_DIR=".dart_tool/hooks_runner/shared/sqlite3/build"
+          for item in "${ASSETS[@]}"; do
+            IFS=":" read -r filename expected_hash <<< "$item"
+            dir_prefix="${expected_hash:0:8}"
+            target_dir="$BASE_CACHE_DIR/download-$dir_prefix"
+            mkdir -p "$target_dir"
+            target_file="$target_dir/libsqlite3.so"
+            if [ ! -f "$target_file" ] || ! echo "$expected_hash  $target_file" | sha256sum -c --status; then
+              echo "Pre-fetching $filename..."
+              curl -fSL --retry 5 --retry-delay 3 \
+                "https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.8.0/$filename" \
+                -o "$target_file"
+              echo "$expected_hash  $target_file" | sha256sum -c -
+            fi
+          done
+          mkdir -p apps/mobile/.dart_tool/hooks_runner/shared/sqlite3
+          cp -r .dart_tool/hooks_runner/shared/sqlite3/build apps/mobile/.dart_tool/hooks_runner/shared/sqlite3/
+
       - name: Build debug APK
         run: flutter build apk --debug
         working-directory: apps/mobile

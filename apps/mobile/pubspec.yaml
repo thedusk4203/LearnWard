@@ -32,6 +32,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  http: ^1.2.0
   integration_test:
     sdk: flutter
   learnward_test_support:
@@ -40,3 +41,12 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+hooks:
+  user_defines:
+    sqlite3:
+      source:
+        linux: system
+        macos: system
+        ios: system
+        default: sqlite3

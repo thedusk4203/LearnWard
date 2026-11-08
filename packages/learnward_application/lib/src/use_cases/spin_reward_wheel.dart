@@ -1,119 +1,111 @@
-import 'dart:math';
+// ignore_for_file: prefer_initializing_formals
 
 import 'package:learnward_domain/learnward_domain.dart';
 
-import '../ports/command_lifecycle_states.dart';
+import '../ports/auth_session_port.dart';
+import '../ports/clock.dart';
 import '../ports/pending_reward_command_store.dart';
+import '../ports/recovery_authorization_port.dart';
 import '../ports/wheel_repository.dart';
+import '../services/jitter_source.dart';
+import '../services/recovery_coordinator.dart';
 
 /// Server-authoritative use-case for spinning the Celebration Wheel with durable journaling.
 final class SpinRewardWheel {
-  const SpinRewardWheel(
+  SpinRewardWheel(
     this._repository,
     this._commandStore, {
     this.uuidGenerator,
-  });
+    AuthSessionPort? authSessionPort,
+    RecoveryAuthorizationPort? authorizationPort,
+    Clock? clock,
+    JitterSource? jitterSource,
+    RecoveryCoordinator? coordinator,
+  }) : _authSessionPort = authSessionPort,
+       _authorizationPort = authorizationPort,
+       _clock = clock ?? const SystemClock(),
+       _jitterSource = jitterSource ?? const RandomJitterSource(),
+       _coordinator = coordinator {
+    if (_coordinator == null &&
+        (_authSessionPort == null || _authorizationPort == null)) {
+      throw ArgumentError(
+        'SpinRewardWheel requires either an explicit RecoveryCoordinator or both '
+        'trusted AuthSessionPort and RecoveryAuthorizationPort.',
+      );
+    }
+  }
 
   final WheelRepository _repository;
   final PendingRewardCommandStore _commandStore;
   final String Function()? uuidGenerator;
+  final AuthSessionPort? _authSessionPort;
+  final RecoveryAuthorizationPort? _authorizationPort;
+  final Clock _clock;
+  final JitterSource _jitterSource;
+  final RecoveryCoordinator? _coordinator;
 
   Future<WheelSpinResult> call({
     required FamilyId familyId,
     required ChildId childId,
     String? commandId,
+    @Deprecated('Actor identity must be obtained from trusted AuthSessionPort')
     String? actorUserId,
+    @Deprecated('Actor role must be obtained from trusted AuthSessionPort')
     String? actorRole,
   }) async {
-    final existing = await _commandStore.findPendingSpinCommand(
+    final coordinator =
+        _coordinator ??
+        RecoveryCoordinator(
+          commandStore: _commandStore,
+          wheelRepository: _repository,
+          authSessionPort: _authSessionPort!,
+          authorizationPort: _authorizationPort!,
+          clock: _clock,
+          jitterSource: _jitterSource,
+          uuidGenerator: uuidGenerator,
+        );
+
+    final result = await coordinator.execute(
+      operation: RewardCommandOperation.spinWheel,
       familyId: familyId.value,
       childId: childId.value,
-      recoveryState: null,
+      requestedCommandId: commandId,
+      trigger: CommandExecutionTrigger.foreground,
     );
 
-    final String actualCommandId;
-    if (existing != null) {
-      final canReplayExisting =
-          actorUserId != null &&
-          actorUserId.isNotEmpty &&
-          existing.actorUserId != null &&
-          existing.actorUserId == actorUserId &&
-          existing.canAutoReplay;
-
-      if (!canReplayExisting) {
+    return switch (result) {
+      CommandCommittedResult(wheelResult: final res) =>
+        res ?? (throw StateError('Command committed without domain result')),
+      CommandTerminalRejectionResult(
+        originalError: final err,
+        errorMessage: final msg,
+      ) =>
+        err != null ? throw err : throw StateError(msg),
+      CommandScheduledResult(
+        originalError: final err,
+        errorMessage: final msg,
+      ) =>
+        err != null
+            ? throw err
+            : throw StateError(msg ?? 'Scheduled for retry'),
+      CommandPendingOriginalActorResult(
+        originalError: final err,
+        reason: final r,
+      ) =>
+        err != null ? throw err : throw StateError('Cannot replay: $r'),
+      CommandQuarantinedResult(originalError: final err, reason: final r) =>
+        err != null ? throw err : throw StateError('Cannot replay: $r'),
+      CommandAlreadyInFlightResult(commandId: final id) => throw StateError(
+        'Command $id is already in flight',
+      ),
+      CommandFamilyMismatchResult(
+        commandFamilyId: final cf,
+        activeFamilyId: final af,
+      ) =>
         throw StateError(
-          'Cannot dispatch reward command: an unresolved pending command exists '
-          '(id: ${existing.commandId}, recoveryState: ${existing.recoveryState.wireValue}, '
-          'dispatchState: ${existing.dispatchState.wireValue}) that is ineligible for automatic replay. '
-          'Reconciliation is required.',
-        );
-      }
-
-      actualCommandId = existing.commandId;
-      await _commandStore.savePendingCommand(
-        existing.copyWith(
-          dispatchState: CommandDispatchState.possiblyDispatched,
+          'Command belongs to family $cf but active family is $af',
         ),
-      );
-    } else {
-      if (actorUserId == null || actorUserId.isEmpty) {
-        throw StateError(
-          'Cannot dispatch reward command: authenticated actor identity is required but was missing or empty.',
-        );
-      }
-
-      actualCommandId = commandId ?? (uuidGenerator?.call() ?? _generateUuid());
-      await _commandStore.savePendingCommand(
-        PendingRewardCommand(
-          operation: RewardCommandOperation.spinWheel,
-          commandId: actualCommandId,
-          familyId: familyId.value,
-          childId: childId.value,
-          actorUserId: actorUserId,
-          actorRole: actorRole,
-          createdAt: DateTime.now().toUtc(),
-          dispatchState: CommandDispatchState.possiblyDispatched,
-        ),
-      );
-    }
-
-    try {
-      final result = await _repository.spinRewardWheel(
-        commandId: actualCommandId,
-        childId: childId,
-      );
-
-      await _commandStore.deletePendingCommand(actualCommandId);
-      return result;
-    } catch (e) {
-      if (_isTerminalError(e)) {
-        await _commandStore.deletePendingCommand(actualCommandId);
-      }
-      rethrow;
-    }
-  }
-
-  static bool _isTerminalError(Object error) {
-    final msg = error.toString();
-    if (msg.contains('LW201') || // Insufficient RP
-        msg.contains('LW202') || // Daily cap reached
-        msg.contains('LW203') || // Pool size < 3
-        msg.contains('LW206') || // Wheel disabled
-        msg.contains('LW004') || // Timezone / invalid
-        msg.contains('P0002') || // Child not found
-        msg.contains('22000') || // Bad argument
-        msg.contains('InvalidWheelException')) {
-      return true;
-    }
-    return false;
-  }
-
-  static String _generateUuid() {
-    final random = Random.secure();
-    final values = List<int>.generate(16, (i) => random.nextInt(256));
-    values[6] = (values[6] & 0x0f) | 0x40;
-    values[8] = (values[8] & 0x3f) | 0x80;
-    final hex = values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
+      CommandAuthUnavailableResult(reason: final r) => throw StateError(r),
+    };
   }
 }
