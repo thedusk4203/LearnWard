@@ -1424,72 +1424,338 @@ void main() {
       expect(rewardRepo.debitCount, equals(1));
     });
 
-    group('R24-5-03: Fresh-command unresolved-state matrix (recoveryState × dispatchState)', () {
-      for (final recovery in CommandRecoveryState.values) {
-        for (final dispatch in CommandDispatchState.values) {
-          test('registerFreshCommand predicate for $recovery × $dispatch in SQLite', () async {
-            final cmdId = 'cmd-matrix-${recovery.name}-${dispatch.name}';
-            final existing = PendingRewardCommand(
-              operation: RewardCommandOperation.spinWheel,
-              commandId: cmdId,
-              familyId: 'fam-matrix',
-              childId: 'child-matrix',
-              actorUserId: 'actor-matrix',
-              createdAt: t0,
-              recoveryState: recovery,
-              dispatchState: dispatch,
-            );
-            await database.savePendingCommand(existing, now: t0);
+    group('R24-6-02: Independent Golden State Matrix (frozen contract precedence)', () {
+      // Independent, authoritative golden expected outcome table (recoveryState × dispatchState).
+      // true  = UNRESOLVED (blocks fresh command creation, fails closed, requires reconciliation)
+      // false = DEFINITIVELY RESOLVED (allows fresh user intent)
+      const goldenOutcomeTable =
+          <(CommandRecoveryState, CommandDispatchState), bool>{
+            // --- 1. Uncertain / Quarantined states (FAIL CLOSED -> true) ---
+            (
+              CommandRecoveryState.quarantinedUnknownOutcome,
+              CommandDispatchState.unknownLegacy,
+            ): true,
+            (
+              CommandRecoveryState.quarantinedUnknownOutcome,
+              CommandDispatchState.neverDispatched,
+            ): true,
+            (
+              CommandRecoveryState.quarantinedUnknownOutcome,
+              CommandDispatchState.possiblyDispatched,
+            ): true,
+            // R24-6-01: Quarantine takes precedence over confirmedCommitted!
+            (
+              CommandRecoveryState.quarantinedUnknownOutcome,
+              CommandDispatchState.confirmedCommitted,
+            ): true,
 
-            final freshCandidate = PendingRewardCommand(
-              operation: RewardCommandOperation.spinWheel,
-              commandId: 'cmd-fresh-candidate',
-              familyId: 'fam-matrix',
-              childId: 'child-matrix',
-              actorUserId: 'actor-matrix',
-              createdAt: t0,
-              recoveryState: CommandRecoveryState.active,
-              dispatchState: CommandDispatchState.neverDispatched,
-            );
+            // --- 2. Actor-bound states (FAIL CLOSED -> true) ---
+            (
+              CommandRecoveryState.pendingOriginalActor,
+              CommandDispatchState.unknownLegacy,
+            ): true,
+            (
+              CommandRecoveryState.pendingOriginalActor,
+              CommandDispatchState.neverDispatched,
+            ): true,
+            (
+              CommandRecoveryState.pendingOriginalActor,
+              CommandDispatchState.possiblyDispatched,
+            ): true,
+            // R24-6-01: Actor binding takes precedence over confirmedCommitted!
+            (
+              CommandRecoveryState.pendingOriginalActor,
+              CommandDispatchState.confirmedCommitted,
+            ): true,
 
-            final result = await database.registerFreshCommand(
-              command: freshCandidate,
-              now: t0,
-            );
+            // --- 3. Legacy unknown provenance states (FAIL CLOSED -> true) ---
+            // R24-6-01: unknownLegacy takes precedence over terminalError!
+            (
+              CommandRecoveryState.terminalError,
+              CommandDispatchState.unknownLegacy,
+            ): true,
+            (CommandRecoveryState.active, CommandDispatchState.unknownLegacy):
+                true,
 
-            final expectedUnresolved = isCommandUnresolved(
-              recoveryState: recovery,
-              dispatchState: dispatch,
-            );
+            // --- 4. Active in-flight / pending retry states (BLOCK DUPLICATES -> true) ---
+            (CommandRecoveryState.active, CommandDispatchState.neverDispatched):
+                true,
+            (
+              CommandRecoveryState.active,
+              CommandDispatchState.possiblyDispatched,
+            ): true,
 
-            if (expectedUnresolved) {
-              expect(
-                result,
-                isA<PreexistingCommandFound>(),
-                reason:
-                    '$recovery × $dispatch is unresolved and MUST block duplicate fresh commands',
-              );
-            } else {
-              expect(
-                result,
-                isA<FreshCommandRegistered>(),
-                reason:
-                    '$recovery × $dispatch is confirmed terminal and MUST allow fresh user intent',
-              );
-            }
+            // --- 5. Definitively resolved terminal failures (ALLOW FRESH INTENT -> false) ---
+            (
+              CommandRecoveryState.terminalError,
+              CommandDispatchState.neverDispatched,
+            ): false,
+            (
+              CommandRecoveryState.terminalError,
+              CommandDispatchState.possiblyDispatched,
+            ): false,
+            (
+              CommandRecoveryState.terminalError,
+              CommandDispatchState.confirmedCommitted,
+            ): false,
 
-            // Cleanup row for next combination
-            await database.customStatement(
-              'DELETE FROM pending_reward_commands WHERE command_id = ?',
-              [cmdId],
+            // --- 6. Definitively resolved terminal success (ALLOW FRESH INTENT -> false) ---
+            (
+              CommandRecoveryState.active,
+              CommandDispatchState.confirmedCommitted,
+            ): false,
+          };
+
+      test('Golden table covers all 16 state combinations', () {
+        expect(goldenOutcomeTable.length, equals(16));
+        for (final rec in CommandRecoveryState.values) {
+          for (final disp in CommandDispatchState.values) {
+            expect(
+              goldenOutcomeTable.containsKey((rec, disp)),
+              isTrue,
+              reason: 'Missing entry in golden matrix for ($rec, $disp)',
             );
-            await database.customStatement(
-              'DELETE FROM pending_reward_commands WHERE command_id = ?',
-              ['cmd-fresh-candidate'],
-            );
-          });
+          }
         }
+      });
+
+      test('isCommandUnresolved classifier matches golden table for all 16 states', () {
+        for (final entry in goldenOutcomeTable.entries) {
+          final (recovery, dispatch) = entry.key;
+          final expectedUnresolved = entry.value;
+
+          final actual = isCommandUnresolved(
+            recoveryState: recovery,
+            dispatchState: dispatch,
+          );
+          expect(
+            actual,
+            equals(expectedUnresolved),
+            reason:
+                'Classifier mismatch for ($recovery, $dispatch): expected $expectedUnresolved but got $actual',
+          );
+        }
+      });
+
+      for (final entry in goldenOutcomeTable.entries) {
+        final (recovery, dispatch) = entry.key;
+        final expectedUnresolved = entry.value;
+
+        test('SQLite registerFreshCommand against golden matrix: $recovery × $dispatch', () async {
+          final cmdId = 'cmd-golden-${recovery.name}-${dispatch.name}';
+          final existing = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: cmdId,
+            familyId: 'fam-matrix',
+            childId: 'child-matrix',
+            actorUserId: 'actor-matrix',
+            createdAt: t0,
+            recoveryState: recovery,
+            dispatchState: dispatch,
+          );
+          await database.savePendingCommand(existing, now: t0);
+
+          final freshCandidate = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-fresh-candidate',
+            familyId: 'fam-matrix',
+            childId: 'child-matrix',
+            actorUserId: 'actor-matrix',
+            createdAt: t0,
+            recoveryState: CommandRecoveryState.active,
+            dispatchState: CommandDispatchState.neverDispatched,
+          );
+
+          final result = await database.registerFreshCommand(
+            command: freshCandidate,
+            now: t0,
+          );
+
+          if (expectedUnresolved) {
+            expect(
+              result,
+              isA<PreexistingCommandFound>(),
+              reason:
+                  'SQLite must reject fresh registration for unresolved $recovery × $dispatch',
+            );
+          } else {
+            expect(
+              result,
+              isA<FreshCommandRegistered>(),
+              reason:
+                  'SQLite must allow fresh registration for resolved $recovery × $dispatch',
+            );
+          }
+
+          // Cleanup rows
+          await database.customStatement(
+            'DELETE FROM pending_reward_commands WHERE command_id = ?',
+            [cmdId],
+          );
+          await database.customStatement(
+            'DELETE FROM pending_reward_commands WHERE command_id = ?',
+            ['cmd-fresh-candidate'],
+          );
+        });
       }
+
+      test('R24-6-01 Named Regression: quarantinedUnknownOutcome × confirmedCommitted fails closed', () async {
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-reg-quarantine-committed',
+          familyId: 'fam-reg',
+          childId: 'child-reg',
+          actorUserId: 'actor-reg',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
+          dispatchState: CommandDispatchState.confirmedCommitted,
+        );
+        await database.savePendingCommand(cmd, now: t0);
+
+        final result = await database.registerFreshCommand(
+          command: PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-fresh-attempt',
+            familyId: 'fam-reg',
+            childId: 'child-reg',
+            actorUserId: 'actor-reg',
+            createdAt: t0,
+          ),
+          now: t0,
+        );
+
+        expect(result, isA<PreexistingCommandFound>());
+        final found = result as PreexistingCommandFound;
+        expect(
+          found.existingCommand.commandId,
+          equals('cmd-reg-quarantine-committed'),
+        );
+      });
+
+      test(
+        'R24-6-01 Named Regression: terminalError × unknownLegacy fails closed',
+        () async {
+          final cmd = PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-reg-terminal-legacy',
+            familyId: 'fam-reg-2',
+            childId: 'child-reg-2',
+            actorUserId: 'actor-reg-2',
+            createdAt: t0,
+            recoveryState: CommandRecoveryState.terminalError,
+            dispatchState: CommandDispatchState.unknownLegacy,
+          );
+          await database.savePendingCommand(cmd, now: t0);
+
+          final result = await database.registerFreshCommand(
+            command: PendingRewardCommand(
+              operation: RewardCommandOperation.spinWheel,
+              commandId: 'cmd-fresh-attempt-2',
+              familyId: 'fam-reg-2',
+              childId: 'child-reg-2',
+              actorUserId: 'actor-reg-2',
+              createdAt: t0,
+            ),
+            now: t0,
+          );
+
+          expect(result, isA<PreexistingCommandFound>());
+          final found = result as PreexistingCommandFound;
+          expect(
+            found.existingCommand.commandId,
+            equals('cmd-reg-terminal-legacy'),
+          );
+        },
+      );
+
+      test('R24-6-01 Named Regression: pendingOriginalActor × confirmedCommitted fails closed', () async {
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-reg-pending-committed',
+          familyId: 'fam-reg-3',
+          childId: 'child-reg-3',
+          actorUserId: 'actor-original',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.pendingOriginalActor,
+          dispatchState: CommandDispatchState.confirmedCommitted,
+        );
+        await database.savePendingCommand(cmd, now: t0);
+
+        final result = await database.registerFreshCommand(
+          command: PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-fresh-attempt-3',
+            familyId: 'fam-reg-3',
+            childId: 'child-reg-3',
+            actorUserId: 'actor-different',
+            createdAt: t0,
+          ),
+          now: t0,
+        );
+
+        expect(result, isA<PreexistingCommandFound>());
+        final found = result as PreexistingCommandFound;
+        expect(
+          found.existingCommand.commandId,
+          equals('cmd-reg-pending-committed'),
+        );
+      });
+
+      test('R24-6-01 Named Regression: normal terminal success active × confirmedCommitted permits fresh intent', () async {
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-reg-normal-success',
+          familyId: 'fam-reg-4',
+          childId: 'child-reg-4',
+          actorUserId: 'actor-reg-4',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.active,
+          dispatchState: CommandDispatchState.confirmedCommitted,
+        );
+        await database.savePendingCommand(cmd, now: t0);
+
+        final result = await database.registerFreshCommand(
+          command: PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-fresh-attempt-4',
+            familyId: 'fam-reg-4',
+            childId: 'child-reg-4',
+            actorUserId: 'actor-reg-4',
+            createdAt: t0,
+          ),
+          now: t0,
+        );
+
+        expect(result, isA<FreshCommandRegistered>());
+      });
+
+      test('R24-6-01 Named Regression: normal terminal failure terminalError × possiblyDispatched permits fresh intent', () async {
+        final cmd = PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-reg-normal-failure',
+          familyId: 'fam-reg-5',
+          childId: 'child-reg-5',
+          actorUserId: 'actor-reg-5',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.terminalError,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        );
+        await database.savePendingCommand(cmd, now: t0);
+
+        final result = await database.registerFreshCommand(
+          command: PendingRewardCommand(
+            operation: RewardCommandOperation.spinWheel,
+            commandId: 'cmd-fresh-attempt-5',
+            familyId: 'fam-reg-5',
+            childId: 'child-reg-5',
+            actorUserId: 'actor-reg-5',
+            createdAt: t0,
+          ),
+          now: t0,
+        );
+
+        expect(result, isA<FreshCommandRegistered>());
+      });
     });
   });
 }

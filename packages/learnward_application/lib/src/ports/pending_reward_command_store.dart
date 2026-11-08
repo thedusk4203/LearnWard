@@ -160,38 +160,53 @@ sealed class RegisterFreshCommandResult {
 }
 
 /// Checks whether a command's state combination represents an unresolved operation
-/// that must block fresh command creation for the same logical target (R24-5-03).
+/// that must block fresh command creation for the same logical target (R24-5-03, R24-6-01).
 ///
-/// Matrix rules:
-/// - Confirmed terminal outcomes do not block legitimate fresh user intent indefinitely.
-/// - Quarantined or unknown outcomes are not bypassed with a new UUID before required reconciliation.
-/// - Existing active/possibly-dispatched commands continue to block duplicate logical operations.
+/// Precedence contract:
+/// 1. Uncertain provenance fails closed: Any command with [CommandRecoveryState.quarantinedUnknownOutcome]
+///    or [CommandDispatchState.unknownLegacy] is quarantined until server-authorized reconciliation,
+///    even if paired with confirmedCommitted or terminalError.
+/// 2. Actor binding fails closed: Any command paused under [CommandRecoveryState.pendingOriginalActor]
+///    must not be bypassed with a new UUID by another session.
+/// 3. Definitively resolved terminal failure: [CommandRecoveryState.terminalError] on non-legacy,
+///    non-quarantined commands permits legitimate fresh user intent.
+/// 4. Definitively resolved terminal success: [CommandDispatchState.confirmedCommitted] on active,
+///    non-legacy, non-quarantined commands permits legitimate fresh user intent.
+/// 5. Active uncommitted commands: [CommandRecoveryState.active] with [CommandDispatchState.neverDispatched]
+///    or [CommandDispatchState.possiblyDispatched] continue to block duplicate logical operations.
 bool isCommandUnresolved({
   required CommandRecoveryState recoveryState,
   required CommandDispatchState dispatchState,
 }) {
-  // Confirmed terminal outcomes do not block legitimate fresh user intent indefinitely.
-  if (recoveryState == CommandRecoveryState.terminalError) {
-    return false;
-  }
-  if (dispatchState == CommandDispatchState.confirmedCommitted) {
-    return false;
-  }
-
-  // Quarantined or unknown outcomes are not bypassed with a new UUID before required reconciliation.
+  // 1. Quarantined or unknown legacy outcomes fail closed until explicit reconciliation.
+  // Uncertain provenance takes precedence over confirmedCommitted and terminalError (R24-6-01).
   if (recoveryState == CommandRecoveryState.quarantinedUnknownOutcome ||
       dispatchState == CommandDispatchState.unknownLegacy) {
     return true;
   }
 
-  // Existing active/possibly-dispatched commands continue to block duplicate logical operations.
-  if (recoveryState == CommandRecoveryState.active ||
-      recoveryState == CommandRecoveryState.pendingOriginalActor) {
+  // 2. Commands paused pending the original authenticated actor fail closed.
+  // Another session cannot bypass the pending command by allocating a new UUID (R24-6-01).
+  if (recoveryState == CommandRecoveryState.pendingOriginalActor) {
     return true;
   }
-  if (dispatchState == CommandDispatchState.neverDispatched ||
-      dispatchState == CommandDispatchState.possiblyDispatched) {
-    return true;
+
+  // 3. Definitively resolved terminal errors (on non-quarantined, non-legacy commands).
+  if (recoveryState == CommandRecoveryState.terminalError) {
+    return false;
+  }
+
+  // 4. Definitively resolved terminal success (confirmed committed by server/receipt).
+  if (dispatchState == CommandDispatchState.confirmedCommitted) {
+    return false;
+  }
+
+  // 5. Existing active/possibly-dispatched commands continue to block duplicate logical operations.
+  if (recoveryState == CommandRecoveryState.active) {
+    if (dispatchState == CommandDispatchState.neverDispatched ||
+        dispatchState == CommandDispatchState.possiblyDispatched) {
+      return true;
+    }
   }
 
   return false;
