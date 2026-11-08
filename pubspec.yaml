@@ -21,4 +21,6 @@ hooks:
     sqlite3:
       source:
         linux: system
+        macos: system
+        ios: system
         default: sqlite3
