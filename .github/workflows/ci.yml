@@ -172,6 +172,49 @@ jobs:
       - name: Resolve workspace dependencies
         run: flutter pub get
 
+      - name: Configure Gradle mirrors and pre-fetch distribution
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat << 'EOF' > ~/.gradle/init.d/01-maven-mirror.init.gradle
+          gradle.beforeSettings { settings ->
+              settings.pluginManagement.repositories.all { repo ->
+                  if (repo instanceof MavenArtifactRepository && repo.url.toString().contains("repo.maven.apache.org")) {
+                      repo.url = uri("https://repo1.maven.org/maven2/")
+                  }
+              }
+              settings.dependencyResolutionManagement.repositories.all { repo ->
+                  if (repo instanceof MavenArtifactRepository && repo.url.toString().contains("repo.maven.apache.org")) {
+                      repo.url = uri("https://repo1.maven.org/maven2/")
+                  }
+              }
+          }
+          gradle.allprojects { project ->
+              project.buildscript.repositories.all { repo ->
+                  if (repo instanceof MavenArtifactRepository && repo.url.toString().contains("repo.maven.apache.org")) {
+                      repo.url = uri("https://repo1.maven.org/maven2/")
+                  }
+              }
+              project.repositories.all { repo ->
+                  if (repo instanceof MavenArtifactRepository && repo.url.toString().contains("repo.maven.apache.org")) {
+                      repo.url = uri("https://repo1.maven.org/maven2/")
+                  }
+              }
+          }
+          EOF
+          WRAPPER_DIR="$HOME/.gradle/wrapper/dists/gradle-9.3.1-all/9ot9r568e8zfvvd4mn8rbu1j0"
+          if [ ! -f "$WRAPPER_DIR/gradle-9.3.1-all.zip.ok" ]; then
+            echo "Pre-fetching Gradle 9.3.1 distribution..."
+            mkdir -p "$WRAPPER_DIR"
+            ZIP_PATH="$WRAPPER_DIR/gradle-9.3.1-all.zip"
+            if ! curl -fSL --retry 3 --retry-delay 2 "https://services.gradle.org/distributions/gradle-9.3.1-all.zip" -o "$ZIP_PATH"; then
+              echo "Primary distribution URL timed out, falling back to mirror..."
+              curl -fSL --retry 3 --retry-delay 2 "https://mirrors.cloud.tencent.com/gradle/gradle-9.3.1-all.zip" -o "$ZIP_PATH"
+            fi
+            unzip -q -o "$ZIP_PATH" -d "$WRAPPER_DIR"
+            touch "$WRAPPER_DIR/gradle-9.3.1-all.zip.ok"
+            touch "$WRAPPER_DIR/gradle-9.3.1-all.zip.lck"
+          fi
+
       - name: Build debug APK
         run: flutter build apk --debug
         working-directory: apps/mobile
