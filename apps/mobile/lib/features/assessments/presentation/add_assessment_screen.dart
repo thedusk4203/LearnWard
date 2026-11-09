@@ -44,6 +44,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   bool _isSubmitting = false;
   bool _isQuarantined = false;
   bool _evidenceRemoved = false;
+  bool _evidenceSaveFailed = false;
   String? _errorMessage;
   double? _liveNormalizedScore;
 
@@ -169,6 +170,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         bytes: file.bytes,
       );
       setState(() {
+        _evidenceSaveFailed = false;
         _evidenceRemoved = false;
         _evidenceId ??= generateUuid();
         _selectedEvidence = SelectedEvidenceFile(
@@ -179,12 +181,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         );
         _errorMessage = null;
       });
-    } catch (_) {
+    } catch (e) {
       setState(() {
-        _evidenceRemoved = false;
-        _evidenceId ??= generateUuid();
-        _selectedEvidence = file;
-        _errorMessage = null;
+        // R26-5-01: Evidence persistence failure must not be treated as success.
+        // Do NOT silently accept an unsaved picked file as durable evidence.
+        // Preserve any previously attached photo and display an actionable error.
+        _evidenceSaveFailed = true;
+        _errorMessage = 'Could not save evidence photo locally. Please check device storage and try again.';
       });
     }
   }
@@ -198,6 +201,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _evidenceRemoved = true;
       _selectedEvidence = null;
       _evidenceId = null;
+      _evidenceSaveFailed = false;
+      _errorMessage = null;
     });
   }
 
@@ -220,6 +225,14 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   Future<void> _saveLocalDraft() async {
+    // R26-5-01: If newly selected evidence persistence failed, do not report draft saved locally.
+    if (_evidenceSaveFailed) {
+      setState(() {
+        _errorMessage = 'Cannot save draft: the selected photo could not be saved locally. Please re-select a photo or remove it.';
+      });
+      return;
+    }
+
     final activeChild = ref.read(activeChildModeProvider);
     if (activeChild == null) return;
 
@@ -271,6 +284,19 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final resolvedPhotoPath = _evidenceRemoved
         ? null
         : (_selectedEvidence?.localPath ?? prior?.localPhotoPath);
+
+    if (!_evidenceRemoved && _selectedEvidence != null) {
+      final fileStore = ref.read(localEvidenceFileStoreProvider);
+      final verifiedBytes = _selectedEvidence!.localPath != null
+          ? await fileStore.readEvidenceBytes(_selectedEvidence!.localPath!)
+          : null;
+      if (verifiedBytes == null) {
+        setState(() {
+          _errorMessage = 'Cannot save draft: the selected photo could not be verified in local storage. Please re-select a photo or remove it.';
+        });
+        return;
+      }
+    }
 
     final raw = double.tryParse(_rawScoreController.text.trim()) ?? 0.0;
     final max = double.tryParse(_maxScoreController.text.trim()) ?? 10.0;
@@ -343,6 +369,27 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         _errorMessage = 'Cannot submit a quarantined legacy draft. Recovery reconciliation is required.';
       });
       return;
+    }
+
+    // R26-5-01: Do not begin a remote submission involving a newly selected attachment whose durable persistence failed.
+    if (_evidenceSaveFailed) {
+      setState(() {
+        _errorMessage = 'Cannot submit assessment: the selected photo could not be saved locally. Please re-select a photo or remove it.';
+      });
+      return;
+    }
+
+    if (!_evidenceRemoved && _selectedEvidence != null) {
+      final fileStore = ref.read(localEvidenceFileStoreProvider);
+      final verifiedBytes = _selectedEvidence!.localPath != null
+          ? await fileStore.readEvidenceBytes(_selectedEvidence!.localPath!)
+          : null;
+      if (verifiedBytes == null) {
+        setState(() {
+          _errorMessage = 'Cannot submit assessment: the selected photo could not be verified in local storage. Please re-select a photo or remove it.';
+        });
+        return;
+      }
     }
 
     if (!_formKey.currentState!.validate()) return;
@@ -543,11 +590,28 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                         color: theme.colorScheme.errorContainer,
                         child: Padding(
                           padding: const EdgeInsets.all(AppSpacing.md),
-                          child: Text(
-                            _errorMessage!,
-                            style: TextStyle(
-                              color: theme.colorScheme.onErrorContainer,
-                            ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _errorMessage!,
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onErrorContainer,
+                                  ),
+                                ),
+                              ),
+                              if (_evidenceSaveFailed)
+                                TextButton(
+                                  key: const Key(
+                                    'dismiss_evidence_error_button',
+                                  ),
+                                  onPressed: () => setState(() {
+                                    _errorMessage = null;
+                                    _evidenceSaveFailed = false;
+                                  }),
+                                  child: const Text('Dismiss'),
+                                ),
+                            ],
                           ),
                         ),
                       ),
@@ -798,6 +862,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                       '${_selectedEvidence!.fileName} (${(_selectedEvidence!.bytes.length / 1024).toStringAsFixed(1)} KB)',
                                       overflow: TextOverflow.ellipsis,
                                     ),
+                                  ),
+                                  IconButton(
+                                    key: const Key('change_evidence_button'),
+                                    tooltip: 'Change Photo',
+                                    icon: const Icon(Icons.edit, size: 18),
+                                    onPressed: _pickEvidence,
                                   ),
                                   IconButton(
                                     key: const Key('remove_evidence_button'),

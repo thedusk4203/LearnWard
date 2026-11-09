@@ -97,6 +97,74 @@ final class FailingSubmitAssessmentRepository extends FakeAssessmentRepository {
   }
 }
 
+final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
+  FailingEvidenceFileStore({this.delegate, this.shouldFailSave = true});
+
+  final LocalEvidenceFileStore? delegate;
+  bool shouldFailSave;
+
+  @override
+  Future<String> saveEvidence({
+    required String fileName,
+    required List<int> bytes,
+  }) async {
+    if (shouldFailSave) {
+      throw const EvidenceStorageException(
+        'Simulated storage write failure (disk full / I/O error)',
+      );
+    }
+    return delegate!.saveEvidence(fileName: fileName, bytes: bytes);
+  }
+
+  @override
+  Future<String> saveDurableEvidence({
+    required String localDraftId,
+    required List<int> bytes,
+    required String mediaType,
+  }) async {
+    if (shouldFailSave) {
+      throw const EvidenceStorageException(
+        'Simulated durable storage failure (disk full / I/O error)',
+      );
+    }
+    return delegate!.saveDurableEvidence(
+      localDraftId: localDraftId,
+      bytes: bytes,
+      mediaType: mediaType,
+    );
+  }
+
+  @override
+  Future<List<int>?> loadEvidence(String filePath) async =>
+      delegate?.loadEvidence(filePath);
+
+  @override
+  Future<List<int>?> readEvidenceBytes(String filePath) async =>
+      delegate?.readEvidenceBytes(filePath);
+
+  @override
+  Future<void> deleteDurableEvidence(String filePath) async =>
+      delegate?.deleteDurableEvidence(filePath);
+
+  @override
+  Future<void> deleteEvidence(String filePath) async =>
+      delegate?.deleteEvidence(filePath);
+
+  @override
+  Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
+    required String filePath,
+    required LocalDraftStore draftStore,
+  }) async =>
+      delegate?.deleteEvidenceIfUnreferenced(
+        filePath: filePath,
+        draftStore: draftStore,
+      ) ??
+      EvidenceFileDeletionResult(
+        status: EvidenceFileDeletionStatus.preservedConservative,
+        filePath: filePath,
+      );
+}
+
 void _ensureSqliteInitialized() {
   if (Platform.isWindows) {
     try {
@@ -226,6 +294,7 @@ void main() {
       required Widget child,
       LocalDraftStore? customDraftStore,
       EvidencePickerService? customPicker,
+      LocalEvidenceFileStore? customFileStore,
     }) {
       return ProviderScope(
         overrides: [
@@ -235,7 +304,9 @@ void main() {
           childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
           assessmentRepositoryProvider.overrideWithValue(fakeAssessmentRepo),
           assessmentEvidenceStorageProvider.overrideWithValue(fakeStorage),
-          localEvidenceFileStoreProvider.overrideWithValue(fileStore),
+          localEvidenceFileStoreProvider.overrideWithValue(
+            customFileStore ?? fileStore,
+          ),
           localDraftStoreProvider.overrideWithValue(
             customDraftStore ?? appDatabase,
           ),
@@ -1657,6 +1728,475 @@ void main() {
             reason: 'fileName "$invalidName" must be rejected',
           );
         }
+      },
+    );
+
+    // -------------------------------------------------------------------------
+    // R26-5-01: Evidence persistence failure must not be treated as success
+    // -------------------------------------------------------------------------
+    testWidgets(
+      'R26-5-01: New photo selected; saveEvidence throws; user receives actionable error and attach button remains',
+      (tester) async {
+        final failingFileStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: true,
+        );
+        final picker = SimulatedEvidencePickerService(
+          stubFile: const SelectedEvidenceFile(
+            fileName: 'temp_picker.jpg',
+            bytes: [1, 2, 3],
+            mediaType: 'image/jpeg',
+            localPath: '/tmp/cache/temp_picker.jpg',
+          ),
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingFileStore,
+            customPicker: picker,
+            child: const Scaffold(body: AddAssessmentScreen()),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Tap attach photo button
+        await tester.ensureVisible(
+          find.byKey(const Key('attach_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('attach_evidence_button')));
+        await tester.pumpAndSettle();
+
+        // Actionable error message is displayed
+        expect(
+          find.textContaining('Could not save evidence photo locally'),
+          findsOneWidget,
+        );
+        // Photo was not accepted as attached evidence
+        expect(find.byKey(const Key('attach_evidence_button')), findsOneWidget);
+        expect(find.byKey(const Key('remove_evidence_button')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'R26-5-01: User attempts to save draft after failure; no misleading success reported and temporary path not persisted',
+      (tester) async {
+        final failingFileStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: true,
+        );
+        final picker = SimulatedEvidencePickerService(
+          stubFile: const SelectedEvidenceFile(
+            fileName: 'temp_picker.jpg',
+            bytes: [1, 2, 3],
+            mediaType: 'image/jpeg',
+            localPath: '/tmp/cache/temp_picker.jpg',
+          ),
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingFileStore,
+            customPicker: picker,
+            child: const Scaffold(body: AddAssessmentScreen()),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Trigger picker which fails
+        await tester.ensureVisible(
+          find.byKey(const Key('attach_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('attach_evidence_button')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('Could not save evidence photo locally'),
+          findsOneWidget,
+        );
+
+        // Attempt to tap Save Draft
+        await tester.ensureVisible(find.byKey(const Key('save_draft_button')));
+        await tester.tap(find.byKey(const Key('save_draft_button')));
+        await tester.pumpAndSettle();
+
+        // No misleading "Draft saved locally." snackbar is displayed
+        expect(find.text('Draft saved locally.'), findsNothing);
+        expect(
+          find.textContaining(
+            'Cannot save draft: the selected photo could not be saved locally',
+          ),
+          findsOneWidget,
+        );
+
+        // Verify SQLite store does NOT contain any draft referencing the temporary path
+        final drafts = await appDatabase.listLocalDrafts(testChild.id);
+        expect(
+          drafts.where((d) => d.localPhotoPath == '/tmp/cache/temp_picker.jpg'),
+          isEmpty,
+        );
+      },
+    );
+
+    testWidgets(
+      'R26-5-01: User attempts to submit assessment after failure; submission is blocked',
+      (tester) async {
+        final failingFileStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: true,
+        );
+        final picker = SimulatedEvidencePickerService(
+          stubFile: const SelectedEvidenceFile(
+            fileName: 'temp_picker.jpg',
+            bytes: [1, 2, 3],
+            mediaType: 'image/jpeg',
+            localPath: '/tmp/cache/temp_picker.jpg',
+          ),
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingFileStore,
+            customPicker: picker,
+            child: const Scaffold(body: AddAssessmentScreen()),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Fill out required form fields
+        await tester.enterText(
+          find.byKey(const Key('assessment_raw_score_field')),
+          '9',
+        );
+        await tester.enterText(
+          find.byKey(const Key('assessment_title_field')),
+          'Math Test',
+        );
+        await tester.pumpAndSettle();
+
+        // Trigger picker failure
+        await tester.ensureVisible(
+          find.byKey(const Key('attach_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('attach_evidence_button')));
+        await tester.pumpAndSettle();
+
+        // Attempt to Submit
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        // Submission is blocked
+        expect(find.text('Assessment submitted for review!'), findsNothing);
+        expect(
+          find.textContaining(
+            'Cannot submit assessment: the selected photo could not be saved locally',
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'R26-5-01: Existing draft photo is replaced, but new file persistence fails; original draft row, evidence ID, photo path and bytes remain unchanged',
+      (tester) async {
+        final origBytes = [40, 50, 60];
+        final origPath = await fileStore.saveEvidence(
+          fileName: 'original_durable.jpg',
+          bytes: origBytes,
+        );
+        const origEvidenceId = 'ev-durable-orig-789';
+        final initialDraft = buildDraft(
+          draftId: 'd-orig-replace-fail',
+          photoPath: origPath,
+          title: 'Existing Homework',
+        ).copyWith(evidenceId: origEvidenceId);
+        await appDatabase.saveLocalDraft(initialDraft);
+
+        final failingFileStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: true,
+        );
+        final picker = SimulatedEvidencePickerService(
+          stubFile: const SelectedEvidenceFile(
+            fileName: 'new_temp_fail.jpg',
+            bytes: [99, 98],
+            mediaType: 'image/jpeg',
+            localPath: '/tmp/cache/new_temp_fail.jpg',
+          ),
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingFileStore,
+            customPicker: picker,
+            child: Scaffold(
+              body: AddAssessmentScreen(initialDraft: initialDraft),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Existing photo is displayed
+        expect(find.textContaining('original_durable.jpg'), findsOneWidget);
+
+        // Tap Change Photo
+        await tester.ensureVisible(
+          find.byKey(const Key('change_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('change_evidence_button')));
+        await tester.pumpAndSettle();
+
+        // Actionable error is displayed
+        expect(
+          find.textContaining('Could not save evidence photo locally'),
+          findsOneWidget,
+        );
+        // Previous attachment remains visible in UI
+        expect(find.textContaining('original_durable.jpg'), findsOneWidget);
+
+        // User attempts to save draft
+        await tester.ensureVisible(find.byKey(const Key('save_draft_button')));
+        await tester.tap(find.byKey(const Key('save_draft_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Draft saved locally.'), findsNothing);
+
+        // Query real SQLite database: draft row, evidence ID, photo path, and bytes remain 100% UNCHANGED
+        final persisted = await appDatabase.getLocalDraft(
+          'd-orig-replace-fail',
+        );
+        expect(persisted, isNotNull);
+        expect(persisted!.evidenceId, equals(origEvidenceId));
+        expect(persisted.localPhotoPath, equals(origPath));
+        expect(persisted.title, equals('Existing Homework'));
+        expect(File(origPath).existsSync(), isTrue);
+        expect(File(origPath).readAsBytesSync(), equals(origBytes));
+      },
+    );
+
+    testWidgets(
+      'R26-5-01: Restart after failed selection; original evidence remains recoverable',
+      (tester) async {
+        final origBytes = [70, 80, 90];
+        final origPath = await fileStore.saveEvidence(
+          fileName: 'original_survivor.jpg',
+          bytes: origBytes,
+        );
+        const origEvidenceId = 'ev-survivor-111';
+        final initialDraft = buildDraft(
+          draftId: 'd-survivor',
+          photoPath: origPath,
+          title: 'Survivor Draft',
+        ).copyWith(evidenceId: origEvidenceId);
+        await appDatabase.saveLocalDraft(initialDraft);
+
+        final failingFileStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: true,
+        );
+        final picker = SimulatedEvidencePickerService(
+          stubFile: const SelectedEvidenceFile(
+            fileName: 'unpersisted_crash.jpg',
+            bytes: [1, 1, 1],
+            mediaType: 'image/jpeg',
+            localPath: '/tmp/cache/unpersisted_crash.jpg',
+          ),
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingFileStore,
+            customPicker: picker,
+            child: Scaffold(
+              body: AddAssessmentScreen(initialDraft: initialDraft),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Trigger failed photo replacement
+        await tester.ensureVisible(
+          find.byKey(const Key('change_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('change_evidence_button')));
+        await tester.pumpAndSettle();
+
+        // Simulate app restart: close database and re-open from the same file
+        await appDatabase.close();
+        final reopenedDb = AppDatabase(NativeDatabase(dbFile));
+
+        try {
+          final recoveredDraft = await reopenedDb.getLocalDraft('d-survivor');
+          expect(recoveredDraft, isNotNull);
+          expect(recoveredDraft!.evidenceId, equals(origEvidenceId));
+          expect(recoveredDraft.localPhotoPath, equals(origPath));
+
+          // Load original bytes from durable storage
+          final recoveredBytes = await fileStore.loadEvidence(
+            recoveredDraft.localPhotoPath!,
+          );
+          expect(recoveredBytes, equals(origBytes));
+        } finally {
+          await reopenedDb.close();
+          // Restore appDatabase for tearDown
+          appDatabase = AppDatabase(NativeDatabase(dbFile));
+        }
+      },
+    );
+
+    testWidgets(
+      'R26-5-01: Successful durable copy supports normal save and submission',
+      (tester) async {
+        final picker = SimulatedEvidencePickerService(
+          stubFile: const SelectedEvidenceFile(
+            fileName: 'good_photo.jpg',
+            bytes: [11, 22, 33],
+            mediaType: 'image/jpeg',
+          ),
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customPicker: picker,
+            child: const Scaffold(body: AddAssessmentScreen()),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Attach photo (succeeds with real fileStore)
+        await tester.ensureVisible(
+          find.byKey(const Key('attach_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('attach_evidence_button')));
+        await tester.pumpAndSettle();
+
+        // Shows attached photo
+        expect(find.textContaining('good_photo.jpg'), findsOneWidget);
+        expect(find.byKey(const Key('remove_evidence_button')), findsOneWidget);
+
+        // Save draft locally
+        await tester.ensureVisible(find.byKey(const Key('save_draft_button')));
+        await tester.tap(find.byKey(const Key('save_draft_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Draft saved locally.'), findsOneWidget);
+
+        // Verify draft was saved with durable path inside draft_evidence/
+        final drafts = await appDatabase.listLocalDrafts(testChild.id);
+        expect(drafts, isNotEmpty);
+        final saved = drafts.first;
+        expect(saved.localPhotoPath, isNotNull);
+        expect(saved.localPhotoPath, contains('draft_evidence'));
+        expect(File(saved.localPhotoPath!).existsSync(), isTrue);
+        expect(
+          File(saved.localPhotoPath!).readAsBytesSync(),
+          equals([11, 22, 33]),
+        );
+      },
+    );
+
+    testWidgets(
+      'R26-5-01: Explicitly submitting with no attachment remains supported',
+      (tester) async {
+        await tester.pumpWidget(
+          createTestHarness(child: const Scaffold(body: AddAssessmentScreen())),
+        );
+        await tester.pumpAndSettle();
+
+        // Fill out required form fields without attaching photo
+        await tester.enterText(
+          find.byKey(const Key('assessment_raw_score_field')),
+          '8.5',
+        );
+        await tester.enterText(
+          find.byKey(const Key('assessment_title_field')),
+          'Reading Comprehension',
+        );
+        await tester.pumpAndSettle();
+
+        // Tap Submit
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        // Submission succeeds without photo
+        expect(find.text('Assessment submitted for review!'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'R26-5-01: Photo save fails, user dismisses error, and submits with no attachment successfully',
+      (tester) async {
+        final failingFileStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: true,
+        );
+        final picker = SimulatedEvidencePickerService(
+          stubFile: const SelectedEvidenceFile(
+            fileName: 'fail.jpg',
+            bytes: [1, 2],
+            mediaType: 'image/jpeg',
+          ),
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingFileStore,
+            customPicker: picker,
+            child: const Scaffold(body: AddAssessmentScreen()),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('assessment_raw_score_field')),
+          '10',
+        );
+        await tester.enterText(
+          find.byKey(const Key('assessment_title_field')),
+          'Spelling Test',
+        );
+        await tester.pumpAndSettle();
+
+        // Trigger picker which fails
+        await tester.ensureVisible(
+          find.byKey(const Key('attach_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('attach_evidence_button')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('Could not save evidence photo locally'),
+          findsOneWidget,
+        );
+
+        // User taps Dismiss button
+        await tester.ensureVisible(
+          find.byKey(const Key('dismiss_evidence_error_button')),
+        );
+        await tester.tap(
+          find.byKey(const Key('dismiss_evidence_error_button')),
+        );
+        await tester.pumpAndSettle();
+
+        // Error is dismissed
+        expect(
+          find.textContaining('Could not save evidence photo locally'),
+          findsNothing,
+        );
+
+        // Now user submits with no attachment
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Assessment submitted for review!'), findsOneWidget);
       },
     );
   });
