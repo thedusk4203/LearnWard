@@ -188,6 +188,8 @@ jobs:
           fi
 
       - name: Pre-fetch verified Android SQLite native binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ASSETS=(
             "libsqlite3.arm.android.so:d0d6eeaf4fa1e833c9344dafce3f8cb00c952f633175e1ec224bd6d05fceecf3"
@@ -204,9 +206,12 @@ jobs:
             target_file="$target_dir/libsqlite3.so"
             if [ ! -f "$target_file" ] || ! echo "$expected_hash  $target_file" | sha256sum -c --status; then
               echo "Pre-fetching $filename..."
-              curl -fSL --retry 5 --retry-delay 3 \
+              if ! curl -fSL --retry 2 --retry-delay 2 \
                 "https://github.com/simolus3/sqlite3.dart/releases/download/sqlite3-3.8.0/$filename" \
-                -o "$target_file"
+                -o "$target_file"; then
+                echo "Falling back to gh release download for $filename..."
+                gh release download sqlite3-3.8.0 --repo simolus3/sqlite3.dart --pattern "$filename" --output "$target_file" --clobber
+              fi
               echo "$expected_hash  $target_file" | sha256sum -c -
             fi
           done
