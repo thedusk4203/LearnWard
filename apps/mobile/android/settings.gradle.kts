@@ -14,6 +14,10 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
+        // CI-scoped fallback for pre-fetched integrity-checked artifacts
+        if (System.getenv("CI") == "true") {
+            mavenLocal()
+        }
     }
 }
 

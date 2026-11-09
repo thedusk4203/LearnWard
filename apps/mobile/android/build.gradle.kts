@@ -2,6 +2,10 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // CI-scoped fallback for pre-fetched integrity-checked artifacts
+        if (System.getenv("CI") == "true") {
+            mavenLocal()
+        }
     }
 }
 

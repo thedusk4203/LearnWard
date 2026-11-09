@@ -422,6 +422,183 @@ class AppDatabase extends _$AppDatabase
     await query.go();
   }
 
+  @override
+  Future<DraftDeletionOutcome> deleteDraftSafely({
+    required String localDraftId,
+    required LocalAssessmentDraft expectedDraft,
+    DateTime? now,
+  }) {
+    return transaction(() async {
+      final query = select(localAssessmentDrafts)
+        ..where((tbl) => tbl.localDraftId.equals(localDraftId));
+      final row = await query.getSingleOrNull();
+
+      if (row == null) {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.notFound,
+          localDraftId: localDraftId,
+          reason: 'Draft not found in local store.',
+        );
+      }
+
+      final current = _mapRowToDraft(row);
+
+      // 1. Revalidate latest persisted draft state against unsafe states
+      if (current.isUnsafeToDelete(now: now)) {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.blockedUnsafeState,
+          localDraftId: localDraftId,
+          reason: current.deletionBlockedReason(now: now),
+          currentDraft: current,
+        );
+      }
+
+      // 2. Reject or require a fresh decision if the draft changed concurrently
+      if (current.hasConflictWith(expectedDraft)) {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.concurrencyConflict,
+          localDraftId: localDraftId,
+          reason: 'Draft was modified while deletion was being confirmed.',
+          currentDraft: current,
+        );
+      }
+
+      // 3. Complete persisted-state CAS delete predicate:
+      // Does not rely solely on updatedAt as a revision counter; guards all durable
+      // identity, ownership, recovery, command, and evidence fields.
+      final deleteQuery = delete(localAssessmentDrafts)
+        ..where((tbl) {
+          Expression<bool> predicate = tbl.localDraftId.equals(localDraftId);
+
+          // Revision & lifecycle state predicates
+          predicate = predicate & tbl.updatedAt.equals(row.updatedAt);
+          predicate =
+              predicate &
+              tbl.dispatchState.equals(expectedDraft.dispatchState.wireValue);
+          predicate =
+              predicate &
+              tbl.submissionStatus.equals(
+                expectedDraft.submissionStatus.wireValue,
+              );
+
+          // Identity & ownership predicates
+          predicate = predicate & tbl.familyId.equals(expectedDraft.familyId);
+          predicate = predicate & tbl.childId.equals(expectedDraft.childId);
+          if (expectedDraft.actorUserId == null) {
+            predicate = predicate & tbl.actorUserId.isNull();
+          } else {
+            predicate =
+                predicate & tbl.actorUserId.equals(expectedDraft.actorUserId!);
+          }
+          if (expectedDraft.actorRole == null) {
+            predicate = predicate & tbl.actorRole.isNull();
+          } else {
+            predicate =
+                predicate & tbl.actorRole.equals(expectedDraft.actorRole!);
+          }
+
+          // Command and server recovery IDs
+          if (expectedDraft.createCommandId == null) {
+            predicate = predicate & tbl.createCommandId.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.createCommandId.equals(expectedDraft.createCommandId!);
+          }
+          if (expectedDraft.submitCommandId == null) {
+            predicate = predicate & tbl.submitCommandId.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.submitCommandId.equals(expectedDraft.submitCommandId!);
+          }
+          if (expectedDraft.evidenceId == null) {
+            predicate = predicate & tbl.evidenceId.isNull();
+          } else {
+            predicate =
+                predicate & tbl.evidenceId.equals(expectedDraft.evidenceId!);
+          }
+          if (expectedDraft.serverAssessmentId == null) {
+            predicate = predicate & tbl.serverAssessmentId.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.serverAssessmentId.equals(
+                  expectedDraft.serverAssessmentId!,
+                );
+          }
+
+          // Evidence paths & checksums
+          if (expectedDraft.localPhotoPath == null) {
+            predicate = predicate & tbl.localPhotoPath.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.localPhotoPath.equals(expectedDraft.localPhotoPath!);
+          }
+          if (expectedDraft.localCompressedPhotoPath == null) {
+            predicate = predicate & tbl.localCompressedPhotoPath.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.localCompressedPhotoPath.equals(
+                  expectedDraft.localCompressedPhotoPath!,
+                );
+          }
+          if (expectedDraft.sha256Checksum == null) {
+            predicate = predicate & tbl.sha256Checksum.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.sha256Checksum.equals(expectedDraft.sha256Checksum!);
+          }
+
+          // Lease token
+          if (expectedDraft.leaseToken == null) {
+            predicate = predicate & tbl.leaseToken.isNull();
+          } else {
+            predicate =
+                predicate & tbl.leaseToken.equals(expectedDraft.leaseToken!);
+          }
+
+          return predicate;
+        });
+      final affectedRows = await deleteQuery.go();
+
+      if (affectedRows == 1) {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.deleted,
+          localDraftId: localDraftId,
+        );
+      } else {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.concurrencyConflict,
+          localDraftId: localDraftId,
+          reason: 'Draft was modified concurrently during deletion execution.',
+          currentDraft: current,
+        );
+      }
+    });
+  }
+
+  @override
+  Future<bool> hasDraftReferenceToFile(String filePath) async {
+    final count = await countDraftReferencesToFile(filePath);
+    return count > 0;
+  }
+
+  @override
+  Future<int> countDraftReferencesToFile(String filePath) async {
+    final query = select(localAssessmentDrafts)
+      ..where(
+        (t) =>
+            t.localPhotoPath.equals(filePath) |
+            t.localCompressedPhotoPath.equals(filePath),
+      );
+    final rows = await query.get();
+    return rows.length;
+  }
+
   LocalAssessmentDraft _mapRowToDraft(LocalAssessmentDraftEntry row) {
     SubjectKey key;
     try {

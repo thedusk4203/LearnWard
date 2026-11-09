@@ -150,6 +150,66 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
   Future<void> deleteLocalDraft(String localDraftId) async {
     _drafts.remove(localDraftId);
   }
+
+  @override
+  Future<DraftDeletionOutcome> deleteDraftSafely({
+    required String localDraftId,
+    required LocalAssessmentDraft expectedDraft,
+    DateTime? now,
+  }) async {
+    final current = _drafts[localDraftId];
+    if (current == null) {
+      return DraftDeletionOutcome(
+        status: DraftDeletionStatus.notFound,
+        localDraftId: localDraftId,
+        reason: 'Draft not found in local store.',
+      );
+    }
+
+    if (current.isUnsafeToDelete(now: now)) {
+      return DraftDeletionOutcome(
+        status: DraftDeletionStatus.blockedUnsafeState,
+        localDraftId: localDraftId,
+        reason: current.deletionBlockedReason(now: now),
+        currentDraft: current,
+      );
+    }
+
+    if (current.hasConflictWith(expectedDraft)) {
+      return DraftDeletionOutcome(
+        status: DraftDeletionStatus.concurrencyConflict,
+        localDraftId: localDraftId,
+        reason: 'Draft was modified while deletion was being confirmed.',
+        currentDraft: current,
+      );
+    }
+
+    _drafts.remove(localDraftId);
+    return DraftDeletionOutcome(
+      status: DraftDeletionStatus.deleted,
+      localDraftId: localDraftId,
+    );
+  }
+
+  @override
+  Future<bool> hasDraftReferenceToFile(String filePath) async {
+    return _drafts.values.any(
+      (d) =>
+          d.localPhotoPath == filePath ||
+          d.localCompressedPhotoPath == filePath,
+    );
+  }
+
+  @override
+  Future<int> countDraftReferencesToFile(String filePath) async {
+    return _drafts.values
+        .where(
+          (d) =>
+              d.localPhotoPath == filePath ||
+              d.localCompressedPhotoPath == filePath,
+        )
+        .length;
+  }
 }
 
 /// Lightweight in-memory fallback for [PendingRewardCommandStore] in test and local demo modes.

@@ -51,12 +51,32 @@ class FakeLocalEvidenceFileStore implements LocalEvidenceFileStore {
 
   @override
   Future<void> deleteDurableEvidence(String filePath) async {
-    files.remove(filePath);
+    // Under Slice 4B-0 conservative evidence retention policy, physical unlinking is disabled.
   }
 
   @override
   Future<void> deleteEvidence(String filePath) =>
       deleteDurableEvidence(filePath);
+
+  @override
+  Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
+    required String filePath,
+    required LocalDraftStore draftStore,
+  }) async {
+    final count = await draftStore.countDraftReferencesToFile(filePath);
+    if (count > 0) {
+      return EvidenceFileDeletionResult(
+        status: EvidenceFileDeletionStatus.preservedReferenced,
+        filePath: filePath,
+        referenceCount: count,
+      );
+    }
+    return EvidenceFileDeletionResult(
+      status: EvidenceFileDeletionStatus.preservedConservative,
+      filePath: filePath,
+      reason: 'Preserved under Slice 4B-0 conservative retention.',
+    );
+  }
 }
 
 class _PresetActiveChildNotifier extends ActiveChildModeNotifier {
@@ -1067,6 +1087,12 @@ void main() {
       expect(migratedDraft.canAutoSubmit, isFalse);
 
       final trackingRepo = _TrackingAssessmentRepository();
+      fakeEvidenceFileStore
+          .files['/data/user/0/com.learnward/cache/photo_offline.jpg'] = [
+        1,
+        2,
+        3,
+      ];
 
       // 3. Open in AddAssessmentScreen under a DIFFERENT signed-in adult
       await tester.pumpWidget(
