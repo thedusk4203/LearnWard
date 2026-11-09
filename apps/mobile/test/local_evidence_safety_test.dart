@@ -491,7 +491,7 @@ void main() {
       // Now delete draft B
       await appDatabase.deleteLocalDraft('d-shared-B');
 
-      // By default, deleteEvidenceIfUnreferenced preserves file under conservative retention
+      // In Phase 6 Slice 4B-0, deleteEvidenceIfUnreferenced conservatively preserves file
       final conservativeAfterAll = await fileStore.deleteEvidenceIfUnreferenced(
         filePath: sharedPath,
         draftStore: appDatabase,
@@ -502,19 +502,7 @@ void main() {
       );
       expect(conservativeAfterAll.isPreserved, isTrue);
       expect(File(sharedPath).existsSync(), isTrue);
-
-      // Explicitly authorized unlinking removes the file
-      final unlinkedAfterAll = await fileStore.deleteEvidenceIfUnreferenced(
-        filePath: sharedPath,
-        draftStore: appDatabase,
-        allowPhysicalUnlink: true,
-      );
-      expect(
-        unlinkedAfterAll.isDeleted,
-        isTrue,
-        reason: 'File should be safely deleted when zero references remain and allowPhysicalUnlink is true',
-      );
-      expect(File(sharedPath).existsSync(), isFalse);
+      expect(File(sharedPath).readAsBytesSync(), equals(sharedBytes));
     });
 
     // -------------------------------------------------------------------------
@@ -820,32 +808,63 @@ void main() {
       },
     );
 
-    test('Concurrent cleanup attempts with allowPhysicalUnlink are safe and idempotent', () async {
+    test('R26-4-01: Public cleanup API cannot physically delete evidence (even unreferenced)', () async {
       final photoBytes = [42, 43, 44];
       final photoPath = await fileStore.saveEvidence(
-        fileName: 'concurrent_unlink_pic.jpg',
+        fileName: 'unreferenced_evidence.jpg',
         bytes: photoBytes,
       );
-
-      // Execute 10 parallel cleanup attempts with allowPhysicalUnlink: true
-      final results = await Future.wait(
-        List.generate(
-          10,
-          (_) => fileStore.deleteEvidenceIfUnreferenced(
-            filePath: photoPath,
-            draftStore: appDatabase,
-            allowPhysicalUnlink: true,
-          ),
-        ),
+      final durableBytes = [52, 53, 54];
+      final durablePath = await fileStore.saveDurableEvidence(
+        localDraftId: 'unref-draft',
+        bytes: durableBytes,
+        mediaType: 'image/jpeg',
       );
 
-      // File should be safely deleted without any unhandled exceptions
-      expect(File(photoPath).existsSync(), isFalse);
+      // Verify zero draft references in database
       expect(
-        results.every((r) => r.isDeleted || r.isAlreadyAbsent),
-        isTrue,
-        reason: 'Concurrent cleanups must all succeed idempotently (deleted or alreadyAbsent)',
+        await appDatabase.countDraftReferencesToFile(photoPath),
+        equals(0),
       );
+      expect(
+        await appDatabase.countDraftReferencesToFile(durablePath),
+        equals(0),
+      );
+
+      // 1. deleteEvidence is a no-op under conservative retention policy
+      await fileStore.deleteEvidence(photoPath);
+      expect(File(photoPath).existsSync(), isTrue);
+      expect(File(photoPath).readAsBytesSync(), equals(photoBytes));
+
+      // 2. deleteDurableEvidence is a no-op under conservative retention policy
+      await fileStore.deleteDurableEvidence(durablePath);
+      expect(File(durablePath).existsSync(), isTrue);
+      expect(File(durablePath).readAsBytesSync(), equals(durableBytes));
+
+      // 3. deleteEvidenceIfUnreferenced returns preservedConservative and retains file
+      final photoResult = await fileStore.deleteEvidenceIfUnreferenced(
+        filePath: photoPath,
+        draftStore: appDatabase,
+      );
+      expect(
+        photoResult.status,
+        equals(EvidenceFileDeletionStatus.preservedConservative),
+      );
+      expect(photoResult.isPreserved, isTrue);
+      expect(File(photoPath).existsSync(), isTrue);
+      expect(File(photoPath).readAsBytesSync(), equals(photoBytes));
+
+      final durableResult = await fileStore.deleteEvidenceIfUnreferenced(
+        filePath: durablePath,
+        draftStore: appDatabase,
+      );
+      expect(
+        durableResult.status,
+        equals(EvidenceFileDeletionStatus.preservedConservative),
+      );
+      expect(durableResult.isPreserved, isTrue);
+      expect(File(durablePath).existsSync(), isTrue);
+      expect(File(durablePath).readAsBytesSync(), equals(durableBytes));
     });
 
     // -------------------------------------------------------------------------
@@ -1337,8 +1356,10 @@ void main() {
         // While dialog open, background worker claims lease
         final leasedDraft = draft.copyWith(
           leaseToken: 'worker-lease-token-abc',
-          leaseExpiresAt: now.add(const Duration(minutes: 5)),
-          updatedAt: now.add(const Duration(seconds: 2)),
+          leaseExpiresAt: DateTime.now().toUtc().add(
+            const Duration(minutes: 5),
+          ),
+          updatedAt: DateTime.now().toUtc(),
         );
         await appDatabase.saveLocalDraft(leasedDraft);
 
@@ -1410,5 +1431,233 @@ void main() {
       expect(File(path1).readAsBytesSync(), equals(bytes1));
       expect(File(path2).readAsBytesSync(), equals(bytes2));
     });
+
+    test('R26-4-02: Deterministic collision in saveDurableEvidence throws EvidenceStorageException and preserves original file bytes', () async {
+      final fixedClock = DateTime(2026, 11, 9, 12, 0, 0);
+      final collidingStore = DefaultLocalEvidenceFileStore(
+        baseDirectory: tempDir,
+        clock: () => fixedClock,
+        suffixGenerator: () => 'fixed-collision',
+      );
+
+      final evidenceDir = Directory('${tempDir.path}/draft_evidence');
+      if (!evidenceDir.existsSync()) {
+        evidenceDir.createSync(recursive: true);
+      }
+
+      // Pre-create the colliding file
+      final collidingFile = File(
+        '${evidenceDir.path}/test-draft_${fixedClock.millisecondsSinceEpoch}_fixed-collision.jpg',
+      );
+      final originalBytes = [1, 2, 3, 4, 5];
+      collidingFile.writeAsBytesSync(originalBytes, flush: true);
+
+      // Attempt to save durable evidence that collides on every attempt
+      expect(
+        () => collidingStore.saveDurableEvidence(
+          localDraftId: 'test-draft',
+          bytes: [9, 9, 9, 9],
+          mediaType: 'image/jpeg',
+        ),
+        throwsA(
+          isA<EvidenceStorageException>().having(
+            (e) => e.message,
+            'message',
+            contains(
+              'Failed to exclusively create durable evidence file after 5 collision attempts',
+            ),
+          ),
+        ),
+      );
+
+      // Verify original file was NEVER overwritten
+      expect(collidingFile.existsSync(), isTrue);
+      expect(collidingFile.readAsBytesSync(), equals(originalBytes));
+    });
+
+    test('R26-4-02: Deterministic collision in saveEvidence throws EvidenceStorageException and preserves original file bytes', () async {
+      final fixedClock = DateTime(2026, 11, 9, 12, 0, 0);
+      final collidingStore = DefaultLocalEvidenceFileStore(
+        baseDirectory: tempDir,
+        clock: () => fixedClock,
+        suffixGenerator: () => 'fixed-collision',
+      );
+
+      final evidenceDir = Directory('${tempDir.path}/draft_evidence');
+      if (!evidenceDir.existsSync()) {
+        evidenceDir.createSync(recursive: true);
+      }
+
+      // Pre-create the colliding file
+      final collidingFile = File(
+        '${evidenceDir.path}/${fixedClock.millisecondsSinceEpoch}_fixed-collision_pic.jpg',
+      );
+      final originalBytes = [10, 20, 30, 40];
+      collidingFile.writeAsBytesSync(originalBytes, flush: true);
+
+      // Attempt to save evidence that collides on every attempt
+      expect(
+        () => collidingStore.saveEvidence(fileName: 'pic.jpg', bytes: [99, 99]),
+        throwsA(
+          isA<EvidenceStorageException>().having(
+            (e) => e.message,
+            'message',
+            contains(
+              'Failed to exclusively create evidence file after 5 collision attempts',
+            ),
+          ),
+        ),
+      );
+
+      // Verify original file was NEVER overwritten
+      expect(collidingFile.existsSync(), isTrue);
+      expect(collidingFile.readAsBytesSync(), equals(originalBytes));
+    });
+
+    test('R26-4-02: saveDurableEvidence recovers on subsequent attempt without overwriting pre-existing colliding file', () async {
+      final fixedClock = DateTime(2026, 11, 9, 12, 0, 0);
+      int callCount = 0;
+      final recoveringStore = DefaultLocalEvidenceFileStore(
+        baseDirectory: tempDir,
+        clock: () => fixedClock,
+        suffixGenerator: () {
+          final res = callCount == 0
+              ? 'collision-candidate'
+              : 'recovered-unique';
+          callCount++;
+          return res;
+        },
+      );
+
+      final evidenceDir = Directory('${tempDir.path}/draft_evidence');
+      if (!evidenceDir.existsSync()) {
+        evidenceDir.createSync(recursive: true);
+      }
+
+      // Pre-create the colliding file for attempt 0
+      final collidingFile = File(
+        '${evidenceDir.path}/recover-draft_${fixedClock.millisecondsSinceEpoch}_collision-candidate.png',
+      );
+      final originalBytes = [100, 101, 102];
+      collidingFile.writeAsBytesSync(originalBytes, flush: true);
+
+      final newBytes = [200, 201];
+      final savedPath = await recoveringStore.saveDurableEvidence(
+        localDraftId: 'recover-draft',
+        bytes: newBytes,
+        mediaType: 'image/png',
+      );
+
+      expect(savedPath, contains('recovered-unique.png'));
+      expect(File(savedPath).existsSync(), isTrue);
+      expect(File(savedPath).readAsBytesSync(), equals(newBytes));
+
+      // Original colliding file remains untouched
+      expect(collidingFile.existsSync(), isTrue);
+      expect(collidingFile.readAsBytesSync(), equals(originalBytes));
+    });
+
+    test('R26-4-02: saveEvidence recovers on subsequent attempt without overwriting pre-existing colliding file', () async {
+      final fixedClock = DateTime(2026, 11, 9, 12, 0, 0);
+      int callCount = 0;
+      final recoveringStore = DefaultLocalEvidenceFileStore(
+        baseDirectory: tempDir,
+        clock: () => fixedClock,
+        suffixGenerator: () {
+          final res = callCount == 0
+              ? 'collision-candidate'
+              : 'recovered-unique';
+          callCount++;
+          return res;
+        },
+      );
+
+      final evidenceDir = Directory('${tempDir.path}/draft_evidence');
+      if (!evidenceDir.existsSync()) {
+        evidenceDir.createSync(recursive: true);
+      }
+
+      // Pre-create the colliding file for attempt 0
+      final collidingFile = File(
+        '${evidenceDir.path}/${fixedClock.millisecondsSinceEpoch}_collision-candidate_doc.pdf',
+      );
+      final originalBytes = [70, 71, 72];
+      collidingFile.writeAsBytesSync(originalBytes, flush: true);
+
+      final newBytes = [80, 81];
+      final savedPath = await recoveringStore.saveEvidence(
+        fileName: 'doc.pdf',
+        bytes: newBytes,
+      );
+
+      expect(savedPath, contains('recovered-unique_doc.pdf'));
+      expect(File(savedPath).existsSync(), isTrue);
+      expect(File(savedPath).readAsBytesSync(), equals(newBytes));
+
+      // Original colliding file remains untouched
+      expect(collidingFile.existsSync(), isTrue);
+      expect(collidingFile.readAsBytesSync(), equals(originalBytes));
+    });
+
+    test('R26-4-02: saveDurableEvidence rejects path traversal, separators, and invalid characters in localDraftId', () async {
+      final testCases = [
+        '../../traversal',
+        'sub/folder',
+        r'sub\folder',
+        '..',
+        '',
+        'draft with spaces',
+        'draft!@#\$%',
+        'draft\x00null',
+      ];
+
+      for (final invalidId in testCases) {
+        expect(
+          () => fileStore.saveDurableEvidence(
+            localDraftId: invalidId,
+            bytes: [1, 2, 3],
+            mediaType: 'image/jpeg',
+          ),
+          throwsA(
+            isA<EvidenceStorageException>().having(
+              (e) => e.message,
+              'message',
+              contains('Invalid localDraftId'),
+            ),
+          ),
+          reason: 'localDraftId "$invalidId" must be rejected',
+        );
+      }
+
+      // Valid IDs containing alphanumeric, dashes, and underscores succeed
+      final validPath = await fileStore.saveDurableEvidence(
+        localDraftId: 'valid-draft_123',
+        bytes: [1, 2, 3],
+        mediaType: 'image/jpeg',
+      );
+      expect(File(validPath).existsSync(), isTrue);
+    });
+
+    test(
+      'R26-4-02: saveEvidence rejects invalid and empty file names',
+      () async {
+        final invalidNames = ['', '.', '..', '../../', '__', '#@!\$%^&*()'];
+
+        for (final invalidName in invalidNames) {
+          expect(
+            () =>
+                fileStore.saveEvidence(fileName: invalidName, bytes: [1, 2, 3]),
+            throwsA(
+              isA<EvidenceStorageException>().having(
+                (e) => e.message,
+                'message',
+                contains('Invalid fileName'),
+              ),
+            ),
+            reason: 'fileName "$invalidName" must be rejected',
+          );
+        }
+      },
+    );
   });
 }

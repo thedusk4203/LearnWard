@@ -6,9 +6,22 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../shared/utils/uuid_generator.dart';
 
+/// Exception thrown when evidence file storage operations fail safely
+/// without risking data loss, collision, or uncoordinated file destruction.
+final class EvidenceStorageException implements Exception {
+  const EvidenceStorageException(this.message, {this.cause});
+
+  final String message;
+  final Object? cause;
+
+  @override
+  String toString() => 'EvidenceStorageException: $message';
+}
+
 /// Status of an unreferenced evidence file deletion attempt.
 enum EvidenceFileDeletionStatus {
   /// File was safely deleted from durable storage.
+  /// (Deprecated in Slice 4B-0: retained for API compatibility, but physical unlinking is disabled).
   deleted,
 
   /// File was already absent from storage (idempotent success).
@@ -18,6 +31,7 @@ enum EvidenceFileDeletionStatus {
   preservedReferenced,
 
   /// File was preserved under Slice 4B-0 conservative evidence retention policy.
+  /// Physical garbage collection is explicitly deferred pending an approved design.
   preservedConservative,
 
   /// Deletion was rejected because the path targets outside the managed evidence directory
@@ -60,13 +74,25 @@ final class EvidenceFileDeletionResult {
 /// Persistent app-private file store for offline evidence attachments.
 ///
 /// Ensures evidence attached to local drafts survives process death and app restarts.
+/// Under Slice 4B-0 conservative evidence retention policy, physical unlinking is
+/// disabled across all cleanup paths to eliminate the risk of destroying unsynced
+/// or unverified evidence. Physical garbage collection is explicitly deferred
+/// pending an approved design.
 abstract interface class LocalEvidenceFileStore {
+  /// Saves durable evidence attached to [localDraftId] using exclusive, non-overwriting creation.
+  ///
+  /// Throws [EvidenceStorageException] if [localDraftId] is invalid, if path traversal is attempted,
+  /// or if all exclusive creation attempts collide without overwriting existing files.
   Future<String> saveDurableEvidence({
     required String localDraftId,
     required List<int> bytes,
     required String mediaType,
   });
 
+  /// Saves evidence with [fileName] using exclusive, non-overwriting creation.
+  ///
+  /// Throws [EvidenceStorageException] if [fileName] is invalid, if path traversal is attempted,
+  /// or if all exclusive creation attempts collide without overwriting existing files.
   Future<String> saveEvidence({
     required String fileName,
     required List<int> bytes,
@@ -76,33 +102,53 @@ abstract interface class LocalEvidenceFileStore {
 
   Future<List<int>?> loadEvidence(String filePath);
 
+  /// Disabled under Slice 4B-0 conservative evidence retention policy.
+  ///
+  /// Physical unlinking is a safe no-op. Physical garbage collection is explicitly
+  /// deferred pending an approved design.
   Future<void> deleteDurableEvidence(String filePath);
 
+  /// Disabled under Slice 4B-0 conservative evidence retention policy.
+  ///
+  /// Physical unlinking is a safe no-op. Physical garbage collection is explicitly
+  /// deferred pending an approved design.
   Future<void> deleteEvidence(String filePath);
 
   /// Reference-aware evidence file cleanup.
   ///
-  /// In Phase 6 Slice 4B-0, [allowPhysicalUnlink] defaults to `false` (conservative retention).
-  /// Normal draft edit/delete flows retain physical evidence files on disk until an approved
-  /// reconciliation and garbage collection design exists.
+  /// In Phase 6 Slice 4B-0, conservative evidence retention is strictly enforced.
+  /// Physical unlinking is completely disabled to eliminate cross-connection
+  /// reference-check-to-unlink gaps without risking destruction of unverified evidence.
+  /// Physical garbage collection is explicitly deferred pending an approved design.
   ///
   /// Returns a typed [EvidenceFileDeletionResult] detailing the outcome.
   /// Fails closed and conservatively retains files on any error, ambiguity, or boundary violation.
   Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
     required String filePath,
     required LocalDraftStore draftStore,
-    bool allowPhysicalUnlink = false,
   });
 }
 
 final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
-  DefaultLocalEvidenceFileStore({Directory? baseDirectory, this.onPreUnlink})
-    : _customBaseDir = baseDirectory;
+  DefaultLocalEvidenceFileStore({
+    Directory? baseDirectory,
+    this.onPreUnlink,
+    String Function()? suffixGenerator,
+    DateTime Function()? clock,
+  }) : _customBaseDir = baseDirectory,
+       _suffixGenerator = suffixGenerator ?? generateUuid,
+       _clock = clock ?? DateTime.now;
 
   final Directory? _customBaseDir;
 
-  /// Optional test seam invoked immediately before physical file unlink.
+  /// Optional test seam invoked during reference checks.
   final Future<void> Function(String filePath)? onPreUnlink;
+
+  /// Deterministic suffix generator seam for collision testing. Defaults to [generateUuid].
+  final String Function() _suffixGenerator;
+
+  /// Clock seam for deterministic timestamping. Defaults to [DateTime.now].
+  final DateTime Function() _clock;
 
   Future<Directory> _getEvidenceDirectory() async {
     final Directory base =
@@ -120,16 +166,33 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
     required List<int> bytes,
     required String mediaType,
   }) async {
-    final dir = await _getEvidenceDirectory();
-    final ext = mediaType == 'image/png' ? 'png' : 'jpg';
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-
-    // Collision-resistant unique naming with non-overwriting creation semantics
-    for (int attempt = 0; attempt < 5; attempt++) {
-      final uniqueSuffix = generateUuid();
-      final file = File(
-        '${dir.path}/${localDraftId}_${timestamp}_$uniqueSuffix.$ext',
+    if (localDraftId.isEmpty ||
+        !RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(localDraftId)) {
+      throw EvidenceStorageException(
+        'Invalid localDraftId "$localDraftId": must contain only alphanumeric characters, dashes, and underscores.',
       );
+    }
+
+    final dir = await _getEvidenceDirectory();
+    final canonicalEvidenceDir = p.canonicalize(dir.path);
+    final ext = mediaType == 'image/png' ? 'png' : 'jpg';
+    final timestamp = _clock().millisecondsSinceEpoch;
+
+    // Collision-resistant unique naming with non-overwriting exclusive creation semantics
+    for (int attempt = 0; attempt < 5; attempt++) {
+      final uniqueSuffix = _suffixGenerator();
+      final targetPath = p.join(
+        dir.path,
+        '${localDraftId}_${timestamp}_$uniqueSuffix.$ext',
+      );
+      final canonicalFilePath = p.canonicalize(targetPath);
+      if (!p.isWithin(canonicalEvidenceDir, canonicalFilePath)) {
+        throw EvidenceStorageException(
+          'Target file path "$canonicalFilePath" is outside evidence directory "$canonicalEvidenceDir".',
+        );
+      }
+
+      final file = File(canonicalFilePath);
       try {
         file.createSync(exclusive: true);
         file.writeAsBytesSync(bytes, flush: true);
@@ -142,12 +205,10 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
       }
     }
 
-    final fallbackSuffix = generateUuid();
-    final file = File(
-      '${dir.path}/${localDraftId}_${timestamp}_$fallbackSuffix.$ext',
+    // Eliminate fallback write without exclusive creation: fail closed
+    throw EvidenceStorageException(
+      'Failed to exclusively create durable evidence file after 5 collision attempts for draft "$localDraftId".',
     );
-    file.writeAsBytesSync(bytes, flush: true);
-    return file.path;
   }
 
   @override
@@ -155,18 +216,37 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
     required String fileName,
     required List<int> bytes,
   }) async {
-    final dir = await _getEvidenceDirectory();
     final sanitizedBase = p
         .basename(fileName)
         .replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-
-    // Collision-resistant unique naming with non-overwriting creation semantics
-    for (int attempt = 0; attempt < 5; attempt++) {
-      final uniqueSuffix = generateUuid();
-      final file = File(
-        '${dir.path}/${timestamp}_${uniqueSuffix}_$sanitizedBase',
+    if (sanitizedBase.isEmpty ||
+        sanitizedBase == '.' ||
+        sanitizedBase == '..' ||
+        sanitizedBase.replaceAll('_', '').isEmpty) {
+      throw EvidenceStorageException(
+        'Invalid fileName "$fileName": must contain valid filename characters.',
       );
+    }
+
+    final dir = await _getEvidenceDirectory();
+    final canonicalEvidenceDir = p.canonicalize(dir.path);
+    final timestamp = _clock().millisecondsSinceEpoch;
+
+    // Collision-resistant unique naming with non-overwriting exclusive creation semantics
+    for (int attempt = 0; attempt < 5; attempt++) {
+      final uniqueSuffix = _suffixGenerator();
+      final targetPath = p.join(
+        dir.path,
+        '${timestamp}_${uniqueSuffix}_$sanitizedBase',
+      );
+      final canonicalFilePath = p.canonicalize(targetPath);
+      if (!p.isWithin(canonicalEvidenceDir, canonicalFilePath)) {
+        throw EvidenceStorageException(
+          'Target file path "$canonicalFilePath" is outside evidence directory "$canonicalEvidenceDir".',
+        );
+      }
+
+      final file = File(canonicalFilePath);
       try {
         file.createSync(exclusive: true);
         file.writeAsBytesSync(bytes, flush: true);
@@ -179,12 +259,10 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
       }
     }
 
-    final fallbackSuffix = generateUuid();
-    final file = File(
-      '${dir.path}/${timestamp}_${fallbackSuffix}_$sanitizedBase',
+    // Eliminate fallback write without exclusive creation: fail closed
+    throw EvidenceStorageException(
+      'Failed to exclusively create evidence file after 5 collision attempts for file "$fileName".',
     );
-    file.writeAsBytesSync(bytes, flush: true);
-    return file.path;
   }
 
   @override
@@ -202,29 +280,11 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
 
   @override
   Future<void> deleteDurableEvidence(String filePath) async {
-    try {
-      final Directory evidenceDir = await _getEvidenceDirectory();
-      final canonicalEvidenceDir = p.canonicalize(evidenceDir.path);
-      final resolvedEvidenceDir = evidenceDir.existsSync()
-          ? p.canonicalize(evidenceDir.resolveSymbolicLinksSync())
-          : canonicalEvidenceDir;
-      final canonicalFilePath = p.canonicalize(filePath);
-
-      if (!p.isWithin(canonicalEvidenceDir, canonicalFilePath) &&
-          !p.isWithin(resolvedEvidenceDir, canonicalFilePath)) {
-        return;
-      }
-      final file = File(canonicalFilePath);
-      if (file.existsSync()) {
-        final resolved = p.canonicalize(file.resolveSymbolicLinksSync());
-        if (p.isWithin(resolvedEvidenceDir, resolved) ||
-            p.isWithin(canonicalEvidenceDir, resolved)) {
-          file.deleteSync();
-        }
-      }
-    } catch (_) {
-      // Ignore if already deleted
-    }
+    // Under Slice 4B-0 conservative evidence retention policy, physical unlinking
+    // is disabled across all cleanup paths to eliminate the risk of deleting
+    // unsynced or unverified evidence.
+    // Physical garbage collection is explicitly deferred pending an approved design.
+    return;
   }
 
   @override
@@ -235,7 +295,6 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
   Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
     required String filePath,
     required LocalDraftStore draftStore,
-    bool allowPhysicalUnlink = false,
   }) async {
     try {
       final Directory evidenceDir = await _getEvidenceDirectory();
@@ -348,55 +407,16 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
         );
       }
 
-      // 6. Conservative retention enforcement (Phase 6 Slice 4B-0 R26-3-02):
-      // Normal draft edit/delete flows retain physical evidence files conservatively
-      // to eliminate cross-connection reference-check-to-unlink gaps completely without
-      // risking destruction of unverified evidence.
-      if (!allowPhysicalUnlink) {
-        return EvidenceFileDeletionResult(
-          status: EvidenceFileDeletionStatus.preservedConservative,
-          filePath: filePath,
-          reason: 'Preserved under Phase 6 Slice 4B-0 conservative evidence retention policy.',
-        );
-      }
-
-      // 7. Physical unlink (when explicitly authorized)
-      try {
-        file.deleteSync();
-        return EvidenceFileDeletionResult(
-          status: EvidenceFileDeletionStatus.deleted,
-          filePath: filePath,
-        );
-      } on PathNotFoundException {
-        return EvidenceFileDeletionResult(
-          status: EvidenceFileDeletionStatus.alreadyAbsent,
-          filePath: filePath,
-        );
-      } on FileSystemException catch (e) {
-        if (!file.existsSync()) {
-          return EvidenceFileDeletionResult(
-            status: EvidenceFileDeletionStatus.alreadyAbsent,
-            filePath: filePath,
-          );
-        }
-        return EvidenceFileDeletionResult(
-          status: EvidenceFileDeletionStatus.deletionFailed,
-          filePath: filePath,
-          reason: 'Filesystem deleteSync failed: $e',
-        );
-      } catch (e) {
-        if (!file.existsSync()) {
-          return EvidenceFileDeletionResult(
-            status: EvidenceFileDeletionStatus.alreadyAbsent,
-            filePath: filePath,
-          );
-        }
-        return EvidenceFileDeletionResult(
-          status: EvidenceFileDeletionStatus.deletionFailed,
-          filePath: filePath,
-          reason: 'Filesystem deleteSync failed: $e',
-        );
-      }
+      // 6. Conservative retention enforcement (Phase 6 Slice 4B-0 R26-4-01):
+      // In Phase 6 Slice 4B-0, conservative evidence retention is strictly enforced.
+      // Physical unlinking is completely removed/disabled to eliminate cross-connection
+      // reference-check-to-unlink gaps without risking destruction of unverified evidence.
+      // Physical garbage collection is explicitly deferred pending an approved design.
+      return EvidenceFileDeletionResult(
+        status: EvidenceFileDeletionStatus.preservedConservative,
+        filePath: filePath,
+        reason: 'Preserved under Phase 6 Slice 4B-0 conservative evidence retention policy (physical garbage collection is deferred).',
+      );
     } catch (e) {
       // Conservative retention: fail closed on any unexpected exception
       return EvidenceFileDeletionResult(
