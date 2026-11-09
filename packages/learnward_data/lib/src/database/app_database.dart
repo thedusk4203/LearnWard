@@ -422,6 +422,24 @@ class AppDatabase extends _$AppDatabase
     await query.go();
   }
 
+  @override
+  Future<bool> hasDraftReferenceToFile(String filePath) async {
+    final count = await countDraftReferencesToFile(filePath);
+    return count > 0;
+  }
+
+  @override
+  Future<int> countDraftReferencesToFile(String filePath) async {
+    final query = select(localAssessmentDrafts)
+      ..where(
+        (t) =>
+            t.localPhotoPath.equals(filePath) |
+            t.localCompressedPhotoPath.equals(filePath),
+      );
+    final rows = await query.get();
+    return rows.length;
+  }
+
   LocalAssessmentDraft _mapRowToDraft(LocalAssessmentDraftEntry row) {
     SubjectKey key;
     try {

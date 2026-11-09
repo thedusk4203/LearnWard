@@ -194,4 +194,11 @@ abstract interface class LocalDraftStore {
 
   /// Deletes a local draft after successful server submission.
   Future<void> deleteLocalDraft(String localDraftId);
+
+  /// Returns whether any local assessment draft currently references [filePath]
+  /// in either its [localPhotoPath] or [localCompressedPhotoPath].
+  Future<bool> hasDraftReferenceToFile(String filePath);
+
+  /// Returns the total count of local drafts referencing [filePath].
+  Future<int> countDraftReferencesToFile(String filePath);
 }

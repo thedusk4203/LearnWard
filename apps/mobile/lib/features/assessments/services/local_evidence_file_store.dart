@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:learnward_application/learnward_application.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Persistent app-private file store for offline evidence attachments.
@@ -24,6 +25,16 @@ abstract interface class LocalEvidenceFileStore {
   Future<void> deleteDurableEvidence(String filePath);
 
   Future<void> deleteEvidence(String filePath);
+
+  /// Deletes [filePath] physically from storage only if no local draft
+  /// in [draftStore] references it (neither as localPhotoPath nor localCompressedPhotoPath).
+  ///
+  /// Returns `true` if the file was safely deleted, or `false` if it was preserved
+  /// because other references still exist or the reference check failed.
+  Future<bool> deleteEvidenceIfUnreferenced({
+    required String filePath,
+    required LocalDraftStore draftStore,
+  });
 }
 
 final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
@@ -36,8 +47,8 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
     final Directory base =
         _customBaseDir ?? await getApplicationDocumentsDirectory();
     final dir = Directory('${base.path}/draft_evidence');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
     }
     return dir;
   }
@@ -52,7 +63,7 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
     final ext = mediaType == 'image/png' ? 'png' : 'jpg';
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final file = File('${dir.path}/${localDraftId}_$timestamp.$ext');
-    await file.writeAsBytes(bytes, flush: true);
+    file.writeAsBytesSync(bytes, flush: true);
     return file.path;
   }
 
@@ -64,15 +75,15 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
     final dir = await _getEvidenceDirectory();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final file = File('${dir.path}/${timestamp}_$fileName');
-    await file.writeAsBytes(bytes, flush: true);
+    file.writeAsBytesSync(bytes, flush: true);
     return file.path;
   }
 
   @override
   Future<List<int>?> readEvidenceBytes(String filePath) async {
     final file = File(filePath);
-    if (await file.exists()) {
-      return file.readAsBytes();
+    if (file.existsSync()) {
+      return file.readAsBytesSync();
     }
     return null;
   }
@@ -85,8 +96,8 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
   Future<void> deleteDurableEvidence(String filePath) async {
     try {
       final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
+      if (file.existsSync()) {
+        file.deleteSync();
       }
     } catch (_) {
       // Ignore if already deleted
@@ -96,4 +107,21 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
   @override
   Future<void> deleteEvidence(String filePath) =>
       deleteDurableEvidence(filePath);
+
+  @override
+  Future<bool> deleteEvidenceIfUnreferenced({
+    required String filePath,
+    required LocalDraftStore draftStore,
+  }) async {
+    try {
+      final hasRef = await draftStore.hasDraftReferenceToFile(filePath);
+      if (hasRef) {
+        return false;
+      }
+      await deleteEvidence(filePath);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 }

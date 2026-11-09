@@ -150,6 +150,26 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
   Future<void> deleteLocalDraft(String localDraftId) async {
     _drafts.remove(localDraftId);
   }
+
+  @override
+  Future<bool> hasDraftReferenceToFile(String filePath) async {
+    return _drafts.values.any(
+      (d) =>
+          d.localPhotoPath == filePath ||
+          d.localCompressedPhotoPath == filePath,
+    );
+  }
+
+  @override
+  Future<int> countDraftReferencesToFile(String filePath) async {
+    return _drafts.values
+        .where(
+          (d) =>
+              d.localPhotoPath == filePath ||
+              d.localCompressedPhotoPath == filePath,
+        )
+        .length;
+  }
 }
 
 /// Lightweight in-memory fallback for [PendingRewardCommandStore] in test and local demo modes.

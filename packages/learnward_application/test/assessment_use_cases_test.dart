@@ -25,6 +25,26 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
   Future<void> deleteLocalDraft(String localDraftId) async {
     drafts.remove(localDraftId);
   }
+
+  @override
+  Future<bool> hasDraftReferenceToFile(String filePath) async {
+    return drafts.values.any(
+      (d) =>
+          d.localPhotoPath == filePath ||
+          d.localCompressedPhotoPath == filePath,
+    );
+  }
+
+  @override
+  Future<int> countDraftReferencesToFile(String filePath) async {
+    return drafts.values
+        .where(
+          (d) =>
+              d.localPhotoPath == filePath ||
+              d.localCompressedPhotoPath == filePath,
+        )
+        .length;
+  }
 }
 
 final class FailingRegisterAssessmentRepository

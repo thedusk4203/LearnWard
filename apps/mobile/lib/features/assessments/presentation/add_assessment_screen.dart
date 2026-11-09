@@ -190,12 +190,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   Future<void> _removeEvidence() async {
-    if (_selectedEvidence?.localPath != null) {
-      try {
-        final fileStore = ref.read(localEvidenceFileStoreProvider);
-        await fileStore.deleteEvidence(_selectedEvidence!.localPath!);
-      } catch (_) {}
-    }
+    // B01: Do NOT physically delete the file here!
+    // Removing an image from the UI must not immediately unlink its physical file.
+    // Keep original evidence available on disk until a new draft state is durably
+    // committed and a safe cleanup decision is authorized.
     setState(() {
       _evidenceRemoved = true;
       _selectedEvidence = null;
@@ -311,11 +309,33 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       actorRole: resolvedActorRole,
     );
 
-    await store.saveLocalDraft(draft);
+    final priorPhotoPath = prior?.localPhotoPath;
 
-    if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Draft saved locally.')));
+    try {
+      await store.saveLocalDraft(draft);
+
+      // B01 / B05: Reference-aware cleanup only AFTER the new draft state is durably committed
+      if (priorPhotoPath != null && priorPhotoPath != resolvedPhotoPath) {
+        try {
+          final fileStore = ref.read(localEvidenceFileStoreProvider);
+          await fileStore.deleteEvidenceIfUnreferenced(
+            filePath: priorPhotoPath,
+            draftStore: store,
+          );
+        } catch (_) {}
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Draft saved locally.')));
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Could not save draft locally. Please check storage space and try again.';
+        });
+      }
     }
   }
 
@@ -427,13 +447,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         localDraftId: _localDraftId,
       );
 
-      // Clean up local evidence file upon success
-      if (_selectedEvidence?.localPath != null) {
-        try {
-          final fileStore = ref.read(localEvidenceFileStoreProvider);
-          await fileStore.deleteEvidence(_selectedEvidence!.localPath!);
-        } catch (_) {}
-      }
+      // B03: Do NOT delete physical evidence solely because submission returned.
+      // Local evidence bytes are preserved on disk for durability and future reconciliation.
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -793,6 +808,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                     ),
                                   ),
                                   IconButton(
+                                    key: const Key('remove_evidence_button'),
+                                    tooltip: 'Remove Photo',
                                     icon: const Icon(Icons.close, size: 18),
                                     onPressed: _removeEvidence,
                                   ),

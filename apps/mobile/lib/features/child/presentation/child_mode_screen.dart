@@ -405,19 +405,135 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                               }
                             },
                             trailing: IconButton(
+                              key: Key(
+                                'delete_draft_button_${draft.localDraftId}',
+                              ),
+                              tooltip: 'Delete Draft',
                               icon: const Icon(Icons.delete_outline, size: 20),
                               onPressed: () async {
-                                if (draft.localPhotoPath != null) {
-                                  try {
-                                    await ref
-                                        .read(localEvidenceFileStoreProvider)
-                                        .deleteEvidence(draft.localPhotoPath!);
-                                  } catch (_) {}
+                                final isBlockedFromDelete =
+                                    draft.isLegacyUnknown ||
+                                    draft.dispatchState ==
+                                        CommandDispatchState
+                                            .possiblyDispatched ||
+                                    draft.dispatchState ==
+                                        CommandDispatchState
+                                            .confirmedCommitted ||
+                                    draft.submissionStatus ==
+                                        DraftSubmissionStatus
+                                            .submittingAssessment ||
+                                    draft.submissionStatus ==
+                                        DraftSubmissionStatus
+                                            .uploadingEvidence ||
+                                    draft.submissionStatus ==
+                                        DraftSubmissionStatus.failedRetryable ||
+                                    (draft.leaseToken != null &&
+                                        draft.leaseExpiresAt != null &&
+                                        draft.leaseExpiresAt!.isAfter(
+                                          DateTime.now().toUtc(),
+                                        ));
+
+                                if (isBlockedFromDelete) {
+                                  await showDialog<void>(
+                                    context: context,
+                                    builder: (dialogContext) => AlertDialog(
+                                      key: const Key(
+                                        'draft_delete_blocked_dialog',
+                                      ),
+                                      title: const Text('Cannot Delete Draft'),
+                                      content: Text(
+                                        draft.isLegacyUnknown
+                                            ? 'This draft was migrated from a previous version and requires recovery reconciliation before it can be deleted.'
+                                            : 'This draft is in progress, queued for retry, or has an ambiguous submission outcome. It cannot be deleted until submission is resolved.',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          key: const Key(
+                                            'draft_delete_blocked_ok_button',
+                                          ),
+                                          onPressed: () =>
+                                              Navigator.of(dialogContext).pop(),
+                                          child: const Text('OK'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  return;
                                 }
+
+                                final confirmed = await showDialog<bool>(
+                                  context: context,
+                                  builder: (dialogContext) => AlertDialog(
+                                    key: const Key(
+                                      'confirm_delete_draft_dialog',
+                                    ),
+                                    title: const Text(
+                                      'Delete Assessment Draft?',
+                                    ),
+                                    content: Text(
+                                      'Are you sure you want to delete "${draft.title}"? This action cannot be undone.',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        key: const Key(
+                                          'cancel_delete_draft_button',
+                                        ),
+                                        onPressed: () =>
+                                            Navigator.of(dialogContext)
+                                                .pop(false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        key: const Key(
+                                          'confirm_delete_draft_button',
+                                        ),
+                                        style: TextButton.styleFrom(
+                                          foregroundColor: Theme.of(context)
+                                              .colorScheme
+                                              .error,
+                                        ),
+                                        onPressed: () =>
+                                            Navigator.of(dialogContext)
+                                                .pop(true),
+                                        child: const Text('Delete'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+
+                                if (confirmed != true) return;
+
                                 final store = ref.read(localDraftStoreProvider);
                                 await store.deleteLocalDraft(
                                   draft.localDraftId,
                                 );
+
+                                final fileStore = ref.read(
+                                  localEvidenceFileStoreProvider,
+                                );
+                                if (draft.localPhotoPath != null) {
+                                  try {
+                                    await fileStore
+                                        .deleteEvidenceIfUnreferenced(
+                                          filePath: draft.localPhotoPath!,
+                                          draftStore: store,
+                                        );
+                                  } catch (_) {}
+                                }
+
+                                if (draft.localCompressedPhotoPath != null &&
+                                    draft.localCompressedPhotoPath !=
+                                        draft.localPhotoPath) {
+                                  try {
+                                    await fileStore
+                                        .deleteEvidenceIfUnreferenced(
+                                          filePath:
+                                              draft.localCompressedPhotoPath!,
+                                          draftStore: store,
+                                        );
+                                  } catch (_) {}
+                                }
+
                                 unawaited(_loadLocalDrafts());
                               },
                             ),

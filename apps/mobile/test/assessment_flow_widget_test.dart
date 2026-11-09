@@ -57,6 +57,17 @@ class FakeLocalEvidenceFileStore implements LocalEvidenceFileStore {
   @override
   Future<void> deleteEvidence(String filePath) =>
       deleteDurableEvidence(filePath);
+
+  @override
+  Future<bool> deleteEvidenceIfUnreferenced({
+    required String filePath,
+    required LocalDraftStore draftStore,
+  }) async {
+    final hasRef = await draftStore.hasDraftReferenceToFile(filePath);
+    if (hasRef) return false;
+    files.remove(filePath);
+    return true;
+  }
 }
 
 class _PresetActiveChildNotifier extends ActiveChildModeNotifier {
