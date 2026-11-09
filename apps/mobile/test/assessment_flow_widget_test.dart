@@ -59,14 +59,29 @@ class FakeLocalEvidenceFileStore implements LocalEvidenceFileStore {
       deleteDurableEvidence(filePath);
 
   @override
-  Future<bool> deleteEvidenceIfUnreferenced({
+  Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
     required String filePath,
     required LocalDraftStore draftStore,
   }) async {
-    final hasRef = await draftStore.hasDraftReferenceToFile(filePath);
-    if (hasRef) return false;
+    final count = await draftStore.countDraftReferencesToFile(filePath);
+    if (count > 0) {
+      return EvidenceFileDeletionResult(
+        status: EvidenceFileDeletionStatus.preservedReferenced,
+        filePath: filePath,
+        referenceCount: count,
+      );
+    }
+    if (!files.containsKey(filePath)) {
+      return EvidenceFileDeletionResult(
+        status: EvidenceFileDeletionStatus.alreadyAbsent,
+        filePath: filePath,
+      );
+    }
     files.remove(filePath);
-    return true;
+    return EvidenceFileDeletionResult(
+      status: EvidenceFileDeletionStatus.deleted,
+      filePath: filePath,
+    );
   }
 }
 

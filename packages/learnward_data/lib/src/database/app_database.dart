@@ -423,6 +423,76 @@ class AppDatabase extends _$AppDatabase
   }
 
   @override
+  Future<DraftDeletionOutcome> deleteDraftSafely({
+    required String localDraftId,
+    required LocalAssessmentDraft expectedDraft,
+    DateTime? now,
+  }) {
+    return transaction(() async {
+      final query = select(localAssessmentDrafts)
+        ..where((tbl) => tbl.localDraftId.equals(localDraftId));
+      final row = await query.getSingleOrNull();
+
+      if (row == null) {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.notFound,
+          localDraftId: localDraftId,
+          reason: 'Draft not found in local store.',
+        );
+      }
+
+      final current = _mapRowToDraft(row);
+
+      // 1. Revalidate latest persisted draft state against unsafe states
+      if (current.isUnsafeToDelete(now: now)) {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.blockedUnsafeState,
+          localDraftId: localDraftId,
+          reason: current.deletionBlockedReason(now: now),
+          currentDraft: current,
+        );
+      }
+
+      // 2. Reject or require a fresh decision if the draft changed concurrently
+      if (current.hasConflictWith(expectedDraft)) {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.concurrencyConflict,
+          localDraftId: localDraftId,
+          reason: 'Draft was modified while deletion was being confirmed.',
+          currentDraft: current,
+        );
+      }
+
+      // 3. Atomic CAS delete matching localDraftId, exact persisted updatedAt, dispatchState, and submissionStatus
+      final deleteQuery = delete(localAssessmentDrafts)
+        ..where(
+          (tbl) =>
+              tbl.localDraftId.equals(localDraftId) &
+              tbl.updatedAt.equals(row.updatedAt) &
+              tbl.dispatchState.equals(expectedDraft.dispatchState.wireValue) &
+              tbl.submissionStatus.equals(
+                expectedDraft.submissionStatus.wireValue,
+              ),
+        );
+      final affectedRows = await deleteQuery.go();
+
+      if (affectedRows == 1) {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.deleted,
+          localDraftId: localDraftId,
+        );
+      } else {
+        return DraftDeletionOutcome(
+          status: DraftDeletionStatus.concurrencyConflict,
+          localDraftId: localDraftId,
+          reason: 'Draft was modified concurrently during deletion execution.',
+          currentDraft: current,
+        );
+      }
+    });
+  }
+
+  @override
   Future<bool> hasDraftReferenceToFile(String filePath) async {
     final count = await countDraftReferencesToFile(filePath);
     return count > 0;

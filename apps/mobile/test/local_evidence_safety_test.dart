@@ -58,6 +58,17 @@ class FailingLocalDraftStore implements LocalDraftStore {
       inner.deleteLocalDraft(localDraftId);
 
   @override
+  Future<DraftDeletionOutcome> deleteDraftSafely({
+    required String localDraftId,
+    required LocalAssessmentDraft expectedDraft,
+    DateTime? now,
+  }) => inner.deleteDraftSafely(
+    localDraftId: localDraftId,
+    expectedDraft: expectedDraft,
+    now: now,
+  );
+
+  @override
   Future<bool> hasDraftReferenceToFile(String filePath) =>
       inner.hasDraftReferenceToFile(filePath);
 
@@ -468,10 +479,11 @@ void main() {
         draftStore: appDatabase,
       );
       expect(
-        deleted,
-        isFalse,
+        deleted.isPreserved,
+        isTrue,
         reason: 'File must NOT be deleted while draft B references it',
       );
+      expect(deleted.referenceCount, equals(1));
       expect(File(sharedPath).existsSync(), isTrue);
       expect(File(sharedPath).readAsBytesSync(), equals(sharedBytes));
 
@@ -482,7 +494,7 @@ void main() {
         draftStore: appDatabase,
       );
       expect(
-        deletedAfterAll,
+        deletedAfterAll.isDeleted,
         isTrue,
         reason: 'File should be safely deleted when zero references remain',
       );
@@ -781,7 +793,11 @@ void main() {
 
       // File should be safely deleted without any unhandled exceptions
       expect(File(photoPath).existsSync(), isFalse);
-      expect(results.every((r) => r == true), isTrue);
+      expect(
+        results.every((r) => r.isDeleted || r.isAlreadyAbsent),
+        isTrue,
+        reason: 'Concurrent cleanups must all succeed idempotently (deleted or alreadyAbsent)',
+      );
     });
 
     // -------------------------------------------------------------------------
@@ -831,6 +847,395 @@ void main() {
 
         // Photo file unlinked because zero drafts reference it
         expect(File(photoPath).existsSync(), isFalse);
+      },
+    );
+
+    // -------------------------------------------------------------------------
+    // R26-02: Pre-unlink reference check race & conservative retention
+    // -------------------------------------------------------------------------
+    test('R26-02: Reference injected during pre-unlink gap aborts deletion and preserves file', () async {
+      final photoBytes = [91, 92, 93];
+      late DefaultLocalEvidenceFileStore racingStore;
+      late String photoPath;
+
+      racingStore = DefaultLocalEvidenceFileStore(
+        baseDirectory: tempDir,
+        onPreUnlink: (path) async {
+          // Concurrently persist a new draft referencing this exact path
+          final competingDraft = buildDraft(
+            draftId: 'd-competing-preunlink',
+            photoPath: path,
+          );
+          await appDatabase.saveLocalDraft(competingDraft);
+        },
+      );
+
+      photoPath = await racingStore.saveEvidence(
+        fileName: 'racing_evidence.jpg',
+        bytes: photoBytes,
+      );
+
+      // At start, zero drafts reference photoPath. But during onPreUnlink, competingDraft appears.
+      final result = await racingStore.deleteEvidenceIfUnreferenced(
+        filePath: photoPath,
+        draftStore: appDatabase,
+      );
+
+      expect(
+        result.status,
+        equals(EvidenceFileDeletionStatus.preservedReferenced),
+      );
+      expect(result.isPreserved, isTrue);
+      expect(result.referenceCount, equals(1));
+      expect(File(photoPath).existsSync(), isTrue);
+      expect(File(photoPath).readAsBytesSync(), equals(photoBytes));
+    });
+
+    test('R26-02: Competing SQLite connections preserve evidence when reference added during pre-unlink window', () async {
+      final conn2 = AppDatabase(NativeDatabase(dbFile));
+      try {
+        final photoBytes = [77, 88];
+        late DefaultLocalEvidenceFileStore racingStore;
+        final sharedPath = await fileStore.saveEvidence(
+          fileName: 'shared_conn_pic.jpg',
+          bytes: photoBytes,
+        );
+
+        final draftA = buildDraft(
+          draftId: 'd-shared-c1',
+          photoPath: sharedPath,
+        );
+        await appDatabase.saveLocalDraft(draftA);
+
+        racingStore = DefaultLocalEvidenceFileStore(
+          baseDirectory: tempDir,
+          onPreUnlink: (path) async {
+            // Connection 2 inserts a draft referencing the path
+            final draftB = buildDraft(draftId: 'd-shared-c2', photoPath: path);
+            await conn2.saveLocalDraft(draftB);
+          },
+        );
+
+        // Connection 1 deletes draft A
+        await appDatabase.deleteLocalDraft('d-shared-c1');
+
+        final result = await racingStore.deleteEvidenceIfUnreferenced(
+          filePath: sharedPath,
+          draftStore: conn2,
+        );
+
+        expect(
+          result.status,
+          equals(EvidenceFileDeletionStatus.preservedReferenced),
+        );
+        expect(result.isPreserved, isTrue);
+        expect(File(sharedPath).existsSync(), isTrue);
+        expect(File(sharedPath).readAsBytesSync(), equals(photoBytes));
+      } finally {
+        await conn2.close();
+      }
+    });
+
+    test('R26-02: Evidence file and draft references survive simulated application restart', () async {
+      final photoBytes = [111, 222];
+      final photoPath = await fileStore.saveEvidence(
+        fileName: 'restart_proof_r26.jpg',
+        bytes: photoBytes,
+      );
+      final draft = buildDraft(draftId: 'd-restart-r26', photoPath: photoPath);
+      await appDatabase.saveLocalDraft(draft);
+
+      // Simulate app termination
+      await appDatabase.close();
+
+      // Reopen database from same file (simulating app restart)
+      final restartedDb = AppDatabase(NativeDatabase(dbFile));
+      try {
+        expect(await restartedDb.hasDraftReferenceToFile(photoPath), isTrue);
+        expect(
+          await restartedDb.countDraftReferencesToFile(photoPath),
+          equals(1),
+        );
+        expect(File(photoPath).existsSync(), isTrue);
+        expect(File(photoPath).readAsBytesSync(), equals(photoBytes));
+
+        // Delete attempt with reference present preserves file
+        final result = await fileStore.deleteEvidenceIfUnreferenced(
+          filePath: photoPath,
+          draftStore: restartedDb,
+        );
+        expect(result.isPreserved, isTrue);
+        expect(File(photoPath).existsSync(), isTrue);
+      } finally {
+        await restartedDb.close();
+      }
+    });
+
+    // -------------------------------------------------------------------------
+    // R26-03: Boundary checks, traversal escapes, and failed delete handling
+    // -------------------------------------------------------------------------
+    test('R26-03: Deletion rejected for paths outside evidence directory (absolute path)', () async {
+      final outsideFile = File('${tempDir.path}/external_file.txt')
+        ..writeAsStringSync('critical system file');
+
+      final result = await fileStore.deleteEvidenceIfUnreferenced(
+        filePath: outsideFile.path,
+        draftStore: appDatabase,
+      );
+
+      expect(
+        result.status,
+        equals(EvidenceFileDeletionStatus.rejectedOutOfBounds),
+      );
+      expect(result.isRejectedOutOfBounds, isTrue);
+      expect(outsideFile.existsSync(), isTrue);
+    });
+
+    test('R26-03: Deletion rejected for path traversal attempts', () async {
+      final traversalPath =
+          '${tempDir.path}/draft_evidence/../../outside_escaped.txt';
+      final result = await fileStore.deleteEvidenceIfUnreferenced(
+        filePath: traversalPath,
+        draftStore: appDatabase,
+      );
+
+      expect(
+        result.status,
+        equals(EvidenceFileDeletionStatus.rejectedOutOfBounds),
+      );
+      expect(result.isRejectedOutOfBounds, isTrue);
+    });
+
+    test('R26-03: Deletion reports alreadyAbsent when file does not exist in evidence directory', () async {
+      final absentPath = '${tempDir.path}/draft_evidence/non_existent.jpg';
+      final result = await fileStore.deleteEvidenceIfUnreferenced(
+        filePath: absentPath,
+        draftStore: appDatabase,
+      );
+
+      expect(result.status, equals(EvidenceFileDeletionStatus.alreadyAbsent));
+      expect(result.isAlreadyAbsent, isTrue);
+    });
+
+    test('R26-03: Filesystem deletion errors return deletionFailed and fail closed', () async {
+      final conflictingDir = Directory(
+        '${tempDir.path}/draft_evidence/dir_as_file.jpg',
+      )..createSync(recursive: true);
+      File('${conflictingDir.path}/nested.txt').writeAsStringSync('nested');
+
+      final result = await fileStore.deleteEvidenceIfUnreferenced(
+        filePath: conflictingDir.path,
+        draftStore: appDatabase,
+      );
+
+      expect(result.status, equals(EvidenceFileDeletionStatus.deletionFailed));
+      expect(result.isFailed, isTrue);
+      expect(conflictingDir.existsSync(), isTrue);
+    });
+
+    // -------------------------------------------------------------------------
+    // R26-01: UI stale-state handling and concurrency conflict dialogs
+    // -------------------------------------------------------------------------
+    testWidgets(
+      'R26-01 UI: Draft mutated to possiblyDispatched while dialog is open is rejected and displays blocked dialog',
+      (tester) async {
+        final photoBytes = [12, 13];
+        final photoPath = await fileStore.saveEvidence(
+          fileName: 'stale_dialog_disp.jpg',
+          bytes: photoBytes,
+        );
+        final draft = buildDraft(
+          draftId: 'd-stale-disp',
+          photoPath: photoPath,
+          title: 'Stale Dialog Draft',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        await tester.pumpWidget(
+          createTestHarness(child: const Scaffold(body: ChildModeScreen())),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Stale Dialog Draft'), findsOneWidget);
+
+        // Tap delete to open dialog
+        await tester.tap(
+          find.byKey(const Key('delete_draft_button_d-stale-disp')),
+        );
+        await tester.pumpAndSettle();
+
+        // Confirm dialog is visible
+        expect(
+          find.byKey(const Key('confirm_delete_draft_dialog')),
+          findsOneWidget,
+        );
+
+        // While dialog is open, mutate draft in appDatabase to possiblyDispatched
+        final mutatedDraft = draft.copyWith(
+          dispatchState: CommandDispatchState.possiblyDispatched,
+          updatedAt: now.add(const Duration(seconds: 5)),
+        );
+        await appDatabase.saveLocalDraft(mutatedDraft);
+
+        // Now tap "Delete" in dialog
+        await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));
+        await tester.pumpAndSettle();
+
+        // Confirm dialog dismissed and blocked dialog appears!
+        expect(
+          find.byKey(const Key('confirm_delete_draft_dialog')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('draft_delete_blocked_dialog')),
+          findsOneWidget,
+        );
+        expect(find.text('Cannot Delete Draft'), findsOneWidget);
+
+        // Dismiss blocked dialog
+        await tester.tap(
+          find.byKey(const Key('draft_delete_blocked_ok_button')),
+        );
+        await tester.pumpAndSettle();
+
+        // Draft and photo file MUST remain intact
+        final persisted = await appDatabase.getLocalDraft('d-stale-disp');
+        expect(persisted, isNotNull);
+        expect(
+          persisted!.dispatchState,
+          equals(CommandDispatchState.possiblyDispatched),
+        );
+        expect(File(photoPath).existsSync(), isTrue);
+      },
+    );
+
+    testWidgets(
+      'R26-01 UI: Draft content modified while dialog is open is rejected and displays conflict dialog',
+      (tester) async {
+        final photoBytes = [14, 15];
+        final photoPath = await fileStore.saveEvidence(
+          fileName: 'stale_dialog_conflict.jpg',
+          bytes: photoBytes,
+        );
+        final draft = buildDraft(
+          draftId: 'd-stale-conflict',
+          photoPath: photoPath,
+          title: 'Before Conflict Title',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        await tester.pumpWidget(
+          createTestHarness(child: const Scaffold(body: ChildModeScreen())),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Before Conflict Title'), findsOneWidget);
+
+        // Tap delete to open dialog
+        await tester.tap(
+          find.byKey(const Key('delete_draft_button_d-stale-conflict')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('confirm_delete_draft_dialog')),
+          findsOneWidget,
+        );
+
+        // Concurrently modify draft title while dialog is pending
+        final updatedDraft = draft.copyWith(
+          title: 'Concurrently Modified Title',
+          updatedAt: now.add(const Duration(seconds: 10)),
+        );
+        await appDatabase.saveLocalDraft(updatedDraft);
+
+        // Tap "Delete" in dialog
+        await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));
+        await tester.pumpAndSettle();
+
+        // Conflict dialog appears!
+        expect(
+          find.byKey(const Key('confirm_delete_draft_dialog')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('draft_delete_conflict_dialog')),
+          findsOneWidget,
+        );
+        expect(find.text('Draft Modified'), findsOneWidget);
+
+        // Dismiss conflict dialog
+        await tester.tap(
+          find.byKey(const Key('draft_delete_conflict_ok_button')),
+        );
+        await tester.pumpAndSettle();
+
+        // Draft remains in store with updated title
+        final persisted = await appDatabase.getLocalDraft('d-stale-conflict');
+        expect(persisted, isNotNull);
+        expect(persisted!.title, equals('Concurrently Modified Title'));
+        expect(File(photoPath).existsSync(), isTrue);
+      },
+    );
+
+    testWidgets(
+      'R26-01 UI: Draft with unexpired lease while dialog open is rejected and displays blocked dialog',
+      (tester) async {
+        final photoBytes = [16, 17];
+        final photoPath = await fileStore.saveEvidence(
+          fileName: 'stale_dialog_lease.jpg',
+          bytes: photoBytes,
+        );
+        final draft = buildDraft(
+          draftId: 'd-stale-lease',
+          photoPath: photoPath,
+          title: 'Lease Test Draft',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        await tester.pumpWidget(
+          createTestHarness(child: const Scaffold(body: ChildModeScreen())),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Lease Test Draft'), findsOneWidget);
+
+        // Tap delete to open dialog
+        await tester.tap(
+          find.byKey(const Key('delete_draft_button_d-stale-lease')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('confirm_delete_draft_dialog')),
+          findsOneWidget,
+        );
+
+        // While dialog open, background worker claims lease
+        final leasedDraft = draft.copyWith(
+          leaseToken: 'worker-lease-token-abc',
+          leaseExpiresAt: now.add(const Duration(minutes: 5)),
+          updatedAt: now.add(const Duration(seconds: 2)),
+        );
+        await appDatabase.saveLocalDraft(leasedDraft);
+
+        // Tap "Delete" in dialog
+        await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('draft_delete_blocked_dialog')),
+          findsOneWidget,
+        );
+        await tester.tap(
+          find.byKey(const Key('draft_delete_blocked_ok_button')),
+        );
+        await tester.pumpAndSettle();
+
+        final persisted = await appDatabase.getLocalDraft('d-stale-lease');
+        expect(persisted, isNotNull);
+        expect(persisted!.leaseToken, equals('worker-lease-token-abc'));
+        expect(File(photoPath).existsSync(), isTrue);
       },
     );
   });

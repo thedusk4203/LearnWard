@@ -85,6 +85,74 @@ final class LocalAssessmentDraft {
       actorUserId != null &&
       actorUserId!.isNotEmpty;
 
+  /// Returns whether this draft is in an unsafe state that forbids local deletion.
+  ///
+  /// Fails closed if quarantined as unknown legacy, possibly dispatched, confirmed
+  /// committed, actively uploading/submitting, pending retry, or held under an unexpired lease.
+  bool isUnsafeToDelete({DateTime? now}) {
+    final currentTime = (now ?? DateTime.now()).toUtc();
+    final hasActiveLease =
+        leaseToken != null &&
+        leaseExpiresAt != null &&
+        leaseExpiresAt!.isAfter(currentTime);
+
+    return isLegacyUnknown ||
+        dispatchState == CommandDispatchState.possiblyDispatched ||
+        dispatchState == CommandDispatchState.confirmedCommitted ||
+        submissionStatus == DraftSubmissionStatus.submittingAssessment ||
+        submissionStatus == DraftSubmissionStatus.uploadingEvidence ||
+        submissionStatus == DraftSubmissionStatus.failedRetryable ||
+        hasActiveLease;
+  }
+
+  /// Returns a user-friendly diagnostic reason why this draft cannot currently be deleted.
+  String? deletionBlockedReason({DateTime? now}) {
+    if (!isUnsafeToDelete(now: now)) return null;
+    final currentTime = (now ?? DateTime.now()).toUtc();
+    final hasActiveLease =
+        leaseToken != null &&
+        leaseExpiresAt != null &&
+        leaseExpiresAt!.isAfter(currentTime);
+
+    if (isLegacyUnknown) {
+      return 'This draft was migrated from a previous version and requires recovery reconciliation before it can be deleted.';
+    }
+    if (hasActiveLease) {
+      return 'This draft is currently being processed under an active lease.';
+    }
+    if (dispatchState == CommandDispatchState.possiblyDispatched) {
+      return 'This draft has an in-flight server command and cannot be deleted until the outcome is confirmed.';
+    }
+    if (dispatchState == CommandDispatchState.confirmedCommitted) {
+      return 'This draft has already been confirmed committed on the server.';
+    }
+    if (submissionStatus == DraftSubmissionStatus.submittingAssessment) {
+      return 'This draft is currently being submitted to the server.';
+    }
+    if (submissionStatus == DraftSubmissionStatus.uploadingEvidence) {
+      return 'Evidence for this draft is currently being uploaded.';
+    }
+    if (submissionStatus == DraftSubmissionStatus.failedRetryable) {
+      return 'This draft encountered a transient error and is queued for retry.';
+    }
+    return 'This draft is in an unsafe state and cannot be deleted.';
+  }
+
+  /// Returns whether this draft has substantive content or state differences
+  /// compared to [other] that would represent a concurrent modification conflict.
+  bool hasConflictWith(LocalAssessmentDraft other) {
+    return !updatedAt.isAtSameMomentAs(other.updatedAt) ||
+        localPhotoPath != other.localPhotoPath ||
+        localCompressedPhotoPath != other.localCompressedPhotoPath ||
+        title != other.title ||
+        rawScore != other.rawScore ||
+        maxScore != other.maxScore ||
+        subjectKey != other.subjectKey ||
+        entryContext != other.entryContext ||
+        submissionStatus != other.submissionStatus ||
+        dispatchState != other.dispatchState;
+  }
+
   LocalAssessmentDraft copyWith({
     String? familyId,
     String? childId,
@@ -181,6 +249,49 @@ final class LocalAssessmentDraft {
 
 const Object _sentinel = Object();
 
+/// Status outcomes for atomic, state-aware local draft deletion.
+enum DraftDeletionStatus {
+  /// Draft row was safely deleted from local storage.
+  deleted,
+
+  /// Deletion was rejected because the draft is in an unsafe state
+  /// (e.g. unknown legacy, in-flight dispatch, confirmed committed, active lease, or active submission).
+  blockedUnsafeState,
+
+  /// Deletion was rejected because the persisted draft was modified
+  /// concurrently while the deletion confirmation was pending.
+  concurrencyConflict,
+
+  /// Draft record was not found in local storage.
+  notFound,
+}
+
+/// Explicit outcome of an atomic [LocalDraftStore.deleteDraftSafely] operation.
+final class DraftDeletionOutcome {
+  const DraftDeletionOutcome({
+    required this.status,
+    required this.localDraftId,
+    this.reason,
+    this.currentDraft,
+  });
+
+  final DraftDeletionStatus status;
+  final String localDraftId;
+  final String? reason;
+  final LocalAssessmentDraft? currentDraft;
+
+  bool get isDeleted => status == DraftDeletionStatus.deleted;
+  bool get isBlockedUnsafeState =>
+      status == DraftDeletionStatus.blockedUnsafeState;
+  bool get isConcurrencyConflict =>
+      status == DraftDeletionStatus.concurrencyConflict;
+  bool get isNotFound => status == DraftDeletionStatus.notFound;
+
+  @override
+  String toString() =>
+      'DraftDeletionOutcome(status: $status, draftId: $localDraftId, reason: $reason)';
+}
+
 /// Port for local offline assessment drafts storage.
 abstract interface class LocalDraftStore {
   /// Saves or updates a local draft.
@@ -194,6 +305,21 @@ abstract interface class LocalDraftStore {
 
   /// Deletes a local draft after successful server submission.
   Future<void> deleteLocalDraft(String localDraftId);
+
+  /// Atomically and safely deletes [localDraftId] only after revalidating that its
+  /// current persisted state matches [expectedDraft] and is safe for deletion.
+  ///
+  /// Rejects deletion if the draft is quarantined (unknown legacy), in-flight
+  /// (possibly dispatched or confirmed committed), has an active lease, or is currently
+  /// undergoing submission or evidence upload.
+  ///
+  /// Rejects deletion with [DraftDeletionStatus.concurrencyConflict] if the draft
+  /// was modified concurrently while the deletion decision was pending.
+  Future<DraftDeletionOutcome> deleteDraftSafely({
+    required String localDraftId,
+    required LocalAssessmentDraft expectedDraft,
+    DateTime? now,
+  });
 
   /// Returns whether any local assessment draft currently references [filePath]
   /// in either its [localPhotoPath] or [localCompressedPhotoPath].

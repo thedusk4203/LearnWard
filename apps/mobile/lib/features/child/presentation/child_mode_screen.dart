@@ -411,27 +411,8 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                               tooltip: 'Delete Draft',
                               icon: const Icon(Icons.delete_outline, size: 20),
                               onPressed: () async {
-                                final isBlockedFromDelete =
-                                    draft.isLegacyUnknown ||
-                                    draft.dispatchState ==
-                                        CommandDispatchState
-                                            .possiblyDispatched ||
-                                    draft.dispatchState ==
-                                        CommandDispatchState
-                                            .confirmedCommitted ||
-                                    draft.submissionStatus ==
-                                        DraftSubmissionStatus
-                                            .submittingAssessment ||
-                                    draft.submissionStatus ==
-                                        DraftSubmissionStatus
-                                            .uploadingEvidence ||
-                                    draft.submissionStatus ==
-                                        DraftSubmissionStatus.failedRetryable ||
-                                    (draft.leaseToken != null &&
-                                        draft.leaseExpiresAt != null &&
-                                        draft.leaseExpiresAt!.isAfter(
-                                          DateTime.now().toUtc(),
-                                        ));
+                                final isBlockedFromDelete = draft
+                                    .isUnsafeToDelete();
 
                                 if (isBlockedFromDelete) {
                                   await showDialog<void>(
@@ -442,9 +423,7 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                                       ),
                                       title: const Text('Cannot Delete Draft'),
                                       content: Text(
-                                        draft.isLegacyUnknown
-                                            ? 'This draft was migrated from a previous version and requires recovery reconciliation before it can be deleted.'
-                                            : 'This draft is in progress, queued for retry, or has an ambiguous submission outcome. It cannot be deleted until submission is resolved.',
+                                        draft.deletionBlockedReason() ?? 'This draft is in progress, queued for retry, or has an ambiguous submission outcome. It cannot be deleted until submission is resolved.',
                                       ),
                                       actions: [
                                         TextButton(
@@ -504,37 +483,107 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                                 if (confirmed != true) return;
 
                                 final store = ref.read(localDraftStoreProvider);
-                                await store.deleteLocalDraft(
-                                  draft.localDraftId,
+                                final outcome = await store.deleteDraftSafely(
+                                  localDraftId: draft.localDraftId,
+                                  expectedDraft: draft,
                                 );
 
-                                final fileStore = ref.read(
-                                  localEvidenceFileStoreProvider,
-                                );
-                                if (draft.localPhotoPath != null) {
-                                  try {
-                                    await fileStore
-                                        .deleteEvidenceIfUnreferenced(
-                                          filePath: draft.localPhotoPath!,
-                                          draftStore: store,
-                                        );
-                                  } catch (_) {}
-                                }
+                                if (!context.mounted) return;
 
-                                if (draft.localCompressedPhotoPath != null &&
-                                    draft.localCompressedPhotoPath !=
-                                        draft.localPhotoPath) {
-                                  try {
-                                    await fileStore
-                                        .deleteEvidenceIfUnreferenced(
-                                          filePath:
-                                              draft.localCompressedPhotoPath!,
-                                          draftStore: store,
-                                        );
-                                  } catch (_) {}
-                                }
+                                if (outcome.isDeleted) {
+                                  final fileStore = ref.read(
+                                    localEvidenceFileStoreProvider,
+                                  );
+                                  if (draft.localPhotoPath != null) {
+                                    try {
+                                      await fileStore
+                                          .deleteEvidenceIfUnreferenced(
+                                            filePath: draft.localPhotoPath!,
+                                            draftStore: store,
+                                          );
+                                    } catch (_) {}
+                                  }
 
-                                unawaited(_loadLocalDrafts());
+                                  if (draft.localCompressedPhotoPath != null &&
+                                      draft.localCompressedPhotoPath !=
+                                          draft.localPhotoPath) {
+                                    try {
+                                      await fileStore
+                                          .deleteEvidenceIfUnreferenced(
+                                            filePath:
+                                                draft.localCompressedPhotoPath!,
+                                            draftStore: store,
+                                          );
+                                    } catch (_) {}
+                                  }
+
+                                  if (!context.mounted) return;
+
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      key: Key('draft_deleted_snackbar'),
+                                      content: Text('Draft deleted.'),
+                                    ),
+                                  );
+                                  unawaited(_loadLocalDrafts());
+                                } else if (outcome.isBlockedUnsafeState) {
+                                  await showDialog<void>(
+                                    context: context,
+                                    builder: (dialogContext) => AlertDialog(
+                                      key: const Key(
+                                        'draft_delete_blocked_dialog',
+                                      ),
+                                      title: const Text('Cannot Delete Draft'),
+                                      content: Text(
+                                        outcome.reason ?? 'This draft is in progress, queued for retry, or has an ambiguous submission outcome. It cannot be deleted until submission is resolved.',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          key: const Key(
+                                            'draft_delete_blocked_ok_button',
+                                          ),
+                                          onPressed: () =>
+                                              Navigator.of(dialogContext).pop(),
+                                          child: const Text('OK'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  unawaited(_loadLocalDrafts());
+                                } else if (outcome.isConcurrencyConflict) {
+                                  await showDialog<void>(
+                                    context: context,
+                                    builder: (dialogContext) => AlertDialog(
+                                      key: const Key(
+                                        'draft_delete_conflict_dialog',
+                                      ),
+                                      title: const Text('Draft Modified'),
+                                      content: Text(
+                                        outcome.reason ?? 'This draft was modified while confirming deletion. Please review the updated draft.',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          key: const Key(
+                                            'draft_delete_conflict_ok_button',
+                                          ),
+                                          onPressed: () =>
+                                              Navigator.of(dialogContext).pop(),
+                                          child: const Text('OK'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  unawaited(_loadLocalDrafts());
+                                } else {
+                                  // notFound
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      key: Key('draft_not_found_snackbar'),
+                                      content: Text('Draft no longer exists.'),
+                                    ),
+                                  );
+                                  unawaited(_loadLocalDrafts());
+                                }
                               },
                             ),
                           ),

@@ -27,6 +27,46 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
   }
 
   @override
+  Future<DraftDeletionOutcome> deleteDraftSafely({
+    required String localDraftId,
+    required LocalAssessmentDraft expectedDraft,
+    DateTime? now,
+  }) async {
+    final current = drafts[localDraftId];
+    if (current == null) {
+      return DraftDeletionOutcome(
+        status: DraftDeletionStatus.notFound,
+        localDraftId: localDraftId,
+        reason: 'Draft not found in local store.',
+      );
+    }
+
+    if (current.isUnsafeToDelete(now: now)) {
+      return DraftDeletionOutcome(
+        status: DraftDeletionStatus.blockedUnsafeState,
+        localDraftId: localDraftId,
+        reason: current.deletionBlockedReason(now: now),
+        currentDraft: current,
+      );
+    }
+
+    if (current.hasConflictWith(expectedDraft)) {
+      return DraftDeletionOutcome(
+        status: DraftDeletionStatus.concurrencyConflict,
+        localDraftId: localDraftId,
+        reason: 'Draft was modified while deletion was being confirmed.',
+        currentDraft: current,
+      );
+    }
+
+    drafts.remove(localDraftId);
+    return DraftDeletionOutcome(
+      status: DraftDeletionStatus.deleted,
+      localDraftId: localDraftId,
+    );
+  }
+
+  @override
   Future<bool> hasDraftReferenceToFile(String filePath) async {
     return drafts.values.any(
       (d) =>
