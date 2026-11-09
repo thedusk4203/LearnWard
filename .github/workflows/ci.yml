@@ -265,21 +265,6 @@ jobs:
             cp "$m2_jar" "$target_dir/kotlin-compiler-embeddable-$ver.jar"
           done
 
-          # 3. Provision CI-scoped Gradle init script to enable mavenLocal() strictly on the CI runner
-          mkdir -p "$HOME/.gradle/init.d"
-          cat << 'EOF' > "$HOME/.gradle/init.d/ci-prefetch.gradle"
-          gradle.beforeSettings { settings ->
-              settings.pluginManagement.repositories {
-                  mavenLocal()
-              }
-          }
-          gradle.allprojects {
-              repositories {
-                  mavenLocal()
-              }
-          }
-          EOF
-
       - name: Build debug APK
         run: flutter build apk --debug
         working-directory: apps/mobile
