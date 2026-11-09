@@ -17,7 +17,8 @@
 | Phase 6 readiness / actor-aware design | MERGED | PR #22 |
 | Phase 6 Slice 4A-0 — Drift v6 / retry persistence / CAS | MERGED / FROZEN | PR #23, merge `88908ac309cda0eddcd549121ea0638c6979a384`, run `42366631328`, success 4/4 |
 | Phase 6 Slice 4A-1 — Actor-aware Spin/Redeem recovery runtime | MERGED / FROZEN | PR #24, merge `6b1d4da03254264ac180e4b1503de93e146c963e`, run `42509975267`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4a-1-recovery-dispatcher-freeze.md` |
-| Slice 4A-2, 4B, 4C, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
+| Phase 6 Slice 4B-0 — Immediate local evidence safety | MERGED / FROZEN | PR #26, merge `f921bb67b67e4e0d528911f0da2b90f7b693fc00`, run `42643730956`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4b-0-local-evidence-safety-freeze.md` |
+| Slice 4A-2, 4B-1, 4C, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
 
 ## 2. Ordered workstream / PR boundaries
 
@@ -47,17 +48,15 @@
 
 **Gate:** independent review and CI; no release/deploy.
 
-### PR #26 (provisional) — Slice 4B-0: Immediate local evidence safety
+### PR #26 — Slice 4B-0: Immediate local evidence safety (MERGED / FROZEN)
 
-**Priority:** P1 user-data-loss prevention, can be scheduled directly after PR #24 and ahead of 4A-2 if staffing/time allows. Do not wait for complete upload resumability to stop unsafe local deletion.
+**Status:** MERGED and FROZEN (Merge commit `f921bb67b67e4e0d528911f0da2b90f7b693fc00`, run `42643730956`).
 
-**Scope:**
-1. `AddAssessmentScreen` must not physically delete a referenced image until a new draft save is committed and reference switch is confirmed. On cancel/back/error, keep existing file and draft intact.
-2. The child draft-list Delete action must require an explicit confirmation, warn if work is unsynced/quarantined, and use an atomic tombstone/retention strategy if a remote operation may have committed. No automatic deletion of unknown-outcome or legacy drafts.
-3. A file may be garbage-collected only after proving there are zero local references and the user explicitly approved deletion. Preserve compressed photo path and original evidence UUID.
-4. UI remains minimal and accessible; no automatic Storage delete after ambiguous registration outcome.
+**Goal:** Zero client evidence loss. Conservative physical evidence retention, atomic CAS draft deletion rejecting uncommitted/conflicting/legacy states, full 30-field persisted state comparison, path containment sanitization, exclusive file creation, fail-closed attachment restoration, and resilient evidence picker persistence.
 
-**Tests:** edit/remove photo -> navigate back without Save; edit -> failed Save; successful Save -> safe cleanup; duplicate file references; restart; delete quarantined draft requires confirmation and retains exportable evidence. **Gate:** no silent local evidence loss.
+**Authoritative implementation details:** Freeze receipt recorded in `docs/freezes/phase-6-slice-4b-0-local-evidence-safety-freeze.md`.
+
+**Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 556 Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria B01–B05 and review dispositions R26-01 through R26-6-01 verified. Schema v6 and backend contracts preserved with 0 diff.
 
 ### PR #27 (provisional) — Slice 4B-1: Evidence resumability and 409 reconciliation
 
