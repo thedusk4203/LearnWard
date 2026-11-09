@@ -49,7 +49,7 @@ Every acceptance scenario defined in `docs/20-phase-6-slice-4a-1-final-implement
 
 | ID | Specification Requirement | Verification Evidence / Test Assertion | Status |
 |---|---|---|---|
-| **A01** | Fresh Spin and Redeem: Insert `never_dispatched`, acquire claim, durable `possibly_dispatched` mark, then exactly one mutating RPC. | Verified: DB records 1 row in `never_dispatched`, transitions to `possibly_dispatched` with active lease, fires 1 RPC, then marks `confirmed_committed`. | **PASS** |
+| **A01** | Fresh Spin and Redeem: Insert `never_dispatched`, acquire claim, durable `possibly_dispatched` mark, then exactly one mutating RPC. | Verified: DB records 1 row in `never_dispatched`, acquires exclusive claim, transitions to `possibly_dispatched` with active lease, fires 1 RPC, then safely completes and removes the journal row via token-fenced `completeCommand()`. | **PASS** |
 | **A02** | Marker rejects wrong token: Attempting pre-dispatch CAS with mismatched token fails closed. | Verified: Returns `false`, zero mutating RPC executed, DB record preserved with existing lease token and status. | **PASS** |
 | **A03** | Marker rejects expired/replaced token: Lease expired or stolen by newer claimant rejects pre-dispatch write. | Verified: Returns `false`, zero RPC, newly acquired claim lease and token on DB row completely untouched. | **PASS** |
 | **A04** | Crash immediately after pre-dispatch SQLite commit: Restart recovers `possibly_dispatched` record without generating a new UUID. | Verified: On reopen, exact original `command_id` is reloaded; no duplicate UUID generated; idempotently reconciled. | **PASS** |
