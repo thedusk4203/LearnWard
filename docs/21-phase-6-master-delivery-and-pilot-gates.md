@@ -2,7 +2,7 @@
 
 **Status:** PLANNED (implementation delegated to coding agent; independent acceptance required)  
 **Planning date:** 2026-11-07  
-**Baseline:** `main` `7584147a3ca906c87dccb6daf52f5b7415ba8a54`  
+**Baseline:** `main` `6b1d4da03254264ac180e4b1503de93e146c963e`  
 **Governance:** Frozen ADRs 0001–0008, Phase 0–5 and Phase 6 completed slices. No server economic rewrite, no silent schema changes.  
 **Working principle:** The planning owner defines contracts, dependencies, acceptance tests and release gates; the coding agent implements exactly one reviewed slice/PR at a time and does not independently expand scope.
 
@@ -16,19 +16,20 @@
 | Phase 6 Slice 4 — Drift v5 foundation | MERGED / FROZEN | PR #21 |
 | Phase 6 readiness / actor-aware design | MERGED | PR #22 |
 | Phase 6 Slice 4A-0 — Drift v6 / retry persistence / CAS | MERGED / FROZEN | PR #23, merge `88908ac309cda0eddcd549121ea0638c6979a384`, run `42366631328`, success 4/4 |
-| Documentation main | VERIFIED | `7584147a3ca906c87dccb6daf52f5b7415ba8a54`, run `42368090260`, success 4/4 |
-| Slice 4A-1 | DESIGN LOCKED in separate contract | `docs/20-phase-6-slice-4a-1-final-implementation-contract.md` (this planning set) |
+| Phase 6 Slice 4A-1 — Actor-aware Spin/Redeem recovery runtime | MERGED / FROZEN | PR #24, merge `6b1d4da03254264ac180e4b1503de93e146c963e`, run `42509975267`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4a-1-recovery-dispatcher-freeze.md` |
 | Slice 4A-2, 4B, 4C, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
 
 ## 2. Ordered workstream / PR boundaries
 
-### PR #24 — Slice 4A-1: Actor-aware Spin/Redeem runtime
+### PR #24 — Slice 4A-1: Actor-aware Spin/Redeem runtime (MERGED / FROZEN)
+
+**Status:** MERGED and FROZEN (Merge commit `6b1d4da03254264ac180e4b1503de93e146c963e`, run `42509975267`).
 
 **Goal:** One safe foreground/background path with durable `possibly_dispatched` CAS, session verification, original ID replay, same-family authorization and bounded recovery. **No native OS background guarantee.**
 
-**Authoritative implementation details:** `docs/20-phase-6-slice-4a-1-final-implementation-contract.md`, including WP0–WP6, A01–A24 and error matrix. Do not reinterpret its acceptance tests.
+**Authoritative implementation details:** `docs/20-phase-6-slice-4a-1-final-implementation-contract.md`, including WP0–WP6, A01–A24 and error matrix. Freeze receipt recorded in `docs/freezes/phase-6-slice-4a-1-recovery-dispatcher-freeze.md`.
 
-**Gate:** CI green at exact HEAD, independent code review confirms no mutation RPC before token-fenced durable marker; no cross-actor/family replay; no duplicate economic effects. Do not merge without sign-off.
+**Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 479 Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria A01–A24 verified. Schema v6 and backend contracts preserved with 0 diff.
 
 ### PR #25 (provisional) — Slice 4A-2: Adult Fulfill/Cancel reliability
 
