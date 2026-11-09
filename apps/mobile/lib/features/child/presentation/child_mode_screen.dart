@@ -491,32 +491,12 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                                 if (!context.mounted) return;
 
                                 if (outcome.isDeleted) {
-                                  final fileStore = ref.read(
-                                    localEvidenceFileStoreProvider,
-                                  );
-                                  if (draft.localPhotoPath != null) {
-                                    try {
-                                      await fileStore
-                                          .deleteEvidenceIfUnreferenced(
-                                            filePath: draft.localPhotoPath!,
-                                            draftStore: store,
-                                          );
-                                    } catch (_) {}
-                                  }
-
-                                  if (draft.localCompressedPhotoPath != null &&
-                                      draft.localCompressedPhotoPath !=
-                                          draft.localPhotoPath) {
-                                    try {
-                                      await fileStore
-                                          .deleteEvidenceIfUnreferenced(
-                                            filePath:
-                                                draft.localCompressedPhotoPath!,
-                                            draftStore: store,
-                                          );
-                                    } catch (_) {}
-                                  }
-
+                                  // Conservative evidence retention (Phase 6 Slice 4B-0 R26-3-02):
+                                  // The draft record is safely removed from SQLite after confirmation.
+                                  // Automatic physical file unlinking in normal draft flows is disabled
+                                  // to prevent data-loss races across independent connections and
+                                  // recovery lifecycles. Orphan evidence files are intentionally retained
+                                  // on disk until an approved reconciliation/garbage-collection design exists.
                                   if (!context.mounted) return;
 
                                   ScaffoldMessenger.of(context).showSnackBar(

@@ -393,10 +393,10 @@ void main() {
     );
 
     // -------------------------------------------------------------------------
-    // B01 / B05: Successful save with reference switch
+    // B01 / B05 / R26-3-02: Successful save with photo replacement
     // -------------------------------------------------------------------------
     testWidgets(
-      'B01/B05: Successful save with reference switch cleans up old file only if unreferenced',
+      'B01/B05/R26-3-02: Successful save with photo replacement conservatively preserves prior evidence on disk',
       (tester) async {
         final oldBytes = [100, 101];
         final oldPath = await fileStore.saveEvidence(
@@ -449,8 +449,9 @@ void main() {
         expect(updated!.localPhotoPath, isNot(equals(oldPath)));
         expect(File(updated.localPhotoPath!).existsSync(), isTrue);
 
-        // Old file had zero other references, so it was safely unlinked
-        expect(File(oldPath).existsSync(), isFalse);
+        // Under Slice 4B-0 R26-3-02 conservative retention, old file is preserved on disk
+        expect(File(oldPath).existsSync(), isTrue);
+        expect(File(oldPath).readAsBytesSync(), equals(oldBytes));
       },
     );
 
@@ -489,14 +490,29 @@ void main() {
 
       // Now delete draft B
       await appDatabase.deleteLocalDraft('d-shared-B');
-      final deletedAfterAll = await fileStore.deleteEvidenceIfUnreferenced(
+
+      // By default, deleteEvidenceIfUnreferenced preserves file under conservative retention
+      final conservativeAfterAll = await fileStore.deleteEvidenceIfUnreferenced(
         filePath: sharedPath,
         draftStore: appDatabase,
       );
       expect(
-        deletedAfterAll.isDeleted,
+        conservativeAfterAll.status,
+        equals(EvidenceFileDeletionStatus.preservedConservative),
+      );
+      expect(conservativeAfterAll.isPreserved, isTrue);
+      expect(File(sharedPath).existsSync(), isTrue);
+
+      // Explicitly authorized unlinking removes the file
+      final unlinkedAfterAll = await fileStore.deleteEvidenceIfUnreferenced(
+        filePath: sharedPath,
+        draftStore: appDatabase,
+        allowPhysicalUnlink: true,
+      );
+      expect(
+        unlinkedAfterAll.isDeleted,
         isTrue,
-        reason: 'File should be safely deleted when zero references remain',
+        reason: 'File should be safely deleted when zero references remain and allowPhysicalUnlink is true',
       );
       expect(File(sharedPath).existsSync(), isFalse);
     });
@@ -771,22 +787,54 @@ void main() {
     );
 
     // -------------------------------------------------------------------------
-    // Concurrent delete taps and cleanup idempotency
+    // Concurrent delete taps, conservative retention and idempotency
     // -------------------------------------------------------------------------
-    test('Repeated delete taps and concurrent cleanup attempts are safe and idempotent', () async {
+    test(
+      'Concurrent cleanup attempts default to conservative retention',
+      () async {
+        final photoBytes = [42, 43, 44];
+        final photoPath = await fileStore.saveEvidence(
+          fileName: 'concurrent_pic.jpg',
+          bytes: photoBytes,
+        );
+
+        // Execute 10 parallel cleanup attempts without allowPhysicalUnlink
+        final results = await Future.wait(
+          List.generate(
+            10,
+            (_) => fileStore.deleteEvidenceIfUnreferenced(
+              filePath: photoPath,
+              draftStore: appDatabase,
+            ),
+          ),
+        );
+
+        // File should remain preserved on disk
+        expect(File(photoPath).existsSync(), isTrue);
+        expect(File(photoPath).readAsBytesSync(), equals(photoBytes));
+        expect(
+          results.every((r) => r.isPreserved),
+          isTrue,
+          reason: 'Concurrent cleanups must all return preserved under Slice 4B-0 policy',
+        );
+      },
+    );
+
+    test('Concurrent cleanup attempts with allowPhysicalUnlink are safe and idempotent', () async {
       final photoBytes = [42, 43, 44];
       final photoPath = await fileStore.saveEvidence(
-        fileName: 'concurrent_pic.jpg',
+        fileName: 'concurrent_unlink_pic.jpg',
         bytes: photoBytes,
       );
 
-      // Execute 10 parallel cleanup attempts
+      // Execute 10 parallel cleanup attempts with allowPhysicalUnlink: true
       final results = await Future.wait(
         List.generate(
           10,
           (_) => fileStore.deleteEvidenceIfUnreferenced(
             filePath: photoPath,
             draftStore: appDatabase,
+            allowPhysicalUnlink: true,
           ),
         ),
       );
@@ -845,8 +893,9 @@ void main() {
         expect(find.text('Draft To Delete'), findsNothing);
         expect(await appDatabase.getLocalDraft('d-conf-del'), isNull);
 
-        // Photo file unlinked because zero drafts reference it
-        expect(File(photoPath).existsSync(), isFalse);
+        // Photo file preserved on disk under Slice 4B-0 conservative retention policy
+        expect(File(photoPath).existsSync(), isTrue);
+        expect(File(photoPath).readAsBytesSync(), equals(photoBytes));
       },
     );
 
@@ -1179,6 +1228,80 @@ void main() {
     );
 
     testWidgets(
+      'R26-3-01 UI: Draft actorUserId or command ID changed without changing updatedAt shows conflict dialog',
+      (tester) async {
+        final photoBytes = [88, 99];
+        final photoPath = await fileStore.saveEvidence(
+          fileName: 'stale_dialog_id_conflict.jpg',
+          bytes: photoBytes,
+        );
+        final draft = buildDraft(
+          draftId: 'd-stale-id-conflict',
+          photoPath: photoPath,
+          title: 'Unchanged Title',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        final persistedInitial = await appDatabase.getLocalDraft(
+          'd-stale-id-conflict',
+        );
+        expect(persistedInitial, isNotNull);
+
+        await tester.pumpWidget(
+          createTestHarness(child: const Scaffold(body: ChildModeScreen())),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Unchanged Title'), findsOneWidget);
+
+        // Open confirm delete dialog
+        await tester.tap(
+          find.byKey(const Key('delete_draft_button_d-stale-id-conflict')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('confirm_delete_draft_dialog')),
+          findsOneWidget,
+        );
+
+        // Concurrently modify actorUserId and submitCommandId WITHOUT changing updatedAt
+        final updatedDraft = persistedInitial!.copyWith(
+          actorUserId: 'new-worker-id',
+          submitCommandId: 'new-submit-cmd',
+          updatedAt: persistedInitial.updatedAt,
+        );
+        await appDatabase.saveLocalDraft(updatedDraft);
+
+        // Tap Delete in dialog
+        await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));
+        await tester.pumpAndSettle();
+
+        // Conflict dialog appears!
+        expect(
+          find.byKey(const Key('confirm_delete_draft_dialog')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('draft_delete_conflict_dialog')),
+          findsOneWidget,
+        );
+
+        await tester.tap(
+          find.byKey(const Key('draft_delete_conflict_ok_button')),
+        );
+        await tester.pumpAndSettle();
+
+        final persisted = await appDatabase.getLocalDraft(
+          'd-stale-id-conflict',
+        );
+        expect(persisted, isNotNull);
+        expect(persisted!.actorUserId, equals('new-worker-id'));
+        expect(File(photoPath).existsSync(), isTrue);
+      },
+    );
+
+    testWidgets(
       'R26-01 UI: Draft with unexpired lease while dialog open is rejected and displays blocked dialog',
       (tester) async {
         final photoBytes = [16, 17];
@@ -1238,5 +1361,54 @@ void main() {
         expect(File(photoPath).existsSync(), isTrue);
       },
     );
+
+    // -------------------------------------------------------------------------
+    // Additional Verification: Collision resistance & non-overwriting creation
+    // -------------------------------------------------------------------------
+    test('saveDurableEvidence creates unique collision-resistant files without overwriting', () async {
+      final bytesA = [1, 2, 3];
+      final bytesB = [4, 5, 6];
+
+      final pathA = await fileStore.saveDurableEvidence(
+        localDraftId: 'draft-collision-test',
+        bytes: bytesA,
+        mediaType: 'image/jpeg',
+      );
+      final pathB = await fileStore.saveDurableEvidence(
+        localDraftId: 'draft-collision-test',
+        bytes: bytesB,
+        mediaType: 'image/jpeg',
+      );
+
+      expect(pathA, isNot(equals(pathB)));
+      expect(File(pathA).existsSync(), isTrue);
+      expect(File(pathB).existsSync(), isTrue);
+      expect(File(pathA).readAsBytesSync(), equals(bytesA));
+      expect(File(pathB).readAsBytesSync(), equals(bytesB));
+    });
+
+    test('saveEvidence sanitizes traversal filenames and prevents accidental overwriting', () async {
+      final bytes1 = [10, 20];
+      final bytes2 = [30, 40];
+
+      // Filename with path traversal characters
+      final path1 = await fileStore.saveEvidence(
+        fileName: '../../sensitive_escaped.jpg',
+        bytes: bytes1,
+      );
+      final path2 = await fileStore.saveEvidence(
+        fileName: '../../sensitive_escaped.jpg',
+        bytes: bytes2,
+      );
+
+      // Verify files are inside draft_evidence and not escaped
+      expect(path1, contains('draft_evidence'));
+      expect(path1, isNot(contains('..')));
+      expect(path2, contains('draft_evidence'));
+      expect(path1, isNot(equals(path2)));
+
+      expect(File(path1).readAsBytesSync(), equals(bytes1));
+      expect(File(path2).readAsBytesSync(), equals(bytes2));
+    });
   });
 }

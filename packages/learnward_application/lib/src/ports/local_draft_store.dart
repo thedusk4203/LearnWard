@@ -140,17 +140,47 @@ final class LocalAssessmentDraft {
 
   /// Returns whether this draft has substantive content or state differences
   /// compared to [other] that would represent a concurrent modification conflict.
+  ///
+  /// Fails closed if ANY durable identity, ownership, command, evidence, or
+  /// recovery field diverged while deletion confirmation was pending, even if
+  /// [updatedAt] was not modified.
   bool hasConflictWith(LocalAssessmentDraft other) {
-    return !updatedAt.isAtSameMomentAs(other.updatedAt) ||
-        localPhotoPath != other.localPhotoPath ||
-        localCompressedPhotoPath != other.localCompressedPhotoPath ||
+    return localDraftId != other.localDraftId ||
+        familyId != other.familyId ||
+        childId != other.childId ||
+        createCommandId != other.createCommandId ||
+        submitCommandId != other.submitCommandId ||
+        evidenceId != other.evidenceId ||
+        serverAssessmentId != other.serverAssessmentId ||
+        subjectKey != other.subjectKey ||
+        subject != other.subject ||
         title != other.title ||
+        assessmentType != other.assessmentType ||
+        difficulty != other.difficulty ||
         rawScore != other.rawScore ||
         maxScore != other.maxScore ||
-        subjectKey != other.subjectKey ||
+        localPhotoPath != other.localPhotoPath ||
         entryContext != other.entryContext ||
+        !occurredAt.isAtSameMomentAs(other.occurredAt) ||
+        !updatedAt.isAtSameMomentAs(other.updatedAt) ||
+        serverEvidenceId != other.serverEvidenceId ||
+        sha256Checksum != other.sha256Checksum ||
+        localCompressedPhotoPath != other.localCompressedPhotoPath ||
         submissionStatus != other.submissionStatus ||
-        dispatchState != other.dispatchState;
+        retryCount != other.retryCount ||
+        dispatchState != other.dispatchState ||
+        lastErrorMessage != other.lastErrorMessage ||
+        actorUserId != other.actorUserId ||
+        actorRole != other.actorRole ||
+        !_nullableDateTimeEquals(nextAttemptAt, other.nextAttemptAt) ||
+        leaseToken != other.leaseToken ||
+        !_nullableDateTimeEquals(leaseExpiresAt, other.leaseExpiresAt);
+  }
+
+  static bool _nullableDateTimeEquals(DateTime? a, DateTime? b) {
+    if (a == null && b == null) return true;
+    if (a == null || b == null) return false;
+    return a.isAtSameMomentAs(b);
   }
 
   LocalAssessmentDraft copyWith({

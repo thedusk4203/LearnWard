@@ -4,6 +4,8 @@ import 'package:learnward_application/learnward_application.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../../shared/utils/uuid_generator.dart';
+
 /// Status of an unreferenced evidence file deletion attempt.
 enum EvidenceFileDeletionStatus {
   /// File was safely deleted from durable storage.
@@ -14,6 +16,9 @@ enum EvidenceFileDeletionStatus {
 
   /// File was preserved because one or more drafts still reference it.
   preservedReferenced,
+
+  /// File was preserved under Slice 4B-0 conservative evidence retention policy.
+  preservedConservative,
 
   /// Deletion was rejected because the path targets outside the managed evidence directory
   /// or attempts path traversal/symlink escape.
@@ -41,7 +46,8 @@ final class EvidenceFileDeletionResult {
   bool get isAlreadyAbsent =>
       status == EvidenceFileDeletionStatus.alreadyAbsent;
   bool get isPreserved =>
-      status == EvidenceFileDeletionStatus.preservedReferenced;
+      status == EvidenceFileDeletionStatus.preservedReferenced ||
+      status == EvidenceFileDeletionStatus.preservedConservative;
   bool get isRejectedOutOfBounds =>
       status == EvidenceFileDeletionStatus.rejectedOutOfBounds;
   bool get isFailed => status == EvidenceFileDeletionStatus.deletionFailed;
@@ -74,14 +80,18 @@ abstract interface class LocalEvidenceFileStore {
 
   Future<void> deleteEvidence(String filePath);
 
-  /// Deletes [filePath] physically from storage only if no local draft
-  /// in [draftStore] references it (neither as localPhotoPath nor localCompressedPhotoPath).
+  /// Reference-aware evidence file cleanup.
+  ///
+  /// In Phase 6 Slice 4B-0, [allowPhysicalUnlink] defaults to `false` (conservative retention).
+  /// Normal draft edit/delete flows retain physical evidence files on disk until an approved
+  /// reconciliation and garbage collection design exists.
   ///
   /// Returns a typed [EvidenceFileDeletionResult] detailing the outcome.
   /// Fails closed and conservatively retains files on any error, ambiguity, or boundary violation.
   Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
     required String filePath,
     required LocalDraftStore draftStore,
+    bool allowPhysicalUnlink = false,
   });
 }
 
@@ -113,7 +123,29 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
     final dir = await _getEvidenceDirectory();
     final ext = mediaType == 'image/png' ? 'png' : 'jpg';
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final file = File('${dir.path}/${localDraftId}_$timestamp.$ext');
+
+    // Collision-resistant unique naming with non-overwriting creation semantics
+    for (int attempt = 0; attempt < 5; attempt++) {
+      final uniqueSuffix = generateUuid();
+      final file = File(
+        '${dir.path}/${localDraftId}_${timestamp}_$uniqueSuffix.$ext',
+      );
+      try {
+        file.createSync(exclusive: true);
+        file.writeAsBytesSync(bytes, flush: true);
+        return file.path;
+      } on PathExistsException {
+        continue;
+      } on FileSystemException {
+        if (file.existsSync()) continue;
+        rethrow;
+      }
+    }
+
+    final fallbackSuffix = generateUuid();
+    final file = File(
+      '${dir.path}/${localDraftId}_${timestamp}_$fallbackSuffix.$ext',
+    );
     file.writeAsBytesSync(bytes, flush: true);
     return file.path;
   }
@@ -124,8 +156,33 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
     required List<int> bytes,
   }) async {
     final dir = await _getEvidenceDirectory();
+    final sanitizedBase = p
+        .basename(fileName)
+        .replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final file = File('${dir.path}/${timestamp}_$fileName');
+
+    // Collision-resistant unique naming with non-overwriting creation semantics
+    for (int attempt = 0; attempt < 5; attempt++) {
+      final uniqueSuffix = generateUuid();
+      final file = File(
+        '${dir.path}/${timestamp}_${uniqueSuffix}_$sanitizedBase',
+      );
+      try {
+        file.createSync(exclusive: true);
+        file.writeAsBytesSync(bytes, flush: true);
+        return file.path;
+      } on PathExistsException {
+        continue;
+      } on FileSystemException {
+        if (file.existsSync()) continue;
+        rethrow;
+      }
+    }
+
+    final fallbackSuffix = generateUuid();
+    final file = File(
+      '${dir.path}/${timestamp}_${fallbackSuffix}_$sanitizedBase',
+    );
     file.writeAsBytesSync(bytes, flush: true);
     return file.path;
   }
@@ -178,6 +235,7 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
   Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
     required String filePath,
     required LocalDraftStore draftStore,
+    bool allowPhysicalUnlink = false,
   }) async {
     try {
       final Directory evidenceDir = await _getEvidenceDirectory();
@@ -290,7 +348,19 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
         );
       }
 
-      // 6. Physical unlink
+      // 6. Conservative retention enforcement (Phase 6 Slice 4B-0 R26-3-02):
+      // Normal draft edit/delete flows retain physical evidence files conservatively
+      // to eliminate cross-connection reference-check-to-unlink gaps completely without
+      // risking destruction of unverified evidence.
+      if (!allowPhysicalUnlink) {
+        return EvidenceFileDeletionResult(
+          status: EvidenceFileDeletionStatus.preservedConservative,
+          filePath: filePath,
+          reason: 'Preserved under Phase 6 Slice 4B-0 conservative evidence retention policy.',
+        );
+      }
+
+      // 7. Physical unlink (when explicitly authorized)
       try {
         file.deleteSync();
         return EvidenceFileDeletionResult(

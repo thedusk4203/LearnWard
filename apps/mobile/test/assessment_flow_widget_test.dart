@@ -62,6 +62,7 @@ class FakeLocalEvidenceFileStore implements LocalEvidenceFileStore {
   Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
     required String filePath,
     required LocalDraftStore draftStore,
+    bool allowPhysicalUnlink = false,
   }) async {
     final count = await draftStore.countDraftReferencesToFile(filePath);
     if (count > 0) {
@@ -69,6 +70,13 @@ class FakeLocalEvidenceFileStore implements LocalEvidenceFileStore {
         status: EvidenceFileDeletionStatus.preservedReferenced,
         filePath: filePath,
         referenceCount: count,
+      );
+    }
+    if (!allowPhysicalUnlink) {
+      return EvidenceFileDeletionResult(
+        status: EvidenceFileDeletionStatus.preservedConservative,
+        filePath: filePath,
+        reason: 'Preserved under Slice 4B-0 conservative retention.',
       );
     }
     if (!files.containsKey(filePath)) {

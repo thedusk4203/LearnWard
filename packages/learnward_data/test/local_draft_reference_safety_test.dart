@@ -199,344 +199,453 @@ void main() {
     );
   });
 
-  group(
-    'R26-01: Atomic State-Aware Draft Deletion & Concurrency Regression Tests',
-    () {
-      late Directory tempDir;
-      late File dbFile;
-      late AppDatabase conn1;
-      late AppDatabase conn2;
+  group('R26-01: Atomic State-Aware Draft Deletion & Concurrency Regression Tests', () {
+    late Directory tempDir;
+    late File dbFile;
+    late AppDatabase conn1;
+    late AppDatabase conn2;
 
-      final childId = ChildId('child-cas-1');
-      final familyId = 'fam-cas-1';
-      final now = DateTime.utc(2026, 11, 9, 12, 0);
+    final childId = ChildId('child-cas-1');
+    final familyId = 'fam-cas-1';
+    final now = DateTime.utc(2026, 11, 9, 12, 0);
 
-      setUp(() {
-        tempDir = Directory.systemTemp.createTempSync('learnward_cas_safety_');
-        dbFile = File('${tempDir.path}/cas_test.sqlite');
-        conn1 = AppDatabase(NativeDatabase(dbFile));
-        conn2 = AppDatabase(NativeDatabase(dbFile));
-      });
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('learnward_cas_safety_');
+      dbFile = File('${tempDir.path}/cas_test.sqlite');
+      conn1 = AppDatabase(NativeDatabase(dbFile));
+      conn2 = AppDatabase(NativeDatabase(dbFile));
+    });
 
-      tearDown(() async {
-        await conn1.close();
-        await conn2.close();
-        if (tempDir.existsSync()) {
-          try {
-            tempDir.deleteSync(recursive: true);
-          } catch (_) {}
-        }
-      });
-
-      LocalAssessmentDraft buildDraft({
-        required String draftId,
-        String? photoPath,
-        CommandDispatchState dispatchState =
-            CommandDispatchState.neverDispatched,
-        DraftSubmissionStatus submissionStatus = DraftSubmissionStatus.draft,
-        String? leaseToken,
-        DateTime? leaseExpiresAt,
-        DateTime? updatedAt,
-        String title = 'Test Assessment',
-        double rawScore = 8.0,
-        double maxScore = 10.0,
-      }) {
-        return LocalAssessmentDraft(
-          localDraftId: draftId,
-          familyId: familyId,
-          childId: childId.value,
-          subjectKey: SubjectKey.math,
-          subject: 'Math',
-          title: title,
-          assessmentType: 'quiz',
-          difficulty: 'normal',
-          rawScore: rawScore,
-          maxScore: maxScore,
-          localPhotoPath: photoPath,
-          occurredAt: now,
-          updatedAt: updatedAt ?? now,
-          dispatchState: dispatchState,
-          submissionStatus: submissionStatus,
-          leaseToken: leaseToken,
-          leaseExpiresAt: leaseExpiresAt,
-        );
+    tearDown(() async {
+      await conn1.close();
+      await conn2.close();
+      if (tempDir.existsSync()) {
+        try {
+          tempDir.deleteSync(recursive: true);
+        } catch (_) {}
       }
+    });
 
-      test('Draft mutated to possiblyDispatched on independent connection rejects deletion with blockedUnsafeState', () async {
-        final photoFile = File('${tempDir.path}/evidence_disp.jpg')
-          ..writeAsBytesSync([1, 2, 3]);
+    LocalAssessmentDraft buildDraft({
+      required String draftId,
+      String? photoPath,
+      CommandDispatchState dispatchState = CommandDispatchState.neverDispatched,
+      DraftSubmissionStatus submissionStatus = DraftSubmissionStatus.draft,
+      String? leaseToken,
+      DateTime? leaseExpiresAt,
+      DateTime? updatedAt,
+      String title = 'Test Assessment',
+      double rawScore = 8.0,
+      double maxScore = 10.0,
+    }) {
+      return LocalAssessmentDraft(
+        localDraftId: draftId,
+        familyId: familyId,
+        childId: childId.value,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: title,
+        assessmentType: 'quiz',
+        difficulty: 'normal',
+        rawScore: rawScore,
+        maxScore: maxScore,
+        localPhotoPath: photoPath,
+        occurredAt: now,
+        updatedAt: updatedAt ?? now,
+        dispatchState: dispatchState,
+        submissionStatus: submissionStatus,
+        leaseToken: leaseToken,
+        leaseExpiresAt: leaseExpiresAt,
+      );
+    }
+
+    test('Draft mutated to possiblyDispatched on independent connection rejects deletion with blockedUnsafeState', () async {
+      final photoFile = File('${tempDir.path}/evidence_disp.jpg')
+        ..writeAsBytesSync([1, 2, 3]);
+      final initialDraft = buildDraft(
+        draftId: 'd-conn-disp',
+        photoPath: photoFile.path,
+        dispatchState: CommandDispatchState.neverDispatched,
+        submissionStatus: DraftSubmissionStatus.draft,
+      );
+      await conn1.saveLocalDraft(initialDraft);
+
+      // Connection 2 transitions draft to possiblyDispatched
+      final dispatched = initialDraft.copyWith(
+        dispatchState: CommandDispatchState.possiblyDispatched,
+        updatedAt: now.add(const Duration(seconds: 1)),
+      );
+      await conn2.saveLocalDraft(dispatched);
+
+      // Connection 1 attempts deleteDraftSafely with snapshot of initialDraft
+      final outcome = await conn1.deleteDraftSafely(
+        localDraftId: 'd-conn-disp',
+        expectedDraft: initialDraft,
+        now: now,
+      );
+
+      expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
+      expect(outcome.isBlockedUnsafeState, isTrue);
+      expect(outcome.reason, contains('in-flight'));
+
+      // Both the draft row and the evidence file remain intact
+      final persisted = await conn1.getLocalDraft('d-conn-disp');
+      expect(persisted, isNotNull);
+      expect(
+        persisted!.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+      );
+      expect(photoFile.existsSync(), isTrue);
+    });
+
+    test('Unexpired lease acquired by another coordinator rejects deletion with blockedUnsafeState', () async {
+      final initialDraft = buildDraft(
+        draftId: 'd-conn-lease',
+        dispatchState: CommandDispatchState.neverDispatched,
+        submissionStatus: DraftSubmissionStatus.draft,
+      );
+      await conn1.saveLocalDraft(initialDraft);
+
+      // Connection 2 acquires an unexpired lease
+      final leased = initialDraft.copyWith(
+        leaseToken: 'worker-lease-token-99',
+        leaseExpiresAt: now.add(const Duration(minutes: 5)),
+        updatedAt: now.add(const Duration(seconds: 1)),
+      );
+      await conn2.saveLocalDraft(leased);
+
+      // Connection 1 attempts deleteDraftSafely
+      final outcome = await conn1.deleteDraftSafely(
+        localDraftId: 'd-conn-lease',
+        expectedDraft: initialDraft,
+        now: now,
+      );
+
+      expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
+      expect(outcome.isBlockedUnsafeState, isTrue);
+      expect(outcome.reason, contains('active lease'));
+
+      final persisted = await conn1.getLocalDraft('d-conn-lease');
+      expect(persisted, isNotNull);
+      expect(persisted!.leaseToken, equals('worker-lease-token-99'));
+    });
+
+    test(
+      'Draft marked unknownLegacy rejects deletion with blockedUnsafeState',
+      () async {
         final initialDraft = buildDraft(
-          draftId: 'd-conn-disp',
-          photoPath: photoFile.path,
+          draftId: 'd-conn-legacy',
           dispatchState: CommandDispatchState.neverDispatched,
-          submissionStatus: DraftSubmissionStatus.draft,
         );
         await conn1.saveLocalDraft(initialDraft);
 
-        // Connection 2 transitions draft to possiblyDispatched
-        final dispatched = initialDraft.copyWith(
-          dispatchState: CommandDispatchState.possiblyDispatched,
+        // Connection 2 marks it unknownLegacy
+        final legacy = initialDraft.copyWith(
+          dispatchState: CommandDispatchState.unknownLegacy,
           updatedAt: now.add(const Duration(seconds: 1)),
         );
-        await conn2.saveLocalDraft(dispatched);
+        await conn2.saveLocalDraft(legacy);
 
-        // Connection 1 attempts deleteDraftSafely with snapshot of initialDraft
         final outcome = await conn1.deleteDraftSafely(
-          localDraftId: 'd-conn-disp',
+          localDraftId: 'd-conn-legacy',
           expectedDraft: initialDraft,
           now: now,
         );
 
         expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
         expect(outcome.isBlockedUnsafeState, isTrue);
-        expect(outcome.reason, contains('in-flight'));
+        expect(outcome.reason, contains('migrated from a previous version'));
 
-        // Both the draft row and the evidence file remain intact
-        final persisted = await conn1.getLocalDraft('d-conn-disp');
-        expect(persisted, isNotNull);
-        expect(
-          persisted!.dispatchState,
-          equals(CommandDispatchState.possiblyDispatched),
-        );
-        expect(photoFile.existsSync(), isTrue);
-      });
+        expect(await conn1.getLocalDraft('d-conn-legacy'), isNotNull);
+      },
+    );
 
-      test('Unexpired lease acquired by another coordinator rejects deletion with blockedUnsafeState', () async {
-        final initialDraft = buildDraft(
-          draftId: 'd-conn-lease',
-          dispatchState: CommandDispatchState.neverDispatched,
-          submissionStatus: DraftSubmissionStatus.draft,
-        );
-        await conn1.saveLocalDraft(initialDraft);
+    test('Draft transitioning to submittingAssessment rejects deletion with blockedUnsafeState', () async {
+      final initialDraft = buildDraft(
+        draftId: 'd-conn-submitting',
+        submissionStatus: DraftSubmissionStatus.draft,
+      );
+      await conn1.saveLocalDraft(initialDraft);
 
-        // Connection 2 acquires an unexpired lease
-        final leased = initialDraft.copyWith(
-          leaseToken: 'worker-lease-token-99',
-          leaseExpiresAt: now.add(const Duration(minutes: 5)),
-          updatedAt: now.add(const Duration(seconds: 1)),
-        );
-        await conn2.saveLocalDraft(leased);
+      // Connection 2 transitions submissionStatus to submittingAssessment
+      final submitting = initialDraft.copyWith(
+        submissionStatus: DraftSubmissionStatus.submittingAssessment,
+        updatedAt: now.add(const Duration(seconds: 1)),
+      );
+      await conn2.saveLocalDraft(submitting);
 
-        // Connection 1 attempts deleteDraftSafely
-        final outcome = await conn1.deleteDraftSafely(
-          localDraftId: 'd-conn-lease',
-          expectedDraft: initialDraft,
-          now: now,
-        );
+      final outcome = await conn1.deleteDraftSafely(
+        localDraftId: 'd-conn-submitting',
+        expectedDraft: initialDraft,
+        now: now,
+      );
 
-        expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
-        expect(outcome.isBlockedUnsafeState, isTrue);
-        expect(outcome.reason, contains('active lease'));
+      expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
+      expect(outcome.isBlockedUnsafeState, isTrue);
+      expect(outcome.reason, contains('being submitted'));
 
-        final persisted = await conn1.getLocalDraft('d-conn-lease');
-        expect(persisted, isNotNull);
-        expect(persisted!.leaseToken, equals('worker-lease-token-99'));
-      });
+      expect(await conn1.getLocalDraft('d-conn-submitting'), isNotNull);
+    });
 
+    test('Draft transitioning to uploadingEvidence rejects deletion with blockedUnsafeState', () async {
+      final initialDraft = buildDraft(
+        draftId: 'd-conn-uploading',
+        submissionStatus: DraftSubmissionStatus.draft,
+      );
+      await conn1.saveLocalDraft(initialDraft);
+
+      final uploading = initialDraft.copyWith(
+        submissionStatus: DraftSubmissionStatus.uploadingEvidence,
+        updatedAt: now.add(const Duration(seconds: 1)),
+      );
+      await conn2.saveLocalDraft(uploading);
+
+      final outcome = await conn1.deleteDraftSafely(
+        localDraftId: 'd-conn-uploading',
+        expectedDraft: initialDraft,
+        now: now,
+      );
+
+      expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
+      expect(outcome.isBlockedUnsafeState, isTrue);
+      expect(outcome.reason, contains('being uploaded'));
+
+      expect(await conn1.getLocalDraft('d-conn-uploading'), isNotNull);
+    });
+
+    test('Draft transitioning to failedRetryable rejects deletion with blockedUnsafeState', () async {
+      final initialDraft = buildDraft(
+        draftId: 'd-conn-retryable',
+        submissionStatus: DraftSubmissionStatus.draft,
+      );
+      await conn1.saveLocalDraft(initialDraft);
+
+      final retryable = initialDraft.copyWith(
+        submissionStatus: DraftSubmissionStatus.failedRetryable,
+        updatedAt: now.add(const Duration(seconds: 1)),
+      );
+      await conn2.saveLocalDraft(retryable);
+
+      final outcome = await conn1.deleteDraftSafely(
+        localDraftId: 'd-conn-retryable',
+        expectedDraft: initialDraft,
+        now: now,
+      );
+
+      expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
+      expect(outcome.isBlockedUnsafeState, isTrue);
+      expect(outcome.reason, contains('queued for retry'));
+
+      expect(await conn1.getLocalDraft('d-conn-retryable'), isNotNull);
+    });
+
+    test('Draft photo reference changed while confirmation was pending rejects with concurrencyConflict', () async {
+      final initialPhoto = File('${tempDir.path}/photo_initial.jpg')
+        ..writeAsBytesSync([10]);
+      final newPhoto = File('${tempDir.path}/photo_new.jpg')
+        ..writeAsBytesSync([20]);
+
+      final initialDraft = buildDraft(
+        draftId: 'd-conn-photo-change',
+        photoPath: initialPhoto.path,
+      );
+      await conn1.saveLocalDraft(initialDraft);
+
+      // Connection 2 changes the photo reference
+      final photoChanged = initialDraft.copyWith(
+        localPhotoPath: newPhoto.path,
+        updatedAt: now.add(const Duration(seconds: 2)),
+      );
+      await conn2.saveLocalDraft(photoChanged);
+
+      // Connection 1 attempts deleteDraftSafely with original snapshot
+      final outcome = await conn1.deleteDraftSafely(
+        localDraftId: 'd-conn-photo-change',
+        expectedDraft: initialDraft,
+        now: now,
+      );
+
+      expect(outcome.status, equals(DraftDeletionStatus.concurrencyConflict));
+      expect(outcome.isConcurrencyConflict, isTrue);
+
+      // The draft and new photo are preserved
+      final persisted = await conn1.getLocalDraft('d-conn-photo-change');
+      expect(persisted, isNotNull);
+      expect(persisted!.localPhotoPath, equals(newPhoto.path));
+      expect(newPhoto.existsSync(), isTrue);
+    });
+
+    test('Draft title or score modified while confirmation was pending rejects with concurrencyConflict', () async {
+      final initialDraft = buildDraft(
+        draftId: 'd-conn-edit',
+        title: 'Original Title',
+        rawScore: 5.0,
+      );
+      await conn1.saveLocalDraft(initialDraft);
+
+      // Connection 2 modifies draft content
+      final edited = initialDraft.copyWith(
+        title: 'Modified Title',
+        rawScore: 9.5,
+        updatedAt: now.add(const Duration(seconds: 3)),
+      );
+      await conn2.saveLocalDraft(edited);
+
+      final outcome = await conn1.deleteDraftSafely(
+        localDraftId: 'd-conn-edit',
+        expectedDraft: initialDraft,
+        now: now,
+      );
+
+      expect(outcome.status, equals(DraftDeletionStatus.concurrencyConflict));
+      expect(outcome.isConcurrencyConflict, isTrue);
+
+      final persisted = await conn1.getLocalDraft('d-conn-edit');
+      expect(persisted, isNotNull);
+      expect(persisted!.title, equals('Modified Title'));
+      expect(persisted.rawScore, equals(9.5));
+    });
+
+    test('Eligible unmodified draft deletes successfully via atomic CAS transaction', () async {
+      final photo = File('${tempDir.path}/delete_ok.jpg')
+        ..writeAsBytesSync([100]);
+      final initialDraft = buildDraft(
+        draftId: 'd-conn-ok',
+        photoPath: photo.path,
+      );
+      await conn1.saveLocalDraft(initialDraft);
+
+      // Fetch exact persisted record so timestamp representation matches
+      final persisted = await conn1.getLocalDraft('d-conn-ok');
+      expect(persisted, isNotNull);
+
+      final outcome = await conn1.deleteDraftSafely(
+        localDraftId: 'd-conn-ok',
+        expectedDraft: persisted!,
+        now: now,
+      );
+
+      expect(outcome.status, equals(DraftDeletionStatus.deleted));
+      expect(outcome.isDeleted, isTrue);
+
+      expect(await conn1.getLocalDraft('d-conn-ok'), isNull);
+      expect(await conn2.getLocalDraft('d-conn-ok'), isNull);
+    });
+
+    // -----------------------------------------------------------------------
+    // R26-3-01: Identity, command, evidence & photo mutations without bumped updatedAt
+    // -----------------------------------------------------------------------
+    for (final fieldMutation in [
+      (
+        'actorUserId',
+        (LocalAssessmentDraft d) => d.copyWith(actorUserId: 'new-actor-999'),
+      ),
+      (
+        'actorRole',
+        (LocalAssessmentDraft d) => d.copyWith(actorRole: 'parent'),
+      ),
+      (
+        'createCommandId',
+        (LocalAssessmentDraft d) =>
+            d.copyWith(createCommandId: 'cmd-create-diverged'),
+      ),
+      (
+        'submitCommandId',
+        (LocalAssessmentDraft d) =>
+            d.copyWith(submitCommandId: 'cmd-submit-diverged'),
+      ),
+      (
+        'evidenceId',
+        (LocalAssessmentDraft d) => d.copyWith(evidenceId: 'ev-id-diverged'),
+      ),
+      (
+        'serverAssessmentId',
+        (LocalAssessmentDraft d) =>
+            d.copyWith(serverAssessmentId: 'srv-assess-diverged'),
+      ),
+      (
+        'serverEvidenceId',
+        (LocalAssessmentDraft d) =>
+            d.copyWith(serverEvidenceId: 'srv-ev-diverged'),
+      ),
+      (
+        'localPhotoPath',
+        (LocalAssessmentDraft d) =>
+            d.copyWith(localPhotoPath: '${tempDir.path}/diverged_photo.jpg'),
+      ),
+      (
+        'localCompressedPhotoPath',
+        (LocalAssessmentDraft d) => d.copyWith(
+          localCompressedPhotoPath: '${tempDir.path}/diverged_comp.jpg',
+        ),
+      ),
+      (
+        'sha256Checksum',
+        (LocalAssessmentDraft d) =>
+            d.copyWith(sha256Checksum: 'abcdef1234567890'),
+      ),
+      (
+        'familyId',
+        (LocalAssessmentDraft d) => d.copyWith(familyId: 'fam-other'),
+      ),
+      ('childId', (LocalAssessmentDraft d) => d.copyWith(childId: 'c-other')),
+    ]) {
       test(
-        'Draft marked unknownLegacy rejects deletion with blockedUnsafeState',
+        'R26-3-01: Mutation to ${fieldMutation.$1} WITHOUT changing updatedAt rejects with concurrencyConflict',
         () async {
+          final photo = File('${tempDir.path}/photo_${fieldMutation.$1}.jpg')
+            ..writeAsBytesSync([10, 20, 30]);
           final initialDraft = buildDraft(
-            draftId: 'd-conn-legacy',
-            dispatchState: CommandDispatchState.neverDispatched,
+            draftId: 'd-mutation-${fieldMutation.$1}',
+            photoPath: photo.path,
           );
           await conn1.saveLocalDraft(initialDraft);
 
-          // Connection 2 marks it unknownLegacy
-          final legacy = initialDraft.copyWith(
-            dispatchState: CommandDispatchState.unknownLegacy,
-            updatedAt: now.add(const Duration(seconds: 1)),
+          final persisted = await conn1.getLocalDraft(
+            'd-mutation-${fieldMutation.$1}',
           );
-          await conn2.saveLocalDraft(legacy);
+          expect(persisted, isNotNull);
 
+          // Connection 2 modifies the target field WITHOUT bumping updatedAt
+          final mutated = fieldMutation
+              .$2(persisted!)
+              .copyWith(updatedAt: persisted.updatedAt);
+          await conn2.saveLocalDraft(mutated);
+
+          // Confirm in conn1 that updatedAt did NOT change
+          final afterConn2 = await conn1.getLocalDraft(
+            'd-mutation-${fieldMutation.$1}',
+          );
+          expect(
+            afterConn2!.updatedAt.isAtSameMomentAs(persisted.updatedAt),
+            isTrue,
+            reason: 'updatedAt must remain strictly identical to test non-timestamp CAS guard',
+          );
+
+          // Connection 1 attempts deleteDraftSafely using the original expected snapshot
           final outcome = await conn1.deleteDraftSafely(
-            localDraftId: 'd-conn-legacy',
-            expectedDraft: initialDraft,
+            localDraftId: 'd-mutation-${fieldMutation.$1}',
+            expectedDraft: persisted,
             now: now,
           );
 
           expect(
             outcome.status,
-            equals(DraftDeletionStatus.blockedUnsafeState),
+            equals(DraftDeletionStatus.concurrencyConflict),
+            reason:
+                'Divergence in ${fieldMutation.$1} must trigger concurrency conflict',
           );
-          expect(outcome.isBlockedUnsafeState, isTrue);
-          expect(outcome.reason, contains('migrated from a previous version'));
+          expect(outcome.isConcurrencyConflict, isTrue);
 
-          expect(await conn1.getLocalDraft('d-conn-legacy'), isNotNull);
+          // Draft and original photo file remain preserved
+          final surviving = await conn1.getLocalDraft(
+            'd-mutation-${fieldMutation.$1}',
+          );
+          expect(surviving, isNotNull);
+          expect(photo.existsSync(), isTrue);
+          expect(photo.readAsBytesSync(), equals([10, 20, 30]));
         },
       );
-
-      test('Draft transitioning to submittingAssessment rejects deletion with blockedUnsafeState', () async {
-        final initialDraft = buildDraft(
-          draftId: 'd-conn-submitting',
-          submissionStatus: DraftSubmissionStatus.draft,
-        );
-        await conn1.saveLocalDraft(initialDraft);
-
-        // Connection 2 transitions submissionStatus to submittingAssessment
-        final submitting = initialDraft.copyWith(
-          submissionStatus: DraftSubmissionStatus.submittingAssessment,
-          updatedAt: now.add(const Duration(seconds: 1)),
-        );
-        await conn2.saveLocalDraft(submitting);
-
-        final outcome = await conn1.deleteDraftSafely(
-          localDraftId: 'd-conn-submitting',
-          expectedDraft: initialDraft,
-          now: now,
-        );
-
-        expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
-        expect(outcome.isBlockedUnsafeState, isTrue);
-        expect(outcome.reason, contains('being submitted'));
-
-        expect(await conn1.getLocalDraft('d-conn-submitting'), isNotNull);
-      });
-
-      test('Draft transitioning to uploadingEvidence rejects deletion with blockedUnsafeState', () async {
-        final initialDraft = buildDraft(
-          draftId: 'd-conn-uploading',
-          submissionStatus: DraftSubmissionStatus.draft,
-        );
-        await conn1.saveLocalDraft(initialDraft);
-
-        final uploading = initialDraft.copyWith(
-          submissionStatus: DraftSubmissionStatus.uploadingEvidence,
-          updatedAt: now.add(const Duration(seconds: 1)),
-        );
-        await conn2.saveLocalDraft(uploading);
-
-        final outcome = await conn1.deleteDraftSafely(
-          localDraftId: 'd-conn-uploading',
-          expectedDraft: initialDraft,
-          now: now,
-        );
-
-        expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
-        expect(outcome.isBlockedUnsafeState, isTrue);
-        expect(outcome.reason, contains('being uploaded'));
-
-        expect(await conn1.getLocalDraft('d-conn-uploading'), isNotNull);
-      });
-
-      test('Draft transitioning to failedRetryable rejects deletion with blockedUnsafeState', () async {
-        final initialDraft = buildDraft(
-          draftId: 'd-conn-retryable',
-          submissionStatus: DraftSubmissionStatus.draft,
-        );
-        await conn1.saveLocalDraft(initialDraft);
-
-        final retryable = initialDraft.copyWith(
-          submissionStatus: DraftSubmissionStatus.failedRetryable,
-          updatedAt: now.add(const Duration(seconds: 1)),
-        );
-        await conn2.saveLocalDraft(retryable);
-
-        final outcome = await conn1.deleteDraftSafely(
-          localDraftId: 'd-conn-retryable',
-          expectedDraft: initialDraft,
-          now: now,
-        );
-
-        expect(outcome.status, equals(DraftDeletionStatus.blockedUnsafeState));
-        expect(outcome.isBlockedUnsafeState, isTrue);
-        expect(outcome.reason, contains('queued for retry'));
-
-        expect(await conn1.getLocalDraft('d-conn-retryable'), isNotNull);
-      });
-
-      test('Draft photo reference changed while confirmation was pending rejects with concurrencyConflict', () async {
-        final initialPhoto = File('${tempDir.path}/photo_initial.jpg')
-          ..writeAsBytesSync([10]);
-        final newPhoto = File('${tempDir.path}/photo_new.jpg')
-          ..writeAsBytesSync([20]);
-
-        final initialDraft = buildDraft(
-          draftId: 'd-conn-photo-change',
-          photoPath: initialPhoto.path,
-        );
-        await conn1.saveLocalDraft(initialDraft);
-
-        // Connection 2 changes the photo reference
-        final photoChanged = initialDraft.copyWith(
-          localPhotoPath: newPhoto.path,
-          updatedAt: now.add(const Duration(seconds: 2)),
-        );
-        await conn2.saveLocalDraft(photoChanged);
-
-        // Connection 1 attempts deleteDraftSafely with original snapshot
-        final outcome = await conn1.deleteDraftSafely(
-          localDraftId: 'd-conn-photo-change',
-          expectedDraft: initialDraft,
-          now: now,
-        );
-
-        expect(outcome.status, equals(DraftDeletionStatus.concurrencyConflict));
-        expect(outcome.isConcurrencyConflict, isTrue);
-
-        // The draft and new photo are preserved
-        final persisted = await conn1.getLocalDraft('d-conn-photo-change');
-        expect(persisted, isNotNull);
-        expect(persisted!.localPhotoPath, equals(newPhoto.path));
-        expect(newPhoto.existsSync(), isTrue);
-      });
-
-      test('Draft title or score modified while confirmation was pending rejects with concurrencyConflict', () async {
-        final initialDraft = buildDraft(
-          draftId: 'd-conn-edit',
-          title: 'Original Title',
-          rawScore: 5.0,
-        );
-        await conn1.saveLocalDraft(initialDraft);
-
-        // Connection 2 modifies draft content
-        final edited = initialDraft.copyWith(
-          title: 'Modified Title',
-          rawScore: 9.5,
-          updatedAt: now.add(const Duration(seconds: 3)),
-        );
-        await conn2.saveLocalDraft(edited);
-
-        final outcome = await conn1.deleteDraftSafely(
-          localDraftId: 'd-conn-edit',
-          expectedDraft: initialDraft,
-          now: now,
-        );
-
-        expect(outcome.status, equals(DraftDeletionStatus.concurrencyConflict));
-        expect(outcome.isConcurrencyConflict, isTrue);
-
-        final persisted = await conn1.getLocalDraft('d-conn-edit');
-        expect(persisted, isNotNull);
-        expect(persisted!.title, equals('Modified Title'));
-        expect(persisted.rawScore, equals(9.5));
-      });
-
-      test('Eligible unmodified draft deletes successfully via atomic CAS transaction', () async {
-        final photo = File('${tempDir.path}/delete_ok.jpg')
-          ..writeAsBytesSync([100]);
-        final initialDraft = buildDraft(
-          draftId: 'd-conn-ok',
-          photoPath: photo.path,
-        );
-        await conn1.saveLocalDraft(initialDraft);
-
-        // Fetch exact persisted record so timestamp representation matches
-        final persisted = await conn1.getLocalDraft('d-conn-ok');
-        expect(persisted, isNotNull);
-
-        final outcome = await conn1.deleteDraftSafely(
-          localDraftId: 'd-conn-ok',
-          expectedDraft: persisted!,
-          now: now,
-        );
-
-        expect(outcome.status, equals(DraftDeletionStatus.deleted));
-        expect(outcome.isDeleted, isTrue);
-
-        expect(await conn1.getLocalDraft('d-conn-ok'), isNull);
-        expect(await conn2.getLocalDraft('d-conn-ok'), isNull);
-      });
-    },
-  );
+    }
+  });
 }

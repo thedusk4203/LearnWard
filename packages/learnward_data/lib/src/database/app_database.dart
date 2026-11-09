@@ -463,17 +463,106 @@ class AppDatabase extends _$AppDatabase
         );
       }
 
-      // 3. Atomic CAS delete matching localDraftId, exact persisted updatedAt, dispatchState, and submissionStatus
+      // 3. Complete persisted-state CAS delete predicate:
+      // Does not rely solely on updatedAt as a revision counter; guards all durable
+      // identity, ownership, recovery, command, and evidence fields.
       final deleteQuery = delete(localAssessmentDrafts)
-        ..where(
-          (tbl) =>
-              tbl.localDraftId.equals(localDraftId) &
-              tbl.updatedAt.equals(row.updatedAt) &
-              tbl.dispatchState.equals(expectedDraft.dispatchState.wireValue) &
+        ..where((tbl) {
+          Expression<bool> predicate = tbl.localDraftId.equals(localDraftId);
+
+          // Revision & lifecycle state predicates
+          predicate = predicate & tbl.updatedAt.equals(row.updatedAt);
+          predicate =
+              predicate &
+              tbl.dispatchState.equals(expectedDraft.dispatchState.wireValue);
+          predicate =
+              predicate &
               tbl.submissionStatus.equals(
                 expectedDraft.submissionStatus.wireValue,
-              ),
-        );
+              );
+
+          // Identity & ownership predicates
+          predicate = predicate & tbl.familyId.equals(expectedDraft.familyId);
+          predicate = predicate & tbl.childId.equals(expectedDraft.childId);
+          if (expectedDraft.actorUserId == null) {
+            predicate = predicate & tbl.actorUserId.isNull();
+          } else {
+            predicate =
+                predicate & tbl.actorUserId.equals(expectedDraft.actorUserId!);
+          }
+          if (expectedDraft.actorRole == null) {
+            predicate = predicate & tbl.actorRole.isNull();
+          } else {
+            predicate =
+                predicate & tbl.actorRole.equals(expectedDraft.actorRole!);
+          }
+
+          // Command and server recovery IDs
+          if (expectedDraft.createCommandId == null) {
+            predicate = predicate & tbl.createCommandId.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.createCommandId.equals(expectedDraft.createCommandId!);
+          }
+          if (expectedDraft.submitCommandId == null) {
+            predicate = predicate & tbl.submitCommandId.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.submitCommandId.equals(expectedDraft.submitCommandId!);
+          }
+          if (expectedDraft.evidenceId == null) {
+            predicate = predicate & tbl.evidenceId.isNull();
+          } else {
+            predicate =
+                predicate & tbl.evidenceId.equals(expectedDraft.evidenceId!);
+          }
+          if (expectedDraft.serverAssessmentId == null) {
+            predicate = predicate & tbl.serverAssessmentId.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.serverAssessmentId.equals(
+                  expectedDraft.serverAssessmentId!,
+                );
+          }
+
+          // Evidence paths & checksums
+          if (expectedDraft.localPhotoPath == null) {
+            predicate = predicate & tbl.localPhotoPath.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.localPhotoPath.equals(expectedDraft.localPhotoPath!);
+          }
+          if (expectedDraft.localCompressedPhotoPath == null) {
+            predicate = predicate & tbl.localCompressedPhotoPath.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.localCompressedPhotoPath.equals(
+                  expectedDraft.localCompressedPhotoPath!,
+                );
+          }
+          if (expectedDraft.sha256Checksum == null) {
+            predicate = predicate & tbl.sha256Checksum.isNull();
+          } else {
+            predicate =
+                predicate &
+                tbl.sha256Checksum.equals(expectedDraft.sha256Checksum!);
+          }
+
+          // Lease token
+          if (expectedDraft.leaseToken == null) {
+            predicate = predicate & tbl.leaseToken.isNull();
+          } else {
+            predicate =
+                predicate & tbl.leaseToken.equals(expectedDraft.leaseToken!);
+          }
+
+          return predicate;
+        });
       final affectedRows = await deleteQuery.go();
 
       if (affectedRows == 1) {

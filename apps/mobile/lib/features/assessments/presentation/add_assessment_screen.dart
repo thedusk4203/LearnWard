@@ -309,21 +309,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       actorRole: resolvedActorRole,
     );
 
-    final priorPhotoPath = prior?.localPhotoPath;
-
     try {
       await store.saveLocalDraft(draft);
 
-      // B01 / B05: Reference-aware cleanup only AFTER the new draft state is durably committed
-      if (priorPhotoPath != null && priorPhotoPath != resolvedPhotoPath) {
-        try {
-          final fileStore = ref.read(localEvidenceFileStoreProvider);
-          await fileStore.deleteEvidenceIfUnreferenced(
-            filePath: priorPhotoPath,
-            draftStore: store,
-          );
-        } catch (_) {}
-      }
+      // Phase 6 Slice 4B-0 (R26-3-02):
+      // Conservative evidence retention: when replacing a photo on a draft,
+      // the prior physical evidence file is intentionally retained on disk
+      // to guarantee zero unverified data loss across concurrent drafts and recovery.
 
       if (mounted) {
         ScaffoldMessenger.of(
