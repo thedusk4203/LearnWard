@@ -173,6 +173,8 @@ jobs:
         run: flutter pub get
 
       - name: Pre-fetch Gradle 9.3.1 distribution with SHA-256 verification
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           WRAPPER_DIR="$HOME/.gradle/wrapper/dists/gradle-9.3.1-all/9ot9r568e8zfvvd4mn8rbu1j0"
           mkdir -p "$WRAPPER_DIR"
@@ -180,7 +182,10 @@ jobs:
           EXPECTED_SHA256="17f277867f6914d61b1aa02efab1ba7bb439ad652ca485cd8ca6842fccec6e43"
           if [ ! -f "$WRAPPER_DIR/gradle-9.3.1-all.zip.ok" ]; then
             echo "Downloading Gradle 9.3.1 distribution..."
-            curl -fSL --retry 3 --retry-delay 2 "https://services.gradle.org/distributions/gradle-9.3.1-all.zip" -o "$ZIP_PATH"
+            if ! curl -fSL --retry 2 --retry-delay 2 "https://services.gradle.org/distributions/gradle-9.3.1-all.zip" -o "$ZIP_PATH"; then
+              echo "Falling back to gh release download for Gradle..."
+              gh release download v9.3.1 --repo gradle/gradle-distributions --pattern "gradle-9.3.1-all.zip" --output "$ZIP_PATH" --clobber
+            fi
             echo "$EXPECTED_SHA256  $ZIP_PATH" | sha256sum -c -
             unzip -q -o "$ZIP_PATH" -d "$WRAPPER_DIR"
             touch "$WRAPPER_DIR/gradle-9.3.1-all.zip.ok"
