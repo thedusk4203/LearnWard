@@ -227,15 +227,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TARGET_DIR="$HOME/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/2.2.21/b13aed5cf8412f9ee9d1e4db21bdcfebcc24f606"
-          mkdir -p "$TARGET_DIR"
-          TARGET_JAR="$TARGET_DIR/kotlin-compiler-embeddable-2.2.21.jar"
-          EXPECTED_SHA256="9588fa696ac5507af764fd5660df6894185e12704ec1bc3f5cb772af4987f295"
-          if [ ! -f "$TARGET_JAR" ] || ! echo "$EXPECTED_SHA256  $TARGET_JAR" | sha256sum -c --status; then
-            echo "Pre-fetching kotlin-compiler-embeddable-2.2.21.jar via gh release..."
-            gh release download v2.2.21 --repo JetBrains/kotlin --pattern "kotlin-compiler-embeddable-2.2.21.jar" --output "$TARGET_JAR" --clobber
-            echo "$EXPECTED_SHA256  $TARGET_JAR" | sha256sum -c -
-          fi
+          KOTLIN_JARS=(
+            "2.2.21:b13aed5cf8412f9ee9d1e4db21bdcfebcc24f606:9588fa696ac5507af764fd5660df6894185e12704ec1bc3f5cb772af4987f295"
+            "2.4.0:f1a24af8bd111a83950236b1aec7a6d72a97e92c:c2b25e8c1c93ec416ba4327f5e31eaec0f0c8847241b9353e294b8db9dce564f"
+          )
+          for item in "${KOTLIN_JARS[@]}"; do
+            IFS=":" read -r ver sha1 sha256 <<< "$item"
+            target_dir="$HOME/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/$ver/$sha1"
+            mkdir -p "$target_dir"
+            target_jar="$target_dir/kotlin-compiler-embeddable-$ver.jar"
+            if [ ! -f "$target_jar" ] || ! echo "$sha256  $target_jar" | sha256sum -c --status; then
+              echo "Pre-fetching kotlin-compiler-embeddable-$ver.jar via gh release..."
+              gh release download "v$ver" --repo JetBrains/kotlin --pattern "kotlin-compiler-embeddable-$ver.jar" --output "$target_jar" --clobber
+              echo "$sha256  $target_jar" | sha256sum -c -
+            fi
+          done
 
       - name: Build debug APK
         run: flutter build apk --debug
