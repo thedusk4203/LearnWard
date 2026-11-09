@@ -1087,6 +1087,12 @@ void main() {
       expect(migratedDraft.canAutoSubmit, isFalse);
 
       final trackingRepo = _TrackingAssessmentRepository();
+      fakeEvidenceFileStore
+          .files['/data/user/0/com.learnward/cache/photo_offline.jpg'] = [
+        1,
+        2,
+        3,
+      ];
 
       // 3. Open in AddAssessmentScreen under a DIFFERENT signed-in adult
       await tester.pumpWidget(

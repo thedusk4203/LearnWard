@@ -11,6 +11,23 @@ import 'evidence_picker_service.dart';
 
 /// Screen where a learner captures an academic result, attaches evidence,
 /// and either saves a local draft or submits for parent review.
+enum ExistingEvidenceRestorationStatus {
+  /// Draft had no evidence attachment initially.
+  none,
+
+  /// File loading/verification from disk is in progress.
+  loading,
+
+  /// File was verified and loaded into memory successfully.
+  restored,
+
+  /// Referenced file is missing or unreadable on local disk.
+  missingOrUnreadable,
+
+  /// User explicitly requested removal of the attachment.
+  removed,
+}
+
 class AddAssessmentScreen extends ConsumerStatefulWidget {
   const AddAssessmentScreen({super.key, this.initialDraft});
 
@@ -45,6 +62,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   bool _isQuarantined = false;
   bool _evidenceRemoved = false;
   bool _evidenceSaveFailed = false;
+  ExistingEvidenceRestorationStatus _restorationStatus =
+      ExistingEvidenceRestorationStatus.none;
+  int _restorationGeneration = 0;
+  String? _unrestoredPhotoPath;
   String? _errorMessage;
   double? _liveNormalizedScore;
 
@@ -73,7 +94,11 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _selectedDifficulty = AssessmentDifficulty.fromValue(draft.difficulty);
       _occurredAt = draft.occurredAt;
       if (draft.localPhotoPath != null) {
+        _unrestoredPhotoPath = draft.localPhotoPath;
+        _restorationStatus = ExistingEvidenceRestorationStatus.loading;
         _restoreEvidenceFile(draft.localPhotoPath!);
+      } else {
+        _restorationStatus = ExistingEvidenceRestorationStatus.none;
       }
     } else {
       _localDraftId = generateUuid();
@@ -92,6 +117,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _selectedType = AssessmentType.quiz;
       _selectedDifficulty = AssessmentDifficulty.normal;
       _occurredAt = DateTime.now();
+      _restorationStatus = ExistingEvidenceRestorationStatus.none;
     }
 
     _rawScoreController.addListener(_updateScorePreview);
@@ -100,15 +126,20 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   Future<void> _restoreEvidenceFile(String path) async {
+    final generation = ++_restorationGeneration;
     try {
       final store = ref.read(localEvidenceFileStoreProvider);
       final bytes = await store.loadEvidence(path);
-      if (bytes != null && mounted) {
+      if (!mounted || generation != _restorationGeneration) return;
+
+      if (bytes != null) {
         final fileName = path.split(RegExp(r'[/\\]')).last;
         final mediaType = fileName.toLowerCase().endsWith('.png')
             ? 'image/png'
             : 'image/jpeg';
         setState(() {
+          _restorationStatus = ExistingEvidenceRestorationStatus.restored;
+          _unrestoredPhotoPath = null;
           _selectedEvidence = SelectedEvidenceFile(
             bytes: bytes,
             fileName: fileName,
@@ -116,8 +147,27 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
             localPath: path,
           );
         });
+      } else {
+        setState(() {
+          _restorationStatus =
+              ExistingEvidenceRestorationStatus.missingOrUnreadable;
+          _errorMessage =
+              'Existing evidence file is missing or unreadable (${path.split(RegExp(r"[/\\]")).last}). '
+              'The draft cannot be saved or submitted without evidence. '
+              'Please attach a replacement photo or explicitly remove the attachment.';
+        });
       }
-    } catch (_) {}
+    } catch (e) {
+      if (!mounted || generation != _restorationGeneration) return;
+      setState(() {
+        _restorationStatus =
+            ExistingEvidenceRestorationStatus.missingOrUnreadable;
+        _errorMessage =
+            'Failed to read existing evidence file: $e. '
+            'The draft cannot be saved or submitted without evidence. '
+            'Please attach a replacement photo or explicitly remove the attachment.';
+      });
+    }
   }
 
   @override
@@ -169,10 +219,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         fileName: file.fileName,
         bytes: file.bytes,
       );
+      _restorationGeneration++;
       setState(() {
         _evidenceSaveFailed = false;
         _evidenceRemoved = false;
-        _evidenceId ??= generateUuid();
+        _unrestoredPhotoPath = null;
+        _restorationStatus = ExistingEvidenceRestorationStatus.restored;
+        _evidenceId ??= widget.initialDraft?.evidenceId ?? generateUuid();
         _selectedEvidence = SelectedEvidenceFile(
           bytes: file.bytes,
           fileName: file.fileName,
@@ -197,8 +250,11 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     // Removing an image from the UI must not immediately unlink its physical file.
     // Keep original evidence available on disk until a new draft state is durably
     // committed and a safe cleanup decision is authorized.
+    _restorationGeneration++;
     setState(() {
       _evidenceRemoved = true;
+      _restorationStatus = ExistingEvidenceRestorationStatus.removed;
+      _unrestoredPhotoPath = null;
       _selectedEvidence = null;
       _evidenceId = null;
       _evidenceSaveFailed = false;
@@ -225,6 +281,23 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   Future<void> _saveLocalDraft() async {
+    // R26-6-01: Evidence restoration in progress or missing/unreadable must fail closed.
+    if (_restorationStatus == ExistingEvidenceRestorationStatus.loading) {
+      setState(() {
+        _errorMessage = 'Evidence restoration is in progress. Please wait a moment before saving.';
+      });
+      return;
+    }
+    if (_restorationStatus ==
+        ExistingEvidenceRestorationStatus.missingOrUnreadable) {
+      setState(() {
+        _errorMessage =
+            'Cannot save draft: existing evidence is missing or unreadable. '
+            'Please attach a replacement photo or explicitly remove the attachment.';
+      });
+      return;
+    }
+
     // R26-5-01: If newly selected evidence persistence failed, do not report draft saved locally.
     if (_evidenceSaveFailed) {
       setState(() {
@@ -371,6 +444,23 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       return;
     }
 
+    // R26-6-01: Evidence restoration in progress or missing/unreadable must fail closed.
+    if (_restorationStatus == ExistingEvidenceRestorationStatus.loading) {
+      setState(() {
+        _errorMessage = 'Evidence restoration is in progress. Please wait a moment before submitting.';
+      });
+      return;
+    }
+    if (_restorationStatus ==
+        ExistingEvidenceRestorationStatus.missingOrUnreadable) {
+      setState(() {
+        _errorMessage =
+            'Cannot submit assessment: existing evidence is missing or unreadable. '
+            'Please attach a replacement photo or explicitly remove the attachment.';
+      });
+      return;
+    }
+
     // R26-5-01: Do not begin a remote submission involving a newly selected attachment whose durable persistence failed.
     if (_evidenceSaveFailed) {
       setState(() {
@@ -420,6 +510,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
       _serverAssessmentId ??= prior?.serverAssessmentId;
 
+      final resolvedPhotoPath = _evidenceRemoved
+          ? null
+          : (_selectedEvidence?.localPath ?? prior?.localPhotoPath);
+      final resolvedEvidenceId = _evidenceRemoved
+          ? null
+          : (_evidenceId ?? prior?.evidenceId);
+
       // Persist local draft state before submitting so that any crash/drop
       // during or before submit preserves the stable command and evidence IDs.
       final localDraft = LocalAssessmentDraft(
@@ -428,7 +525,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         childId: activeChild.id.value,
         createCommandId: _createCommandId,
         submitCommandId: _submitCommandId,
-        evidenceId: _evidenceId,
+        evidenceId: resolvedEvidenceId,
         serverAssessmentId: _serverAssessmentId,
         subjectKey: _selectedSubjectKey,
         subject: _subjectController.text.trim().isEmpty
@@ -441,7 +538,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         difficulty: _selectedDifficulty.value,
         rawScore: raw,
         maxScore: max,
-        localPhotoPath: _selectedEvidence?.localPath,
+        localPhotoPath: resolvedPhotoPath,
         occurredAt: _occurredAt,
         updatedAt: DateTime.now().toUtc(),
         entryContext: EntryContext.sharedChild,
@@ -463,8 +560,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         localDraftStore: store,
       );
 
-      final evidenceIdObj = _evidenceId != null
-          ? EvidenceId(_evidenceId!)
+      final evidenceIdObj = resolvedEvidenceId != null
+          ? EvidenceId(resolvedEvidenceId)
           : null;
 
       await submitUseCase(
@@ -480,8 +577,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         score: AssessmentScore(rawScore: raw, maxScore: max),
         occurredAt: _occurredAt,
         entryContext: EntryContext.sharedChild,
-        evidenceBytes: _selectedEvidence?.bytes,
-        evidenceMediaType: _selectedEvidence?.mediaType,
+        evidenceBytes: _evidenceRemoved ? null : _selectedEvidence?.bytes,
+        evidenceMediaType: _evidenceRemoved
+            ? null
+            : _selectedEvidence?.mediaType,
         evidenceId: evidenceIdObj,
         localDraftId: _localDraftId,
       );
@@ -600,7 +699,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                   ),
                                 ),
                               ),
-                              if (_evidenceSaveFailed)
+                              if (_evidenceSaveFailed ||
+                                  _restorationStatus ==
+                                      ExistingEvidenceRestorationStatus
+                                          .missingOrUnreadable)
                                 TextButton(
                                   key: const Key(
                                     'dismiss_evidence_error_button',
@@ -848,7 +950,118 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                               style: TextStyle(fontSize: 12),
                             ),
                             const SizedBox(height: AppSpacing.sm),
-                            if (_selectedEvidence != null)
+                            if (_restorationStatus ==
+                                ExistingEvidenceRestorationStatus.loading)
+                              Row(
+                                children: [
+                                  const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                  const SizedBox(width: AppSpacing.sm),
+                                  Expanded(
+                                    child: Text(
+                                      'Verifying existing evidence photo...',
+                                      style: theme.textTheme.bodySmall,
+                                    ),
+                                  ),
+                                  TextButton.icon(
+                                    key: const Key('attach_evidence_button'),
+                                    icon: const Icon(
+                                      Icons.add_a_photo,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Change Photo'),
+                                    onPressed: _pickEvidence,
+                                  ),
+                                ],
+                              )
+                            else if (_restorationStatus ==
+                                ExistingEvidenceRestorationStatus
+                                    .missingOrUnreadable)
+                              Container(
+                                padding: const EdgeInsets.all(AppSpacing.sm),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.errorContainer
+                                      .withValues(alpha: 0.5),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: theme.colorScheme.error,
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.broken_image_outlined,
+                                          color: theme.colorScheme.error,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: AppSpacing.sm),
+                                        Expanded(
+                                          child: Text(
+                                            'Attached photo is missing or unreadable on disk',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: theme.colorScheme.error,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: AppSpacing.xs),
+                                    Text(
+                                      'Path: ${_unrestoredPhotoPath ?? 'unknown'}\n'
+                                      'To protect against data loss, you cannot save or submit until you attach a replacement photo or explicitly remove this attachment.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color:
+                                            theme.colorScheme.onErrorContainer,
+                                      ),
+                                    ),
+                                    const SizedBox(height: AppSpacing.sm),
+                                    Wrap(
+                                      spacing: AppSpacing.sm,
+                                      runSpacing: AppSpacing.xs,
+                                      children: [
+                                        OutlinedButton.icon(
+                                          key: const Key(
+                                            'attach_evidence_button',
+                                          ),
+                                          icon: const Icon(
+                                            Icons.add_a_photo,
+                                            size: 16,
+                                          ),
+                                          label: const Text(
+                                            'Attach Replacement',
+                                          ),
+                                          onPressed: _pickEvidence,
+                                        ),
+                                        TextButton.icon(
+                                          key: const Key(
+                                            'remove_evidence_button',
+                                          ),
+                                          icon: const Icon(
+                                            Icons.delete_outline,
+                                            size: 16,
+                                          ),
+                                          label: const Text(
+                                            'Remove Attachment',
+                                          ),
+                                          onPressed: _removeEvidence,
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else if (_selectedEvidence != null)
                               Row(
                                 children: [
                                   const Icon(

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -98,10 +99,19 @@ final class FailingSubmitAssessmentRepository extends FakeAssessmentRepository {
 }
 
 final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
-  FailingEvidenceFileStore({this.delegate, this.shouldFailSave = true});
+  FailingEvidenceFileStore({
+    this.delegate,
+    this.shouldFailSave = true,
+    this.shouldFailLoad = false,
+    this.shouldReturnNullLoad = false,
+    this.pendingLoadCompleter,
+  });
 
   final LocalEvidenceFileStore? delegate;
   bool shouldFailSave;
+  bool shouldFailLoad;
+  bool shouldReturnNullLoad;
+  Completer<List<int>?>? pendingLoadCompleter;
 
   @override
   Future<String> saveEvidence({
@@ -135,8 +145,20 @@ final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
   }
 
   @override
-  Future<List<int>?> loadEvidence(String filePath) async =>
-      delegate?.loadEvidence(filePath);
+  Future<List<int>?> loadEvidence(String filePath) async {
+    if (pendingLoadCompleter != null) {
+      return pendingLoadCompleter!.future;
+    }
+    if (shouldFailLoad) {
+      throw const FileSystemException(
+        'Simulated I/O disk error loading evidence file',
+      );
+    }
+    if (shouldReturnNullLoad) {
+      return null;
+    }
+    return delegate?.loadEvidence(filePath);
+  }
 
   @override
   Future<List<int>?> readEvidenceBytes(String filePath) async =>
@@ -2197,6 +2219,599 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Assessment submitted for review!'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (1): Existing draft references a missing physical file (returns null from fileStore)',
+      (tester) async {
+        final draft = buildDraft(
+          draftId: 'r26-6-missing-file',
+          photoPath: '${tempDir.path}/evidence/non_existent_photo.jpg',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        await tester.pumpWidget(
+          createTestHarness(
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Attached photo is missing or unreadable on disk'),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining(
+            'Existing evidence file is missing or unreadable',
+          ),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('attach_evidence_button')), findsOneWidget);
+        expect(find.byKey(const Key('remove_evidence_button')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (2): Existing evidence read returns null explicitly',
+      (tester) async {
+        final draft = buildDraft(
+          draftId: 'r26-6-null-read',
+          photoPath: '${tempDir.path}/evidence/photo.jpg',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        final failingStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: false,
+          shouldReturnNullLoad: true,
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingStore,
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Attached photo is missing or unreadable on disk'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (3): Existing evidence read throws an I/O exception (FileSystemException)',
+      (tester) async {
+        final draft = buildDraft(
+          draftId: 'r26-6-io-exception',
+          photoPath: '${tempDir.path}/evidence/corrupt.jpg',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        final failingStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: false,
+          shouldFailLoad: true,
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingStore,
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Attached photo is missing or unreadable on disk'),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining('Failed to read existing evidence file'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (4): Save after failed restoration: no false evidence-durability success',
+      (tester) async {
+        final draft = buildDraft(
+          draftId: 'r26-6-save-fail-closed',
+          photoPath: '${tempDir.path}/evidence/unreadable.jpg',
+          title: 'Original Title',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        final failingStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: false,
+          shouldReturnNullLoad: true,
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingStore,
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Attempt to edit title and save
+        await tester.enterText(
+          find.byKey(const Key('assessment_title_field')),
+          'Mutated Title Without Evidence',
+        );
+        await tester.pumpAndSettle();
+
+        await tester.ensureVisible(find.byKey(const Key('save_draft_button')));
+        await tester.tap(find.byKey(const Key('save_draft_button')));
+        await tester.pumpAndSettle();
+
+        // Must NOT report draft saved locally
+        expect(find.text('Draft saved locally.'), findsNothing);
+        expect(
+          find.textContaining(
+            'Cannot save draft: existing evidence is missing or unreadable',
+          ),
+          findsOneWidget,
+        );
+
+        // Database row must remain intact with original title
+        final persisted = await appDatabase.getLocalDraft(
+          'r26-6-save-fail-closed',
+        );
+        expect(persisted, isNotNull);
+        expect(persisted!.title, 'Original Title');
+        expect(
+          persisted.localPhotoPath,
+          '${tempDir.path}/evidence/unreadable.jpg',
+        );
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (5): Submit after failed restoration: zero remote mutations and draft remains intact',
+      (tester) async {
+        final draft = buildDraft(
+          draftId: 'r26-6-submit-fail-closed',
+          photoPath: '${tempDir.path}/evidence/unreadable.jpg',
+          title: 'Science Project',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        final failingStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: false,
+          shouldReturnNullLoad: true,
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingStore,
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        // Must NOT report submitted
+        expect(find.text('Assessment submitted for review!'), findsNothing);
+        expect(
+          find.textContaining(
+            'Cannot submit assessment: existing evidence is missing or unreadable',
+          ),
+          findsOneWidget,
+        );
+
+        // Zero remote mutations
+        expect(fakeAssessmentRepo.assessments.isEmpty, isTrue);
+        expect(fakeStorage.storage.isEmpty, isTrue);
+
+        // Database row must remain intact
+        final persisted = await appDatabase.getLocalDraft(
+          'r26-6-submit-fail-closed',
+        );
+        expect(persisted, isNotNull);
+        expect(
+          persisted!.localPhotoPath,
+          '${tempDir.path}/evidence/unreadable.jpg',
+        );
+        expect(persisted.submissionStatus, DraftSubmissionStatus.draft);
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (6): Restoration still pending when Save/Submit is attempted fails closed',
+      (tester) async {
+        final pendingLoadCompleter = Completer<List<int>?>();
+        final draft = buildDraft(
+          draftId: 'r26-6-pending-load',
+          photoPath: '${tempDir.path}/evidence/slow.jpg',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        final slowStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: false,
+          pendingLoadCompleter: pendingLoadCompleter,
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: slowStore,
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        // Pump frame without settling so load is still pending
+        await tester.pump();
+
+        expect(
+          find.text('Verifying existing evidence photo...'),
+          findsOneWidget,
+        );
+
+        // Save attempt while loading fails closed
+        await tester.ensureVisible(find.byKey(const Key('save_draft_button')));
+        await tester.tap(find.byKey(const Key('save_draft_button')));
+        await tester.pump();
+
+        expect(
+          find.text(
+            'Evidence restoration is in progress. Please wait a moment before saving.',
+          ),
+          findsOneWidget,
+        );
+
+        // Submit attempt while loading fails closed
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pump();
+
+        expect(
+          find.text(
+            'Evidence restoration is in progress. Please wait a moment before submitting.',
+          ),
+          findsOneWidget,
+        );
+
+        // Now complete the restoration
+        pendingLoadCompleter.complete([1, 2, 3, 4, 5]);
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('slow.jpg'), findsOneWidget);
+        expect(find.text('Verifying existing evidence photo...'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (7): New replacement succeeds after a restoration failure',
+      (tester) async {
+        final draft = buildDraft(
+          draftId: 'r26-6-replace-success',
+          photoPath: '${tempDir.path}/evidence/unreadable.jpg',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        final customStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: false,
+          shouldReturnNullLoad: true,
+        );
+        final picker = SimulatedEvidencePickerService(
+          stubFile: const SelectedEvidenceFile(
+            fileName: 'fresh_replacement.jpg',
+            bytes: [10, 20, 30, 40],
+            mediaType: 'image/jpeg',
+          ),
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: customStore,
+            customPicker: picker,
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Attached photo is missing or unreadable on disk'),
+          findsOneWidget,
+        );
+
+        // User attaches replacement
+        await tester.ensureVisible(
+          find.byKey(const Key('attach_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('attach_evidence_button')));
+        await tester.pumpAndSettle();
+
+        // Broken warning should be gone, replacement displayed
+        expect(
+          find.text('Attached photo is missing or unreadable on disk'),
+          findsNothing,
+        );
+        expect(find.textContaining('fresh_replacement.jpg'), findsOneWidget);
+
+        // Save succeeds
+        await tester.ensureVisible(find.byKey(const Key('save_draft_button')));
+        await tester.tap(find.byKey(const Key('save_draft_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Draft saved locally.'), findsOneWidget);
+        ScaffoldMessenger.of(tester.element(find.byType(Scaffold).first))
+            .clearSnackBars();
+        await tester.pumpAndSettle();
+
+        // Submit succeeds
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Assessment submitted for review!'), findsOneWidget);
+        expect(fakeAssessmentRepo.assessments.length, 1);
+        expect(fakeStorage.storage.length, 1);
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (8): Late restoration response cannot overwrite a newer user selection',
+      (tester) async {
+        final pendingLoadCompleter = Completer<List<int>?>();
+        final draft = buildDraft(
+          draftId: 'r26-6-epoch-token',
+          photoPath: '${tempDir.path}/evidence/slow_photo.jpg',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        final slowStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: false,
+          pendingLoadCompleter: pendingLoadCompleter,
+        );
+        final picker = SimulatedEvidencePickerService(
+          stubFile: const SelectedEvidenceFile(
+            fileName: 'newer_photo.jpg',
+            bytes: [9, 9, 9],
+            mediaType: 'image/jpeg',
+          ),
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: slowStore,
+            customPicker: picker,
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        // Pump frame, restoration in flight
+        await tester.pump();
+
+        // While pending, user picks a replacement photo
+        await tester.ensureVisible(
+          find.byKey(const Key('attach_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('attach_evidence_button')));
+        await tester.pump();
+
+        // Newer photo is now attached
+        expect(find.textContaining('newer_photo.jpg'), findsOneWidget);
+
+        // Now the slow load finally completes with the old photo bytes
+        pendingLoadCompleter.complete([1, 1, 1]);
+        await tester.pumpAndSettle();
+
+        // Newer selection MUST NOT be overwritten by the late restoration result
+        expect(find.textContaining('newer_photo.jpg'), findsOneWidget);
+        expect(find.textContaining('slow_photo.jpg'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (9): Restart preserves original IDs and recovery metadata in SQLite',
+      (tester) async {
+        final originalDraft = LocalAssessmentDraft(
+          localDraftId: 'r26-6-metadata-preserve',
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          createCommandId: 'cmd-create-original-999',
+          submitCommandId: 'cmd-submit-original-888',
+          evidenceId: 'ev-original-777',
+          serverAssessmentId: 'srv-original-666',
+          subjectKey: SubjectKey.english,
+          subject: 'English',
+          title: 'Spelling Essay',
+          assessmentType: 'exam',
+          difficulty: 'hard',
+          rawScore: 95.0,
+          maxScore: 100.0,
+          localPhotoPath: '${tempDir.path}/evidence/missing_essay.jpg',
+          occurredAt: now,
+          updatedAt: now,
+          entryContext: EntryContext.sharedChild,
+          actorUserId: 'actor-original-555',
+          actorRole: 'learner',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.draft,
+        );
+        await appDatabase.saveLocalDraft(originalDraft);
+
+        final failingStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: false,
+          shouldReturnNullLoad: true,
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: failingStore,
+            child: Scaffold(
+              body: AddAssessmentScreen(initialDraft: originalDraft),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Screen is open, restoration failed
+        expect(
+          find.text('Attached photo is missing or unreadable on disk'),
+          findsOneWidget,
+        );
+
+        // Attempt save (fails closed)
+        await tester.ensureVisible(find.byKey(const Key('save_draft_button')));
+        await tester.tap(find.byKey(const Key('save_draft_button')));
+        await tester.pumpAndSettle();
+
+        // Reload draft directly from SQLite to simulate app restart
+        final reloaded = await appDatabase.getLocalDraft(
+          'r26-6-metadata-preserve',
+        );
+        expect(reloaded, isNotNull);
+        expect(reloaded!.createCommandId, 'cmd-create-original-999');
+        expect(reloaded.submitCommandId, 'cmd-submit-original-888');
+        expect(reloaded.evidenceId, 'ev-original-777');
+        expect(reloaded.serverAssessmentId, 'srv-original-666');
+        expect(reloaded.actorUserId, 'actor-original-555');
+        expect(reloaded.actorRole, 'learner');
+        expect(
+          reloaded.localPhotoPath,
+          '${tempDir.path}/evidence/missing_essay.jpg',
+        );
+        expect(reloaded.dispatchState, CommandDispatchState.neverDispatched);
+        expect(reloaded.submissionStatus, DraftSubmissionStatus.draft);
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (10): Genuinely attachment-free draft saves and submits normally',
+      (tester) async {
+        final draft = buildDraft(
+          draftId: 'r26-6-no-attachment',
+          photoPath: null,
+          title: 'Math Mental Quiz',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        await tester.pumpWidget(
+          createTestHarness(
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // No broken image warning
+        expect(
+          find.text('Attached photo is missing or unreadable on disk'),
+          findsNothing,
+        );
+        expect(find.text('Attach Photo'), findsOneWidget);
+
+        // Save succeeds
+        await tester.ensureVisible(find.byKey(const Key('save_draft_button')));
+        await tester.tap(find.byKey(const Key('save_draft_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Draft saved locally.'), findsOneWidget);
+        ScaffoldMessenger.of(tester.element(find.byType(Scaffold).first))
+            .clearSnackBars();
+        await tester.pumpAndSettle();
+
+        // Submit succeeds
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Assessment submitted for review!'), findsOneWidget);
+        expect(fakeAssessmentRepo.assessments.length, 1);
+        expect(fakeStorage.storage.isEmpty, isTrue);
+      },
+    );
+
+    testWidgets(
+      'R26-6-01 (11): Explicitly removing unreadable attachment authorizes attachment-free save and submit',
+      (tester) async {
+        final draft = buildDraft(
+          draftId: 'r26-6-remove-unreadable',
+          photoPath: '${tempDir.path}/evidence/corrupt_unreadable.jpg',
+        );
+        await appDatabase.saveLocalDraft(draft);
+
+        final customStore = FailingEvidenceFileStore(
+          delegate: fileStore,
+          shouldFailSave: false,
+          shouldReturnNullLoad: true,
+        );
+
+        await tester.pumpWidget(
+          createTestHarness(
+            customFileStore: customStore,
+            child: Scaffold(body: AddAssessmentScreen(initialDraft: draft)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('Attached photo is missing or unreadable on disk'),
+          findsOneWidget,
+        );
+
+        // User explicitly taps "Remove Attachment"
+        await tester.ensureVisible(
+          find.byKey(const Key('remove_evidence_button')),
+        );
+        await tester.tap(find.byKey(const Key('remove_evidence_button')));
+        await tester.pumpAndSettle();
+
+        // Broken warning should be replaced with "Attach Photo"
+        expect(
+          find.text('Attached photo is missing or unreadable on disk'),
+          findsNothing,
+        );
+        expect(find.text('Attach Photo'), findsOneWidget);
+
+        // Save succeeds with attachment removed
+        await tester.ensureVisible(find.byKey(const Key('save_draft_button')));
+        await tester.tap(find.byKey(const Key('save_draft_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Draft saved locally.'), findsOneWidget);
+        ScaffoldMessenger.of(tester.element(find.byType(Scaffold).first))
+            .clearSnackBars();
+        await tester.pumpAndSettle();
+
+        final persisted = await appDatabase.getLocalDraft(
+          'r26-6-remove-unreadable',
+        );
+        expect(persisted!.localPhotoPath, isNull);
+        expect(persisted.evidenceId, isNull);
+
+        // Submit succeeds with zero evidence uploaded
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Assessment submitted for review!'), findsOneWidget);
+        expect(fakeAssessmentRepo.assessments.length, 1);
+        expect(fakeStorage.storage.isEmpty, isTrue);
       },
     );
   });
