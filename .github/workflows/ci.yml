@@ -244,14 +244,25 @@ jobs:
           )
           for item in "${KOTLIN_JARS[@]}"; do
             IFS=":" read -r ver sha1 sha256 <<< "$item"
+
+            # 1. Populate Maven local (~/.m2/repository)
+            m2_dir="$HOME/.m2/repository/org/jetbrains/kotlin/kotlin-compiler-embeddable/$ver"
+            mkdir -p "$m2_dir"
+            m2_jar="$m2_dir/kotlin-compiler-embeddable-$ver.jar"
+            m2_pom="$m2_dir/kotlin-compiler-embeddable-$ver.pom"
+            if [ ! -f "$m2_jar" ] || ! echo "$sha256  $m2_jar" | sha256sum -c --status; then
+              echo "Pre-fetching kotlin-compiler-embeddable-$ver.jar via gh release..."
+              gh release download "v$ver" --repo JetBrains/kotlin --pattern "kotlin-compiler-embeddable-$ver.jar" --output "$m2_jar" --clobber
+              echo "$sha256  $m2_jar" | sha256sum -c -
+            fi
+            if [ ! -f "$m2_pom" ]; then
+              curl -sSL "https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-compiler-embeddable/$ver/kotlin-compiler-embeddable-$ver.pom" -o "$m2_pom" || true
+            fi
+
+            # 2. Populate Gradle module cache (~/.gradle/caches/modules-2/files-2.1)
             target_dir="$HOME/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-compiler-embeddable/$ver/$sha1"
             mkdir -p "$target_dir"
-            target_jar="$target_dir/kotlin-compiler-embeddable-$ver.jar"
-            if [ ! -f "$target_jar" ] || ! echo "$sha256  $target_jar" | sha256sum -c --status; then
-              echo "Pre-fetching kotlin-compiler-embeddable-$ver.jar via gh release..."
-              gh release download "v$ver" --repo JetBrains/kotlin --pattern "kotlin-compiler-embeddable-$ver.jar" --output "$target_jar" --clobber
-              echo "$sha256  $target_jar" | sha256sum -c -
-            fi
+            cp "$m2_jar" "$target_dir/kotlin-compiler-embeddable-$ver.jar"
           done
 
       - name: Build debug APK
