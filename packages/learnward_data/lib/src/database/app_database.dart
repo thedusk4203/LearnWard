@@ -672,15 +672,27 @@ class AppDatabase extends _$AppDatabase
       try {
         return await transaction(() async {
           final query = select(pendingRewardCommands)
-            ..where((t) => t.familyId.equals(command.familyId))
-            ..where((t) => t.operation.equals(command.operation.wireValue));
+            ..where((t) => t.familyId.equals(command.familyId));
 
-          if (command.childId != null) {
-            query.where((t) => t.childId.equals(command.childId!));
-          }
-          if (command.operation == RewardCommandOperation.redeemReward &&
-              command.rewardId != null) {
-            query.where((t) => t.rewardId.equals(command.rewardId!));
+          if (command.operation == RewardCommandOperation.fulfillReward ||
+              command.operation == RewardCommandOperation.cancelReward) {
+            query
+              ..where((t) => t.redemptionId.equals(command.redemptionId!))
+              ..where(
+                (t) => t.operation.isIn([
+                  RewardCommandOperation.fulfillReward.wireValue,
+                  RewardCommandOperation.cancelReward.wireValue,
+                ]),
+              );
+          } else {
+            query.where((t) => t.operation.equals(command.operation.wireValue));
+            if (command.childId != null) {
+              query.where((t) => t.childId.equals(command.childId!));
+            }
+            if (command.operation == RewardCommandOperation.redeemReward &&
+                command.rewardId != null) {
+              query.where((t) => t.rewardId.equals(command.rewardId!));
+            }
           }
 
           final candidates = await query.get();
@@ -1061,6 +1073,26 @@ class AppDatabase extends _$AppDatabase
   // PHASE 6 SLICE 4A-0: ATOMIC CAS STORE OPERATIONS & FENCING
   // ---------------------------------------------------------------------------
 
+  static const String _operationEligibilityPredicate = '''
+    (
+      operation IN ('spin_wheel', 'redeem_reward')
+      OR (
+        operation = 'fulfill_reward'
+        AND child_id IS NOT NULL AND trim(child_id) <> ''
+        AND redemption_id IS NOT NULL AND trim(redemption_id) <> ''
+        AND cancellation_reason IS NULL
+        AND actor_role IN ('owner', 'parent')
+      )
+      OR (
+        operation = 'cancel_reward'
+        AND child_id IS NOT NULL AND trim(child_id) <> ''
+        AND redemption_id IS NOT NULL AND trim(redemption_id) <> ''
+        AND cancellation_reason IS NOT NULL AND length(trim(cancellation_reason)) >= 2
+        AND actor_role IN ('owner', 'parent')
+      )
+    )
+  ''';
+
   @override
   Future<String?> acquireClaim({
     required String commandId,
@@ -1081,7 +1113,7 @@ class AppDatabase extends _$AppDatabase
       WHERE command_id = ?
         AND actor_user_id = ?
         AND recovery_state = 'active'
-        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND $_operationEligibilityPredicate
         AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
         AND (
@@ -1144,13 +1176,14 @@ class AppDatabase extends _$AppDatabase
     final rowsAffected = await customUpdate(
       '''
       UPDATE pending_reward_commands
-      SET dispatch_state = 'possibly_dispatched'
+      SET dispatch_state = 'possibly_dispatched',
+          last_error_message = CASE WHEN last_error_message LIKE '[UNVERIFIED_TARGET_MISS:%' THEN NULL ELSE last_error_message END
       WHERE command_id = ?
         AND lease_token = ?
         AND lease_expires_at > ?
         AND actor_user_id = ?
         AND recovery_state = 'active'
-        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND $_operationEligibilityPredicate
         AND dispatch_state IN ('never_dispatched', 'possibly_dispatched');
       ''',
       variables: [
@@ -1232,7 +1265,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id IS NOT NULL
         AND actor_user_id <> ?
         AND recovery_state = 'active'
-        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND $_operationEligibilityPredicate
         AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
@@ -1273,7 +1306,7 @@ class AppDatabase extends _$AppDatabase
         AND family_id = ?
         AND actor_user_id = ?
         AND recovery_state = 'pending_original_actor'
-        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND $_operationEligibilityPredicate
         AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
@@ -1308,7 +1341,7 @@ class AppDatabase extends _$AppDatabase
       WHERE actor_user_id = ?
         ${familyId != null ? 'AND family_id = ?' : ''}
         AND recovery_state = 'active'
-        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND $_operationEligibilityPredicate
         AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
         AND (
@@ -1352,7 +1385,7 @@ class AppDatabase extends _$AppDatabase
         AND actor_user_id IS NOT NULL
         AND actor_user_id <> ?
         AND recovery_state = 'active'
-        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND $_operationEligibilityPredicate
         AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)
@@ -1393,7 +1426,7 @@ class AppDatabase extends _$AppDatabase
       WHERE family_id = ?
         AND actor_user_id = ?
         AND recovery_state = 'pending_original_actor'
-        AND operation IN ('spin_wheel', 'redeem_reward')
+        AND $_operationEligibilityPredicate
         AND dispatch_state IN ('never_dispatched', 'possibly_dispatched', 'confirmed_committed')
         AND (
           (lease_token IS NULL AND lease_expires_at IS NULL)

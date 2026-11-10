@@ -90,40 +90,94 @@ class _ParentFulfillmentInboxScreenState
     if (family == null) return;
 
     if (_inFlightRedemptionIds.contains(redemption.id.value) ||
-        _pendingUpdates.any((p) => p.redemptionId == redemption.id.value)) {
+        _pendingUpdates.any(
+          (p) => p.redemptionId == redemption.id.value && p.isCommandUnresolved,
+        )) {
       return;
     }
 
     setState(() => _inFlightRedemptionIds.add(redemption.id.value));
     try {
       final commandStore = ref.read(pendingRewardCommandStoreProvider);
+      final coordinator = ref.read(recoveryCoordinatorProvider);
       final fulfillUseCase = FulfillRewardRedemption(
         ref.read(rewardRepositoryProvider),
         commandStore,
+        coordinator: coordinator,
       );
-      await fulfillUseCase(familyId: family.id, redemptionId: redemption.id);
+      final result = await fulfillUseCase.executeResult(
+        familyId: family.id,
+        redemptionId: redemption.id,
+        childId: redemption.childId,
+        trigger: CommandExecutionTrigger.foreground,
+      );
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Delivered "${redemption.rewardTitle}" to ${_childNames[redemption.childId.value] ?? 'child'}!',
+        if (result is CommandCommittedResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Delivered "${redemption.rewardTitle}" to ${_childNames[redemption.childId.value] ?? 'child'}!',
+              ),
             ),
-          ),
-        );
+          );
+        } else if (result is CommandScheduledResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                "We're checking whether the delivery was saved. Tap retry if needed.",
+              ),
+            ),
+          );
+        } else if (result is CommandPendingOriginalActorResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Delivery pending confirmation by original parent.',
+              ),
+            ),
+          );
+        } else if (result is CommandQuarantinedResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Delivery requires review: ${result.reason}'),
+            ),
+          );
+        } else if (result is CommandTerminalRejectionResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to fulfill reward: ${result.errorMessage}'),
+            ),
+          );
+        } else if (result is CommandAuthUnavailableResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Authentication unavailable: ${result.reason}'),
+            ),
+          );
+        } else if (result is CommandFamilyMismatchResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Family mismatch during fulfillment execution.'),
+            ),
+          );
+        } else if (result is CommandAlreadyInFlightResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Fulfillment is already in progress.'),
+            ),
+          );
+        }
       }
       await _loadData();
     } catch (e) {
       await _loadData();
       if (mounted) {
-        final isTerminal =
-            e.toString().contains('LW204') ||
-            e.toString().contains('LW004') ||
-            e.toString().contains('InvalidRedemptionException');
-        final msg = isTerminal
-            ? 'Failed to fulfill reward: ${e.toString()}'
-            : "We're checking whether the delivery was saved. Tap retry if needed.";
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(msg)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fulfillment encountered an error: ${e.toString()}'),
+          ),
+        );
       }
     } finally {
       if (mounted) {
@@ -137,7 +191,9 @@ class _ParentFulfillmentInboxScreenState
     if (family == null) return;
 
     if (_inFlightRedemptionIds.contains(redemption.id.value) ||
-        _pendingUpdates.any((p) => p.redemptionId == redemption.id.value)) {
+        _pendingUpdates.any(
+          (p) => p.redemptionId == redemption.id.value && p.isCommandUnresolved,
+        )) {
       return;
     }
 
@@ -191,41 +247,94 @@ class _ParentFulfillmentInboxScreenState
       },
     );
 
-    if (confirmed == true && reasonController.text.trim().isNotEmpty) {
+    if (confirmed == true && reasonController.text.trim().length >= 2) {
       setState(() => _inFlightRedemptionIds.add(redemption.id.value));
       try {
         final commandStore = ref.read(pendingRewardCommandStoreProvider);
+        final coordinator = ref.read(recoveryCoordinatorProvider);
         final cancelUseCase = CancelRewardRedemption(
           ref.read(rewardRepositoryProvider),
           commandStore,
+          coordinator: coordinator,
         );
-        await cancelUseCase(
+        final result = await cancelUseCase.executeResult(
           familyId: family.id,
           redemptionId: redemption.id,
+          childId: redemption.childId,
           cancellationReason: reasonController.text.trim(),
+          trigger: CommandExecutionTrigger.foreground,
         );
+
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Cancelled. ${redemption.rpCost.toStringAsFixed(0)} RP refunded to balance.',
+          if (result is CommandCommittedResult) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Cancelled. ${redemption.rpCost.toStringAsFixed(0)} RP refunded to balance.',
+                ),
               ),
-            ),
-          );
+            );
+          } else if (result is CommandScheduledResult) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  "We're checking whether the cancellation was processed. Tap retry if needed.",
+                ),
+              ),
+            );
+          } else if (result is CommandPendingOriginalActorResult) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Cancellation pending confirmation by original parent.',
+                ),
+              ),
+            );
+          } else if (result is CommandQuarantinedResult) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Cancellation requires review: ${result.reason}'),
+              ),
+            );
+          } else if (result is CommandTerminalRejectionResult) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Failed to cancel reward: ${result.errorMessage}',
+                ),
+              ),
+            );
+          } else if (result is CommandAuthUnavailableResult) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Authentication unavailable: ${result.reason}'),
+              ),
+            );
+          } else if (result is CommandFamilyMismatchResult) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Family mismatch during cancellation execution.'),
+              ),
+            );
+          } else if (result is CommandAlreadyInFlightResult) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Cancellation is already in progress.'),
+              ),
+            );
+          }
         }
         await _loadData();
       } catch (e) {
         await _loadData();
         if (mounted) {
-          final isTerminal =
-              e.toString().contains('LW204') ||
-              e.toString().contains('LW004') ||
-              e.toString().contains('InvalidRedemptionException');
-          final msg = isTerminal
-              ? 'Failed to cancel reward: ${e.toString()}'
-              : "We're checking whether the cancellation was processed. Tap retry if needed.";
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(msg)));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Cancellation encountered an error: ${e.toString()}',
+              ),
+            ),
+          );
         }
       } finally {
         if (mounted) {
@@ -239,51 +348,137 @@ class _ParentFulfillmentInboxScreenState
     final family = ref.read(activeFamilyProvider);
     if (family == null || pending.redemptionId == null) return;
 
+    if (pending.operation == RewardCommandOperation.cancelReward &&
+        (pending.cancellationReason == null ||
+            pending.cancellationReason!.trim().length < 2)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Cannot retry cancellation: missing cancellation reason.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    final ChildId childId;
+    if (pending.childId != null && pending.childId!.isNotEmpty) {
+      childId = ChildId(pending.childId!);
+    } else {
+      final matching = _redemptions
+          .where((r) => r.id.value == pending.redemptionId)
+          .firstOrNull;
+      if (matching != null) {
+        childId = matching.childId;
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Cannot resolve pending update: child identity unknown.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+    }
+
     setState(() => _inFlightRedemptionIds.add(pending.redemptionId!));
     try {
       final commandStore = ref.read(pendingRewardCommandStoreProvider);
+      final coordinator = ref.read(recoveryCoordinatorProvider);
+      final CommandExecutionResult result;
+
       if (pending.operation == RewardCommandOperation.fulfillReward) {
         final fulfillUseCase = FulfillRewardRedemption(
           ref.read(rewardRepositoryProvider),
           commandStore,
+          coordinator: coordinator,
         );
-        await fulfillUseCase(
+        result = await fulfillUseCase.executeResult(
           commandId: pending.commandId,
           familyId: family.id,
           redemptionId: RewardRedemptionId(pending.redemptionId!),
+          childId: childId,
+          trigger: CommandExecutionTrigger.foregroundRetry,
         );
-      } else if (pending.operation == RewardCommandOperation.cancelReward) {
+      } else {
         final cancelUseCase = CancelRewardRedemption(
           ref.read(rewardRepositoryProvider),
           commandStore,
+          coordinator: coordinator,
         );
-        await cancelUseCase(
+        result = await cancelUseCase.executeResult(
           commandId: pending.commandId,
           familyId: family.id,
           redemptionId: RewardRedemptionId(pending.redemptionId!),
-          cancellationReason:
-              pending.cancellationReason ?? 'Cancelled by parent',
+          childId: childId,
+          cancellationReason: pending.cancellationReason!,
+          trigger: CommandExecutionTrigger.foregroundRetry,
         );
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pending reward update verified!')),
-        );
+        if (result is CommandCommittedResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Pending reward update verified!')),
+          );
+        } else if (result is CommandScheduledResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                "We're checking whether the update was processed. Tap retry to verify.",
+              ),
+            ),
+          );
+        } else if (result is CommandPendingOriginalActorResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Pending confirmation by original parent.'),
+            ),
+          );
+        } else if (result is CommandQuarantinedResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Pending update requires manual review: ${result.reason}',
+              ),
+            ),
+          );
+        } else if (result is CommandTerminalRejectionResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Update failed: ${result.errorMessage}')),
+          );
+        } else if (result is CommandAuthUnavailableResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Authentication unavailable: ${result.reason}'),
+            ),
+          );
+        } else if (result is CommandFamilyMismatchResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Family mismatch during pending update verification.',
+              ),
+            ),
+          );
+        } else if (result is CommandAlreadyInFlightResult) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Update is already being processed.')),
+          );
+        }
       }
       await _loadData();
     } catch (e) {
       await _loadData();
       if (mounted) {
-        final isTerminal =
-            e.toString().contains('LW204') ||
-            e.toString().contains('LW004') ||
-            e.toString().contains('InvalidRedemptionException');
-        final msg = isTerminal
-            ? 'Update failed: ${e.toString()}'
-            : "We're checking whether the update was processed. Tap retry to verify.";
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(msg)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Update failed: ${e.toString()}')),
+        );
       }
     } finally {
       if (mounted) {
@@ -335,45 +530,7 @@ class _ParentFulfillmentInboxScreenState
 
             // Pending Update Recovery Banner
             if (_pendingUpdates.isNotEmpty)
-              Container(
-                key: const Key('pending_fulfillment_recovery_banner'),
-                width: double.infinity,
-                margin: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md,
-                  vertical: AppSpacing.xs,
-                ),
-                padding: const EdgeInsets.all(AppSpacing.md),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.tertiaryContainer,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: theme.colorScheme.tertiary),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.hourglass_top,
-                      color: theme.colorScheme.onTertiaryContainer,
-                    ),
-                    const SizedBox(width: AppSpacing.md),
-                    Expanded(
-                      child: Text(
-                        "We're checking whether a reward update was completed.",
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onTertiaryContainer,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    FilledButton.tonal(
-                      key: const Key('retry_pending_fulfillment_button'),
-                      onPressed: _inFlightRedemptionIds.isNotEmpty
-                          ? null
-                          : () => _resolvePendingUpdate(_pendingUpdates.first),
-                      child: const Text('Retry'),
-                    ),
-                  ],
-                ),
-              ),
+              _buildRecoveryBanner(theme, _pendingUpdates.first),
 
             Expanded(
               child: RefreshIndicator(
@@ -383,6 +540,72 @@ class _ParentFulfillmentInboxScreenState
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildRecoveryBanner(ThemeData theme, PendingRewardCommand pending) {
+    final currentUserId = ref.read(currentUserIdProvider);
+    final isOriginalActorMismatch =
+        pending.actorUserId != null &&
+        pending.actorUserId!.isNotEmpty &&
+        currentUserId != null &&
+        pending.actorUserId != currentUserId;
+
+    final IconData icon;
+    final String message;
+    final bool canRetry;
+
+    if (pending.recoveryState == CommandRecoveryState.pendingOriginalActor ||
+        isOriginalActorMismatch) {
+      icon = Icons.pause_circle_outline;
+      message = 'Pending confirmation by original parent.';
+      canRetry = !isOriginalActorMismatch && _inFlightRedemptionIds.isEmpty;
+    } else if (pending.recoveryState ==
+            CommandRecoveryState.quarantinedUnknownOutcome ||
+        pending.recoveryState == CommandRecoveryState.terminalError) {
+      icon = Icons.warning_amber_rounded;
+      message = 'Pending update requires manual review.';
+      canRetry = false;
+    } else {
+      icon = Icons.hourglass_top;
+      message = "We're checking whether a reward update was completed.";
+      canRetry = _inFlightRedemptionIds.isEmpty;
+    }
+
+    return Container(
+      key: const Key('pending_fulfillment_recovery_banner'),
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.xs,
+      ),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.tertiary),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: theme.colorScheme.onTertiaryContainer),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Text(
+              message,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onTertiaryContainer,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          if (canRetry)
+            FilledButton.tonal(
+              key: const Key('retry_pending_fulfillment_button'),
+              onPressed: () => _resolvePendingUpdate(pending),
+              child: const Text('Retry'),
+            ),
+        ],
       ),
     );
   }
@@ -455,9 +678,11 @@ class _ParentFulfillmentInboxScreenState
     String childName,
   ) {
     final costRp = item.rpCost;
-    final isPendingUpdate = _pendingUpdates.any(
-      (p) => p.redemptionId == item.id.value,
-    );
+    final matchingPending = _pendingUpdates
+        .where((p) => p.redemptionId == item.id.value)
+        .firstOrNull;
+    final isPendingUpdate =
+        matchingPending != null && matchingPending.isCommandUnresolved;
     final isInFlight = _inFlightRedemptionIds.contains(item.id.value);
 
     return Card(
@@ -553,8 +778,10 @@ class _ParentFulfillmentInboxScreenState
                         ? null
                         : () => _fulfill(item),
                     child: Text(
-                      isInFlight || isPendingUpdate
+                      isInFlight
                           ? 'Checking...'
+                          : isPendingUpdate
+                          ? 'Pending...'
                           : 'Mark as Delivered',
                     ),
                   ),

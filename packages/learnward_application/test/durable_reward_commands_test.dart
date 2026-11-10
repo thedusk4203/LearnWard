@@ -30,6 +30,22 @@ void main() {
       );
     }
 
+    FulfillRewardRedemption createFulfillUseCase() {
+      return FulfillRewardRedemption(
+        server,
+        commandStore,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
+    }
+
+    CancelRewardRedemption createCancelUseCase() {
+      return CancelRewardRedemption(
+        server,
+        commandStore,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
+    }
+
     setUp(() {
       commandStore = InMemoryPendingRewardCommandStore();
       server = MockServerRewardRepository();
@@ -250,7 +266,7 @@ void main() {
       );
 
       // 1. Initial fulfill attempt with simulated timeout after server commit
-      var fulfillUseCase = FulfillRewardRedemption(server, commandStore);
+      var fulfillUseCase = createFulfillUseCase();
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
@@ -273,7 +289,7 @@ void main() {
       final fulfillCommandId = pending!.commandId;
 
       // 2. Simulate app restart
-      fulfillUseCase = FulfillRewardRedemption(server, commandStore);
+      fulfillUseCase = createFulfillUseCase();
 
       // 3. Retry fulfillment
       final recovered = await fulfillUseCase(
@@ -300,7 +316,7 @@ void main() {
       expect(server.childBalances[childId.value], 3500);
 
       // 1. Initial cancel attempt with commit-response-loss
-      var cancelUseCase = CancelRewardRedemption(server, commandStore);
+      var cancelUseCase = createCancelUseCase();
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
@@ -326,7 +342,7 @@ void main() {
       final cancelCommandId = pending.commandId;
 
       // 2. Simulate app restart
-      cancelUseCase = CancelRewardRedemption(server, commandStore);
+      cancelUseCase = createCancelUseCase();
 
       // 3. Retry cancellation
       final recovered = await cancelUseCase(

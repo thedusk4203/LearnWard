@@ -66,6 +66,33 @@ final class PendingRewardCommand {
   final String? leaseToken;
   final DateTime? leaseExpiresAt;
 
+  static const int maxConsecutiveUnverifiedTargetMisses = 3;
+
+  static final RegExp _unverifiedTargetMissPattern = RegExp(
+    r'^\[UNVERIFIED_TARGET_MISS:(\d+)/(\d+)\]\s*',
+  );
+
+  /// Durably parsed count of consecutive RLS-filtered / missing-target verification
+  /// misses (`rlsFilteredOrMissingTargetRow` or `missingOrUnverifiedMembership`).
+  ///
+  /// Separate from [retryCount] (`R28-05`): returns `0` when [lastErrorMessage] is null
+  /// or was last written by any other exit (transient RPC error, transient verification
+  /// timeout, session generation change, active family switch, or actor pause/resume).
+  int get consecutiveUnverifiedTargetMisses {
+    final msg = lastErrorMessage;
+    if (msg == null) return 0;
+    final match = _unverifiedTargetMissPattern.firstMatch(msg);
+    if (match == null) return 0;
+    return int.tryParse(match.group(1) ?? '') ?? 0;
+  }
+
+  /// Formats the canonical durable consecutive-miss prefix stored in [lastErrorMessage].
+  static String formatUnverifiedTargetMissMessage({
+    required int consecutiveMisses,
+    required String detail,
+    int maxMisses = maxConsecutiveUnverifiedTargetMisses,
+  }) => '[UNVERIFIED_TARGET_MISS:$consecutiveMisses/$maxMisses] $detail';
+
   /// Whether this command is eligible for automatic retry/replay.
   /// Fails closed if the command is quarantined, legacy unknown, confirmed committed,
   /// or missing actor binding.
@@ -74,14 +101,21 @@ final class PendingRewardCommand {
       dispatchState != CommandDispatchState.unknownLegacy &&
       dispatchState != CommandDispatchState.confirmedCommitted &&
       actorUserId != null &&
-      actorUserId!.isNotEmpty;
+      actorUserId!.isNotEmpty &&
+      (operation == RewardCommandOperation.spinWheel ||
+          operation == RewardCommandOperation.redeemReward ||
+          operation == RewardCommandOperation.fulfillReward ||
+          operation == RewardCommandOperation.cancelReward);
 
   /// Whether this command represents an unresolved operation that must block
   /// fresh command creation for the same logical target (R24-5-03).
-  bool get isUnresolved => isCommandUnresolved(
+  bool get isUnresolved => _isCommandUnresolvedImpl(
     recoveryState: recoveryState,
     dispatchState: dispatchState,
   );
+
+  /// Alias for [isUnresolved] matching the specification contract naming.
+  bool get isCommandUnresolved => isUnresolved;
 
   PendingRewardCommand copyWith({
     Object? id = _sentinel,
@@ -175,6 +209,14 @@ sealed class RegisterFreshCommandResult {
 /// 5. Active uncommitted commands: [CommandRecoveryState.active] with [CommandDispatchState.neverDispatched]
 ///    or [CommandDispatchState.possiblyDispatched] continue to block duplicate logical operations.
 bool isCommandUnresolved({
+  required CommandRecoveryState recoveryState,
+  required CommandDispatchState dispatchState,
+}) => _isCommandUnresolvedImpl(
+  recoveryState: recoveryState,
+  dispatchState: dispatchState,
+);
+
+bool _isCommandUnresolvedImpl({
   required CommandRecoveryState recoveryState,
   required CommandDispatchState dispatchState,
 }) {
@@ -314,8 +356,11 @@ abstract interface class PendingRewardCommandStore {
   ///
   /// Requires matching [leaseToken], unexpired lease ([now] < lease_expires_at),
   /// actor_user_id == [authenticatedActorId], recovery_state == 'active',
-  /// operation IN ('spin_wheel', 'redeem_reward'), and
+  /// valid operation predicate (spin/redeem or adult fulfill/cancel), and
   /// dispatch_state IN ('never_dispatched', 'possibly_dispatched').
+  ///
+  /// Atomically resets any stale `[UNVERIFIED_TARGET_MISS:%` prefix in `last_error_message`
+  /// upon successful target authorization (R28-05).
   Future<bool> markPossiblyDispatched({
     required String commandId,
     required String leaseToken,

@@ -168,7 +168,11 @@ void main() {
 
       // --- Session 1: Parent cancels with response-loss ---
       final dbA = AppDatabase(NativeDatabase(dbFile));
-      final cancelUseCaseA = CancelRewardRedemption(server, dbA);
+      final cancelUseCaseA = CancelRewardRedemption(
+        server,
+        dbA,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
@@ -205,7 +209,11 @@ void main() {
       final cancelCommandId = pendingCancel.commandId;
 
       // Parent retries cancellation (even if retry UI supplies different reason)
-      final cancelUseCaseB = CancelRewardRedemption(server, dbB);
+      final cancelUseCaseB = CancelRewardRedemption(
+        server,
+        dbB,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       final recovered = await cancelUseCaseB(
         familyId: familyId,
         redemptionId: redemption.id,
@@ -249,7 +257,11 @@ void main() {
 
       // --- Session 1: Parent fulfills with timeout after commit ---
       final dbA = AppDatabase(NativeDatabase(dbFile));
-      final fulfillUseCaseA = FulfillRewardRedemption(server, dbA);
+      final fulfillUseCaseA = FulfillRewardRedemption(
+        server,
+        dbA,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
@@ -280,7 +292,11 @@ void main() {
       final fulfillCommandId = pendingFulfill.commandId;
 
       // Retry fulfillment
-      final fulfillUseCaseB = FulfillRewardRedemption(server, dbB);
+      final fulfillUseCaseB = FulfillRewardRedemption(
+        server,
+        dbB,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       final recovered = await fulfillUseCaseB(
         familyId: familyId,
         redemptionId: redemption.id,

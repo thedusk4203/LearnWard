@@ -37,17 +37,25 @@ final class InMemoryPendingRewardCommandStore
   }) async {
     final effectiveNow = (now ?? DateTime.now()).toUtc();
     for (final existing in _commands.values) {
-      final matchesOperation =
-          existing.familyId == command.familyId &&
-          existing.operation == command.operation &&
-          (command.childId == null || existing.childId == command.childId) &&
-          (command.operation != RewardCommandOperation.redeemReward ||
-              existing.rewardId == command.rewardId);
+      final bool matchesTarget;
+      if (command.operation == RewardCommandOperation.fulfillReward ||
+          command.operation == RewardCommandOperation.cancelReward) {
+        matchesTarget =
+            existing.familyId == command.familyId &&
+            existing.redemptionId == command.redemptionId &&
+            (existing.operation == RewardCommandOperation.fulfillReward ||
+                existing.operation == RewardCommandOperation.cancelReward);
+      } else {
+        matchesTarget =
+            existing.familyId == command.familyId &&
+            existing.operation == command.operation &&
+            (command.childId == null || existing.childId == command.childId) &&
+            (command.operation != RewardCommandOperation.redeemReward ||
+                existing.rewardId == command.rewardId);
+      }
 
-      if (matchesOperation) {
-        if (existing.isUnresolved) {
-          return PreexistingCommandFound(existing);
-        }
+      if (matchesTarget && existing.isUnresolved) {
+        return PreexistingCommandFound(existing);
       }
     }
 
@@ -268,6 +276,31 @@ final class InMemoryPendingRewardCommandStore
   // PHASE 6 SLICE 4A-0: ATOMIC CAS STORE OPERATIONS & FENCING
   // ---------------------------------------------------------------------------
 
+  static bool _isOperationEligible(PendingRewardCommand cmd) {
+    if (cmd.operation == RewardCommandOperation.spinWheel ||
+        cmd.operation == RewardCommandOperation.redeemReward) {
+      return true;
+    }
+    if (cmd.operation == RewardCommandOperation.fulfillReward) {
+      return cmd.childId != null &&
+          cmd.childId!.trim().isNotEmpty &&
+          cmd.redemptionId != null &&
+          cmd.redemptionId!.trim().isNotEmpty &&
+          cmd.cancellationReason == null &&
+          (cmd.actorRole == 'owner' || cmd.actorRole == 'parent');
+    }
+    if (cmd.operation == RewardCommandOperation.cancelReward) {
+      return cmd.childId != null &&
+          cmd.childId!.trim().isNotEmpty &&
+          cmd.redemptionId != null &&
+          cmd.redemptionId!.trim().isNotEmpty &&
+          cmd.cancellationReason != null &&
+          cmd.cancellationReason!.trim().length >= 2 &&
+          (cmd.actorRole == 'owner' || cmd.actorRole == 'parent');
+    }
+    return false;
+  }
+
   @override
   Future<String?> acquireClaim({
     required String commandId,
@@ -282,8 +315,7 @@ final class InMemoryPendingRewardCommandStore
 
     if (cmd.actorUserId != actorUserId) return null;
     if (cmd.recoveryState != CommandRecoveryState.active) return null;
-    if (cmd.operation != RewardCommandOperation.spinWheel &&
-        cmd.operation != RewardCommandOperation.redeemReward) {
+    if (!_isOperationEligible(cmd)) {
       return null;
     }
     if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
@@ -346,8 +378,7 @@ final class InMemoryPendingRewardCommandStore
     }
     if (cmd.actorUserId != authenticatedActorId) return false;
     if (cmd.recoveryState != CommandRecoveryState.active) return false;
-    if (cmd.operation != RewardCommandOperation.spinWheel &&
-        cmd.operation != RewardCommandOperation.redeemReward) {
+    if (!_isOperationEligible(cmd)) {
       return false;
     }
     if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
@@ -355,8 +386,17 @@ final class InMemoryPendingRewardCommandStore
       return false;
     }
 
+    final String? nextLastErrorMessage;
+    if (cmd.lastErrorMessage != null &&
+        cmd.lastErrorMessage!.startsWith('[UNVERIFIED_TARGET_MISS:')) {
+      nextLastErrorMessage = null;
+    } else {
+      nextLastErrorMessage = cmd.lastErrorMessage;
+    }
+
     _commands[commandId] = cmd.copyWith(
       dispatchState: CommandDispatchState.possiblyDispatched,
+      lastErrorMessage: nextLastErrorMessage,
     );
     return true;
   }
@@ -411,12 +451,12 @@ final class InMemoryPendingRewardCommandStore
       return false;
     }
     if (cmd.recoveryState != CommandRecoveryState.active) return false;
-    if (cmd.operation != RewardCommandOperation.spinWheel &&
-        cmd.operation != RewardCommandOperation.redeemReward) {
+    if (!_isOperationEligible(cmd)) {
       return false;
     }
     if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
-        cmd.dispatchState != CommandDispatchState.possiblyDispatched) {
+        cmd.dispatchState != CommandDispatchState.possiblyDispatched &&
+        cmd.dispatchState != CommandDispatchState.confirmedCommitted) {
       return false;
     }
     if (!_isLeaseAvailable(cmd, effectiveNow)) {
@@ -448,12 +488,12 @@ final class InMemoryPendingRewardCommandStore
     if (cmd.recoveryState != CommandRecoveryState.pendingOriginalActor) {
       return false;
     }
-    if (cmd.operation != RewardCommandOperation.spinWheel &&
-        cmd.operation != RewardCommandOperation.redeemReward) {
+    if (!_isOperationEligible(cmd)) {
       return false;
     }
     if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
-        cmd.dispatchState != CommandDispatchState.possiblyDispatched) {
+        cmd.dispatchState != CommandDispatchState.possiblyDispatched &&
+        cmd.dispatchState != CommandDispatchState.confirmedCommitted) {
       return false;
     }
     if (!_isLeaseAvailable(cmd, effectiveNow)) {
@@ -481,12 +521,12 @@ final class InMemoryPendingRewardCommandStore
       if (familyId != null && cmd.familyId != familyId) return false;
       if (cmd.actorUserId != actorUserId) return false;
       if (cmd.recoveryState != CommandRecoveryState.active) return false;
-      if (cmd.operation != RewardCommandOperation.spinWheel &&
-          cmd.operation != RewardCommandOperation.redeemReward) {
+      if (!_isOperationEligible(cmd)) {
         return false;
       }
       if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
-          cmd.dispatchState != CommandDispatchState.possiblyDispatched) {
+          cmd.dispatchState != CommandDispatchState.possiblyDispatched &&
+          cmd.dispatchState != CommandDispatchState.confirmedCommitted) {
         return false;
       }
       if (cmd.nextAttemptAt != null &&
@@ -517,12 +557,12 @@ final class InMemoryPendingRewardCommandStore
         return false;
       }
       if (cmd.recoveryState != CommandRecoveryState.active) return false;
-      if (cmd.operation != RewardCommandOperation.spinWheel &&
-          cmd.operation != RewardCommandOperation.redeemReward) {
+      if (!_isOperationEligible(cmd)) {
         return false;
       }
       if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
-          cmd.dispatchState != CommandDispatchState.possiblyDispatched) {
+          cmd.dispatchState != CommandDispatchState.possiblyDispatched &&
+          cmd.dispatchState != CommandDispatchState.confirmedCommitted) {
         return false;
       }
       if (!_isLeaseAvailable(cmd, effectiveNow)) {
@@ -549,12 +589,12 @@ final class InMemoryPendingRewardCommandStore
       if (cmd.recoveryState != CommandRecoveryState.pendingOriginalActor) {
         return false;
       }
-      if (cmd.operation != RewardCommandOperation.spinWheel &&
-          cmd.operation != RewardCommandOperation.redeemReward) {
+      if (!_isOperationEligible(cmd)) {
         return false;
       }
       if (cmd.dispatchState != CommandDispatchState.neverDispatched &&
-          cmd.dispatchState != CommandDispatchState.possiblyDispatched) {
+          cmd.dispatchState != CommandDispatchState.possiblyDispatched &&
+          cmd.dispatchState != CommandDispatchState.confirmedCommitted) {
         return false;
       }
       if (!_isLeaseAvailable(cmd, effectiveNow)) {

@@ -168,15 +168,23 @@ final class SupabaseRewardRepository implements RewardRepository {
     required String commandId,
     required RewardRedemptionId redemptionId,
   }) async {
-    final response = await _client.rpc<Map<String, dynamic>>(
-      'fulfill_reward_redemption',
-      params: {
-        'p_redemption_id': redemptionId.value,
-        'p_command_id': commandId,
-      },
-    );
+    try {
+      final response = await _client.rpc<Map<String, dynamic>>(
+        'fulfill_reward_redemption',
+        params: {
+          'p_redemption_id': redemptionId.value,
+          'p_command_id': commandId,
+        },
+      );
 
-    return _mapRedemption(response);
+      return _mapRedemption(response);
+    } on PostgrestException catch (e) {
+      throw BackendRpcException(
+        message: e.message,
+        code: e.code,
+        details: e.details,
+      );
+    }
   }
 
   @override
@@ -185,16 +193,24 @@ final class SupabaseRewardRepository implements RewardRepository {
     required RewardRedemptionId redemptionId,
     required String cancellationReason,
   }) async {
-    final response = await _client.rpc<Map<String, dynamic>>(
-      'cancel_reward_redemption',
-      params: {
-        'p_redemption_id': redemptionId.value,
-        'p_command_id': commandId,
-        'p_cancellation_reason': cancellationReason,
-      },
-    );
+    try {
+      final response = await _client.rpc<Map<String, dynamic>>(
+        'cancel_reward_redemption',
+        params: {
+          'p_redemption_id': redemptionId.value,
+          'p_command_id': commandId,
+          'p_cancellation_reason': cancellationReason,
+        },
+      );
 
-    return _mapRedemption(response);
+      return _mapRedemption(response);
+    } on PostgrestException catch (e) {
+      throw BackendRpcException(
+        message: e.message,
+        code: e.code,
+        details: e.details,
+      );
+    }
   }
 
   @override

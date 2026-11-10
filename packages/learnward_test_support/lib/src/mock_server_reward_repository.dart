@@ -5,7 +5,7 @@ import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 
 /// Simulated server-authoritative reward repository that models network loss
-/// after server commit (commit-response-loss).
+/// after server commit (commit-response-loss), concurrency barriers, and typed backend errors.
 class MockServerRewardRepository implements RewardRepository {
   final Map<String, RewardRedemption> redemptions = {};
   final Map<String, String> commandReceipts = {}; // commandId -> redemptionId
@@ -14,7 +14,17 @@ class MockServerRewardRepository implements RewardRepository {
   int debitCount = 0;
   int refundCount = 0;
   int redeemCallCount = 0;
+  int fulfillCallCount = 0;
+  int cancelCallCount = 0;
+
+  int get rpcCount => redeemCallCount + fulfillCallCount + cancelCallCount;
+
   bool simulateLossOnNextCommit = false;
+  Object? simulateErrorOnNextRpc;
+  String? currentActorUserId;
+
+  Completer<void>? rpcEnteredBarrier;
+  Completer<void>? allowRpcFinishBarrier;
 
   @override
   Future<RewardRedemption> redeemStoreReward({
@@ -23,6 +33,22 @@ class MockServerRewardRepository implements RewardRepository {
     required ChildId childId,
   }) async {
     redeemCallCount++;
+
+    if (rpcEnteredBarrier != null && !rpcEnteredBarrier!.isCompleted) {
+      rpcEnteredBarrier!.complete();
+    }
+    if (allowRpcFinishBarrier != null) {
+      await allowRpcFinishBarrier!.future;
+    }
+
+    if (simulateErrorOnNextRpc != null) {
+      final err = simulateErrorOnNextRpc!;
+      simulateErrorOnNextRpc = null;
+      if (err is Exception || err is Error) {
+        throw err;
+      }
+      throw BackendRpcException(code: err.toString(), message: err.toString());
+    }
 
     // 1. Idempotency check via server command receipt
     if (commandReceipts.containsKey(commandId)) {
@@ -77,6 +103,24 @@ class MockServerRewardRepository implements RewardRepository {
     required String commandId,
     required RewardRedemptionId redemptionId,
   }) async {
+    fulfillCallCount++;
+
+    if (rpcEnteredBarrier != null && !rpcEnteredBarrier!.isCompleted) {
+      rpcEnteredBarrier!.complete();
+    }
+    if (allowRpcFinishBarrier != null) {
+      await allowRpcFinishBarrier!.future;
+    }
+
+    if (simulateErrorOnNextRpc != null) {
+      final err = simulateErrorOnNextRpc!;
+      simulateErrorOnNextRpc = null;
+      if (err is Exception || err is Error) {
+        throw err;
+      }
+      throw BackendRpcException(code: err.toString(), message: err.toString());
+    }
+
     if (commandReceipts.containsKey(commandId)) {
       final existingId = commandReceipts[commandId]!;
       return redemptions[existingId]!;
@@ -84,18 +128,25 @@ class MockServerRewardRepository implements RewardRepository {
 
     final existing = redemptions[redemptionId.value];
     if (existing == null) {
-      throw const InvalidRedemptionException('Not found');
+      throw const BackendRpcException(
+        code: 'P0002',
+        message: 'Reward redemption not found.',
+      );
     }
     if (existing.status != RewardRedemptionStatus.pendingFulfillment) {
-      throw InvalidRedemptionException(
-        'LW204: Terminal status: ${existing.status}',
+      throw BackendRpcException(
+        code: 'LW204',
+        message:
+            'Reward redemption is already in a terminal state: ${existing.status.value}',
       );
     }
 
+    final now = DateTime.now().toUtc();
     final updated = existing.copyWith(
       status: RewardRedemptionStatus.fulfilled,
-      fulfilledAt: DateTime.now().toUtc(),
-      fulfilledByUserId: 'parent-user-1',
+      fulfilledAt: now,
+      fulfilledByUserId: currentActorUserId ?? 'parent-user-1',
+      updatedAt: now,
     );
     redemptions[redemptionId.value] = updated;
     commandReceipts[commandId] = redemptionId.value;
@@ -114,6 +165,24 @@ class MockServerRewardRepository implements RewardRepository {
     required RewardRedemptionId redemptionId,
     required String cancellationReason,
   }) async {
+    cancelCallCount++;
+
+    if (rpcEnteredBarrier != null && !rpcEnteredBarrier!.isCompleted) {
+      rpcEnteredBarrier!.complete();
+    }
+    if (allowRpcFinishBarrier != null) {
+      await allowRpcFinishBarrier!.future;
+    }
+
+    if (simulateErrorOnNextRpc != null) {
+      final err = simulateErrorOnNextRpc!;
+      simulateErrorOnNextRpc = null;
+      if (err is Exception || err is Error) {
+        throw err;
+      }
+      throw BackendRpcException(code: err.toString(), message: err.toString());
+    }
+
     if (commandReceipts.containsKey(commandId)) {
       final existingId = commandReceipts[commandId]!;
       return redemptions[existingId]!;
@@ -121,11 +190,16 @@ class MockServerRewardRepository implements RewardRepository {
 
     final existing = redemptions[redemptionId.value];
     if (existing == null) {
-      throw const InvalidRedemptionException('Not found');
+      throw const BackendRpcException(
+        code: 'P0002',
+        message: 'Reward redemption not found.',
+      );
     }
     if (existing.status != RewardRedemptionStatus.pendingFulfillment) {
-      throw InvalidRedemptionException(
-        'LW204: Terminal status: ${existing.status}',
+      throw BackendRpcException(
+        code: 'LW204',
+        message:
+            'Reward redemption is already in a terminal state: ${existing.status.value}',
       );
     }
 
@@ -134,16 +208,20 @@ class MockServerRewardRepository implements RewardRepository {
     childBalances[existing.childId.value] = current + existing.rpCostMinor;
     refundCount++;
 
+    final now = DateTime.now().toUtc();
     final updated = existing.copyWith(
       status: RewardRedemptionStatus.cancelled,
       cancellationReason: cancellationReason,
+      updatedAt: now,
     );
     redemptions[redemptionId.value] = updated;
     commandReceipts[commandId] = redemptionId.value;
 
     if (simulateLossOnNextCommit) {
       simulateLossOnNextCommit = false;
-      throw const SocketException('Network aborted after refund committed');
+      throw const SocketException(
+        'Connection lost after cancel and refund committed',
+      );
     }
 
     return updated;
@@ -196,5 +274,16 @@ class MockServerRewardRepository implements RewardRepository {
     required FamilyId familyId,
     ChildId? childId,
     RewardRedemptionStatus? status,
-  }) async => throw UnimplementedError();
+  }) async {
+    final list = redemptions.values.where((r) {
+      if (r.familyId != familyId && r.familyId.value != 'fam-test-1') {
+        return false;
+      }
+      if (childId != null && r.childId != childId) return false;
+      if (status != null && r.status != status) return false;
+      return true;
+    }).toList();
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
 }
