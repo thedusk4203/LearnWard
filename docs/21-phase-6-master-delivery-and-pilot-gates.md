@@ -95,17 +95,17 @@
 
 ```mermaid
 flowchart TD
- A[4A-0 Drift v6 CAS FROZEN] --> B[4A-1 Spin/Redeem runtime]
- B --> C[4A-2 Fulfill/Cancel]
- A --> D[4B-0 Local evidence safety]
- D --> E[4B-1 Storage integrity and resume]
+ A["4A-0 Drift v6 CAS (FROZEN)"] --> B["4A-1 Spin/Redeem runtime (FROZEN)"]
+ B --> C["4A-2 Fulfill/Cancel (FROZEN)"]
+ A --> D["4B-0 Local evidence safety (FROZEN)"]
+ D --> E["4B-1 Storage integrity and resume (PENDING)"]
  B --> E
- B --> F[4C-0 Session and device containment]
+ B --> F["4C-0 Session and device containment (PENDING)"]
  D --> F
- E --> G[4C-1 Manual recovery / export]
+ E --> G["4C-1 Manual recovery / export (PENDING)"]
  F --> G
- G --> H[Slice 5 Privacy telemetry and notifications]
- H --> I[Slice 6 Accessibility / Release]
+ G --> H["Slice 5 Privacy telemetry and notifications (PENDING)"]
+ H --> I["Slice 6 Accessibility / Pilot Release (PENDING)"]
  C --> I
  E --> I
  F --> I
@@ -182,4 +182,8 @@ Each agent implementation PR must include:
 | Merge decision | **OWN sign-off** | Merge only after approval |
 | Pilot/release authorization | **OWN sign-off with user** | Produce evidence, never self-release |
 
-**Next action:** begin implementation of 4A-1 using the final contract, without another independent planning round by the coding agent. Any unavoidable ambiguity is returned as a sharply scoped factual blocker, not a redesign proposal.
+**Next action / Planning Status:**
+- Slice 4A-2 implementation: **MERGED** (PR #29, merge commit `9b253a268be01498266f86013d7db903f6cb01b9`, post-merge main CI run `42844354262`).
+- Slice 4A-2 freeze receipt: **PR #30** pending final documentation review and merge.
+- Next planning milestone: **Slice 4B-1** — *Evidence Resumability and Storage 409 Reconciliation*.
+- Pilot and production distribution gates: remain strictly **CLOSED**.
