@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:learnward_application/learnward_application.dart';
@@ -9,7 +11,11 @@ import '../../../app/bootstrap/app_providers.dart';
 /// Parent inbox for managing and fulfilling pending child reward claims
 /// with durable restart-safe idempotency.
 class ParentFulfillmentInboxScreen extends ConsumerStatefulWidget {
-  const ParentFulfillmentInboxScreen({super.key});
+  const ParentFulfillmentInboxScreen({super.key, this.clock});
+
+  /// Optional injected clock for deterministic time progression in tests.
+  /// Falls back to [appClockProvider].
+  final DateTime Function()? clock;
 
   @override
   ConsumerState<ParentFulfillmentInboxScreen> createState() =>
@@ -19,6 +25,7 @@ class ParentFulfillmentInboxScreen extends ConsumerStatefulWidget {
 class _ParentFulfillmentInboxScreenState
     extends ConsumerState<ParentFulfillmentInboxScreen> {
   final ScrollController _recoveryScrollController = ScrollController();
+  Timer? _scheduledRetryTimer;
   bool _isLoading = false;
   String? _errorMessage;
   List<RewardRedemption> _redemptions = [];
@@ -28,6 +35,12 @@ class _ParentFulfillmentInboxScreenState
   List<PendingRewardCommand> _pendingUpdates = [];
   final Set<String> _inFlightRedemptionIds = {};
 
+  DateTime _now() {
+    final clock = widget.clock;
+    if (clock != null) return clock().toUtc();
+    return ref.read(appClockProvider)().toUtc();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -35,9 +48,43 @@ class _ParentFulfillmentInboxScreenState
   }
 
   @override
+  void didUpdateWidget(ParentFulfillmentInboxScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _scheduleNextDueCheck();
+  }
+
+  @override
   void dispose() {
+    _scheduledRetryTimer?.cancel();
     _recoveryScrollController.dispose();
     super.dispose();
+  }
+
+  void _scheduleNextDueCheck() {
+    _scheduledRetryTimer?.cancel();
+    _scheduledRetryTimer = null;
+    final now = _now();
+    DateTime? earliestFutureDeadline;
+    for (final cmd in _pendingUpdates) {
+      if (!cmd.isCommandUnresolved) continue;
+      final deadline = cmd.nextAttemptAt?.toUtc();
+      if (deadline != null && deadline.isAfter(now)) {
+        if (earliestFutureDeadline == null ||
+            deadline.isBefore(earliestFutureDeadline)) {
+          earliestFutureDeadline = deadline;
+        }
+      }
+    }
+    if (earliestFutureDeadline != null) {
+      final delay = earliestFutureDeadline.difference(now);
+      final timerDuration = delay.isNegative ? Duration.zero : delay;
+      _scheduledRetryTimer = Timer(timerDuration, () {
+        if (mounted) {
+          setState(() {});
+          _scheduleNextDueCheck();
+        }
+      });
+    }
   }
 
   Future<void> _loadData() async {
@@ -81,6 +128,7 @@ class _ParentFulfillmentInboxScreenState
           _pendingUpdates = pendingUpdates;
           _isLoading = false;
         });
+        _scheduleNextDueCheck();
       }
     } catch (e) {
       if (mounted) {
@@ -371,12 +419,12 @@ class _ParentFulfillmentInboxScreenState
     final isLegacy =
         pending.dispatchState == CommandDispatchState.unknownLegacy;
 
-    final now = DateTime.now().toUtc();
+    final now = _now();
     final isScheduledInFuture =
         pending.nextAttemptAt != null &&
         pending.nextAttemptAt!.toUtc().isAfter(now);
 
-    // Defense-in-depth: Never execute retry for ineligible commands (R29-06)
+    // Defense-in-depth: Never execute retry for ineligible commands (R29-06, R29-07)
     if (!isOriginalActorMatch ||
         isQuarantined ||
         isTerminal ||
@@ -532,6 +580,7 @@ class _ParentFulfillmentInboxScreenState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDispatcherEnabled = ref.watch(recoveryDispatcherEnabledProvider);
     final unresolvedUpdates = _pendingUpdates
         .where((p) => p.isCommandUnresolved)
         .toList();
@@ -600,7 +649,11 @@ class _ParentFulfillmentInboxScreenState
                           itemCount: unresolvedUpdates.length,
                           itemBuilder: (context, index) {
                             final pending = unresolvedUpdates[index];
-                            return _buildRecoveryBanner(theme, pending);
+                            return _buildRecoveryBanner(
+                              theme,
+                              pending,
+                              isDispatcherEnabled,
+                            );
                           },
                         ),
                       ),
@@ -621,7 +674,11 @@ class _ParentFulfillmentInboxScreenState
     );
   }
 
-  Widget _buildRecoveryBanner(ThemeData theme, PendingRewardCommand pending) {
+  Widget _buildRecoveryBanner(
+    ThemeData theme,
+    PendingRewardCommand pending,
+    bool isDispatcherEnabled,
+  ) {
     final currentUserId = ref.read(currentUserIdProvider);
     final hasValidActorId =
         pending.actorUserId != null && pending.actorUserId!.trim().isNotEmpty;
@@ -641,7 +698,7 @@ class _ParentFulfillmentInboxScreenState
     final isLegacy =
         pending.dispatchState == CommandDispatchState.unknownLegacy;
 
-    final now = DateTime.now().toUtc();
+    final now = _now();
     final isScheduledInFuture =
         pending.nextAttemptAt != null &&
         pending.nextAttemptAt!.toUtc().isAfter(now);
@@ -658,15 +715,17 @@ class _ParentFulfillmentInboxScreenState
       icon = Icons.pause_circle_outline;
       message = 'Pending confirmation by original parent.';
       canRetry = false;
+    } else if (isScheduledInFuture) {
+      icon = Icons.schedule;
+      message = isDispatcherEnabled
+          ? 'Automatic retry scheduled. Waiting before next attempt.'
+          : 'Manual retry will become available after the retry delay.';
+      canRetry = false;
     } else if (pending.recoveryState ==
         CommandRecoveryState.pendingOriginalActor) {
       icon = Icons.pause_circle_outline;
       message = 'Pending confirmation by original parent.';
       canRetry = !isInFlight;
-    } else if (isScheduledInFuture) {
-      icon = Icons.schedule;
-      message = 'Automatic retry scheduled. Waiting before next attempt.';
-      canRetry = false;
     } else {
       icon = Icons.hourglass_top;
       message = "We're checking whether a reward update was completed.";

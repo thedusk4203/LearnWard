@@ -1356,7 +1356,7 @@ void main() {
 
           expect(
             find.text(
-              'Automatic retry scheduled. Waiting before next attempt.',
+              'Manual retry will become available after the retry delay.',
             ),
             findsOneWidget,
           );
@@ -1451,5 +1451,634 @@ void main() {
         expect(await commandStore.listPendingCommands(), isEmpty);
       },
     );
+
+    group('ParentFulfillmentInboxScreen R29-07 UI Retry Availability vs Scheduling Tests', () {
+      testWidgets(
+        'Active command scheduled in future with dispatcher disabled shows manual retry delay message and no Retry button',
+        (tester) async {
+          final inMemoryRewards = InMemoryRewardRepository();
+          final created = await inMemoryRewards.createReward(
+            familyId: testFamily.id,
+            title: 'Reward Item',
+            category: RewardCategory.item,
+            storeCostMinor: 1000,
+            storeEnabled: true,
+          );
+          final redemption = await inMemoryRewards.redeemStoreReward(
+            commandId: 'cmd-pre-r29-07-1',
+            rewardId: created.id,
+            childId: testChild.id,
+          );
+
+          final commandStore = InMemoryPendingRewardCommandStore();
+          final baseTime = DateTime.utc(2026, 11, 1, 12, 0, 0);
+          await commandStore.savePendingCommand(
+            PendingRewardCommand(
+              operation: RewardCommandOperation.fulfillReward,
+              commandId: 'cmd-sched-active-dis-1',
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-1',
+              actorRole: 'parent',
+              redemptionId: redemption.id.value,
+              nextAttemptAt: baseTime.add(const Duration(minutes: 5)),
+              createdAt: baseTime,
+            ),
+          );
+
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                currentUserIdProvider.overrideWithValue('parent-1'),
+                recoveryDispatcherEnabledProvider.overrideWithValue(false),
+                activeFamilyProvider.overrideWith(
+                  () => _PresetActiveFamilyNotifier(testFamily),
+                ),
+                childProfileRepositoryProvider.overrideWithValue(
+                  InMemoryChildProfileRepository()..children.add(testChild),
+                ),
+                rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+                pendingRewardCommandStoreProvider.overrideWithValue(
+                  commandStore,
+                ),
+              ],
+              child: MaterialApp(
+                home: ParentFulfillmentInboxScreen(
+                  key: UniqueKey(),
+                  clock: () => baseTime,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          expect(
+            find.text(
+              'Manual retry will become available after the retry delay.',
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(
+              const Key(
+                'retry_pending_fulfillment_button_cmd-sched-active-dis-1',
+              ),
+            ),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets(
+        'Active command scheduled in future with dispatcher enabled shows automatic retry scheduled message and no Retry button',
+        (tester) async {
+          final inMemoryRewards = InMemoryRewardRepository();
+          final created = await inMemoryRewards.createReward(
+            familyId: testFamily.id,
+            title: 'Reward Item',
+            category: RewardCategory.item,
+            storeCostMinor: 1000,
+            storeEnabled: true,
+          );
+          final redemption = await inMemoryRewards.redeemStoreReward(
+            commandId: 'cmd-pre-r29-07-2',
+            rewardId: created.id,
+            childId: testChild.id,
+          );
+
+          final commandStore = InMemoryPendingRewardCommandStore();
+          final baseTime = DateTime.utc(2026, 11, 1, 12, 0, 0);
+          await commandStore.savePendingCommand(
+            PendingRewardCommand(
+              operation: RewardCommandOperation.fulfillReward,
+              commandId: 'cmd-sched-active-en-1',
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-1',
+              actorRole: 'parent',
+              redemptionId: redemption.id.value,
+              nextAttemptAt: baseTime.add(const Duration(minutes: 5)),
+              createdAt: baseTime,
+            ),
+          );
+
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                currentUserIdProvider.overrideWithValue('parent-1'),
+                recoveryDispatcherEnabledProvider.overrideWithValue(true),
+                activeFamilyProvider.overrideWith(
+                  () => _PresetActiveFamilyNotifier(testFamily),
+                ),
+                childProfileRepositoryProvider.overrideWithValue(
+                  InMemoryChildProfileRepository()..children.add(testChild),
+                ),
+                rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+                pendingRewardCommandStoreProvider.overrideWithValue(
+                  commandStore,
+                ),
+              ],
+              child: MaterialApp(
+                home: ParentFulfillmentInboxScreen(
+                  key: UniqueKey(),
+                  clock: () => baseTime,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          expect(
+            find.text(
+              'Automatic retry scheduled. Waiting before next attempt.',
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(
+              const Key(
+                'retry_pending_fulfillment_button_cmd-sched-active-en-1',
+              ),
+            ),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets(
+        'Paused original-actor command scheduled in future shows delay message and no Retry button',
+        (tester) async {
+          final inMemoryRewards = InMemoryRewardRepository();
+          final created = await inMemoryRewards.createReward(
+            familyId: testFamily.id,
+            title: 'Reward Item',
+            category: RewardCategory.item,
+            storeCostMinor: 1000,
+            storeEnabled: true,
+          );
+          final redemption = await inMemoryRewards.redeemStoreReward(
+            commandId: 'cmd-pre-r29-07-3',
+            rewardId: created.id,
+            childId: testChild.id,
+          );
+
+          final commandStore = InMemoryPendingRewardCommandStore();
+          final baseTime = DateTime.utc(2026, 11, 1, 12, 0, 0);
+          await commandStore.savePendingCommand(
+            PendingRewardCommand(
+              operation: RewardCommandOperation.fulfillReward,
+              commandId: 'cmd-sched-paused-1',
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-1',
+              actorRole: 'parent',
+              redemptionId: redemption.id.value,
+              recoveryState: CommandRecoveryState.pendingOriginalActor,
+              nextAttemptAt: baseTime.add(const Duration(minutes: 5)),
+              createdAt: baseTime,
+            ),
+          );
+
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                currentUserIdProvider.overrideWithValue('parent-1'),
+                recoveryDispatcherEnabledProvider.overrideWithValue(false),
+                activeFamilyProvider.overrideWith(
+                  () => _PresetActiveFamilyNotifier(testFamily),
+                ),
+                childProfileRepositoryProvider.overrideWithValue(
+                  InMemoryChildProfileRepository()..children.add(testChild),
+                ),
+                rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+                pendingRewardCommandStoreProvider.overrideWithValue(
+                  commandStore,
+                ),
+              ],
+              child: MaterialApp(
+                home: ParentFulfillmentInboxScreen(
+                  key: UniqueKey(),
+                  clock: () => baseTime,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          expect(
+            find.text(
+              'Manual retry will become available after the retry delay.',
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(
+              const Key('retry_pending_fulfillment_button_cmd-sched-paused-1'),
+            ),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets(
+        'Transition from scheduled to due state updates dynamically and enables Retry button without navigation',
+        (tester) async {
+          final inMemoryRewards = InMemoryRewardRepository();
+          final created = await inMemoryRewards.createReward(
+            familyId: testFamily.id,
+            title: 'Reward Item',
+            category: RewardCategory.item,
+            storeCostMinor: 1000,
+            storeEnabled: true,
+          );
+          final redemption = await inMemoryRewards.redeemStoreReward(
+            commandId: 'cmd-pre-r29-07-4',
+            rewardId: created.id,
+            childId: testChild.id,
+          );
+
+          final commandStore = InMemoryPendingRewardCommandStore();
+          var currentTime = DateTime.utc(2026, 11, 1, 12, 0, 0);
+          final deadline = currentTime.add(const Duration(seconds: 2));
+
+          await commandStore.savePendingCommand(
+            PendingRewardCommand(
+              operation: RewardCommandOperation.fulfillReward,
+              commandId: 'cmd-transition-1',
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-1',
+              actorRole: 'parent',
+              redemptionId: redemption.id.value,
+              recoveryState: CommandRecoveryState.pendingOriginalActor,
+              nextAttemptAt: deadline,
+              createdAt: currentTime,
+            ),
+          );
+
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                currentUserIdProvider.overrideWithValue('parent-1'),
+                recoveryDispatcherEnabledProvider.overrideWithValue(false),
+                activeFamilyProvider.overrideWith(
+                  () => _PresetActiveFamilyNotifier(testFamily),
+                ),
+                childProfileRepositoryProvider.overrideWithValue(
+                  InMemoryChildProfileRepository()..children.add(testChild),
+                ),
+                rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+                pendingRewardCommandStoreProvider.overrideWithValue(
+                  commandStore,
+                ),
+              ],
+              child: MaterialApp(
+                home: ParentFulfillmentInboxScreen(
+                  key: UniqueKey(),
+                  clock: () => currentTime,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          // At t=0: Scheduled in future -> delay message, no retry button
+          expect(
+            find.text(
+              'Manual retry will become available after the retry delay.',
+            ),
+            findsOneWidget,
+          );
+          final retryFinder = find.byKey(
+            const Key('retry_pending_fulfillment_button_cmd-transition-1'),
+          );
+          expect(retryFinder, findsNothing);
+
+          // Advance time by 2 seconds to match deadline
+          currentTime = currentTime.add(const Duration(seconds: 2));
+          await tester.pump(const Duration(seconds: 2));
+          await tester.pumpAndSettle();
+
+          // At t=2s: Dynamic timer fired, re-evaluating banner without navigation
+          expect(
+            find.text(
+              'Manual retry will become available after the retry delay.',
+            ),
+            findsNothing,
+          );
+          expect(
+            find.text('Pending confirmation by original parent.'),
+            findsOneWidget,
+          );
+          expect(retryFinder, findsOneWidget);
+
+          // Tap Retry -> CAS resume executes and fulfills command
+          await tester.tap(retryFinder);
+          await tester.pumpAndSettle();
+
+          // Banner cleared, command resolved in store
+          expect(
+            find.byKey(
+              const Key('pending_fulfillment_recovery_banner_cmd-transition-1'),
+            ),
+            findsNothing,
+          );
+          expect(await commandStore.listPendingCommands(), isEmpty);
+        },
+      );
+
+      testWidgets('Foreign actor remains blocked after deadline has passed', (
+        tester,
+      ) async {
+        final inMemoryRewards = InMemoryRewardRepository();
+        final created = await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: 'Reward Item',
+          category: RewardCategory.item,
+          storeCostMinor: 1000,
+          storeEnabled: true,
+        );
+        final redemption = await inMemoryRewards.redeemStoreReward(
+          commandId: 'cmd-pre-r29-07-5',
+          rewardId: created.id,
+          childId: testChild.id,
+        );
+
+        final commandStore = InMemoryPendingRewardCommandStore();
+        var currentTime = DateTime.utc(2026, 11, 1, 12, 0, 0);
+        final deadline = currentTime.add(const Duration(seconds: 2));
+
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.fulfillReward,
+            commandId: 'cmd-foreign-blocked-1',
+            familyId: testFamily.id.value,
+            childId: testChild.id.value,
+            actorUserId: 'parent-1', // Original actor
+            actorRole: 'parent',
+            redemptionId: redemption.id.value,
+            recoveryState: CommandRecoveryState.pendingOriginalActor,
+            nextAttemptAt: deadline,
+            createdAt: currentTime,
+          ),
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              currentUserIdProvider.overrideWithValue(
+                'parent-2',
+              ), // Foreign actor
+              recoveryDispatcherEnabledProvider.overrideWithValue(false),
+              activeFamilyProvider.overrideWith(
+                () => _PresetActiveFamilyNotifier(testFamily),
+              ),
+              childProfileRepositoryProvider.overrideWithValue(
+                InMemoryChildProfileRepository()..children.add(testChild),
+              ),
+              rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+              pendingRewardCommandStoreProvider.overrideWithValue(commandStore),
+            ],
+            child: MaterialApp(
+              home: ParentFulfillmentInboxScreen(
+                key: UniqueKey(),
+                clock: () => currentTime,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Foreign actor initially sees pending confirmation by original parent, no retry button
+        expect(
+          find.text('Pending confirmation by original parent.'),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(
+            const Key('retry_pending_fulfillment_button_cmd-foreign-blocked-1'),
+          ),
+          findsNothing,
+        );
+
+        // Advance time past deadline
+        currentTime = currentTime.add(const Duration(seconds: 5));
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pumpAndSettle();
+
+        // Still blocked!
+        expect(
+          find.text('Pending confirmation by original parent.'),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(
+            const Key('retry_pending_fulfillment_button_cmd-foreign-blocked-1'),
+          ),
+          findsNothing,
+        );
+      });
+
+      testWidgets(
+        'Quarantined command remains blocked regardless of deadline',
+        (tester) async {
+          final inMemoryRewards = InMemoryRewardRepository();
+          final created = await inMemoryRewards.createReward(
+            familyId: testFamily.id,
+            title: 'Reward Item',
+            category: RewardCategory.item,
+            storeCostMinor: 1000,
+            storeEnabled: true,
+          );
+          final redemption = await inMemoryRewards.redeemStoreReward(
+            commandId: 'cmd-pre-r29-07-6',
+            rewardId: created.id,
+            childId: testChild.id,
+          );
+
+          final commandStore = InMemoryPendingRewardCommandStore();
+          var currentTime = DateTime.utc(2026, 11, 1, 12, 0, 0);
+          final deadline = currentTime.add(const Duration(seconds: 2));
+
+          await commandStore.savePendingCommand(
+            PendingRewardCommand(
+              operation: RewardCommandOperation.fulfillReward,
+              commandId: 'cmd-quarantine-blocked-1',
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-1',
+              actorRole: 'parent',
+              redemptionId: redemption.id.value,
+              recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
+              nextAttemptAt: deadline,
+              createdAt: currentTime,
+            ),
+          );
+
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                currentUserIdProvider.overrideWithValue('parent-1'),
+                recoveryDispatcherEnabledProvider.overrideWithValue(false),
+                activeFamilyProvider.overrideWith(
+                  () => _PresetActiveFamilyNotifier(testFamily),
+                ),
+                childProfileRepositoryProvider.overrideWithValue(
+                  InMemoryChildProfileRepository()..children.add(testChild),
+                ),
+                rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+                pendingRewardCommandStoreProvider.overrideWithValue(
+                  commandStore,
+                ),
+              ],
+              child: MaterialApp(
+                home: ParentFulfillmentInboxScreen(
+                  key: UniqueKey(),
+                  clock: () => currentTime,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          expect(
+            find.text('Pending update requires manual review.'),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(
+              const Key(
+                'retry_pending_fulfillment_button_cmd-quarantine-blocked-1',
+              ),
+            ),
+            findsNothing,
+          );
+
+          // Advance past deadline
+          currentTime = currentTime.add(const Duration(seconds: 5));
+          await tester.pump(const Duration(seconds: 5));
+          await tester.pumpAndSettle();
+
+          expect(
+            find.text('Pending update requires manual review.'),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(
+              const Key(
+                'retry_pending_fulfillment_button_cmd-quarantine-blocked-1',
+              ),
+            ),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets(
+        'Multiple pending commands with different deadlines transition independently',
+        (tester) async {
+          final inMemoryRewards = InMemoryRewardRepository();
+          final created = await inMemoryRewards.createReward(
+            familyId: testFamily.id,
+            title: 'Reward Item',
+            category: RewardCategory.item,
+            storeCostMinor: 1000,
+            storeEnabled: true,
+          );
+          final redemption = await inMemoryRewards.redeemStoreReward(
+            commandId: 'cmd-pre-r29-07-7',
+            rewardId: created.id,
+            childId: testChild.id,
+          );
+
+          final commandStore = InMemoryPendingRewardCommandStore();
+          var currentTime = DateTime.utc(2026, 11, 1, 12, 0, 0);
+          final deadlineA = currentTime.add(const Duration(seconds: 2));
+          final deadlineB = currentTime.add(const Duration(seconds: 5));
+
+          await commandStore.savePendingCommand(
+            PendingRewardCommand(
+              operation: RewardCommandOperation.fulfillReward,
+              commandId: 'cmd-multi-a',
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-1',
+              actorRole: 'parent',
+              redemptionId: redemption.id.value,
+              recoveryState: CommandRecoveryState.pendingOriginalActor,
+              nextAttemptAt: deadlineA,
+              createdAt: currentTime,
+            ),
+          );
+          await commandStore.savePendingCommand(
+            PendingRewardCommand(
+              operation: RewardCommandOperation.fulfillReward,
+              commandId: 'cmd-multi-b',
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-1',
+              actorRole: 'parent',
+              redemptionId: redemption.id.value,
+              recoveryState: CommandRecoveryState.active,
+              nextAttemptAt: deadlineB,
+              createdAt: currentTime,
+            ),
+          );
+
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                currentUserIdProvider.overrideWithValue('parent-1'),
+                recoveryDispatcherEnabledProvider.overrideWithValue(false),
+                activeFamilyProvider.overrideWith(
+                  () => _PresetActiveFamilyNotifier(testFamily),
+                ),
+                childProfileRepositoryProvider.overrideWithValue(
+                  InMemoryChildProfileRepository()..children.add(testChild),
+                ),
+                rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+                pendingRewardCommandStoreProvider.overrideWithValue(
+                  commandStore,
+                ),
+              ],
+              child: MaterialApp(
+                home: ParentFulfillmentInboxScreen(
+                  key: UniqueKey(),
+                  clock: () => currentTime,
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final retryFinderA = find.byKey(
+            const Key('retry_pending_fulfillment_button_cmd-multi-a'),
+          );
+          final retryFinderB = find.byKey(
+            const Key('retry_pending_fulfillment_button_cmd-multi-b'),
+          );
+
+          // At t=0: Both scheduled, neither has retry
+          expect(retryFinderA, findsNothing);
+          expect(retryFinderB, findsNothing);
+
+          // Advance 2 seconds: Command A reaches deadline, Command B still pending
+          currentTime = currentTime.add(const Duration(seconds: 2));
+          await tester.pump(const Duration(seconds: 2));
+          await tester.pumpAndSettle();
+
+          expect(retryFinderA, findsOneWidget);
+          expect(retryFinderB, findsNothing);
+
+          // Advance 3 more seconds (t=5s): Command B reaches deadline
+          currentTime = currentTime.add(const Duration(seconds: 3));
+          await tester.pump(const Duration(seconds: 3));
+          await tester.pumpAndSettle();
+
+          expect(retryFinderA, findsOneWidget);
+          expect(retryFinderB, findsOneWidget);
+        },
+      );
+    });
   });
 }
