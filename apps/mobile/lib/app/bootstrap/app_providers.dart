@@ -20,6 +20,16 @@ final appConfigProvider = Provider<AppConfig>((ref) {
   return AppConfig.fromEnvironment();
 });
 
+/// System clock provider for testability and time-dependent logic.
+final appClockProvider = Provider<DateTime Function()>((ref) {
+  return () => DateTime.now().toUtc();
+});
+
+/// Recovery dispatcher enabled status provider.
+final recoveryDispatcherEnabledProvider = Provider<bool>((ref) {
+  return AppConfig.recoveryDispatcherEnabled;
+});
+
 /// Local Drift database provider.
 final databaseProvider = Provider<AppDatabase>((ref) {
   final database = AppDatabase(driftDatabase(name: 'learnward'));

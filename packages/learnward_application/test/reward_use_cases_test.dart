@@ -178,12 +178,26 @@ class FakeRewardRepository implements RewardRepository {
 
 void main() {
   late FakeRewardRepository repository;
+  late FakeAuthSessionPort authPort;
+  late FakeRecoveryAuthorizationPort authzPort;
   final familyId = FamilyId('fam-001');
   final childId = ChildId('child-001');
   final now = DateTime.utc(2026, 11, 1, 10, 0);
 
   setUp(() {
     repository = FakeRewardRepository();
+    authPort = FakeAuthSessionPort(
+      initialContext: ValidatedActorContext(
+        userId: 'adult-001',
+        sessionGeneration: '1',
+        observedAt: now,
+        role: 'parent',
+      ),
+    );
+    authzPort = FakeRecoveryAuthorizationPort(
+      defaultStatus: TargetAuthorizationStatus.authorized,
+      defaultAdultRole: VerifiedAdultRole.parent,
+    );
   });
 
   group('Reward Catalog Use Cases', () {
@@ -351,7 +365,12 @@ void main() {
 
     test('FulfillRewardRedemption completes delivery', () async {
       final commandStore = InMemoryPendingRewardCommandStore();
-      final fulfill = FulfillRewardRedemption(repository, commandStore);
+      final fulfill = FulfillRewardRedemption(
+        repository,
+        commandStore,
+        authSessionPort: authPort,
+        authorizationPort: authzPort,
+      );
 
       final redId = RewardRedemptionId('red-1');
       repository.redemptions[redId.value] = RewardRedemption(
@@ -381,7 +400,12 @@ void main() {
 
     test('CancelRewardRedemption cancels and records reason', () async {
       final commandStore = InMemoryPendingRewardCommandStore();
-      final cancel = CancelRewardRedemption(repository, commandStore);
+      final cancel = CancelRewardRedemption(
+        repository,
+        commandStore,
+        authSessionPort: authPort,
+        authorizationPort: authzPort,
+      );
 
       final redId = RewardRedemptionId('red-2');
       repository.redemptions[redId.value] = RewardRedemption(
@@ -408,6 +432,61 @@ void main() {
       expect(cancelled.status, RewardRedemptionStatus.cancelled);
       expect(cancelled.cancellationReason, 'Event rained out');
       expect(repository.commandIds.contains('cmd-cancel-1'), isTrue);
+    });
+
+    test('R29-01: Fulfill and Cancel constructors fail closed without trusted dependencies', () async {
+      final commandStore = InMemoryPendingRewardCommandStore();
+
+      // 1. Omitted both
+      expect(
+        () => FulfillRewardRedemption(repository, commandStore),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => CancelRewardRedemption(repository, commandStore),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // 2. Omitted authorizationPort
+      expect(
+        () => FulfillRewardRedemption(
+          repository,
+          commandStore,
+          authSessionPort: authPort,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => CancelRewardRedemption(
+          repository,
+          commandStore,
+          authSessionPort: authPort,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // 3. Omitted authSessionPort
+      expect(
+        () => FulfillRewardRedemption(
+          repository,
+          commandStore,
+          authorizationPort: authzPort,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => CancelRewardRedemption(
+          repository,
+          commandStore,
+          authorizationPort: authzPort,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // Assert 0 rows in store, 0 RPC calls in repository
+      expect(await commandStore.listPendingCommands(), isEmpty);
+      expect(repository.fulfillCallCount, 0);
+      expect(repository.cancelCallCount, 0);
     });
 
     test(

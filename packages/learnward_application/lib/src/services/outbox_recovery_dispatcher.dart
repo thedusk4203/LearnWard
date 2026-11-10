@@ -152,6 +152,8 @@ final class OutboxRecoveryDispatcher {
               familyId: cmd.familyId,
               childId: cmd.childId!,
               rewardId: cmd.rewardId,
+              redemptionId: cmd.redemptionId,
+              cancellationReason: cmd.cancellationReason,
               requestedCommandId: cmd.commandId,
               trigger: CommandExecutionTrigger.recovery,
             );

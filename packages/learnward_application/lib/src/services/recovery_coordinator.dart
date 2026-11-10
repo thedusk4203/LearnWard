@@ -164,7 +164,8 @@ final class CommandAuthUnavailableResult extends CommandExecutionResult {
 }
 
 /// Central application coordinator for actor-aware, restart-safe recovery of
-/// [RewardCommandOperation.spinWheel] and [RewardCommandOperation.redeemReward].
+/// [RewardCommandOperation.spinWheel], [RewardCommandOperation.redeemReward],
+/// [RewardCommandOperation.fulfillReward], and [RewardCommandOperation.cancelReward].
 final class RecoveryCoordinator {
   const RecoveryCoordinator({
     required PendingRewardCommandStore commandStore,
@@ -199,12 +200,30 @@ final class RecoveryCoordinator {
   final String Function()? _uuidGenerator;
   final Duration _defaultLeaseDuration;
 
-  /// Executes a single Spin or Redeem command through the shared, locked recovery pipeline.
+  static const int maxConsecutiveUnverifiedTargetMisses =
+      PendingRewardCommand.maxConsecutiveUnverifiedTargetMisses;
+
+  Duration _calculateBackoff(int n, {double minFloorSeconds = 1.0}) {
+    final capSeconds = min(60.0, 2.0 * pow(2.0, n - 1));
+    final jitterUniform = _jitterSource.sampleUniform();
+    var waitSeconds = jitterUniform * capSeconds;
+
+    if (_jitterSource is! DeterministicJitterSource &&
+        waitSeconds < minFloorSeconds) {
+      waitSeconds = minFloorSeconds;
+    }
+
+    return Duration(milliseconds: (waitSeconds * 1000).toInt());
+  }
+
+  /// Executes a single reward command through the shared, locked recovery pipeline.
   Future<CommandExecutionResult> execute({
     required RewardCommandOperation operation,
     required String familyId,
     required String childId,
     String? rewardId,
+    String? redemptionId,
+    String? cancellationReason,
     String? requestedCommandId,
     CommandExecutionTrigger trigger = CommandExecutionTrigger.foreground,
     Duration? overrideLeaseDuration,
@@ -233,26 +252,154 @@ final class RecoveryCoordinator {
       }
     }
 
-    final authStatus = await _authorizationPort.verifyTarget(
-      context: context,
-      familyId: familyId,
-      childId: childId,
-      operation: operation,
-    );
+    final isAdultOp =
+        operation == RewardCommandOperation.fulfillReward ||
+        operation == RewardCommandOperation.cancelReward;
 
-    // M01 / H05: Handle preflight definitive denial or confirmed revocation
-    if (authStatus == TargetAuthorizationStatus.definitelyDenied ||
-        authStatus == TargetAuthorizationStatus.confirmedRevoked) {
-      final denialReason =
-          authStatus == TargetAuthorizationStatus.confirmedRevoked
-          ? 'Device grant confirmed revoked prior to execution.'
-          : 'Target family/child authorization definitively denied.';
+    PendingRewardCommand? existing;
+    AdultTargetAuthorizationResult? adultAuth;
 
-      // If an existing command was targeted, acquire claim and safely transition it to quarantine in SQLite.
-      if (requestedCommandId != null) {
-        final existing = await _commandStore.getPendingCommand(
-          requestedCommandId,
-        );
+    if (requestedCommandId != null) {
+      existing = await _commandStore.getPendingCommand(requestedCommandId);
+      if (existing == null) {
+        if (trigger == CommandExecutionTrigger.recovery ||
+            trigger == CommandExecutionTrigger.foregroundRetry) {
+          return CommandQuarantinedResult(
+            commandId: requestedCommandId,
+            reason:
+                'Pending command not found for requested retry ID: $requestedCommandId',
+          );
+        }
+      }
+    }
+
+    if (isAdultOp) {
+      // Step 0 for adult operations: check existing row first if requested
+      if (existing != null) {
+        if (existing.dispatchState == CommandDispatchState.unknownLegacy ||
+            existing.recoveryState ==
+                CommandRecoveryState.quarantinedUnknownOutcome ||
+            existing.recoveryState == CommandRecoveryState.terminalError) {
+          return CommandQuarantinedResult(
+            commandId: existing.commandId,
+            reason:
+                'Command is quarantined or legacy unknown: recovery=${existing.recoveryState.wireValue}, dispatch=${existing.dispatchState.wireValue}',
+          );
+        }
+
+        // Actor mismatch check (R24-3-02)
+        if (existing.actorUserId != null &&
+            existing.actorUserId!.isNotEmpty &&
+            existing.actorUserId != context.userId) {
+          if (trigger == CommandExecutionTrigger.recovery) {
+            await _commandStore.pauseMismatchedActorCommand(
+              commandId: existing.commandId,
+              familyId: existing.familyId,
+              authenticatedActorId: context.userId,
+              mismatchReason: 'Signed in as different user',
+              now: now,
+            );
+          }
+          return CommandPendingOriginalActorResult(
+            commandId: existing.commandId,
+            originalActorId: existing.actorUserId!,
+            reason: 'Actor mismatch with authenticated session',
+          );
+        }
+
+        // Completeness gate (A2-19)
+        final bool isComplete =
+            existing.actorUserId != null &&
+            existing.actorUserId!.isNotEmpty &&
+            existing.childId != null &&
+            existing.childId!.isNotEmpty &&
+            existing.redemptionId != null &&
+            existing.redemptionId!.isNotEmpty &&
+            (existing.actorRole == 'owner' || existing.actorRole == 'parent');
+
+        if (!isComplete) {
+          return CommandQuarantinedResult(
+            commandId: existing.commandId,
+            reason: 'Incomplete or legacy command identity',
+          );
+        }
+
+        if (operation == RewardCommandOperation.cancelReward &&
+            (existing.cancellationReason == null ||
+                existing.cancellationReason!.trim().length < 2)) {
+          return CommandQuarantinedResult(
+            commandId: existing.commandId,
+            reason: 'Incomplete or legacy command identity: cancellation reason is required',
+          );
+        }
+
+        if (operation == RewardCommandOperation.fulfillReward &&
+            existing.cancellationReason != null) {
+          return CommandQuarantinedResult(
+            commandId: existing.commandId,
+            reason: 'Incomplete or legacy command identity: fulfill command must not have cancellation reason',
+          );
+        }
+
+        // Target match check
+        final cleanRequestedReason = cancellationReason?.trim();
+        final matchesTarget =
+            existing.operation == operation &&
+            existing.familyId == familyId &&
+            existing.childId == childId &&
+            existing.redemptionId == redemptionId &&
+            (operation != RewardCommandOperation.cancelReward ||
+                existing.cancellationReason == cleanRequestedReason);
+
+        if (!matchesTarget) {
+          return CommandQuarantinedResult(
+            commandId: existing.commandId,
+            reason:
+                'Mismatched command payload for existing command ID ${existing.commandId}.',
+          );
+        }
+
+        // Recovery schedule check
+        if (trigger == CommandExecutionTrigger.recovery &&
+            existing.nextAttemptAt != null &&
+            existing.nextAttemptAt!.isAfter(now)) {
+          return CommandScheduledResult(
+            commandId: existing.commandId,
+            nextAttemptAt: existing.nextAttemptAt!,
+            retryCount: existing.retryCount,
+          );
+        }
+      }
+
+      // Verify adult redemption target
+      adultAuth = await _authorizationPort.verifyAdultRedemptionTarget(
+        context: context,
+        familyId: familyId,
+        childId: childId,
+        redemptionId: redemptionId ?? '',
+        operation: operation,
+      );
+
+      // Verified role consistency check on existing row
+      if (existing != null &&
+          adultAuth.status == TargetAuthorizationStatus.authorized) {
+        if (adultAuth.verifiedRole!.wireValue != existing.actorRole) {
+          adultAuth = const AdultTargetAuthorizationResult.definitelyDenied(
+            reason: AdultTargetVerificationReason.inconsistentRoleClaim,
+          );
+        }
+      }
+
+      if (adultAuth.status == TargetAuthorizationStatus.definitelyDenied ||
+          adultAuth.status == TargetAuthorizationStatus.confirmedRevoked) {
+        final denialReason =
+            adultAuth.reason ==
+                AdultTargetVerificationReason.childConfirmedArchived
+            ? 'Target child profile is confirmed archived.'
+            : adultAuth.status == TargetAuthorizationStatus.confirmedRevoked
+            ? 'Device grant confirmed revoked prior to execution.'
+            : 'Target adult authorization definitively denied (${adultAuth.reason.name}).';
+
         if (existing != null &&
             existing.recoveryState == CommandRecoveryState.active) {
           final claimToken = await _commandStore.acquireClaim(
@@ -262,7 +409,6 @@ final class RecoveryCoordinator {
             now: now,
           );
           if (claimToken == null) {
-            // CAS failure: command is currently leased or locked by another worker
             return CommandAlreadyInFlightResult(commandId: existing.commandId);
           }
           final transitioned = await _commandStore.transitionRecoveryState(
@@ -272,76 +418,345 @@ final class RecoveryCoordinator {
             lastErrorMessage: denialReason,
           );
           if (!transitioned) {
-            // CAS failure: state transition failed (e.g. lease expired or preempted)
             return CommandAlreadyInFlightResult(commandId: existing.commandId);
           }
         }
+
+        return CommandQuarantinedResult(
+          commandId: requestedCommandId ?? 'unassigned',
+          reason: denialReason,
+        );
       }
 
-      return CommandQuarantinedResult(
-        commandId: requestedCommandId ?? 'unassigned',
-        reason: denialReason,
-      );
-    }
+      if (adultAuth.status == TargetAuthorizationStatus.unverified) {
+        if (requestedCommandId == null) {
+          return const CommandAuthUnavailableResult(
+            reason: 'Target authorization could not be verified.',
+          );
+        }
 
-    if (authStatus == TargetAuthorizationStatus.unverified) {
-      return const CommandAuthUnavailableResult(
-        reason: 'Target authorization could not be verified.',
+        if (existing != null) {
+          if (existing.recoveryState != CommandRecoveryState.active) {
+            return CommandQuarantinedResult(
+              commandId: existing.commandId,
+              reason: 'Command is not active',
+            );
+          }
+
+          final claimToken = await _commandStore.acquireClaim(
+            commandId: existing.commandId,
+            actorUserId: context.userId,
+            leaseDuration: const Duration(seconds: 10),
+            now: now,
+          );
+          if (claimToken == null) {
+            final latest = await _commandStore.getPendingCommand(
+              existing.commandId,
+            );
+            if (latest != null &&
+                latest.nextAttemptAt != null &&
+                latest.nextAttemptAt!.isAfter(now)) {
+              return CommandScheduledResult(
+                commandId: existing.commandId,
+                nextAttemptAt: latest.nextAttemptAt!,
+                retryCount: latest.retryCount,
+                errorMessage: latest.lastErrorMessage,
+              );
+            }
+            return CommandAlreadyInFlightResult(commandId: existing.commandId);
+          }
+
+          final latest = await _commandStore.getPendingCommand(
+            existing.commandId,
+          );
+          if (latest == null || latest.leaseToken != claimToken) {
+            return CommandAlreadyInFlightResult(commandId: existing.commandId);
+          }
+
+          final nextGlobalRetry = latest.retryCount + 1;
+          final backoffDuration = _calculateBackoff(
+            nextGlobalRetry,
+            minFloorSeconds: 5.0,
+          );
+          final nextAttemptAt = now.add(backoffDuration);
+
+          if (adultAuth.reason ==
+                  AdultTargetVerificationReason.rlsFilteredOrMissingTargetRow ||
+              adultAuth.reason ==
+                  AdultTargetVerificationReason.missingOrUnverifiedMembership) {
+            final nextMissCount = latest.consecutiveUnverifiedTargetMisses + 1;
+            if (nextMissCount >= maxConsecutiveUnverifiedTargetMisses) {
+              final quarantineReason =
+                  PendingRewardCommand.formatUnverifiedTargetMissMessage(
+                    consecutiveMisses: nextMissCount,
+                    detail:
+                        'Target remained unverified (missing or RLS-filtered row, no positive archive proof) after $maxConsecutiveUnverifiedTargetMisses consecutive verification misses; quarantined for manual review.',
+                  );
+              final transitioned = await _commandStore.transitionRecoveryState(
+                commandId: existing.commandId,
+                leaseToken: claimToken,
+                newState: CommandRecoveryState.quarantinedUnknownOutcome,
+                lastErrorMessage: quarantineReason,
+              );
+              if (!transitioned) {
+                return CommandAlreadyInFlightResult(
+                  commandId: existing.commandId,
+                );
+              }
+              return CommandQuarantinedResult(
+                commandId: existing.commandId,
+                reason: quarantineReason,
+              );
+            } else {
+              final missMessage =
+                  PendingRewardCommand.formatUnverifiedTargetMissMessage(
+                    consecutiveMisses: nextMissCount,
+                    detail:
+                        'Target row unverified (missing or RLS-filtered, no positive archive proof); consecutive miss $nextMissCount/$maxConsecutiveUnverifiedTargetMisses.',
+                  );
+              final released = await _commandStore.releaseClaim(
+                commandId: existing.commandId,
+                leaseToken: claimToken,
+                nextAttemptAt: nextAttemptAt,
+                lastErrorMessage: missMessage,
+              );
+              if (!released) {
+                return CommandAlreadyInFlightResult(
+                  commandId: existing.commandId,
+                );
+              }
+              return CommandScheduledResult(
+                commandId: existing.commandId,
+                nextAttemptAt: nextAttemptAt,
+                retryCount: nextGlobalRetry,
+                errorMessage: missMessage,
+              );
+            }
+          } else {
+            // Transient verification failure
+            const failureMessage =
+                'Temporary target verification failure (network/timeout); retry scheduled.';
+            final released = await _commandStore.releaseClaim(
+              commandId: existing.commandId,
+              leaseToken: claimToken,
+              nextAttemptAt: nextAttemptAt,
+              lastErrorMessage: failureMessage,
+            );
+            if (!released) {
+              return CommandAlreadyInFlightResult(
+                commandId: existing.commandId,
+              );
+            }
+            return const CommandAuthUnavailableResult(reason: failureMessage);
+          }
+        }
+      }
+    } else {
+      // Step 0 for child operations (spin_wheel, redeem_reward)
+      final authStatus = await _authorizationPort.verifyTarget(
+        context: context,
+        familyId: familyId,
+        childId: childId,
+        operation: operation,
       );
+
+      if (authStatus == TargetAuthorizationStatus.definitelyDenied ||
+          authStatus == TargetAuthorizationStatus.confirmedRevoked) {
+        final denialReason =
+            authStatus == TargetAuthorizationStatus.confirmedRevoked
+            ? 'Device grant confirmed revoked prior to execution.'
+            : 'Target family/child authorization definitively denied.';
+
+        if (requestedCommandId != null) {
+          final existingChild = await _commandStore.getPendingCommand(
+            requestedCommandId,
+          );
+          if (existingChild != null &&
+              existingChild.recoveryState == CommandRecoveryState.active) {
+            final claimToken = await _commandStore.acquireClaim(
+              commandId: existingChild.commandId,
+              actorUserId: context.userId,
+              leaseDuration: const Duration(seconds: 10),
+              now: now,
+            );
+            if (claimToken == null) {
+              return CommandAlreadyInFlightResult(
+                commandId: existingChild.commandId,
+              );
+            }
+            final transitioned = await _commandStore.transitionRecoveryState(
+              commandId: existingChild.commandId,
+              leaseToken: claimToken,
+              newState: CommandRecoveryState.quarantinedUnknownOutcome,
+              lastErrorMessage: denialReason,
+            );
+            if (!transitioned) {
+              return CommandAlreadyInFlightResult(
+                commandId: existingChild.commandId,
+              );
+            }
+          }
+        }
+
+        return CommandQuarantinedResult(
+          commandId: requestedCommandId ?? 'unassigned',
+          reason: denialReason,
+        );
+      }
+
+      if (authStatus == TargetAuthorizationStatus.unverified) {
+        return const CommandAuthUnavailableResult(
+          reason: 'Target authorization could not be verified.',
+        );
+      }
     }
 
     // STEP 1 — SELECT IDENTITY: Find exact existing command or create new
     PendingRewardCommand? command;
 
-    if (requestedCommandId != null) {
-      // W3 / H04: Strict requested ID lookup. Missing retry ID fails closed!
-      command = await _commandStore.getPendingCommand(requestedCommandId);
-      if (command == null) {
-        return CommandQuarantinedResult(
-          commandId: requestedCommandId,
-          reason:
-              'Pending command not found for requested retry ID: $requestedCommandId',
-        );
-      }
+    if (existing != null) {
+      command = existing;
 
-      // W3 / H04: Validate stored immutable payload against invocation arguments.
+      final cleanRequestedReason = cancellationReason?.trim();
       final matchesTarget =
           command.operation == operation &&
           command.familyId == familyId &&
           command.childId == childId &&
           (operation != RewardCommandOperation.redeemReward ||
-              command.rewardId == rewardId);
+              command.rewardId == rewardId) &&
+          ((operation != RewardCommandOperation.fulfillReward &&
+                  operation != RewardCommandOperation.cancelReward) ||
+              command.redemptionId == redemptionId) &&
+          (operation != RewardCommandOperation.cancelReward ||
+              command.cancellationReason == cleanRequestedReason);
 
       if (!matchesTarget) {
         return CommandQuarantinedResult(
           commandId: command.commandId,
           reason:
-              'Mismatched command payload for existing command ID ${command.commandId}. '
-              'Expected op=$operation, fam=$familyId, child=$childId, reward=$rewardId; '
-              'Stored op=${command.operation}, fam=${command.familyId}, child=${command.childId}, reward=${command.rewardId}',
+              'Mismatched command payload for existing command ID ${command.commandId}.',
         );
       }
+
+      // Safe Manual Resume for Original Adult (R29-02)
+      if (isAdultOp &&
+          command.recoveryState == CommandRecoveryState.pendingOriginalActor) {
+        if (trigger == CommandExecutionTrigger.foregroundRetry) {
+          // Re-verify session generation and active family before atomic resume
+          if (_authSessionPort.currentSessionGeneration !=
+              context.sessionGeneration) {
+            return const CommandAuthUnavailableResult(
+              reason: 'Session epoch changed prior to manual resumption.',
+            );
+          }
+          if (_activeFamilyIdProvider != null) {
+            final currentActiveFamily = _activeFamilyIdProvider();
+            if (currentActiveFamily == null ||
+                currentActiveFamily != command.familyId) {
+              return CommandFamilyMismatchResult(
+                commandId: command.commandId,
+                commandFamilyId: command.familyId,
+                activeFamilyId: currentActiveFamily,
+              );
+            }
+          }
+
+          final resumed = await _commandStore.resumeOriginalActorCommand(
+            commandId: command.commandId,
+            familyId: command.familyId,
+            authenticatedActorId: context.userId,
+            now: now,
+          );
+
+          if (resumed) {
+            final refreshed = await _commandStore.getPendingCommand(
+              command.commandId,
+            );
+            if (refreshed == null) {
+              return CommandQuarantinedResult(
+                commandId: command.commandId,
+                reason: 'Pending command missing after manual resumption.',
+              );
+            }
+            command = refreshed;
+            existing = refreshed;
+          } else {
+            final latest = await _commandStore.getPendingCommand(
+              command.commandId,
+            );
+            if (latest == null) {
+              return CommandQuarantinedResult(
+                commandId: command.commandId,
+                reason: 'Pending command missing during manual resumption.',
+              );
+            }
+            if (latest.recoveryState == CommandRecoveryState.active) {
+              command = latest;
+              existing = latest;
+            } else if (latest.recoveryState ==
+                    CommandRecoveryState.quarantinedUnknownOutcome ||
+                latest.recoveryState == CommandRecoveryState.terminalError) {
+              return CommandQuarantinedResult(
+                commandId: command.commandId,
+                reason:
+                    'Command transitioned to quarantined or terminal state.',
+              );
+            } else if (latest.actorUserId != context.userId) {
+              return CommandPendingOriginalActorResult(
+                commandId: command.commandId,
+                originalActorId: latest.actorUserId ?? '',
+                reason: 'Actor mismatch with authenticated session',
+              );
+            } else {
+              // Active lease contention or unfulfilled CAS condition
+              return CommandAlreadyInFlightResult(commandId: command.commandId);
+            }
+          }
+        } else {
+          return CommandPendingOriginalActorResult(
+            commandId: command.commandId,
+            originalActorId: command.actorUserId ?? '',
+            reason: 'Command is paused pending original actor confirmation.',
+          );
+        }
+      }
     } else {
-      // requestedCommandId is null
       if (trigger == CommandExecutionTrigger.recovery ||
           trigger == CommandExecutionTrigger.foregroundRetry) {
-        // Missing explicit retry ID must fail closed!
         return const CommandAuthUnavailableResult(
           reason: 'Missing explicit retry ID for recovery dispatch.',
         );
       }
 
-      // Truly fresh foreground intent: generate candidate UUID and atomically register (R24-4-01)
-      final newCommandId = _generateUuid();
+      String? cleanReason;
+      if (operation == RewardCommandOperation.cancelReward) {
+        cleanReason = cancellationReason?.trim() ?? '';
+        if (cleanReason.length < 2) {
+          return const CommandQuarantinedResult(
+            commandId: 'unassigned',
+            reason: 'Cancellation reason must be at least 2 characters.',
+          );
+        }
+      }
+
+      final newCommandId = requestedCommandId ?? _generateUuid();
+      final String? actorRole = isAdultOp
+          ? adultAuth!.verifiedRole!.wireValue
+          : context.role;
+
       final freshCmd = PendingRewardCommand(
         operation: operation,
         commandId: newCommandId,
         familyId: familyId,
         childId: childId,
         rewardId: rewardId,
+        redemptionId: redemptionId,
+        cancellationReason: operation == RewardCommandOperation.cancelReward
+            ? cleanReason
+            : null,
         createdAt: now,
         actorUserId: context.userId,
-        actorRole: context.role,
+        actorRole: actorRole,
         recoveryState: CommandRecoveryState.active,
         dispatchState: CommandDispatchState.neverDispatched,
       );
@@ -354,10 +769,8 @@ final class RecoveryCoordinator {
       switch (regResult) {
         case FreshCommandRegistered(command: final newlyCreated):
           command = newlyCreated;
-        case PreexistingCommandFound(existingCommand: final existing):
-          // An unresolved pending command already exists for this logical operation.
-          // Cannot allocate or dispatch distinct UUIDs!
-          return CommandAlreadyInFlightResult(commandId: existing.commandId);
+        case PreexistingCommandFound(existingCommand: final preexisting):
+          return CommandAlreadyInFlightResult(commandId: preexisting.commandId);
       }
     }
 
@@ -372,7 +785,15 @@ final class RecoveryCoordinator {
       );
     }
 
-    // Check actor match (R24-3-02: must run before claim and before confirmedCommitted reconciliation!)
+    if (command.recoveryState == CommandRecoveryState.pendingOriginalActor) {
+      return CommandPendingOriginalActorResult(
+        commandId: command.commandId,
+        originalActorId: command.actorUserId ?? '',
+        reason: 'Command is paused pending original actor confirmation.',
+      );
+    }
+
+    // Check actor match (R24-3-02)
     if (command.actorUserId != null && command.actorUserId != context.userId) {
       if (trigger == CommandExecutionTrigger.recovery) {
         await _commandStore.pauseMismatchedActorCommand(
@@ -414,8 +835,6 @@ final class RecoveryCoordinator {
     }
 
     // STEP 2 — ATOMICALLY ACQUIRE EXCLUSIVE CLAIM LEASE (R24-4-02, R24-5-02)
-    // Every independent coordinator execution must acquire an exclusive claim.
-    // Supplying or adopting an existing lease without acquiring an exclusive claim is prohibited.
     final leaseToken = await _commandStore.acquireClaim(
       commandId: command.commandId,
       actorUserId: context.userId,
@@ -441,7 +860,6 @@ final class RecoveryCoordinator {
     // STEP 3 — REVALIDATE AUTH/AUTHORIZATION AFTER CLAIM
     if (_authSessionPort.currentSessionGeneration !=
         context.sessionGeneration) {
-      // Session epoch changed during claim acquisition: release claim and fail closed
       await _commandStore.releaseClaim(
         commandId: command.commandId,
         leaseToken: leaseToken,
@@ -454,7 +872,6 @@ final class RecoveryCoordinator {
     }
 
     // STEP 4 — DURABLE PRE-SEND MARKER (TOKEN-FENCED)
-    // If command was already confirmedCommitted, skip markPossiblyDispatched.
     if (command.dispatchState != CommandDispatchState.confirmedCommitted) {
       final markSuccess = await _commandStore.markPossiblyDispatched(
         commandId: command.commandId,
@@ -464,7 +881,6 @@ final class RecoveryCoordinator {
       );
 
       if (!markSuccess) {
-        // Token-fenced marker failed (e.g. lease expired or was taken over)
         return CommandAlreadyInFlightResult(commandId: command.commandId);
       }
     }
@@ -475,7 +891,6 @@ final class RecoveryCoordinator {
         freshContext.userId != context.userId ||
         _authSessionPort.currentSessionGeneration !=
             context.sessionGeneration) {
-      // Session or actor invalidated immediately before RPC: ZERO RPC!
       await _commandStore.releaseClaim(
         commandId: command.commandId,
         leaseToken: leaseToken,
@@ -488,7 +903,6 @@ final class RecoveryCoordinator {
       );
     }
 
-    // In-flight active UI family recheck immediately before RPC (R24-3-03, R24-4-05)
     if (_activeFamilyIdProvider != null) {
       final currentActive = _activeFamilyIdProvider();
       if (currentActive == null || currentActive != command.familyId) {
@@ -508,53 +922,172 @@ final class RecoveryCoordinator {
       }
     }
 
-    final freshAuth = await _authorizationPort.verifyTarget(
-      context: freshContext,
-      familyId: command.familyId,
-      childId: command.childId!,
-      operation: command.operation,
-    );
+    if (isAdultOp) {
+      final freshAdultAuth = await _authorizationPort
+          .verifyAdultRedemptionTarget(
+            context: freshContext,
+            familyId: command.familyId,
+            childId: command.childId!,
+            redemptionId: command.redemptionId!,
+            operation: command.operation,
+          );
 
-    if (freshAuth == TargetAuthorizationStatus.confirmedRevoked ||
-        freshAuth == TargetAuthorizationStatus.definitelyDenied) {
-      final reason = freshAuth == TargetAuthorizationStatus.confirmedRevoked
-          ? 'Device grant confirmed revoked prior to RPC.'
-          : 'Target authorization definitely denied prior to RPC.';
+      if (freshAdultAuth.status == TargetAuthorizationStatus.authorized) {
+        if (freshAdultAuth.verifiedRole!.wireValue != command.actorRole) {
+          await _commandStore.transitionRecoveryState(
+            commandId: command.commandId,
+            leaseToken: leaseToken,
+            newState: CommandRecoveryState.quarantinedUnknownOutcome,
+            lastErrorMessage: 'Actor membership role changed from stored role.',
+          );
+          return CommandQuarantinedResult(
+            commandId: command.commandId,
+            reason: 'Actor membership role changed from stored role.',
+          );
+        }
+      } else if (freshAdultAuth.status ==
+              TargetAuthorizationStatus.definitelyDenied ||
+          freshAdultAuth.status == TargetAuthorizationStatus.confirmedRevoked) {
+        final reason =
+            freshAdultAuth.reason ==
+                AdultTargetVerificationReason.childConfirmedArchived
+            ? 'Target child profile is confirmed archived.'
+            : 'Target adult authorization definitely denied prior to RPC.';
 
-      final transitioned = await _commandStore.transitionRecoveryState(
-        commandId: command.commandId,
-        leaseToken: leaseToken,
-        newState: CommandRecoveryState.quarantinedUnknownOutcome,
-        lastErrorMessage: reason,
-      );
-      if (!transitioned) {
-        // Lost lease ownership / CAS failure (R24-3-04)
-        return CommandAlreadyInFlightResult(commandId: command.commandId);
+        final transitioned = await _commandStore.transitionRecoveryState(
+          commandId: command.commandId,
+          leaseToken: leaseToken,
+          newState: CommandRecoveryState.quarantinedUnknownOutcome,
+          lastErrorMessage: reason,
+        );
+        if (!transitioned) {
+          return CommandAlreadyInFlightResult(commandId: command.commandId);
+        }
+        return CommandQuarantinedResult(
+          commandId: command.commandId,
+          reason: reason,
+        );
+      } else if (freshAdultAuth.status ==
+          TargetAuthorizationStatus.unverified) {
+        final latest = await _commandStore.getPendingCommand(command.commandId);
+        if (latest == null || latest.leaseToken != leaseToken) {
+          return CommandAlreadyInFlightResult(commandId: command.commandId);
+        }
+
+        final nextGlobalRetry = latest.retryCount + 1;
+        final backoffDuration = _calculateBackoff(
+          nextGlobalRetry,
+          minFloorSeconds: 5.0,
+        );
+        final nextAttemptAt = _clock.now().toUtc().add(backoffDuration);
+
+        if (freshAdultAuth.reason ==
+                AdultTargetVerificationReason.rlsFilteredOrMissingTargetRow ||
+            freshAdultAuth.reason ==
+                AdultTargetVerificationReason.missingOrUnverifiedMembership) {
+          final nextMissCount = latest.consecutiveUnverifiedTargetMisses + 1;
+          if (nextMissCount >= maxConsecutiveUnverifiedTargetMisses) {
+            final quarantineReason =
+                PendingRewardCommand.formatUnverifiedTargetMissMessage(
+                  consecutiveMisses: nextMissCount,
+                  detail:
+                      'Target remained unverified (missing or RLS-filtered row, no positive archive proof) after $maxConsecutiveUnverifiedTargetMisses consecutive verification misses; quarantined for manual review.',
+                );
+            final transitioned = await _commandStore.transitionRecoveryState(
+              commandId: command.commandId,
+              leaseToken: leaseToken,
+              newState: CommandRecoveryState.quarantinedUnknownOutcome,
+              lastErrorMessage: quarantineReason,
+            );
+            if (!transitioned) {
+              return CommandAlreadyInFlightResult(commandId: command.commandId);
+            }
+            return CommandQuarantinedResult(
+              commandId: command.commandId,
+              reason: quarantineReason,
+            );
+          } else {
+            final missMessage =
+                PendingRewardCommand.formatUnverifiedTargetMissMessage(
+                  consecutiveMisses: nextMissCount,
+                  detail:
+                      'Target row unverified (missing or RLS-filtered, no positive archive proof); consecutive miss $nextMissCount/$maxConsecutiveUnverifiedTargetMisses.',
+                );
+            final released = await _commandStore.releaseClaim(
+              commandId: command.commandId,
+              leaseToken: leaseToken,
+              nextAttemptAt: nextAttemptAt,
+              lastErrorMessage: missMessage,
+            );
+            if (!released) {
+              return CommandAlreadyInFlightResult(commandId: command.commandId);
+            }
+            return CommandScheduledResult(
+              commandId: command.commandId,
+              nextAttemptAt: nextAttemptAt,
+              retryCount: nextGlobalRetry,
+              errorMessage: missMessage,
+            );
+          }
+        } else {
+          // Transient verification failure
+          const failureMessage =
+              'Temporary target verification failure (network/timeout); retry scheduled.';
+          final released = await _commandStore.releaseClaim(
+            commandId: command.commandId,
+            leaseToken: leaseToken,
+            nextAttemptAt: nextAttemptAt,
+            lastErrorMessage: failureMessage,
+          );
+          if (!released) {
+            return CommandAlreadyInFlightResult(commandId: command.commandId);
+          }
+          return const CommandAuthUnavailableResult(reason: failureMessage);
+        }
       }
-      return CommandQuarantinedResult(
-        commandId: command.commandId,
-        reason: reason,
+    } else {
+      final freshAuth = await _authorizationPort.verifyTarget(
+        context: freshContext,
+        familyId: command.familyId,
+        childId: command.childId!,
+        operation: command.operation,
       );
+
+      if (freshAuth == TargetAuthorizationStatus.confirmedRevoked ||
+          freshAuth == TargetAuthorizationStatus.definitelyDenied) {
+        final reason = freshAuth == TargetAuthorizationStatus.confirmedRevoked
+            ? 'Device grant confirmed revoked prior to RPC.'
+            : 'Target authorization definitely denied prior to RPC.';
+
+        final transitioned = await _commandStore.transitionRecoveryState(
+          commandId: command.commandId,
+          leaseToken: leaseToken,
+          newState: CommandRecoveryState.quarantinedUnknownOutcome,
+          lastErrorMessage: reason,
+        );
+        if (!transitioned) {
+          return CommandAlreadyInFlightResult(commandId: command.commandId);
+        }
+        return CommandQuarantinedResult(
+          commandId: command.commandId,
+          reason: reason,
+        );
+      }
+
+      if (freshAuth == TargetAuthorizationStatus.unverified) {
+        await _commandStore.releaseClaim(
+          commandId: command.commandId,
+          leaseToken: leaseToken,
+          nextAttemptAt: _clock.now().toUtc().add(const Duration(seconds: 5)),
+          lastErrorMessage: 'Target authorization unverified immediately prior to remote RPC.',
+        );
+        return const CommandAuthUnavailableResult(
+          reason: 'Target authorization unverified immediately prior to remote RPC.',
+        );
+      }
     }
 
-    if (freshAuth == TargetAuthorizationStatus.unverified) {
-      // Network or authorization verification unavailable immediately before RPC:
-      // Release claim with backoff, ZERO RPC executed!
-      await _commandStore.releaseClaim(
-        commandId: command.commandId,
-        leaseToken: leaseToken,
-        nextAttemptAt: _clock.now().toUtc().add(const Duration(seconds: 5)),
-        lastErrorMessage:
-            'Target authorization unverified immediately prior to remote RPC.',
-      );
-      return const CommandAuthUnavailableResult(
-        reason:
-            'Target authorization unverified immediately prior to remote RPC.',
-      );
-    }
-
-    // STEP 6 — AUTHORITATIVE REMOTE RPC EXECUTION (OR RECONCILIATION FOR confirmedCommitted)
-    // Strictly execute using the validated stored immutable command payload under active lease!
+    // STEP 6 — AUTHORITATIVE REMOTE RPC EXECUTION
     try {
       if (command.operation == RewardCommandOperation.spinWheel) {
         final wheelRepo = _wheelRepository;
@@ -569,9 +1102,6 @@ final class RecoveryCoordinator {
           childId: ChildId(command.childId!),
         );
 
-        // Validate auth session post-RPC (R24-4-03):
-        // If actor logged out or session generation changed during in-flight RPC,
-        // a stale session MUST NOT finalize the command. Retain unresolved journal state!
         final postRpcContext = await _authSessionPort.validateForMutation();
         if (postRpcContext == null ||
             postRpcContext.userId != context.userId ||
@@ -590,14 +1120,12 @@ final class RecoveryCoordinator {
           );
         }
 
-        // STEP 7A — DEFINITIVE SUCCESS UNDER CURRENT LEASE
         final completed = await _commandStore.completeCommand(
           commandId: command.commandId,
           leaseToken: leaseToken,
         );
 
         if (!completed) {
-          // Lost lease ownership! Another worker preempted or lease expired (R24-3-04).
           return CommandAlreadyInFlightResult(commandId: command.commandId);
         }
 
@@ -619,9 +1147,6 @@ final class RecoveryCoordinator {
           rewardId: RewardId(command.rewardId!),
         );
 
-        // Validate auth session post-RPC (R24-4-03):
-        // If actor logged out or session generation changed during in-flight RPC,
-        // a stale session MUST NOT finalize the command. Retain unresolved journal state!
         final postRpcContext = await _authSessionPort.validateForMutation();
         if (postRpcContext == null ||
             postRpcContext.userId != context.userId ||
@@ -640,14 +1165,101 @@ final class RecoveryCoordinator {
           );
         }
 
-        // STEP 7A — DEFINITIVE SUCCESS UNDER CURRENT LEASE
         final completed = await _commandStore.completeCommand(
           commandId: command.commandId,
           leaseToken: leaseToken,
         );
 
         if (!completed) {
-          // Lost lease ownership! Another worker preempted or lease expired (R24-3-04).
+          return CommandAlreadyInFlightResult(commandId: command.commandId);
+        }
+
+        return CommandCommittedResult(
+          commandId: command.commandId,
+          redemption: result,
+        );
+      } else if (command.operation == RewardCommandOperation.fulfillReward) {
+        final rewardRepo = _rewardRepository;
+        if (rewardRepo == null) {
+          throw StateError(
+            'RewardRepository not provided to RecoveryCoordinator',
+          );
+        }
+
+        final result = await rewardRepo.fulfillRewardRedemption(
+          commandId: command.commandId,
+          redemptionId: RewardRedemptionId(command.redemptionId!),
+        );
+
+        final postRpcContext = await _authSessionPort.validateForMutation();
+        if (postRpcContext == null ||
+            postRpcContext.userId != context.userId ||
+            _authSessionPort.currentSessionGeneration !=
+                context.sessionGeneration) {
+          await _commandStore.releaseClaim(
+            commandId: command.commandId,
+            leaseToken: leaseToken,
+            nextAttemptAt: _clock.now().toUtc().add(const Duration(seconds: 1)),
+            lastErrorMessage:
+                'Session invalidated or actor logged out while RPC in-flight.',
+          );
+          return const CommandAuthUnavailableResult(
+            reason:
+                'Session invalidated or actor logged out while RPC in-flight.',
+          );
+        }
+
+        final completed = await _commandStore.completeCommand(
+          commandId: command.commandId,
+          leaseToken: leaseToken,
+        );
+
+        if (!completed) {
+          return CommandAlreadyInFlightResult(commandId: command.commandId);
+        }
+
+        return CommandCommittedResult(
+          commandId: command.commandId,
+          redemption: result,
+        );
+      } else if (command.operation == RewardCommandOperation.cancelReward) {
+        final rewardRepo = _rewardRepository;
+        if (rewardRepo == null) {
+          throw StateError(
+            'RewardRepository not provided to RecoveryCoordinator',
+          );
+        }
+
+        final result = await rewardRepo.cancelRewardRedemption(
+          commandId: command.commandId,
+          redemptionId: RewardRedemptionId(command.redemptionId!),
+          cancellationReason: command.cancellationReason!,
+        );
+
+        final postRpcContext = await _authSessionPort.validateForMutation();
+        if (postRpcContext == null ||
+            postRpcContext.userId != context.userId ||
+            _authSessionPort.currentSessionGeneration !=
+                context.sessionGeneration) {
+          await _commandStore.releaseClaim(
+            commandId: command.commandId,
+            leaseToken: leaseToken,
+            nextAttemptAt: _clock.now().toUtc().add(const Duration(seconds: 1)),
+            lastErrorMessage:
+                'Session invalidated or actor logged out while RPC in-flight.',
+          );
+          return const CommandAuthUnavailableResult(
+            reason:
+                'Session invalidated or actor logged out while RPC in-flight.',
+          );
+        }
+
+        final completed = await _commandStore.completeCommand(
+          commandId: command.commandId,
+          leaseToken: leaseToken,
+        );
+
+        if (!completed) {
           return CommandAlreadyInFlightResult(commandId: command.commandId);
         }
 
@@ -657,14 +1269,10 @@ final class RecoveryCoordinator {
         );
       } else {
         throw UnsupportedError(
-          'Operation ${command.operation} is out of scope for Slice 4A-1',
+          'Operation ${command.operation} is out of scope',
         );
       }
     } catch (e) {
-      // Validate auth session post-RPC (R24-4-03):
-      // If actor logged out or session generation changed during in-flight RPC,
-      // a stale session MUST NOT finalize or quarantine another actor's recovery.
-      // Retain unresolved journal state!
       final postRpcContext = await _authSessionPort.validateForMutation();
       if (postRpcContext == null ||
           postRpcContext.userId != context.userId ||
@@ -684,18 +1292,19 @@ final class RecoveryCoordinator {
       }
 
       // STEP 7B — ERROR DISPOSITION UNDER CURRENT LEASE
-      final classified = RecoveryErrorClassifier.classify(e);
+      final classified = RecoveryErrorClassifier.classify(
+        e,
+        operation: command.operation,
+      );
 
       switch (classified.action) {
         case ClassifiedErrorAction.terminalWhitelisted:
-          // Whitelisted business error: complete/delete journal with token fencing
           final completed = await _commandStore.completeCommand(
             commandId: command.commandId,
             leaseToken: leaseToken,
           );
 
           if (!completed) {
-            // Lost lease ownership / CAS failure (R24-3-04)
             return CommandAlreadyInFlightResult(commandId: command.commandId);
           }
 
@@ -708,7 +1317,6 @@ final class RecoveryCoordinator {
 
         case ClassifiedErrorAction.deviceRevoked:
         case ClassifiedErrorAction.quarantineUnknownOutcome:
-          // Ambiguous authorization failure, 42501, or unwhitelisted error
           final transitioned = await _commandStore.transitionRecoveryState(
             commandId: command.commandId,
             leaseToken: leaseToken,
@@ -717,7 +1325,6 @@ final class RecoveryCoordinator {
           );
 
           if (!transitioned) {
-            // Lost lease ownership / CAS failure (R24-3-04)
             return CommandAlreadyInFlightResult(commandId: command.commandId);
           }
 
@@ -728,28 +1335,14 @@ final class RecoveryCoordinator {
           );
 
         case ClassifiedErrorAction.transientRetryable:
-          // W4 / H03: Calculate bounded exponential backoff with full jitter anchored AFTER failure
           final postFailureNow = _clock.now().toUtc();
           final latestRow = await _commandStore.getPendingCommand(
             command.commandId,
           );
           final currentRetry = latestRow?.retryCount ?? command.retryCount;
           final n = currentRetry + 1;
-
-          // cap = min(60s, 2s * 2^(n-1))
-          final capSeconds = min(60.0, 2.0 * pow(2.0, n - 1));
-          final jitterUniform = _jitterSource.sampleUniform();
-          var waitSeconds = jitterUniform * capSeconds;
-
-          // Scheduler flood guard: at least 1 second minimum wait to prevent thundering herd (unless explicitly deterministic in tests)
-          if (_jitterSource is! DeterministicJitterSource &&
-              waitSeconds < 1.0) {
-            waitSeconds = 1.0;
-          }
-
-          final nextAttemptAt = postFailureNow.add(
-            Duration(milliseconds: (waitSeconds * 1000).toInt()),
-          );
+          final backoff = _calculateBackoff(n, minFloorSeconds: 1.0);
+          final nextAttemptAt = postFailureNow.add(backoff);
 
           final released = await _commandStore.releaseClaim(
             commandId: command.commandId,
@@ -759,7 +1352,6 @@ final class RecoveryCoordinator {
           );
 
           if (!released) {
-            // Lost lease ownership / CAS failure (R24-3-04)
             return CommandAlreadyInFlightResult(commandId: command.commandId);
           }
 

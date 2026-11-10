@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_data/learnward_data.dart';
@@ -9,12 +10,18 @@ import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:test/test.dart';
 
 void main() {
+  setUpAll(() {
+    driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
+  });
+
   group('File-Backed SQLite Restart Persistence & Network Recovery', () {
     late Directory tempDir;
     late File dbFile;
     late MockServerRewardRepository server;
     late FakeAuthSessionPort defaultAuth;
     late FakeRecoveryAuthorizationPort defaultAuthz;
+    late FakeAuthSessionPort parentAuth;
+    late FakeRecoveryAuthorizationPort parentAuthz;
 
     final familyId = FamilyId('fam-restart-1');
     final childId = ChildId('child-restart-1');
@@ -31,6 +38,14 @@ void main() {
       );
       defaultAuthz = FakeRecoveryAuthorizationPort(
         defaultStatus: TargetAuthorizationStatus.authorized,
+      );
+      parentAuth = FakeAuthSessionPort(
+        activeUserId: 'usr-parent-1',
+        role: 'parent',
+      );
+      parentAuthz = FakeRecoveryAuthorizationPort(
+        defaultStatus: TargetAuthorizationStatus.authorized,
+        defaultAdultRole: VerifiedAdultRole.parent,
       );
     });
 
@@ -168,7 +183,13 @@ void main() {
 
       // --- Session 1: Parent cancels with response-loss ---
       final dbA = AppDatabase(NativeDatabase(dbFile));
-      final cancelUseCaseA = CancelRewardRedemption(server, dbA);
+      final cancelUseCaseA = CancelRewardRedemption(
+        server,
+        dbA,
+        authSessionPort: parentAuth,
+        authorizationPort: parentAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
@@ -205,7 +226,13 @@ void main() {
       final cancelCommandId = pendingCancel.commandId;
 
       // Parent retries cancellation (even if retry UI supplies different reason)
-      final cancelUseCaseB = CancelRewardRedemption(server, dbB);
+      final cancelUseCaseB = CancelRewardRedemption(
+        server,
+        dbB,
+        authSessionPort: parentAuth,
+        authorizationPort: parentAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       final recovered = await cancelUseCaseB(
         familyId: familyId,
         redemptionId: redemption.id,
@@ -249,7 +276,13 @@ void main() {
 
       // --- Session 1: Parent fulfills with timeout after commit ---
       final dbA = AppDatabase(NativeDatabase(dbFile));
-      final fulfillUseCaseA = FulfillRewardRedemption(server, dbA);
+      final fulfillUseCaseA = FulfillRewardRedemption(
+        server,
+        dbA,
+        authSessionPort: parentAuth,
+        authorizationPort: parentAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       server.simulateLossOnNextCommit = true;
 
       await expectLater(
@@ -280,7 +313,13 @@ void main() {
       final fulfillCommandId = pendingFulfill.commandId;
 
       // Retry fulfillment
-      final fulfillUseCaseB = FulfillRewardRedemption(server, dbB);
+      final fulfillUseCaseB = FulfillRewardRedemption(
+        server,
+        dbB,
+        authSessionPort: parentAuth,
+        authorizationPort: parentAuthz,
+        jitterSource: const DeterministicJitterSource(0.0),
+      );
       final recovered = await fulfillUseCaseB(
         familyId: familyId,
         redemptionId: redemption.id,

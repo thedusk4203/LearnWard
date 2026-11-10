@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:learnward_domain/learnward_domain.dart';
 
+import '../ports/pending_reward_command_store.dart';
+
 /// Prescribed disposition action for classified recovery errors.
 enum ClassifiedErrorAction {
   /// Definitive, whitelisted business failure (LW201, LW202, LW203, LW205, LW206).
@@ -46,7 +48,16 @@ final class RecoveryErrorClassifier {
   /// LW203: Eligible wheel reward pool below 3
   /// LW205: Store reward no longer active/available
   /// LW206: Wheel disabled
-  static const Set<String> _terminalWhitelistedCodes = {
+  static const Set<String> _spinWheelWhitelistedCodes = {
+    'LW201',
+    'LW202',
+    'LW203',
+    'LW206',
+  };
+
+  static const Set<String> _redeemRewardWhitelistedCodes = {'LW201', 'LW205'};
+
+  static const Set<String> _allLegacyWhitelistedCodes = {
     'LW201',
     'LW202',
     'LW203',
@@ -61,15 +72,31 @@ final class RecoveryErrorClassifier {
   /// - Terminal business rejection REQUIRES an authoritative, positively typed
   ///   error code signal from the backend RPC adapter. Arbitrary string matches
   ///   are never treated as terminal rejections.
+  /// - Adult operations (`fulfill_reward` and `cancel_reward`) never whitelist any error codes for automatic deletion.
   /// - Transport/timeout/socket exceptions are transient retryable only when no
   ///   authoritative terminal code is present.
-  static ClassifiedError classify(Object error) {
+  static ClassifiedError classify(
+    Object error, {
+    RewardCommandOperation? operation,
+  }) {
     // 1. Authoritative structured backend code takes precedence over untrusted message text (R24-4-04)
     if (error is BackendRpcError && error.code != null) {
       final code = error.code!;
       final message = _sanitizeMessage(error.message);
 
-      if (_terminalWhitelistedCodes.contains(code)) {
+      final Set<String> whitelisted;
+      if (operation == RewardCommandOperation.fulfillReward ||
+          operation == RewardCommandOperation.cancelReward) {
+        whitelisted = const <String>{};
+      } else if (operation == RewardCommandOperation.spinWheel) {
+        whitelisted = _spinWheelWhitelistedCodes;
+      } else if (operation == RewardCommandOperation.redeemReward) {
+        whitelisted = _redeemRewardWhitelistedCodes;
+      } else {
+        whitelisted = _allLegacyWhitelistedCodes;
+      }
+
+      if (whitelisted.contains(code)) {
         return ClassifiedError(
           action: ClassifiedErrorAction.terminalWhitelisted,
           sanitizedMessage: message,
