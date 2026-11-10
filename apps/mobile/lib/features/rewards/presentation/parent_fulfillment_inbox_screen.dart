@@ -18,6 +18,7 @@ class ParentFulfillmentInboxScreen extends ConsumerStatefulWidget {
 
 class _ParentFulfillmentInboxScreenState
     extends ConsumerState<ParentFulfillmentInboxScreen> {
+  final ScrollController _recoveryScrollController = ScrollController();
   bool _isLoading = false;
   String? _errorMessage;
   List<RewardRedemption> _redemptions = [];
@@ -31,6 +32,12 @@ class _ParentFulfillmentInboxScreenState
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
+  }
+
+  @override
+  void dispose() {
+    _recoveryScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -348,6 +355,36 @@ class _ParentFulfillmentInboxScreenState
     final family = ref.read(activeFamilyProvider);
     if (family == null || pending.redemptionId == null) return;
 
+    final currentUserId = ref.read(currentUserIdProvider);
+    final hasValidActorId =
+        pending.actorUserId != null && pending.actorUserId!.trim().isNotEmpty;
+    final isOriginalActorMatch =
+        currentUserId != null &&
+        currentUserId.trim().isNotEmpty &&
+        hasValidActorId &&
+        currentUserId == pending.actorUserId;
+
+    final isQuarantined =
+        pending.recoveryState == CommandRecoveryState.quarantinedUnknownOutcome;
+    final isTerminal =
+        pending.recoveryState == CommandRecoveryState.terminalError;
+    final isLegacy =
+        pending.dispatchState == CommandDispatchState.unknownLegacy;
+
+    final now = DateTime.now().toUtc();
+    final isScheduledInFuture =
+        pending.nextAttemptAt != null &&
+        pending.nextAttemptAt!.toUtc().isAfter(now);
+
+    // Defense-in-depth: Never execute retry for ineligible commands (R29-06)
+    if (!isOriginalActorMatch ||
+        isQuarantined ||
+        isTerminal ||
+        isLegacy ||
+        isScheduledInFuture) {
+      return;
+    }
+
     if (pending.operation == RewardCommandOperation.cancelReward &&
         (pending.cancellationReason == null ||
             pending.cancellationReason!.trim().length < 2)) {
@@ -502,60 +539,83 @@ class _ParentFulfillmentInboxScreenState
     return Scaffold(
       appBar: AppBar(title: const Text('Fulfillment Inbox')),
       body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.md,
-                vertical: AppSpacing.sm,
-              ),
-              child: SegmentedButton<RewardRedemptionStatus?>(
-                segments: const [
-                  ButtonSegment(
-                    value: RewardRedemptionStatus.pendingFulfillment,
-                    label: Text('Pending'),
-                  ),
-                  ButtonSegment(
-                    value: RewardRedemptionStatus.fulfilled,
-                    label: Text('Fulfilled'),
-                  ),
-                  ButtonSegment(
-                    value: RewardRedemptionStatus.cancelled,
-                    label: Text('Cancelled'),
-                  ),
-                  ButtonSegment(value: null, label: Text('All')),
-                ],
-                selected: {_statusFilter},
-                onSelectionChanged: (set) {
-                  setState(() {
-                    _statusFilter = set.first;
-                  });
-                  _loadData();
-                },
-              ),
-            ),
-            const Divider(height: 1),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final maxRecoveryHeight = (constraints.maxHeight * 0.40).clamp(
+              0.0,
+              220.0,
+            );
 
-            // Pending Update Recovery Banners (R29-03: Expose all relevant unresolved commands independently)
-            if (unresolvedUpdates.isNotEmpty)
-              KeyedSubtree(
-                key: const Key('pending_fulfillment_recovery_banner'),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (final pending in unresolvedUpdates)
-                      _buildRecoveryBanner(theme, pending),
-                  ],
+            return Column(
+              children: [
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.md,
+                      vertical: AppSpacing.sm,
+                    ),
+                    child: SegmentedButton<RewardRedemptionStatus?>(
+                      segments: const [
+                        ButtonSegment(
+                          value: RewardRedemptionStatus.pendingFulfillment,
+                          label: Text('Pending'),
+                        ),
+                        ButtonSegment(
+                          value: RewardRedemptionStatus.fulfilled,
+                          label: Text('Fulfilled'),
+                        ),
+                        ButtonSegment(
+                          value: RewardRedemptionStatus.cancelled,
+                          label: Text('Cancelled'),
+                        ),
+                        ButtonSegment(value: null, label: Text('All')),
+                      ],
+                      selected: {_statusFilter},
+                      onSelectionChanged: (set) {
+                        setState(() {
+                          _statusFilter = set.first;
+                        });
+                        _loadData();
+                      },
+                    ),
+                  ),
                 ),
-              ),
+                const Divider(height: 1),
 
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: _loadData,
-                child: _buildList(theme),
-              ),
-            ),
-          ],
+                // Pending Update Recovery Banners (R29-05: Bounded, scrollable region)
+                if (unresolvedUpdates.isNotEmpty)
+                  KeyedSubtree(
+                    key: const Key('pending_fulfillment_recovery_banner'),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxHeight: maxRecoveryHeight),
+                      child: Scrollbar(
+                        controller: _recoveryScrollController,
+                        child: ListView.builder(
+                          key: const Key(
+                            'pending_recovery_banners_scroll_view',
+                          ),
+                          controller: _recoveryScrollController,
+                          shrinkWrap: true,
+                          itemCount: unresolvedUpdates.length,
+                          itemBuilder: (context, index) {
+                            final pending = unresolvedUpdates[index];
+                            return _buildRecoveryBanner(theme, pending);
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: _loadData,
+                    child: _buildList(theme),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -563,42 +623,49 @@ class _ParentFulfillmentInboxScreenState
 
   Widget _buildRecoveryBanner(ThemeData theme, PendingRewardCommand pending) {
     final currentUserId = ref.read(currentUserIdProvider);
-    final isOriginalActorMismatch =
-        pending.actorUserId != null &&
-        pending.actorUserId!.isNotEmpty &&
-        currentUserId != null &&
-        pending.actorUserId != currentUserId;
-
+    final hasValidActorId =
+        pending.actorUserId != null && pending.actorUserId!.trim().isNotEmpty;
     final isOriginalActorMatch =
-        pending.actorUserId != null &&
         currentUserId != null &&
-        pending.actorUserId == currentUserId;
+        currentUserId.trim().isNotEmpty &&
+        hasValidActorId &&
+        currentUserId == pending.actorUserId;
 
     final inFlightKey = pending.redemptionId ?? pending.commandId;
     final isInFlight = _inFlightRedemptionIds.contains(inFlightKey);
+
+    final isQuarantined =
+        pending.recoveryState == CommandRecoveryState.quarantinedUnknownOutcome;
+    final isTerminal =
+        pending.recoveryState == CommandRecoveryState.terminalError;
+    final isLegacy =
+        pending.dispatchState == CommandDispatchState.unknownLegacy;
+
+    final now = DateTime.now().toUtc();
+    final isScheduledInFuture =
+        pending.nextAttemptAt != null &&
+        pending.nextAttemptAt!.toUtc().isAfter(now);
 
     final IconData icon;
     final String message;
     final bool canRetry;
 
-    if (pending.recoveryState == CommandRecoveryState.pendingOriginalActor) {
-      icon = Icons.pause_circle_outline;
-      if (isOriginalActorMatch) {
-        message = 'Pending confirmation by original parent.';
-        canRetry = !isInFlight;
-      } else {
-        message = 'Pending confirmation by original parent.';
-        canRetry = false;
-      }
-    } else if (isOriginalActorMismatch) {
+    if (isQuarantined || isTerminal || isLegacy || !hasValidActorId) {
+      icon = Icons.warning_amber_rounded;
+      message = 'Pending update requires manual review.';
+      canRetry = false;
+    } else if (!isOriginalActorMatch) {
       icon = Icons.pause_circle_outline;
       message = 'Pending confirmation by original parent.';
       canRetry = false;
     } else if (pending.recoveryState ==
-            CommandRecoveryState.quarantinedUnknownOutcome ||
-        pending.recoveryState == CommandRecoveryState.terminalError) {
-      icon = Icons.warning_amber_rounded;
-      message = 'Pending update requires manual review.';
+        CommandRecoveryState.pendingOriginalActor) {
+      icon = Icons.pause_circle_outline;
+      message = 'Pending confirmation by original parent.';
+      canRetry = !isInFlight;
+    } else if (isScheduledInFuture) {
+      icon = Icons.schedule;
+      message = 'Automatic retry scheduled. Waiting before next attempt.';
       canRetry = false;
     } else {
       icon = Icons.hourglass_top;
@@ -655,7 +722,7 @@ class _ParentFulfillmentInboxScreenState
 
     if (_errorMessage != null) {
       return Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(AppSpacing.md),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -671,7 +738,7 @@ class _ParentFulfillmentInboxScreenState
 
     if (_redemptions.isEmpty) {
       return Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(AppSpacing.lg),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -799,31 +866,35 @@ class _ParentFulfillmentInboxScreenState
             ],
             if (item.status == RewardRedemptionStatus.pendingFulfillment) ...[
               const SizedBox(height: AppSpacing.md),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  OutlinedButton(
-                    key: Key('cancel_button_${item.id.value}'),
-                    onPressed: isInFlight || isPendingUpdate
-                        ? null
-                        : () => _cancelAndRefund(item),
-                    child: const Text('Cancel & Refund'),
-                  ),
-                  const SizedBox(width: AppSpacing.sm),
-                  FilledButton(
-                    key: Key('fulfill_button_${item.id.value}'),
-                    onPressed: isInFlight || isPendingUpdate
-                        ? null
-                        : () => _fulfill(item),
-                    child: Text(
-                      isInFlight
-                          ? 'Checking...'
-                          : isPendingUpdate
-                          ? 'Pending...'
-                          : 'Mark as Delivered',
+              Align(
+                alignment: Alignment.centerRight,
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.xs,
+                  children: [
+                    OutlinedButton(
+                      key: Key('cancel_button_${item.id.value}'),
+                      onPressed: isInFlight || isPendingUpdate
+                          ? null
+                          : () => _cancelAndRefund(item),
+                      child: const Text('Cancel & Refund'),
                     ),
-                  ),
-                ],
+                    FilledButton(
+                      key: Key('fulfill_button_${item.id.value}'),
+                      onPressed: isInFlight || isPendingUpdate
+                          ? null
+                          : () => _fulfill(item),
+                      child: Text(
+                        isInFlight
+                            ? 'Checking...'
+                            : isPendingUpdate
+                            ? 'Pending...'
+                            : 'Mark as Delivered',
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ],

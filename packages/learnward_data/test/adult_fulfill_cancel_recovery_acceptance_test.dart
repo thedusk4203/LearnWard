@@ -3590,33 +3590,58 @@ void main() {
         authzPort: authzPort,
       );
 
-      // Concurrent execution from two separate SQLite connections
-      final results = await Future.wait([
-        coord1.execute(
-          operation: RewardCommandOperation.fulfillReward,
-          familyId: 'fam-1',
-          childId: 'child-1',
-          redemptionId: 'red-adult-4',
-          requestedCommandId: 'cmd-adultA-4',
-          trigger: CommandExecutionTrigger.foregroundRetry,
-        ),
-        coord2.execute(
-          operation: RewardCommandOperation.fulfillReward,
-          familyId: 'fam-1',
-          childId: 'child-1',
-          redemptionId: 'red-adult-4',
-          requestedCommandId: 'cmd-adultA-4',
-          trigger: CommandExecutionTrigger.foregroundRetry,
-        ),
-      ]);
+      repo.rpcEnteredBarrier = Completer<void>();
+      repo.allowRpcFinishBarrier = Completer<void>();
 
+      // Worker 1 starts manual retry on connection 1
+      final worker1Future = coord1.execute(
+        operation: RewardCommandOperation.fulfillReward,
+        familyId: 'fam-1',
+        childId: 'child-1',
+        redemptionId: 'red-adult-4',
+        requestedCommandId: 'cmd-adultA-4',
+        trigger: CommandExecutionTrigger.foregroundRetry,
+      );
+
+      // Wait until Worker 1 resumes the row, claims the lease, and enters the remote RPC barrier
+      await repo.rpcEnteredBarrier!.future;
+
+      // In-flight assertion on db1: row is resumed (active), claimed (leaseToken != null), and possibly_dispatched
+      final inFlightRow = await database.getPendingCommand('cmd-adultA-4');
+      expect(inFlightRow, isNotNull);
+      expect(inFlightRow!.recoveryState, CommandRecoveryState.active);
+      expect(inFlightRow.leaseToken, isNotNull);
+      expect(
+        inFlightRow.dispatchState,
+        CommandDispatchState.possiblyDispatched,
+      );
+
+      // Worker 2 attempts manual retry on connection 2 while Worker 1 is suspended in-flight inside RPC
+      final worker2Result = await coord2.execute(
+        operation: RewardCommandOperation.fulfillReward,
+        familyId: 'fam-1',
+        childId: 'child-1',
+        redemptionId: 'red-adult-4',
+        requestedCommandId: 'cmd-adultA-4',
+        trigger: CommandExecutionTrigger.foregroundRetry,
+      );
+
+      expect(worker2Result, isA<CommandAlreadyInFlightResult>());
+      expect(
+        (worker2Result as CommandAlreadyInFlightResult).commandId,
+        'cmd-adultA-4',
+      );
       expect(repo.fulfillCallCount, 1);
-      final committedCount = results.whereType<CommandCommittedResult>().length;
-      final inFlightCount = results
-          .whereType<CommandAlreadyInFlightResult>()
-          .length;
-      expect(committedCount + inFlightCount, 2);
-      expect(committedCount, greaterThanOrEqualTo(1));
+
+      // Release Worker 1
+      repo.allowRpcFinishBarrier!.complete();
+      final worker1Result = await worker1Future;
+      expect(worker1Result, isA<CommandCommittedResult>());
+      expect(repo.fulfillCallCount, 1);
+
+      // Row cleared on completion
+      final finalRow = await database.getPendingCommand('cmd-adultA-4');
+      expect(finalRow, isNull);
     });
 
     test('R29-02 Subcase 5: Manual retry succeeds cleanly with recovery dispatcher disabled', () async {
