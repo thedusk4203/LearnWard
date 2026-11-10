@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_data/learnward_data.dart';
@@ -9,12 +10,18 @@ import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:test/test.dart';
 
 void main() {
+  setUpAll(() {
+    driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
+  });
+
   group('File-Backed SQLite Restart Persistence & Network Recovery', () {
     late Directory tempDir;
     late File dbFile;
     late MockServerRewardRepository server;
     late FakeAuthSessionPort defaultAuth;
     late FakeRecoveryAuthorizationPort defaultAuthz;
+    late FakeAuthSessionPort parentAuth;
+    late FakeRecoveryAuthorizationPort parentAuthz;
 
     final familyId = FamilyId('fam-restart-1');
     final childId = ChildId('child-restart-1');
@@ -31,6 +38,14 @@ void main() {
       );
       defaultAuthz = FakeRecoveryAuthorizationPort(
         defaultStatus: TargetAuthorizationStatus.authorized,
+      );
+      parentAuth = FakeAuthSessionPort(
+        activeUserId: 'usr-parent-1',
+        role: 'parent',
+      );
+      parentAuthz = FakeRecoveryAuthorizationPort(
+        defaultStatus: TargetAuthorizationStatus.authorized,
+        defaultAdultRole: VerifiedAdultRole.parent,
       );
     });
 
@@ -171,6 +186,8 @@ void main() {
       final cancelUseCaseA = CancelRewardRedemption(
         server,
         dbA,
+        authSessionPort: parentAuth,
+        authorizationPort: parentAuthz,
         jitterSource: const DeterministicJitterSource(0.0),
       );
       server.simulateLossOnNextCommit = true;
@@ -212,6 +229,8 @@ void main() {
       final cancelUseCaseB = CancelRewardRedemption(
         server,
         dbB,
+        authSessionPort: parentAuth,
+        authorizationPort: parentAuthz,
         jitterSource: const DeterministicJitterSource(0.0),
       );
       final recovered = await cancelUseCaseB(
@@ -260,6 +279,8 @@ void main() {
       final fulfillUseCaseA = FulfillRewardRedemption(
         server,
         dbA,
+        authSessionPort: parentAuth,
+        authorizationPort: parentAuthz,
         jitterSource: const DeterministicJitterSource(0.0),
       );
       server.simulateLossOnNextCommit = true;
@@ -295,6 +316,8 @@ void main() {
       final fulfillUseCaseB = FulfillRewardRedemption(
         server,
         dbB,
+        authSessionPort: parentAuth,
+        authorizationPort: parentAuthz,
         jitterSource: const DeterministicJitterSource(0.0),
       );
       final recovered = await fulfillUseCaseB(

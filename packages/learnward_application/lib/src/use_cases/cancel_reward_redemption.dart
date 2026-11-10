@@ -20,17 +20,20 @@ final class CancelRewardRedemption {
     this.uuidGenerator,
   }) : _coordinator =
            coordinator ??
-           RecoveryCoordinator(
-             commandStore: _commandStore,
-             rewardRepository: _repository,
-             authSessionPort:
-                 authSessionPort ?? const _DefaultAuthSessionPort(),
-             authorizationPort:
-                 authorizationPort ?? const _DefaultRecoveryAuthorizationPort(),
-             clock: clock ?? const SystemClock(),
-             jitterSource: jitterSource ?? const RandomJitterSource(),
-             uuidGenerator: uuidGenerator,
-           );
+           ((authSessionPort == null || authorizationPort == null)
+               ? throw ArgumentError(
+                   'CancelRewardRedemption requires either an explicit RecoveryCoordinator '
+                   'or both trusted AuthSessionPort and RecoveryAuthorizationPort.',
+                 )
+               : RecoveryCoordinator(
+                   commandStore: _commandStore,
+                   rewardRepository: _repository,
+                   authSessionPort: authSessionPort,
+                   authorizationPort: authorizationPort,
+                   clock: clock ?? const SystemClock(),
+                   jitterSource: jitterSource ?? const RandomJitterSource(),
+                   uuidGenerator: uuidGenerator,
+                 ));
 
   final RewardRepository _repository;
   final PendingRewardCommandStore _commandStore;
@@ -142,46 +145,4 @@ final class CancelRewardRedemption {
       throw StateError('Unexpected coordinator result: $result');
     }
   }
-}
-
-class _DefaultAuthSessionPort implements AuthSessionPort {
-  const _DefaultAuthSessionPort();
-
-  @override
-  String? get currentSessionGeneration => '1';
-
-  @override
-  Stream<String?> get sessionGenerationStream => const Stream.empty();
-
-  @override
-  Future<ValidatedActorContext?> validateForMutation() async =>
-      ValidatedActorContext(
-        userId: 'default-test-adult-user',
-        sessionGeneration: '1',
-        observedAt: DateTime.now().toUtc(),
-        role: 'parent',
-      );
-}
-
-class _DefaultRecoveryAuthorizationPort implements RecoveryAuthorizationPort {
-  const _DefaultRecoveryAuthorizationPort();
-
-  @override
-  Future<TargetAuthorizationStatus> verifyTarget({
-    required ValidatedActorContext context,
-    required String familyId,
-    required String childId,
-    required RewardCommandOperation operation,
-  }) async => TargetAuthorizationStatus.authorized;
-
-  @override
-  Future<AdultTargetAuthorizationResult> verifyAdultRedemptionTarget({
-    required ValidatedActorContext context,
-    required String familyId,
-    required String childId,
-    required String redemptionId,
-    required RewardCommandOperation operation,
-  }) async => const AdultTargetAuthorizationResult.authorized(
-    verifiedRole: VerifiedAdultRole.parent,
-  );
 }

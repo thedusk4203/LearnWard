@@ -386,7 +386,12 @@ class _ParentFulfillmentInboxScreenState
       }
     }
 
-    setState(() => _inFlightRedemptionIds.add(pending.redemptionId!));
+    final inFlightKey = pending.redemptionId ?? pending.commandId;
+    if (_inFlightRedemptionIds.contains(inFlightKey)) {
+      return;
+    }
+
+    setState(() => _inFlightRedemptionIds.add(inFlightKey));
     try {
       final commandStore = ref.read(pendingRewardCommandStoreProvider);
       final coordinator = ref.read(recoveryCoordinatorProvider);
@@ -482,7 +487,7 @@ class _ParentFulfillmentInboxScreenState
       }
     } finally {
       if (mounted) {
-        setState(() => _inFlightRedemptionIds.remove(pending.redemptionId!));
+        setState(() => _inFlightRedemptionIds.remove(inFlightKey));
       }
     }
   }
@@ -490,6 +495,9 @@ class _ParentFulfillmentInboxScreenState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final unresolvedUpdates = _pendingUpdates
+        .where((p) => p.isCommandUnresolved)
+        .toList();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Fulfillment Inbox')),
@@ -528,9 +536,18 @@ class _ParentFulfillmentInboxScreenState
             ),
             const Divider(height: 1),
 
-            // Pending Update Recovery Banner
-            if (_pendingUpdates.isNotEmpty)
-              _buildRecoveryBanner(theme, _pendingUpdates.first),
+            // Pending Update Recovery Banners (R29-03: Expose all relevant unresolved commands independently)
+            if (unresolvedUpdates.isNotEmpty)
+              KeyedSubtree(
+                key: const Key('pending_fulfillment_recovery_banner'),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final pending in unresolvedUpdates)
+                      _buildRecoveryBanner(theme, pending),
+                  ],
+                ),
+              ),
 
             Expanded(
               child: RefreshIndicator(
@@ -552,15 +569,31 @@ class _ParentFulfillmentInboxScreenState
         currentUserId != null &&
         pending.actorUserId != currentUserId;
 
+    final isOriginalActorMatch =
+        pending.actorUserId != null &&
+        currentUserId != null &&
+        pending.actorUserId == currentUserId;
+
+    final inFlightKey = pending.redemptionId ?? pending.commandId;
+    final isInFlight = _inFlightRedemptionIds.contains(inFlightKey);
+
     final IconData icon;
     final String message;
     final bool canRetry;
 
-    if (pending.recoveryState == CommandRecoveryState.pendingOriginalActor ||
-        isOriginalActorMismatch) {
+    if (pending.recoveryState == CommandRecoveryState.pendingOriginalActor) {
+      icon = Icons.pause_circle_outline;
+      if (isOriginalActorMatch) {
+        message = 'Pending confirmation by original parent.';
+        canRetry = !isInFlight;
+      } else {
+        message = 'Pending confirmation by original parent.';
+        canRetry = false;
+      }
+    } else if (isOriginalActorMismatch) {
       icon = Icons.pause_circle_outline;
       message = 'Pending confirmation by original parent.';
-      canRetry = !isOriginalActorMismatch && _inFlightRedemptionIds.isEmpty;
+      canRetry = false;
     } else if (pending.recoveryState ==
             CommandRecoveryState.quarantinedUnknownOutcome ||
         pending.recoveryState == CommandRecoveryState.terminalError) {
@@ -570,11 +603,11 @@ class _ParentFulfillmentInboxScreenState
     } else {
       icon = Icons.hourglass_top;
       message = "We're checking whether a reward update was completed.";
-      canRetry = _inFlightRedemptionIds.isEmpty;
+      canRetry = !isInFlight;
     }
 
     return Container(
-      key: const Key('pending_fulfillment_recovery_banner'),
+      key: Key('pending_fulfillment_recovery_banner_${pending.commandId}'),
       width: double.infinity,
       margin: const EdgeInsets.symmetric(
         horizontal: AppSpacing.md,
@@ -600,10 +633,15 @@ class _ParentFulfillmentInboxScreenState
             ),
           ),
           if (canRetry)
-            FilledButton.tonal(
-              key: const Key('retry_pending_fulfillment_button'),
-              onPressed: () => _resolvePendingUpdate(pending),
-              child: const Text('Retry'),
+            KeyedSubtree(
+              key: Key('retry_pending_fulfillment_button_${pending.commandId}'),
+              child: FilledButton.tonal(
+                key: const Key('retry_pending_fulfillment_button'),
+                onPressed: isInFlight
+                    ? null
+                    : () => _resolvePendingUpdate(pending),
+                child: const Text('Retry'),
+              ),
             ),
         ],
       ),

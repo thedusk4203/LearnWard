@@ -30,18 +30,28 @@ void main() {
       );
     }
 
-    FulfillRewardRedemption createFulfillUseCase() {
+    FulfillRewardRedemption createFulfillUseCase({
+      AuthSessionPort? auth,
+      RecoveryAuthorizationPort? authz,
+    }) {
       return FulfillRewardRedemption(
         server,
         commandStore,
+        authSessionPort: auth ?? authPort,
+        authorizationPort: authz ?? authzPort,
         jitterSource: const DeterministicJitterSource(0.0),
       );
     }
 
-    CancelRewardRedemption createCancelUseCase() {
+    CancelRewardRedemption createCancelUseCase({
+      AuthSessionPort? auth,
+      RecoveryAuthorizationPort? authz,
+    }) {
       return CancelRewardRedemption(
         server,
         commandStore,
+        authSessionPort: auth ?? authPort,
+        authorizationPort: authz ?? authzPort,
         jitterSource: const DeterministicJitterSource(0.0),
       );
     }

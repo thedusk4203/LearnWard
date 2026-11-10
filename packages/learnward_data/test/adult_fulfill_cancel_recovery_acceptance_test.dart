@@ -3266,4 +3266,423 @@ void main() {
       expect(database.schemaVersion, 6);
     });
   });
+
+  group('R29-02: Safe Original-Actor Manual Retry Resumption', () {
+    late Directory tempDir;
+    late File dbFile;
+    late AppDatabase database;
+    late AppDatabase database2;
+    late TestClock clock;
+    final t0 = DateTime.utc(2026, 11, 7, 12, 0, 0);
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('learnward_r29_02_');
+      dbFile = File('${tempDir.path}/r29_02.sqlite');
+      database = AppDatabase(NativeDatabase(dbFile));
+      database2 = AppDatabase(NativeDatabase(dbFile));
+      clock = TestClock(t0);
+    });
+
+    tearDown(() async {
+      await database.close();
+      await database2.close();
+      if (tempDir.existsSync()) {
+        try {
+          tempDir.deleteSync(recursive: true);
+        } catch (_) {}
+      }
+    });
+
+    RewardRedemption buildRedemption({
+      required String id,
+      String familyId = 'fam-1',
+      String childId = 'child-1',
+      int rpCostMinor = 1500,
+      RewardRedemptionStatus status = RewardRedemptionStatus.pendingFulfillment,
+      String? cancellationReason,
+    }) {
+      return RewardRedemption(
+        id: RewardRedemptionId(id),
+        familyId: FamilyId(familyId),
+        childId: ChildId(childId),
+        rewardId: RewardId('rew-1'),
+        origin: RewardOrigin.store,
+        rpCostMinor: rpCostMinor,
+        status: status,
+        cancellationReason: cancellationReason,
+        rewardSnapshot: const {'title': 'Test Reward', 'cost': 1500},
+        createdAt: t0,
+        updatedAt: t0,
+      );
+    }
+
+    RecoveryCoordinator buildCoord({
+      required AppDatabase db,
+      required RewardRepository rewardRepo,
+      required AuthSessionPort authPort,
+      required RecoveryAuthorizationPort authzPort,
+      String? Function()? activeFamilyIdProvider,
+    }) {
+      return RecoveryCoordinator(
+        commandStore: db,
+        wheelRepository: FakeWheelRepository(),
+        rewardRepository: rewardRepo,
+        authSessionPort: authPort,
+        authorizationPort: authzPort,
+        clock: clock,
+        jitterSource: const DeterministicJitterSource(0.0),
+        activeFamilyIdProvider: activeFamilyIdProvider ?? () => 'fam-1',
+      );
+    }
+
+    test('R29-02 Subcase 1: Successful return of Adult A resumes and completes command', () async {
+      final repo = MockServerRewardRepository();
+      repo.redemptions['red-adult-1'] = buildRedemption(
+        id: 'red-adult-1',
+        rpCostMinor: 1000,
+      );
+
+      // Seed command in pendingOriginalActor state
+      await database.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.fulfillReward,
+          commandId: 'cmd-adultA-1',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          redemptionId: 'red-adult-1',
+          actorUserId: 'adult-A',
+          actorRole: 'parent',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.pendingOriginalActor,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+        now: t0,
+      );
+
+      final authPortAdultA = FakeAuthSessionPort(
+        initialContext: ValidatedActorContext(
+          userId: 'adult-A',
+          sessionGeneration: 'gen-A',
+          observedAt: t0,
+          role: 'parent',
+        ),
+      );
+      final authzPort = FakeRecoveryAuthorizationPort(
+        defaultStatus: TargetAuthorizationStatus.authorized,
+        defaultAdultRole: VerifiedAdultRole.parent,
+      );
+
+      final coord = buildCoord(
+        db: database,
+        rewardRepo: repo,
+        authPort: authPortAdultA,
+        authzPort: authzPort,
+      );
+
+      final result = await coord.execute(
+        operation: RewardCommandOperation.fulfillReward,
+        familyId: 'fam-1',
+        childId: 'child-1',
+        redemptionId: 'red-adult-1',
+        requestedCommandId: 'cmd-adultA-1',
+        trigger: CommandExecutionTrigger.foregroundRetry,
+      );
+
+      expect(result, isA<CommandCommittedResult>());
+      expect(repo.fulfillCallCount, 1);
+      expect(repo.commandReceipts.containsKey('cmd-adultA-1'), isTrue);
+
+      // Verify row completed in SQLite
+      final pendingAfter = await database.getPendingCommand('cmd-adultA-1');
+      expect(pendingAfter, isNull);
+    });
+
+    test(
+      'R29-02 Subcase 2: Foreign actor Adult B cannot resume Adult A command',
+      () async {
+        final repo = MockServerRewardRepository();
+        repo.redemptions['red-adult-2'] = buildRedemption(
+          id: 'red-adult-2',
+          rpCostMinor: 1000,
+        );
+
+        // Seed command in pendingOriginalActor state
+        await database.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.fulfillReward,
+            commandId: 'cmd-adultA-2',
+            familyId: 'fam-1',
+            childId: 'child-1',
+            redemptionId: 'red-adult-2',
+            actorUserId: 'adult-A',
+            actorRole: 'parent',
+            createdAt: t0,
+            recoveryState: CommandRecoveryState.pendingOriginalActor,
+            dispatchState: CommandDispatchState.possiblyDispatched,
+          ),
+          now: t0,
+        );
+
+        // Adult B attempts retry
+        final authPortAdultB = FakeAuthSessionPort(
+          initialContext: ValidatedActorContext(
+            userId: 'adult-B',
+            sessionGeneration: 'gen-B',
+            observedAt: t0,
+            role: 'parent',
+          ),
+        );
+        final authzPort = FakeRecoveryAuthorizationPort(
+          defaultStatus: TargetAuthorizationStatus.authorized,
+          defaultAdultRole: VerifiedAdultRole.parent,
+        );
+
+        final coord = buildCoord(
+          db: database,
+          rewardRepo: repo,
+          authPort: authPortAdultB,
+          authzPort: authzPort,
+        );
+
+        final result = await coord.execute(
+          operation: RewardCommandOperation.fulfillReward,
+          familyId: 'fam-1',
+          childId: 'child-1',
+          redemptionId: 'red-adult-2',
+          requestedCommandId: 'cmd-adultA-2',
+          trigger: CommandExecutionTrigger.foregroundRetry,
+        );
+
+        expect(result, isA<CommandPendingOriginalActorResult>());
+        final pendingResult = result as CommandPendingOriginalActorResult;
+        expect(pendingResult.originalActorId, 'adult-A');
+        expect(repo.fulfillCallCount, 0);
+
+        // Database state unchanged
+        final row = await database.getPendingCommand('cmd-adultA-2');
+        expect(row, isNotNull);
+        expect(row!.recoveryState, CommandRecoveryState.pendingOriginalActor);
+        expect(row.actorUserId, 'adult-A');
+      },
+    );
+
+    test('R29-02 Subcase 3: Lease contention prevents resume and returns in-flight', () async {
+      final repo = MockServerRewardRepository();
+      repo.redemptions['red-adult-3'] = buildRedemption(
+        id: 'red-adult-3',
+        rpCostMinor: 1000,
+      );
+
+      // Seed command in pendingOriginalActor with active unexpired lease
+      await database.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.fulfillReward,
+          commandId: 'cmd-adultA-3',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          redemptionId: 'red-adult-3',
+          actorUserId: 'adult-A',
+          actorRole: 'parent',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.pendingOriginalActor,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+        now: t0,
+      );
+
+      // Explicitly set active unexpired lease directly in DB to simulate contention
+      await database.customUpdate(
+        'UPDATE pending_reward_commands SET lease_token = ?, lease_expires_at = ? WHERE command_id = ?',
+        variables: [
+          Variable<String>('contending-lease-token'),
+          Variable<DateTime>(t0.add(const Duration(minutes: 5))),
+          Variable<String>('cmd-adultA-3'),
+        ],
+        updates: {database.pendingRewardCommands},
+      );
+
+      final authPortAdultA = FakeAuthSessionPort(
+        initialContext: ValidatedActorContext(
+          userId: 'adult-A',
+          sessionGeneration: 'gen-A',
+          observedAt: t0,
+          role: 'parent',
+        ),
+      );
+      final authzPort = FakeRecoveryAuthorizationPort(
+        defaultStatus: TargetAuthorizationStatus.authorized,
+        defaultAdultRole: VerifiedAdultRole.parent,
+      );
+
+      final coord = buildCoord(
+        db: database,
+        rewardRepo: repo,
+        authPort: authPortAdultA,
+        authzPort: authzPort,
+      );
+
+      final result = await coord.execute(
+        operation: RewardCommandOperation.fulfillReward,
+        familyId: 'fam-1',
+        childId: 'child-1',
+        redemptionId: 'red-adult-3',
+        requestedCommandId: 'cmd-adultA-3',
+        trigger: CommandExecutionTrigger.foregroundRetry,
+      );
+
+      expect(result, isA<CommandAlreadyInFlightResult>());
+      expect(repo.fulfillCallCount, 0);
+
+      // State preserved
+      final row = await database.getPendingCommand('cmd-adultA-3');
+      expect(row, isNotNull);
+      expect(row!.recoveryState, CommandRecoveryState.pendingOriginalActor);
+      expect(row.leaseToken, 'contending-lease-token');
+    });
+
+    test('R29-02 Subcase 4: Concurrent manual retries across connections execute exactly 1 RPC', () async {
+      final repo = MockServerRewardRepository();
+      repo.redemptions['red-adult-4'] = buildRedemption(
+        id: 'red-adult-4',
+        rpCostMinor: 1000,
+      );
+
+      // Seed command in pendingOriginalActor
+      await database.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.fulfillReward,
+          commandId: 'cmd-adultA-4',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          redemptionId: 'red-adult-4',
+          actorUserId: 'adult-A',
+          actorRole: 'parent',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.pendingOriginalActor,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+        now: t0,
+      );
+
+      final authPortAdultA = FakeAuthSessionPort(
+        initialContext: ValidatedActorContext(
+          userId: 'adult-A',
+          sessionGeneration: 'gen-A',
+          observedAt: t0,
+          role: 'parent',
+        ),
+      );
+      final authzPort = FakeRecoveryAuthorizationPort(
+        defaultStatus: TargetAuthorizationStatus.authorized,
+        defaultAdultRole: VerifiedAdultRole.parent,
+      );
+
+      final coord1 = buildCoord(
+        db: database,
+        rewardRepo: repo,
+        authPort: authPortAdultA,
+        authzPort: authzPort,
+      );
+      final coord2 = buildCoord(
+        db: database2,
+        rewardRepo: repo,
+        authPort: authPortAdultA,
+        authzPort: authzPort,
+      );
+
+      // Concurrent execution from two separate SQLite connections
+      final results = await Future.wait([
+        coord1.execute(
+          operation: RewardCommandOperation.fulfillReward,
+          familyId: 'fam-1',
+          childId: 'child-1',
+          redemptionId: 'red-adult-4',
+          requestedCommandId: 'cmd-adultA-4',
+          trigger: CommandExecutionTrigger.foregroundRetry,
+        ),
+        coord2.execute(
+          operation: RewardCommandOperation.fulfillReward,
+          familyId: 'fam-1',
+          childId: 'child-1',
+          redemptionId: 'red-adult-4',
+          requestedCommandId: 'cmd-adultA-4',
+          trigger: CommandExecutionTrigger.foregroundRetry,
+        ),
+      ]);
+
+      expect(repo.fulfillCallCount, 1);
+      final committedCount = results.whereType<CommandCommittedResult>().length;
+      final inFlightCount = results
+          .whereType<CommandAlreadyInFlightResult>()
+          .length;
+      expect(committedCount + inFlightCount, 2);
+      expect(committedCount, greaterThanOrEqualTo(1));
+    });
+
+    test('R29-02 Subcase 5: Manual retry succeeds cleanly with recovery dispatcher disabled', () async {
+      final repo = MockServerRewardRepository();
+      repo.redemptions['red-adult-5'] = buildRedemption(
+        id: 'red-adult-5',
+        rpCostMinor: 1000,
+      );
+
+      // Seed cancel command in pendingOriginalActor
+      await database.savePendingCommand(
+        PendingRewardCommand(
+          operation: RewardCommandOperation.cancelReward,
+          commandId: 'cmd-adultA-5',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          redemptionId: 'red-adult-5',
+          cancellationReason: 'Out of stock this week',
+          actorUserId: 'adult-A',
+          actorRole: 'parent',
+          createdAt: t0,
+          recoveryState: CommandRecoveryState.pendingOriginalActor,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+        now: t0,
+      );
+
+      final authPortAdultA = FakeAuthSessionPort(
+        initialContext: ValidatedActorContext(
+          userId: 'adult-A',
+          sessionGeneration: 'gen-A',
+          observedAt: t0,
+          role: 'parent',
+        ),
+      );
+      final authzPort = FakeRecoveryAuthorizationPort(
+        defaultStatus: TargetAuthorizationStatus.authorized,
+        defaultAdultRole: VerifiedAdultRole.parent,
+      );
+
+      final coord = buildCoord(
+        db: database,
+        rewardRepo: repo,
+        authPort: authPortAdultA,
+        authzPort: authzPort,
+      );
+
+      // Dispatcher is NOT started / disabled. Adult A triggers foregroundRetry directly.
+      final result = await coord.execute(
+        operation: RewardCommandOperation.cancelReward,
+        familyId: 'fam-1',
+        childId: 'child-1',
+        redemptionId: 'red-adult-5',
+        cancellationReason: 'Out of stock this week',
+        requestedCommandId: 'cmd-adultA-5',
+        trigger: CommandExecutionTrigger.foregroundRetry,
+      );
+
+      expect(result, isA<CommandCommittedResult>());
+      expect(repo.cancelCallCount, 1);
+      expect(repo.refundCount, 1);
+      expect(repo.commandReceipts.containsKey('cmd-adultA-5'), isTrue);
+
+      // Command cleared from DB
+      final pendingAfter = await database.getPendingCommand('cmd-adultA-5');
+      expect(pendingAfter, isNull);
+    });
+  });
 }

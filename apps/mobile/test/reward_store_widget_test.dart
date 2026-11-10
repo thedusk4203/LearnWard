@@ -595,5 +595,152 @@ void main() {
         expect(await commandStore.listPendingCommands(), isEmpty);
       },
     );
+
+    testWidgets(
+      'R29-03: multiple pending commands exposes each unresolved command; quarantined entry does not hide retryable entry',
+      (tester) async {
+        final inMemoryRewards = InMemoryRewardRepository();
+        final created1 = await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: 'Reward Item 1',
+          category: RewardCategory.privilege,
+          storeCostMinor: 1000,
+        );
+        final created2 = await inMemoryRewards.createReward(
+          familyId: testFamily.id,
+          title: 'Reward Item 2',
+          category: RewardCategory.treat,
+          storeCostMinor: 2000,
+        );
+
+        final redemption1 = await inMemoryRewards.redeemStoreReward(
+          commandId: 'cmd-seed-red-1',
+          rewardId: created1.id,
+          childId: testChild.id,
+        );
+        final redemption2 = await inMemoryRewards.redeemStoreReward(
+          commandId: 'cmd-seed-red-2',
+          rewardId: created2.id,
+          childId: testChild.id,
+        );
+
+        final commandStore = InMemoryPendingRewardCommandStore();
+
+        // Command 1: Quarantined
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.fulfillReward,
+            commandId: 'cmd-quarantined-1',
+            familyId: testFamily.id.value,
+            childId: testChild.id.value,
+            actorUserId: 'parent-1',
+            actorRole: 'parent',
+            redemptionId: redemption1.id.value,
+            recoveryState: CommandRecoveryState.quarantinedUnknownOutcome,
+            dispatchState: CommandDispatchState.possiblyDispatched,
+            lastErrorMessage: 'Pending update requires manual review.',
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        // Command 2: Active / Retryable
+        await commandStore.savePendingCommand(
+          PendingRewardCommand(
+            operation: RewardCommandOperation.fulfillReward,
+            commandId: 'cmd-retryable-2',
+            familyId: testFamily.id.value,
+            childId: testChild.id.value,
+            actorUserId: 'parent-1',
+            actorRole: 'parent',
+            redemptionId: redemption2.id.value,
+            recoveryState: CommandRecoveryState.active,
+            dispatchState: CommandDispatchState.possiblyDispatched,
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              currentUserIdProvider.overrideWithValue('parent-1'),
+              activeFamilyProvider.overrideWith(
+                () => _PresetActiveFamilyNotifier(testFamily),
+              ),
+              childProfileRepositoryProvider.overrideWithValue(
+                InMemoryChildProfileRepository()..children.add(testChild),
+              ),
+              rewardRepositoryProvider.overrideWithValue(inMemoryRewards),
+              pendingRewardCommandStoreProvider.overrideWithValue(commandStore),
+            ],
+            child: const MaterialApp(home: ParentFulfillmentInboxScreen()),
+          ),
+        );
+
+        await tester.pumpAndSettle();
+
+        // 1. Quarantined command banner is present and has NO retry button
+        expect(
+          find.byKey(
+            const Key('pending_fulfillment_recovery_banner_cmd-quarantined-1'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.text('Pending update requires manual review.'),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(
+            const Key('retry_pending_fulfillment_button_cmd-quarantined-1'),
+          ),
+          findsNothing,
+        );
+
+        // 2. Quarantined entry did NOT hide retryable entry: Command 2 banner is also present with Retry button
+        expect(
+          find.byKey(
+            const Key('pending_fulfillment_recovery_banner_cmd-retryable-2'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.text("We're checking whether a reward update was completed."),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(
+            const Key('retry_pending_fulfillment_button_cmd-retryable-2'),
+          ),
+          findsOneWidget,
+        );
+
+        // 3. Tap retry on command 2
+        await tester.tap(
+          find.byKey(
+            const Key('retry_pending_fulfillment_button_cmd-retryable-2'),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Command 2 resolved and disappeared
+        expect(
+          find.byKey(
+            const Key('pending_fulfillment_recovery_banner_cmd-retryable-2'),
+          ),
+          findsNothing,
+        );
+
+        // Command 1 remains visible and quarantined
+        expect(
+          find.byKey(
+            const Key('pending_fulfillment_recovery_banner_cmd-quarantined-1'),
+          ),
+          findsOneWidget,
+        );
+        final remainingCommands = await commandStore.listPendingCommands();
+        expect(remainingCommands.length, 1);
+        expect(remainingCommands.first.commandId, 'cmd-quarantined-1');
+      },
+    );
   });
 }

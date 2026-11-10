@@ -69,19 +69,26 @@ final class PendingRewardCommand {
   static const int maxConsecutiveUnverifiedTargetMisses = 3;
 
   static final RegExp _unverifiedTargetMissPattern = RegExp(
-    r'^\[UNVERIFIED_TARGET_MISS:(\d+)/(\d+)\]\s*',
+    r'^\[UNVERIFIED_TARGET_MISS:([1-3])/3\]\s+(\S.*)$',
   );
 
   /// Durably parsed count of consecutive RLS-filtered / missing-target verification
   /// misses (`rlsFilteredOrMissingTargetRow` or `missingOrUnverifiedMembership`).
   ///
-  /// Separate from [retryCount] (`R28-05`): returns `0` when [lastErrorMessage] is null
-  /// or was last written by any other exit (transient RPC error, transient verification
-  /// timeout, session generation change, active family switch, or actor pause/resume).
-  int get consecutiveUnverifiedTargetMisses {
-    final msg = lastErrorMessage;
-    if (msg == null) return 0;
-    final match = _unverifiedTargetMissPattern.firstMatch(msg);
+  /// Strictly parses the canonical marker `[UNVERIFIED_TARGET_MISS:m/3]` where `m` is 1, 2, or 3
+  /// followed by a valid suffix detail.
+  /// Separate from [retryCount] (`R28-05`): returns `0` when [lastErrorMessage] is null,
+  /// malformed, out-of-range, noncanonical, truncated, or was last written by any other exit
+  /// (transient RPC error, transient verification timeout, session generation change,
+  /// active family switch, or actor pause/resume).
+  int get consecutiveUnverifiedTargetMisses =>
+      parseUnverifiedTargetMisses(lastErrorMessage);
+
+  /// Strictly parses consecutive unverified target misses from a message string.
+  /// Returns `0` for null, malformed, noncanonical, out-of-range, or truncated strings.
+  static int parseUnverifiedTargetMisses(String? message) {
+    if (message == null) return 0;
+    final match = _unverifiedTargetMissPattern.firstMatch(message.trimRight());
     if (match == null) return 0;
     return int.tryParse(match.group(1) ?? '') ?? 0;
   }
@@ -91,7 +98,28 @@ final class PendingRewardCommand {
     required int consecutiveMisses,
     required String detail,
     int maxMisses = maxConsecutiveUnverifiedTargetMisses,
-  }) => '[UNVERIFIED_TARGET_MISS:$consecutiveMisses/$maxMisses] $detail';
+  }) {
+    if (consecutiveMisses < 1 ||
+        consecutiveMisses > maxConsecutiveUnverifiedTargetMisses) {
+      throw ArgumentError.value(
+        consecutiveMisses,
+        'consecutiveMisses',
+        'Must be between 1 and $maxConsecutiveUnverifiedTargetMisses',
+      );
+    }
+    if (maxMisses != maxConsecutiveUnverifiedTargetMisses) {
+      throw ArgumentError.value(
+        maxMisses,
+        'maxMisses',
+        'Must be $maxConsecutiveUnverifiedTargetMisses',
+      );
+    }
+    final trimmedDetail = detail.trim();
+    if (trimmedDetail.isEmpty) {
+      throw ArgumentError.value(detail, 'detail', 'Detail cannot be empty');
+    }
+    return '[UNVERIFIED_TARGET_MISS:$consecutiveMisses/$maxMisses] $trimmedDetail';
+  }
 
   /// Whether this command is eligible for automatic retry/replay.
   /// Fails closed if the command is quarantined, legacy unknown, confirmed committed,

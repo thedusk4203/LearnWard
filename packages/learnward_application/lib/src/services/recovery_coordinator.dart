@@ -637,6 +637,89 @@ final class RecoveryCoordinator {
               'Mismatched command payload for existing command ID ${command.commandId}.',
         );
       }
+
+      // Safe Manual Resume for Original Adult (R29-02)
+      if (isAdultOp &&
+          command.recoveryState == CommandRecoveryState.pendingOriginalActor) {
+        if (trigger == CommandExecutionTrigger.foregroundRetry) {
+          // Re-verify session generation and active family before atomic resume
+          if (_authSessionPort.currentSessionGeneration !=
+              context.sessionGeneration) {
+            return const CommandAuthUnavailableResult(
+              reason: 'Session epoch changed prior to manual resumption.',
+            );
+          }
+          if (_activeFamilyIdProvider != null) {
+            final currentActiveFamily = _activeFamilyIdProvider();
+            if (currentActiveFamily == null ||
+                currentActiveFamily != command.familyId) {
+              return CommandFamilyMismatchResult(
+                commandId: command.commandId,
+                commandFamilyId: command.familyId,
+                activeFamilyId: currentActiveFamily,
+              );
+            }
+          }
+
+          final resumed = await _commandStore.resumeOriginalActorCommand(
+            commandId: command.commandId,
+            familyId: command.familyId,
+            authenticatedActorId: context.userId,
+            now: now,
+          );
+
+          if (resumed) {
+            final refreshed = await _commandStore.getPendingCommand(
+              command.commandId,
+            );
+            if (refreshed == null) {
+              return CommandQuarantinedResult(
+                commandId: command.commandId,
+                reason: 'Pending command missing after manual resumption.',
+              );
+            }
+            command = refreshed;
+            existing = refreshed;
+          } else {
+            final latest = await _commandStore.getPendingCommand(
+              command.commandId,
+            );
+            if (latest == null) {
+              return CommandQuarantinedResult(
+                commandId: command.commandId,
+                reason: 'Pending command missing during manual resumption.',
+              );
+            }
+            if (latest.recoveryState == CommandRecoveryState.active) {
+              command = latest;
+              existing = latest;
+            } else if (latest.recoveryState ==
+                    CommandRecoveryState.quarantinedUnknownOutcome ||
+                latest.recoveryState == CommandRecoveryState.terminalError) {
+              return CommandQuarantinedResult(
+                commandId: command.commandId,
+                reason:
+                    'Command transitioned to quarantined or terminal state.',
+              );
+            } else if (latest.actorUserId != context.userId) {
+              return CommandPendingOriginalActorResult(
+                commandId: command.commandId,
+                originalActorId: latest.actorUserId ?? '',
+                reason: 'Actor mismatch with authenticated session',
+              );
+            } else {
+              // Active lease contention or unfulfilled CAS condition
+              return CommandAlreadyInFlightResult(commandId: command.commandId);
+            }
+          }
+        } else {
+          return CommandPendingOriginalActorResult(
+            commandId: command.commandId,
+            originalActorId: command.actorUserId ?? '',
+            reason: 'Command is paused pending original actor confirmation.',
+          );
+        }
+      }
     } else {
       if (trigger == CommandExecutionTrigger.recovery ||
           trigger == CommandExecutionTrigger.foregroundRetry) {
@@ -699,6 +782,14 @@ final class RecoveryCoordinator {
       return CommandQuarantinedResult(
         commandId: command.commandId,
         reason: 'Command is quarantined or legacy unknown.',
+      );
+    }
+
+    if (command.recoveryState == CommandRecoveryState.pendingOriginalActor) {
+      return CommandPendingOriginalActorResult(
+        commandId: command.commandId,
+        originalActorId: command.actorUserId ?? '',
+        reason: 'Command is paused pending original actor confirmation.',
       );
     }
 
