@@ -17,7 +17,8 @@
 | Phase 6 readiness / actor-aware design | MERGED | PR #22 |
 | Phase 6 Slice 4A-0 — Drift v6 / retry persistence / CAS | MERGED / FROZEN | PR #23, merge `88908ac309cda0eddcd549121ea0638c6979a384`, run `42366631328`, success 4/4 |
 | Phase 6 Slice 4A-1 — Actor-aware Spin/Redeem recovery runtime | MERGED / FROZEN | PR #24, merge `6b1d4da03254264ac180e4b1503de93e146c963e`, run `42509975267`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4a-1-recovery-dispatcher-freeze.md` |
-| Slice 4A-2, 4B, 4C, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
+| Phase 6 Slice 4B-0 — Immediate local evidence safety | MERGED / FROZEN | PR #26, merge `f921bb67b67e4e0d528911f0da2b90f7b693fc00`, run `42643730956`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4b-0-local-evidence-safety-freeze.md` |
+| Slice 4A-2, 4B-1, 4C, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
 
 ## 2. Ordered workstream / PR boundaries
 
@@ -31,7 +32,7 @@
 
 **Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 479 Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria A01–A24 verified. Schema v6 and backend contracts preserved with 0 diff.
 
-### PR #25 (provisional) — Slice 4A-2: Adult Fulfill/Cancel reliability
+### Slice 4A-2: Adult Fulfill/Cancel reliability (PR: TBD / not allocated)
 
 **Dependency:** PR #24 merged and frozen; reuse its session verification, claim marker, execution coordinator and error classifier but extend eligibility explicitly for `fulfill_reward` and `cancel_reward` only after new tests. Existing v6 claim predicate intentionally excludes these operations; implement a narrowly scoped, reviewed CAS extension, NOT a blanket operation filter removal.
 
@@ -47,19 +48,17 @@
 
 **Gate:** independent review and CI; no release/deploy.
 
-### PR #26 (provisional) — Slice 4B-0: Immediate local evidence safety
+### PR #26 — Slice 4B-0: Immediate local evidence safety (MERGED / FROZEN)
 
-**Priority:** P1 user-data-loss prevention, can be scheduled directly after PR #24 and ahead of 4A-2 if staffing/time allows. Do not wait for complete upload resumability to stop unsafe local deletion.
+**Status:** MERGED and FROZEN (Merge commit `f921bb67b67e4e0d528911f0da2b90f7b693fc00`, run `42643730956`).
 
-**Scope:**
-1. `AddAssessmentScreen` must not physically delete a referenced image until a new draft save is committed and reference switch is confirmed. On cancel/back/error, keep existing file and draft intact.
-2. The child draft-list Delete action must require an explicit confirmation, warn if work is unsynced/quarantined, and use an atomic tombstone/retention strategy if a remote operation may have committed. No automatic deletion of unknown-outcome or legacy drafts.
-3. A file may be garbage-collected only after proving there are zero local references and the user explicitly approved deletion. Preserve compressed photo path and original evidence UUID.
-4. UI remains minimal and accessible; no automatic Storage delete after ambiguous registration outcome.
+**Goal:** Zero client evidence loss. Conservative physical evidence retention, atomic CAS draft deletion rejecting uncommitted/conflicting/legacy states, full 30-field persisted state comparison, path containment sanitization, exclusive file creation, fail-closed attachment restoration, and resilient evidence picker persistence.
 
-**Tests:** edit/remove photo -> navigate back without Save; edit -> failed Save; successful Save -> safe cleanup; duplicate file references; restart; delete quarantined draft requires confirmation and retains exportable evidence. **Gate:** no silent local evidence loss.
+**Authoritative implementation details:** Freeze receipt recorded in `docs/freezes/phase-6-slice-4b-0-local-evidence-safety-freeze.md`.
 
-### PR #27 (provisional) — Slice 4B-1: Evidence resumability and 409 reconciliation
+**Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 556 Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria B01–B05 and review dispositions R26-01 through R26-6-01 verified. Schema v6 and backend contracts preserved with 0 diff.
+
+### Slice 4B-1: Evidence resumability and 409 reconciliation (PR: TBD / not allocated)
 
 **Dependency:** v6 draft persistence, PR #26 local-deletion safety, validated actor/session port and original command markers.
 
@@ -69,7 +68,7 @@
 
 **Tests:** identical 409; same-size/different-content; missing custom metadata; server commit/response loss; local file survives restart; assessment submitted on another device; RLS visibility failure; revoked device; conflict quarantine. **Gate:** no data loss, no silent overwrite.
 
-### PR #28 (provisional) — Slice 4C-0: Auth, Child Mode and device containment
+### Slice 4C-0: Auth, Child Mode and device containment (PR: TBD / not allocated)
 
 **Dependencies:** shared auth/session port in PR #24, local evidence safety and recoverability.
 
@@ -77,25 +76,25 @@
 
 **Tests:** child mode while signed out; A->B account switch; family switch; restart on shared hardware; PIN cracking attempts; salted hash migration; lost auth session; revoked paired child grant; child profile archived; data kept quarantined for an adult export path. **Gate:** no cross-user data presentation or child containment bypass.
 
-### PR #29 (provisional) — Slice 4C-1: Manual recovery and export UX
+### Slice 4C-1: Manual recovery and export UX (PR: TBD / not allocated)
 
 **Scope:** Parent-facing command/draft states and explicit `Keep quarantined`, `Export unsynced work`, `Abandon local copy`. Separate definitive terminal rejection from unknown outcome; clear duplicate-charge warnings. Allow export of unsynced text and evidence without automatic mutation. No hidden command UUID regeneration. Require authorized parent for destructive actions; retained files removed only after durable confirmation and no references.
 
 **Tests:** accessibility labels, state-appropriate copy, no RPC from manual quarantine display, guarded destructive confirmation, export integrity, actor mismatch returns, unknown legacy record visible only to permitted adult. **Gate:** no unrecoverable local data under normal user workflows.
 
-### PR #30 (provisional) — Phase 6 Slice 5: Coordination notifications and privacy telemetry
+### Phase 6 Slice 5: Coordination notifications and privacy telemetry (PR: TBD / not allocated)
 
 **Scope:** Only notification and telemetry behavior approved in ADR 0008, with opt-in/parent control where applicable, minimal personal data, retention windows, scrubbed logs, failure containment and fallback if permissions denied. Never put schoolwork, child identifiers or private evidence into push payloads or analytics.
 
 **Tests:** permission denied, duplicate notification suppression, sign-out/device revocation, data minimization, retention cleanup, no PII in logs. **Gate:** privacy sign-off.
 
-### PR #31 (provisional) — Phase 6 Slice 6: Accessibility and actual release readiness
+### Phase 6 Slice 6: Accessibility and actual release readiness (PR: TBD / not allocated)
 
 **Scope:** TalkBack/VoiceOver semantics, minimum touch targets, meaningful labels, reduced motion for spinning animation, keyboard/focus order, empty/error states, accessible parent confirmation, child-friendly guidance; Android production signing (not debug keystore), iOS distribution signing/provisioning, production `APP_ENV` and Supabase publishable key checks, release pipeline artifact validation, store privacy policies and family pilot runbook.
 
 **Tests:** Android release build and iOS release archive with authorized signing environment; AppConfig fails closed when release misconfigured; device smoke tests on Android/iOS; screen reader and reduced-motion checks; legal/privacy and retention approval. CI simulator/debug alone does **not** satisfy distribution gate.
 
-**Order can vary between PR #25 and PR #26 when justified by risk, but never combine unrelated slices merely to reduce PR count. PR numbers above are provisional and must be resolved against GitHub before opening.**
+**Execution prioritized Slice 4B-0 ahead of Slice 4A-2 to prevent data loss. Future PR numbers are TBD / not allocated and must be resolved against GitHub before opening. Never combine unrelated slices merely to reduce PR count.**
 
 ## 3. Explicit dependency graph
 
