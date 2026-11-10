@@ -32,7 +32,7 @@
 
 **Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 479 Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria A01–A24 verified. Schema v6 and backend contracts preserved with 0 diff.
 
-### PR #25 (provisional) — Slice 4A-2: Adult Fulfill/Cancel reliability
+### Slice 4A-2: Adult Fulfill/Cancel reliability (PR: TBD / not allocated)
 
 **Dependency:** PR #24 merged and frozen; reuse its session verification, claim marker, execution coordinator and error classifier but extend eligibility explicitly for `fulfill_reward` and `cancel_reward` only after new tests. Existing v6 claim predicate intentionally excludes these operations; implement a narrowly scoped, reviewed CAS extension, NOT a blanket operation filter removal.
 
@@ -58,7 +58,7 @@
 
 **Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 556 Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria B01–B05 and review dispositions R26-01 through R26-6-01 verified. Schema v6 and backend contracts preserved with 0 diff.
 
-### PR #27 (provisional) — Slice 4B-1: Evidence resumability and 409 reconciliation
+### Slice 4B-1: Evidence resumability and 409 reconciliation (PR: TBD / not allocated)
 
 **Dependency:** v6 draft persistence, PR #26 local-deletion safety, validated actor/session port and original command markers.
 
@@ -68,7 +68,7 @@
 
 **Tests:** identical 409; same-size/different-content; missing custom metadata; server commit/response loss; local file survives restart; assessment submitted on another device; RLS visibility failure; revoked device; conflict quarantine. **Gate:** no data loss, no silent overwrite.
 
-### PR #28 (provisional) — Slice 4C-0: Auth, Child Mode and device containment
+### Slice 4C-0: Auth, Child Mode and device containment (PR: TBD / not allocated)
 
 **Dependencies:** shared auth/session port in PR #24, local evidence safety and recoverability.
 
@@ -76,25 +76,25 @@
 
 **Tests:** child mode while signed out; A->B account switch; family switch; restart on shared hardware; PIN cracking attempts; salted hash migration; lost auth session; revoked paired child grant; child profile archived; data kept quarantined for an adult export path. **Gate:** no cross-user data presentation or child containment bypass.
 
-### PR #29 (provisional) — Slice 4C-1: Manual recovery and export UX
+### Slice 4C-1: Manual recovery and export UX (PR: TBD / not allocated)
 
 **Scope:** Parent-facing command/draft states and explicit `Keep quarantined`, `Export unsynced work`, `Abandon local copy`. Separate definitive terminal rejection from unknown outcome; clear duplicate-charge warnings. Allow export of unsynced text and evidence without automatic mutation. No hidden command UUID regeneration. Require authorized parent for destructive actions; retained files removed only after durable confirmation and no references.
 
 **Tests:** accessibility labels, state-appropriate copy, no RPC from manual quarantine display, guarded destructive confirmation, export integrity, actor mismatch returns, unknown legacy record visible only to permitted adult. **Gate:** no unrecoverable local data under normal user workflows.
 
-### PR #30 (provisional) — Phase 6 Slice 5: Coordination notifications and privacy telemetry
+### Phase 6 Slice 5: Coordination notifications and privacy telemetry (PR: TBD / not allocated)
 
 **Scope:** Only notification and telemetry behavior approved in ADR 0008, with opt-in/parent control where applicable, minimal personal data, retention windows, scrubbed logs, failure containment and fallback if permissions denied. Never put schoolwork, child identifiers or private evidence into push payloads or analytics.
 
 **Tests:** permission denied, duplicate notification suppression, sign-out/device revocation, data minimization, retention cleanup, no PII in logs. **Gate:** privacy sign-off.
 
-### PR #31 (provisional) — Phase 6 Slice 6: Accessibility and actual release readiness
+### Phase 6 Slice 6: Accessibility and actual release readiness (PR: TBD / not allocated)
 
 **Scope:** TalkBack/VoiceOver semantics, minimum touch targets, meaningful labels, reduced motion for spinning animation, keyboard/focus order, empty/error states, accessible parent confirmation, child-friendly guidance; Android production signing (not debug keystore), iOS distribution signing/provisioning, production `APP_ENV` and Supabase publishable key checks, release pipeline artifact validation, store privacy policies and family pilot runbook.
 
 **Tests:** Android release build and iOS release archive with authorized signing environment; AppConfig fails closed when release misconfigured; device smoke tests on Android/iOS; screen reader and reduced-motion checks; legal/privacy and retention approval. CI simulator/debug alone does **not** satisfy distribution gate.
 
-**Order can vary between PR #25 and PR #26 when justified by risk, but never combine unrelated slices merely to reduce PR count. PR numbers above are provisional and must be resolved against GitHub before opening.**
+**Execution prioritized Slice 4B-0 ahead of Slice 4A-2 to prevent data loss. Future PR numbers are TBD / not allocated and must be resolved against GitHub before opening. Never combine unrelated slices merely to reduce PR count.**
 
 ## 3. Explicit dependency graph
 
