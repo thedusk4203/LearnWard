@@ -18,7 +18,8 @@
 | Phase 6 Slice 4A-0 — Drift v6 / retry persistence / CAS | MERGED / FROZEN | PR #23, merge `88908ac309cda0eddcd549121ea0638c6979a384`, run `42366631328`, success 4/4 |
 | Phase 6 Slice 4A-1 — Actor-aware Spin/Redeem recovery runtime | MERGED / FROZEN | PR #24, merge `6b1d4da03254264ac180e4b1503de93e146c963e`, run `42509975267`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4a-1-recovery-dispatcher-freeze.md` |
 | Phase 6 Slice 4B-0 — Immediate local evidence safety | MERGED / FROZEN | PR #26, merge `f921bb67b67e4e0d528911f0da2b90f7b693fc00`, run `42643730956`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4b-0-local-evidence-safety-freeze.md` |
-| Slice 4A-2, 4B-1, 4C, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
+| Phase 6 Slice 4A-2 — Adult Fulfill/Cancel reliability | MERGED / FROZEN | PR #28 (design), PR #29 (impl), merge `9b253a268be01498266f86013d7db903f6cb01b9`, run `42844354262`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4a-2-adult-fulfill-cancel-freeze.md` |
+| Slice 4B-1, 4C, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
 
 ## 2. Ordered workstream / PR boundaries
 
@@ -32,21 +33,15 @@
 
 **Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 479 Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria A01–A24 verified. Schema v6 and backend contracts preserved with 0 diff.
 
-### Slice 4A-2: Adult Fulfill/Cancel reliability (PR: TBD / not allocated)
+### PR #29 — Slice 4A-2: Adult Fulfill/Cancel reliability (MERGED / FROZEN)
 
-**Dependency:** PR #24 merged and frozen; reuse its session verification, claim marker, execution coordinator and error classifier but extend eligibility explicitly for `fulfill_reward` and `cancel_reward` only after new tests. Existing v6 claim predicate intentionally excludes these operations; implement a narrowly scoped, reviewed CAS extension, NOT a blanket operation filter removal.
+**Status:** MERGED and FROZEN (Design PR #28, merge `d48fe4bc331c724a6ff262bf8594e2aca554c2d7`; Implementation PR #29, merge `9b253a268be01498266f86013d7db903f6cb01b9`, post-merge main CI run `42844354262`).
 
-**Design contract:**
-1. Preserve the original adult `actorUserId`, redemption ID and cancellation reason per command ID; no child actor fulfillment/cancellation.
-2. Before RPC, require current adult membership of the command's family and active target child eligibility as frozen server contract permits; after archive, quarantine unknown outcomes.
-3. Durable pre-dispatch marker, token-fenced completion, idempotent same-ID retry; receipt absence never proves no effect.
-4. Refund from Cancel is **only** performed by frozen server RPC; client never credits RP locally. A response lost after refund must not cause duplicate refund.
-5. False terminal assumptions are prohibited: changed reward/redemption state or `42501` may conceal a prior successful original command; classify conservatively and preserve journal.
-6. On original actor absent, pause; another adult cannot inherit or regenerate the command UUID.
+**Goal:** Reliable, restart-safe, idempotent adult reward fulfillment and cancellation with server-authoritative refunds, verified adult role provenance, cross-operation mutual exclusion, bounded unverified-target recovery, and non-overflowing presentation banners with dynamic due-time promotion.
 
-**Tests:** fulfill server commit + response loss; cancel + refund response loss; concurrent cancel/fulfill; adult A/B switch; child archive; mixed reward command operations; stale lease; no duplicate refund or redemption state change. All account/receipt constraints unchanged.
+**Authoritative implementation details:** Freeze receipt recorded in `docs/freezes/phase-6-slice-4a-2-adult-fulfill-cancel-freeze.md` and approved design contract in `docs/23-phase-6-slice-4a-2-adult-fulfill-cancel-design-contract.md`.
 
-**Gate:** independent review and CI; no release/deploy.
+**Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 449 workspace Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria A2-01–A2-20 and review findings R29-01 through R29-07 verified. Schema v6 and backend contracts preserved with 0 diff.
 
 ### PR #26 — Slice 4B-0: Immediate local evidence safety (MERGED / FROZEN)
 
@@ -100,17 +95,17 @@
 
 ```mermaid
 flowchart TD
- A[4A-0 Drift v6 CAS FROZEN] --> B[4A-1 Spin/Redeem runtime]
- B --> C[4A-2 Fulfill/Cancel]
- A --> D[4B-0 Local evidence safety]
- D --> E[4B-1 Storage integrity and resume]
+ A["4A-0 Drift v6 CAS (FROZEN)"] --> B["4A-1 Spin/Redeem runtime (FROZEN)"]
+ B --> C["4A-2 Fulfill/Cancel (FROZEN)"]
+ A --> D["4B-0 Local evidence safety (FROZEN)"]
+ D --> E["4B-1 Storage integrity and resume (PENDING)"]
  B --> E
- B --> F[4C-0 Session and device containment]
+ B --> F["4C-0 Session and device containment (PENDING)"]
  D --> F
- E --> G[4C-1 Manual recovery / export]
+ E --> G["4C-1 Manual recovery / export (PENDING)"]
  F --> G
- G --> H[Slice 5 Privacy telemetry and notifications]
- H --> I[Slice 6 Accessibility / Release]
+ G --> H["Slice 5 Privacy telemetry and notifications (PENDING)"]
+ H --> I["Slice 6 Accessibility / Pilot Release (PENDING)"]
  C --> I
  E --> I
  F --> I
@@ -187,4 +182,8 @@ Each agent implementation PR must include:
 | Merge decision | **OWN sign-off** | Merge only after approval |
 | Pilot/release authorization | **OWN sign-off with user** | Produce evidence, never self-release |
 
-**Next action:** begin implementation of 4A-1 using the final contract, without another independent planning round by the coding agent. Any unavoidable ambiguity is returned as a sharply scoped factual blocker, not a redesign proposal.
+**Next action / Planning Status:**
+- Slice 4A-2 implementation: **MERGED** (PR #29, merge commit `9b253a268be01498266f86013d7db903f6cb01b9`, post-merge main CI run `42844354262`).
+- Slice 4A-2 freeze receipt: **PR #30** pending final documentation review and merge.
+- Next planning milestone: **Slice 4B-1** — *Evidence Resumability and Storage 409 Reconciliation*.
+- Pilot and production distribution gates: remain strictly **CLOSED**.
