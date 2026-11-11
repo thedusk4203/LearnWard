@@ -1,7 +1,7 @@
 # LearnWard — Phase 6 Slice 4B-1: Evidence Resumability & Storage 409 Reconciliation
 
 **Document status:** DESIGN DRAFT FOR INDEPENDENT APPROVAL — NOT IMPLEMENTED / NOT FROZEN  
-**Proposed canonical repository path:** `docs/24-phase-6-slice-4b-1-evidence-resumability-design-contract.md` (check filename availability before creating)  
+**Canonical repository path:** `docs/24-phase-6-slice-4b-1-evidence-resumability-design-contract.md`  
 **Reviewed baseline:** `main` at `a9cbee7dc2e47c6f792d8adfa7d45cbabb90d90d` (PR #30 merge)  
 **Prerequisites:** Slice 4B-0 local evidence safety, Slice 4A-0 Drift v6 CAS foundation, frozen Phase 6 server RPC/RLS/storage contracts.  
 **Release:** No pilot, production, background dispatcher enablement or release signing authorization.
@@ -176,6 +176,78 @@ All tests must assert server call counts, persisted state, local file retention 
 5. **Draft identity for legacy rows:** Spell out safe migration-in-place vs quarantined cases based on `dispatchState`, actual local bytes and actor provenance.
 
 If any decision cannot be implemented safely using only the frozen contracts, return a focused design blocker and a non-destructive fallback. No silent server/schema expansion.
+
+### 9.1 D1 Resolution — Strict Local Status Serialization & Fail-Closed Unknown Wire Handling
+
+- **Zero Schema Change:** Drift `schemaVersion => 6` and the 30 columns of `LocalAssessmentDrafts` (`packages/learnward_data/lib/src/database/local_assessment_drafts.dart`) remain unchanged.
+- **Wire Values & Fail-Closed Deserialization:**
+  - Persisted `submission_status` SQL values remain restricted to the 5 existing wire tokens (`draft`, `uploading_evidence`, `submitting_assessment`, `failed_retryable`, `terminal_error`).
+  - `DraftSubmissionStatus.fromString(String value)` (`packages/learnward_application/lib/src/ports/command_lifecycle_states.dart:L80-L85`) MUST change its fallback from `DraftSubmissionStatus.draft` to `DraftSubmissionStatus.terminalError` (fail-closed).
+  - In `AppDatabase._mapRowToDraft` (`packages/learnward_data/lib/src/database/app_database.dart:L642-L678`), if `row.submissionStatus` is not one of the 5 known wire values, map `submissionStatus` to `DraftSubmissionStatus.terminalError` and prefix `lastErrorMessage` with `LW4B1:UNKNOWN_WIRE_STATUS:<raw>` so a newer or corrupted status row can never be edited, auto-submitted, or deleted (`B1-30`).
+- **Structured `LW4B1:` Envelope & `DraftRecoveryDisposition`:**
+  - `lastErrorMessage` uses a deterministic machine-readable prefix `LW4B1:<CODE>:<sanitized_message>` paired with `(submissionStatus, dispatchState)` to derive a typed `DraftRecoveryDisposition` enum on `LocalAssessmentDraft`:
+    - `editableDraft`: `submissionStatus == draft && dispatchState == neverDispatched` and no `LW4B1:` quarantine code.
+    - `inFlightStage`: `submissionStatus` in `{uploadingEvidence, submittingAssessment}` with active lease.
+    - `retryScheduled`: `submissionStatus == failedRetryable && dispatchState == neverDispatched` (`LW4B1:TRANSIENT_PRE_DISPATCH`).
+    - `verificationPending`: `submissionStatus == failedRetryable && dispatchState == possiblyDispatched` (`LW4B1:NEEDS_REMOTE_VERIFICATION`).
+    - `waitingOriginalActor`: `submissionStatus == failedRetryable` and `LW4B1:WAITING_ORIGINAL_ACTOR`.
+    - `quarantinedEvidenceConflict`: `submissionStatus == terminalError` and `LW4B1:EVIDENCE_CONFLICT`.
+    - `quarantinedRegistrationUnresolved`: `submissionStatus == terminalError` and `LW4B1:REGISTRATION_UNRESOLVED_REMOTE_RETAINED`.
+    - `quarantinedUnknownOutcome`: `submissionStatus == terminalError` and `LW4B1:` in `{UNKNOWN_WIRE_STATUS, VERSION_CONFLICT, AMBIGUOUS_SUBMIT_OUTCOME, LEGACY_IN_FLIGHT_UNVERIFIED_BYTES}`.
+    - `terminalPolicyDenial`: `submissionStatus == terminalError` and `LW4B1:TERMINAL_POLICY_DENIAL`.
+    - `confirmedSubmitted`: `dispatchState == confirmedCommitted`.
+- **Deletion & Auto-Submit Guards (`LocalAssessmentDraft`):**
+  - `isUnsafeToDelete` (`packages/learnward_application/lib/src/ports/local_draft_store.dart:L99-L106`) MUST return `true` when any of the following hold: `isLeased`, `isLegacyUnknown`, `submissionStatus != DraftSubmissionStatus.draft` (explicitly including `DraftSubmissionStatus.terminalError`), `dispatchState != CommandDispatchState.neverDispatched`, `serverAssessmentId != null`, `serverEvidenceId != null`, `localCompressedPhotoPath != null`, or `lastErrorMessage` begins with `LW4B1:`.
+  - `canAutoSubmit` MUST return `false` for `waitingOriginalActor`, `quarantinedEvidenceConflict`, `quarantinedRegistrationUnresolved`, `quarantinedUnknownOutcome`, `terminalPolicyDenial`, `confirmedSubmitted`, and `isLegacyUnknown`.
+
+### 9.2 D2 Resolution — Write Protection & Exhaustive `saveLocalDraft` / `deleteLocalDraft` Call-Site Contract
+
+- **Production Call-Site Migration:**
+  1. `AddAssessmentScreen._saveLocalDraft()` (`apps/mobile/lib/features/assessments/presentation/add_assessment_screen.dart:L412`): Replace `store.saveLocalDraft(draft)` with `store.registerOrUpdateDraftIfUnchanged(expected: prior, desired: draft, now: clock.now())`.
+  2. `AddAssessmentScreen._submitAssessment()` (`apps/mobile/lib/features/assessments/presentation/add_assessment_screen.dart:L555`): Remove the unconditional pre-submit `store.saveLocalDraft(localDraft)` call; delegate canonical snapshot staging, CAS update, lease claim acquisition (`acquireDraftClaim`), and pre-dispatch marking (`markDraftStageAndDispatch`) to `SubmitAssessmentDraft`.
+  3. `SubmitAssessmentDraft.call()` (`packages/learnward_application/lib/src/use_cases/submit_assessment_draft.dart:L55, L87, L126`):
+     - Replace `saveLocalDraft` at `L55` and `L87` with token-fenced `markDraftStageAndDispatch` and `persistServerAssessmentId`.
+     - Replace `deleteLocalDraft` at `L126` with token-fenced `completeDraftSubmission` (setting `dispatchState = confirmedCommitted`, clearing lease, preserving the journal row and canonical file on disk per `I14` and `B1-28`, while `ChildModeScreen` filters `confirmedCommitted` rows from the editable unsent-drafts list).
+  4. `AppDatabase.saveLocalDraft` (`packages/learnward_data/lib/src/database/app_database.dart:L361`) and `InMemoryLocalDraftStore.saveLocalDraft`: Harden inside a transaction so that if a row with `localDraftId` already exists and holds an active lease (`leaseToken != null && leaseExpiresAt > now`), OR is `possiblyDispatched` / `confirmedCommitted`, OR is `unknownLegacy` when mutating immutable identity fields, OR already has a non-null `localCompressedPhotoPath`, `sha256Checksum`, `serverAssessmentId`, or `serverEvidenceId` that the caller attempts to overwrite or clear, it throws a typed `DraftWriteConflictException` instead of performing an unconditional UPSERT (`I10`, `B1-16`).
+- **UI In-Flight Capture Guard (`AddAssessmentScreen`):**
+  - Disable `_pickEvidence`, `_removeEvidence`, and form field edits whenever the draft is leased, in-flight (`uploadingEvidence` / `submittingAssessment`), `possiblyDispatched`, `confirmedCommitted`, `waitingOriginalActor`, or quarantined.
+
+### 9.3 D3 Resolution — Assessment Submit Outcome Attribution & Version-Conflict Rules
+
+- **Verified SQL & RLS Mechanics:**
+  - Under RLS (`supabase/migrations/20261105000000_phase6_1_child_lifecycle_rls.sql:L233-L297`), direct `SELECT` on `public.command_receipts` and `public.assessment_review_events` is restricted to `private.is_active_family_adult(family_id)` (paired child devices receive 0 rows on direct table reads).
+  - However, `public.submit_assessment(p_assessment_id, p_expected_version, p_command_id)` (`supabase/migrations/20261105120000_phase6_2_child_archive_concurrency.sql:L464-L600`) is `SECURITY DEFINER` and executes Step 6 (`select * into v_receipt from public.command_receipts where command_id = p_command_id`) **before** Step 7 (`v_assessment.version != p_expected_version` -> `LW101`) and **before** Step 8 (`v_assessment.status != 'draft'` -> `LW107`).
+- **Attribution Rules:**
+  1. Before re-invoking `submit_assessment` on recovery, the orchestrator reads `getAssessment` and `listEvidenceForAssessment` and verifies:
+     - Assessment `id == serverAssessmentId`, `familyId`, `childId`, `createdByUserId == actorUserId`, and immutable content fields (`subjectKey`, `subject`, `title`, `type`, `difficulty`, `score.rawScore`, `score.maxScore`, `occurredAt`, `entryContext`) match the local draft.
+     - If the local draft has `evidenceId != null`, the matching `assessment_evidence` row (`id == evidenceId`, `storagePath`, `mediaType`, `fileSizeBytes`) exists and its remote Storage object passes full byte/SHA-256 verification against `sha256Checksum`.
+  2. After content and evidence verification pass, the original authenticated `actorUserId` invokes `submitAssessment(assessmentId: serverAssessmentId, expectedVersion: 1, commandId: submitCommandId)`:
+     - If `submitCommandId` previously committed, Step 6 inside `public.submit_assessment` matches `v_receipt.operation = 'submit' AND v_receipt.resource_id = p_assessment_id AND v_receipt.actor_user_id = auth.uid()` and returns the authoritative `public.assessments` row idempotently even if an adult has already verified or rejected it (`version >= 2`). Only this positive `submit_assessment` return marks the draft `confirmedCommitted` (`B1-13`).
+     - If `submit_assessment` with the original `submitCommandId` raises `LW101` (`Stale assessment version`), `LW107` (`Only draft assessments can be submitted`), or `42501` (`Invalid command replay or command ID mismatch`), Step 6 positively proved that `submitCommandId` did NOT submit that assessment. The orchestrator MUST NOT adopt the newer server version or infer success from `status != 'draft'`; it MUST quarantine the draft as `LW4B1:VERSION_CONFLICT` or `LW4B1:AMBIGUOUS_SUBMIT_OUTCOME` (`DraftSubmissionStatus.terminalError`, `B1-14`).
+
+### 9.4 D4 Resolution — Platform-Safe Canonical File Durability & Checksum Binding
+
+- **`saveCanonicalEvidenceSnapshot` Contract (`apps/mobile/lib/features/assessments/services/local_evidence_file_store.dart`):**
+  1. Validate byte length (`1 <= bytes.length <= 10 * 1024 * 1024`) and magic-byte header signature:
+     - JPEG (`FF D8 FF` prefix) -> `mediaType = 'image/jpeg'`, `ext = 'jpg'`.
+     - PNG (`89 50 4E 47 0D 0A 1A 0A` prefix) -> `mediaType = 'image/png'`, `ext = 'png'`.
+     - Reject any other byte signature with `EvidenceStorageException` (never trusting file extensions, `I02`, `B1-29`).
+  2. Resolve `<app_documents>/draft_evidence/${localDraftId}_canonical_${timestamp}_${uniqueSuffix}.$ext`, verify canonical directory confinement via `p.isWithin`, and create the file using `file.createSync(exclusive: true)` (up to 5 unique-suffix attempts; never using `File.rename` that can overwrite an existing POSIX target).
+  3. Write bytes via `RandomAccessFile` (`writeFromSync(bytes)` + `flushSync()` + `closeSync()`).
+  4. Re-read the newly written file from disk (`file.readAsBytesSync()`), verify `reRead.length == bytes.length`, compute `sha256.convert(reRead).toString()` (lowercase 64-character hex), and verify exact equality with `sha256.convert(bytes).toString()`.
+  5. Return `CanonicalEvidenceSnapshot(canonicalPath, sha256Checksum, fileSizeBytes, mediaType)` for atomic CAS binding into `localCompressedPhotoPath` and `sha256Checksum`.
+- **Dependency Alignment:** Declare `crypto: ^3.0.6` (already locked at `3.0.8` in workspace `pubspec.lock` and used by `apps/mobile`) in `packages/learnward_application/pubspec.yaml` and `packages/learnward_data/pubspec.yaml`.
+
+### 9.5 D5 Resolution — Draft Identity & Migration Rules for Legacy Rows
+
+- **Case A — `dispatchState == unknownLegacy`:**
+  - Quarantined (`isLegacyUnknown == true`). Never stage a canonical snapshot for remote upload, never mint replacement command/evidence UUIDs, and never auto-submit. Local text/score edits via `AddAssessmentScreen` preserve `unknownLegacy` and keep `NULL` IDs as `NULL`.
+- **Case B — `dispatchState == possiblyDispatched` (or `serverAssessmentId != null` / `serverEvidenceId != null`) with `localPhotoPath != null || evidenceId != null` but missing `localCompressedPhotoPath` or `sha256Checksum`:**
+  - Quarantined (`LW4B1:LEGACY_IN_FLIGHT_UNVERIFIED_BYTES`, `DraftSubmissionStatus.terminalError`). Never snapshot mutable `localPhotoPath` retroactively to satisfy a remote 409 or registration check (`I01`, `B1-26`).
+- **Case C — `dispatchState == neverDispatched && submissionStatus == draft && serverAssessmentId == null && serverEvidenceId == null` with `localPhotoPath != null` and missing `localCompressedPhotoPath` or `sha256Checksum`:**
+  - Eligible for one-time foreground migration-in-place by the authorized original actor (`actorUserId == null || actorUserId == authenticatedActorId`): read and magic-byte-validate `localPhotoPath`, write an immutable canonical snapshot via `saveCanonicalEvidenceSnapshot`, bind `localCompressedPhotoPath` + `sha256Checksum` + stable UUIDs (`createCommandId ?? newUuid`, `submitCommandId ?? newUuid`, `evidenceId ?? newUuid`), and persist via `registerOrUpdateDraftIfUnchanged(expected: prior, desired: migrated)` before acquiring a claim.
+
+**Design Blocker Assessment:** Zero frozen-boundary blockers. All 5 design decisions (`D1–D5`), invariants (`I01–I16`), work packages (`WP0–WP6`), and acceptance tests (`B1-01–B1-30`) are implementable within Drift schema v6 and the frozen Phase 6 server/RLS/Storage contracts.
 
 ## 10. Merge and Release Gates
 
