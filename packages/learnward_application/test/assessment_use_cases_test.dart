@@ -112,6 +112,8 @@ final class FailingDeleteStorage implements AssessmentEvidenceStorage {
     required EvidenceId evidenceId,
     required List<int> bytes,
     required String mediaType,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   }) => inner.uploadEvidence(
     familyId: familyId,
     childId: childId,
@@ -119,6 +121,32 @@ final class FailingDeleteStorage implements AssessmentEvidenceStorage {
     evidenceId: evidenceId,
     bytes: bytes,
     mediaType: mediaType,
+    context: context,
+    expectedSessionGeneration: expectedSessionGeneration,
+  );
+
+  @override
+  Future<List<int>> downloadEvidence({
+    required String storagePath,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) => inner.downloadEvidence(
+    storagePath: storagePath,
+    context: context,
+    expectedSessionGeneration: expectedSessionGeneration,
+  );
+
+  @override
+  Future<EvidenceStorageReconciliationResult> reconcileEvidence({
+    required String storagePath,
+    required List<int> localBytes,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) => inner.reconcileEvidence(
+    storagePath: storagePath,
+    localBytes: localBytes,
+    context: context,
+    expectedSessionGeneration: expectedSessionGeneration,
   );
 
   @override
@@ -324,7 +352,7 @@ void main() {
     );
   });
 
-  test('UploadAssessmentEvidence performs compensation cleanup when DB registration fails', () async {
+  test('UploadAssessmentEvidence preserves storage object and never performs compensation delete when DB registration fails (I04)', () async {
     final failingRepo = FailingRegisterAssessmentRepository();
     final draft = await CreateAssessmentDraft(failingRepo)(
       commandId: 'cmd-create-6',
@@ -343,47 +371,112 @@ void main() {
       storage: storage,
     );
 
+    final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440003');
     await expectLater(
       () => uploadUseCase(
         familyId: familyId,
         childId: childId,
         assessmentId: draft.id,
-        evidenceId: EvidenceId('550e8400-e29b-41d4-a716-446655440003'),
+        evidenceId: evidenceId,
         bytes: [1, 2, 3, 4],
         mediaType: 'image/jpeg',
       ),
       throwsA(isA<StateError>()),
     );
 
-    // Verify storage object was compensated/deleted
-    expect(storage.storage.isEmpty, isTrue);
+    // Verify Invariant I04: Storage object is retained, NOT deleted
+    final expectedPath =
+        '${familyId.value}/${childId.value}/${draft.id.value}/${evidenceId.value}.jpg';
+    expect(storage.storage.containsKey(expectedPath), isTrue);
+    expect(storage.storage[expectedPath], equals([1, 2, 3, 4]));
+    expect(storage.deleteCallCount, equals(0));
+    expect(storage.deleteCalls, isEmpty);
   });
 
-  test('UploadAssessmentEvidence invokes onCleanupError safely when storage deletion fails', () async {
-    final failingRepo = FailingRegisterAssessmentRepository();
-    final failingStorage = FailingDeleteStorage(storage);
-    String? reportedMessage;
-    Object? reportedError;
-
+  test('UploadAssessmentEvidence with AuthSessionPort fails closed when session is null, expired, or sessionGeneration changes (R31-08)', () async {
+    final fakeAuth = FakeAuthSessionPort(
+      activeUserId: 'user-parent-1',
+      sessionGeneration: 'gen-1',
+    );
     final uploadUseCase = UploadAssessmentEvidence(
-      repository: failingRepo,
-      storage: failingStorage,
-      onCleanupError: (msg, err) {
-        reportedMessage = msg;
-        reportedError = err;
-      },
+      repository: repository,
+      storage: storage,
+      authSessionPort: fakeAuth,
     );
 
     final draft = await CreateAssessmentDraft(repository)(
-      commandId: 'cmd-create-fail-del',
+      commandId: 'cmd-create-auth-1',
       familyId: familyId,
       childId: childId,
-      subjectKey: SubjectKey.science,
-      subject: 'Science',
-      title: 'Lab 2',
-      type: AssessmentType.homework,
+      subjectKey: SubjectKey.math,
+      subject: 'Math',
+      title: 'Auth Test',
+      type: AssessmentType.quiz,
       difficulty: AssessmentDifficulty.normal,
-      score: AssessmentScore(rawScore: 8, maxScore: 10),
+      score: AssessmentScore(rawScore: 10, maxScore: 10),
+    );
+
+    final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440004');
+
+    // 1. Session generation mismatch
+    await expectLater(
+      () => uploadUseCase(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: draft.id,
+        evidenceId: evidenceId,
+        bytes: [1, 2, 3, 4],
+        mediaType: 'image/jpeg',
+        expectedSessionGeneration: 'gen-old-stale',
+      ),
+      throwsA(isA<EvidenceStorageAuthException>()),
+    );
+
+    // 2. Unauthenticated / signed out
+    fakeAuth.signOut();
+    await expectLater(
+      () => uploadUseCase(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: draft.id,
+        evidenceId: evidenceId,
+        bytes: [1, 2, 3, 4],
+        mediaType: 'image/jpeg',
+      ),
+      throwsA(isA<EvidenceStorageAuthException>()),
+    );
+
+    // Zero storage uploads occurred during auth failures
+    expect(storage.storage.isEmpty, isTrue);
+  });
+
+  test('UploadAssessmentEvidence with AuthSessionPort fails closed on actor switch (R31-08)', () async {
+    final fakeAuth = FakeAuthSessionPort(
+      activeUserId: 'user-attacker',
+      sessionGeneration: 'gen-attacker',
+    );
+    final uploadUseCase = UploadAssessmentEvidence(
+      repository: repository,
+      storage: storage,
+      authSessionPort: fakeAuth,
+    );
+
+    final draft = await CreateAssessmentDraft(repository)(
+      commandId: 'cmd-create-auth-2',
+      familyId: familyId,
+      childId: childId,
+      subjectKey: SubjectKey.math,
+      subject: 'Math',
+      title: 'Actor Switch Test',
+      type: AssessmentType.quiz,
+      difficulty: AssessmentDifficulty.normal,
+      score: AssessmentScore(rawScore: 10, maxScore: 10),
+    );
+
+    final originalContext = ValidatedActorContext(
+      userId: 'user-original-owner',
+      sessionGeneration: 'gen-orig',
+      observedAt: DateTime.now().toUtc(),
     );
 
     await expectLater(
@@ -391,15 +484,180 @@ void main() {
         familyId: familyId,
         childId: childId,
         assessmentId: draft.id,
-        evidenceId: EvidenceId('550e8400-e29b-41d4-a716-446655440004'),
-        bytes: [5, 6, 7],
+        evidenceId: EvidenceId('550e8400-e29b-41d4-a716-446655440005'),
+        bytes: [1, 2, 3, 4],
         mediaType: 'image/jpeg',
+        context: originalContext,
       ),
-      throwsA(isA<StateError>()),
+      throwsA(isA<EvidenceStorageAuthException>()),
     );
 
-    expect(reportedMessage, contains('Failed to clean up'));
-    expect(reportedError, isNotNull);
+    expect(storage.storage.isEmpty, isTrue);
+  });
+
+  test('UploadAssessmentEvidence 409 reconciliation succeeds on identical bytes (B1-06)', () async {
+    final draft = await CreateAssessmentDraft(repository)(
+      commandId: 'cmd-create-409-match',
+      familyId: familyId,
+      childId: childId,
+      subjectKey: SubjectKey.science,
+      subject: 'Science',
+      title: 'Lab 409 Match',
+      type: AssessmentType.homework,
+      difficulty: AssessmentDifficulty.normal,
+      score: AssessmentScore(rawScore: 8, maxScore: 10),
+    );
+
+    final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440006');
+    final path =
+        '${familyId.value}/${childId.value}/${draft.id.value}/${evidenceId.value}.jpg';
+    final bytes = [10, 20, 30, 40, 50];
+
+    // Pre-seed storage with identical bytes (simulating prior acknowledged upload)
+    storage.storage[path] = List<int>.from(bytes);
+
+    final uploadUseCase = UploadAssessmentEvidence(
+      repository: repository,
+      storage: storage,
+    );
+
+    final result = await uploadUseCase(
+      familyId: familyId,
+      childId: childId,
+      assessmentId: draft.id,
+      evidenceId: evidenceId,
+      bytes: bytes,
+      mediaType: 'image/jpeg',
+    );
+
+    expect(result.storagePath, equals(path));
+    expect(storage.reconcileCallCount, equals(1));
+  });
+
+  test('UploadAssessmentEvidence 409 reconciliation fails with conflict on differing digest (B1-07)', () async {
+    final draft = await CreateAssessmentDraft(repository)(
+      commandId: 'cmd-create-409-conflict',
+      familyId: familyId,
+      childId: childId,
+      subjectKey: SubjectKey.science,
+      subject: 'Science',
+      title: 'Lab 409 Conflict',
+      type: AssessmentType.homework,
+      difficulty: AssessmentDifficulty.normal,
+      score: AssessmentScore(rawScore: 8, maxScore: 10),
+    );
+
+    final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440007');
+    final path =
+        '${familyId.value}/${childId.value}/${draft.id.value}/${evidenceId.value}.jpg';
+
+    // Pre-seed storage with same length but differing content bytes
+    storage.storage[path] = [1, 2, 3, 4, 5];
+    final localBytes = [1, 2, 3, 4, 99]; // Same length, different SHA-256
+
+    final uploadUseCase = UploadAssessmentEvidence(
+      repository: repository,
+      storage: storage,
+    );
+
+    await expectLater(
+      () => uploadUseCase(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: draft.id,
+        evidenceId: evidenceId,
+        bytes: localBytes,
+        mediaType: 'image/jpeg',
+      ),
+      throwsA(isA<EvidenceStorageConflictException>()),
+    );
+
+    // Verify remote bytes untouched and no deletion occurred
+    expect(storage.storage[path], equals([1, 2, 3, 4, 5]));
+    expect(storage.deleteCallCount, equals(0));
+  });
+
+  test('UploadAssessmentEvidence 409 reconciliation fails with conflict on differing length (B1-08)', () async {
+    final draft = await CreateAssessmentDraft(repository)(
+      commandId: 'cmd-create-409-diff-len',
+      familyId: familyId,
+      childId: childId,
+      subjectKey: SubjectKey.science,
+      subject: 'Science',
+      title: 'Lab 409 Diff Len',
+      type: AssessmentType.homework,
+      difficulty: AssessmentDifficulty.normal,
+      score: AssessmentScore(rawScore: 8, maxScore: 10),
+    );
+
+    final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440008');
+    final path =
+        '${familyId.value}/${childId.value}/${draft.id.value}/${evidenceId.value}.jpg';
+
+    // Pre-seed storage with 3 bytes
+    storage.storage[path] = [1, 2, 3];
+    final localBytes = [1, 2, 3, 4, 5]; // 5 bytes
+
+    final uploadUseCase = UploadAssessmentEvidence(
+      repository: repository,
+      storage: storage,
+    );
+
+    await expectLater(
+      () => uploadUseCase(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: draft.id,
+        evidenceId: evidenceId,
+        bytes: localBytes,
+        mediaType: 'image/jpeg',
+      ),
+      throwsA(isA<EvidenceStorageConflictException>()),
+    );
+
+    expect(storage.storage[path], equals([1, 2, 3]));
+    expect(storage.deleteCallCount, equals(0));
+  });
+
+  test('UploadAssessmentEvidence 409 reconciliation fails closed as unknown on download error without deleting local or remote bytes (B1-09)', () async {
+    final draft = await CreateAssessmentDraft(repository)(
+      commandId: 'cmd-create-409-unknown',
+      familyId: familyId,
+      childId: childId,
+      subjectKey: SubjectKey.science,
+      subject: 'Science',
+      title: 'Lab 409 Unknown',
+      type: AssessmentType.homework,
+      difficulty: AssessmentDifficulty.normal,
+      score: AssessmentScore(rawScore: 8, maxScore: 10),
+    );
+
+    final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440009');
+    final path =
+        '${familyId.value}/${childId.value}/${draft.id.value}/${evidenceId.value}.jpg';
+    storage.storage[path] = [1, 2, 3];
+    storage.throwOnDownload = StateError('Simulated 403 RLS hidden error');
+
+    final uploadUseCase = UploadAssessmentEvidence(
+      repository: repository,
+      storage: storage,
+    );
+
+    await expectLater(
+      () => uploadUseCase(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: draft.id,
+        evidenceId: evidenceId,
+        bytes: [1, 2, 3],
+        mediaType: 'image/jpeg',
+      ),
+      throwsA(isA<EvidenceStorageUnknownOutcomeException>()),
+    );
+
+    // Verify remote bytes still intact and never deleted
+    expect(storage.storage[path], equals([1, 2, 3]));
+    expect(storage.deleteCallCount, equals(0));
   });
 
   test(

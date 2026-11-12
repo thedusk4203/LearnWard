@@ -1103,12 +1103,100 @@ final class InMemoryAssessmentEvidenceStorage
     required EvidenceId evidenceId,
     required List<int> bytes,
     required String mediaType,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   }) async {
     final ext = mediaType == 'image/png' ? 'png' : 'jpg';
     final path =
         '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
-    _storage[path] = bytes;
+
+    if (bytes.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
+      throw const InvalidAssessmentException(
+        'Evidence file size must not exceed 10 MiB.',
+      );
+    }
+    if (mediaType != 'image/jpeg' && mediaType != 'image/png') {
+      throw InvalidAssessmentException(
+        'Unsupported media type: $mediaType. Only JPEG and PNG are allowed.',
+      );
+    }
+
+    if (_storage.containsKey(path)) {
+      final reconciliation = await reconcileEvidence(
+        storagePath: path,
+        localBytes: bytes,
+        context: context,
+        expectedSessionGeneration: expectedSessionGeneration,
+      );
+      switch (reconciliation) {
+        case MatchingBytesOutcome():
+          return path;
+        case ContentConflictOutcome(:final reason):
+          throw EvidenceStorageConflictException(reconciliation, reason);
+        case UnknownOutcome(:final reason, :final cause):
+          throw EvidenceStorageUnknownOutcomeException(
+            reconciliation,
+            reason,
+            cause,
+          );
+        case AuthFailureOutcome(:final reason):
+          throw EvidenceStorageAuthException(reconciliation, reason);
+      }
+    }
+
+    _storage[path] = List<int>.from(bytes);
     return path;
+  }
+
+  @override
+  Future<List<int>> downloadEvidence({
+    required String storagePath,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) async {
+    final data = _storage[storagePath];
+    if (data == null) {
+      throw StateError('Remote storage object not found: $storagePath');
+    }
+    return List<int>.from(data);
+  }
+
+  @override
+  Future<EvidenceStorageReconciliationResult> reconcileEvidence({
+    required String storagePath,
+    required List<int> localBytes,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) async {
+    final remoteBytes = _storage[storagePath];
+    if (remoteBytes == null) {
+      return UnknownOutcome(
+        storagePath: storagePath,
+        reason: 'Object not found in local demo storage',
+      );
+    }
+
+    final localSha = computeSha256Hex(localBytes);
+    final remoteSha = computeSha256Hex(remoteBytes);
+
+    if (remoteBytes.length == localBytes.length && remoteSha == localSha) {
+      return MatchingBytesOutcome(
+        storagePath: storagePath,
+        remoteBytes: remoteBytes,
+        remoteSha256: remoteSha,
+      );
+    }
+
+    return ContentConflictOutcome(
+      storagePath: storagePath,
+      localSha256: localSha,
+      remoteSha256: remoteSha,
+      localByteCount: localBytes.length,
+      remoteByteCount: remoteBytes.length,
+      reason: remoteBytes.length != localBytes.length
+          ? 'Byte length mismatch: local=${localBytes.length}, remote=${remoteBytes.length}'
+          : 'SHA-256 digest mismatch with identical length',
+    );
   }
 
   @override

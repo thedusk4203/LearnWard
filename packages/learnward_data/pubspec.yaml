@@ -9,6 +9,7 @@ environment:
   sdk: ^3.13.0
 
 dependencies:
+  crypto: ^3.0.6
   drift: ^2.35.3
   learnward_application:
     path: ../learnward_application
@@ -19,6 +20,7 @@ dependencies:
 dev_dependencies:
   build_runner: 2.15.1
   drift_dev: ^2.35.2
+  http: ^1.2.0
   learnward_test_support:
     path: ../learnward_test_support
   sqlite3: ^3.8.0

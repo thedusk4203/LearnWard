@@ -2,23 +2,29 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../ports/assessment_evidence_storage.dart';
 import '../ports/assessment_repository.dart';
+import '../ports/auth_session_port.dart';
 
 /// Use case to upload evidence file to Storage and register the evidence record in the database.
 ///
-/// Implements compensation cleanup: if metadata registration fails, the uploaded storage
-/// object is immediately deleted to prevent orphan storage assets.
+/// Invariant I04: Unconditional compensation deletion has been removed. If metadata
+/// registration fails or yields an ambiguous response, remote Storage bytes are preserved
+/// for future authorized reconciliation rather than blindly deleted.
 final class UploadAssessmentEvidence {
   const UploadAssessmentEvidence({
     required this.repository,
     required this.storage,
+    this.authSessionPort,
+    @Deprecated('Compensation cleanup is removed per Invariant I04')
     this.onCleanupError,
   });
 
   final AssessmentRepository repository;
   final AssessmentEvidenceStorage storage;
+  final AuthSessionPort? authSessionPort;
   final void Function(String message, Object? error)? onCleanupError;
 
-  static const int maxFileSizeBytes = 10 * 1024 * 1024; // 10 MiB
+  static const int maxFileSizeBytes =
+      AssessmentEvidenceStorage.maxFileSizeBytes; // 10 MiB
 
   Future<AssessmentEvidence> call({
     required FamilyId familyId,
@@ -27,22 +33,57 @@ final class UploadAssessmentEvidence {
     required EvidenceId evidenceId,
     required List<int> bytes,
     required String mediaType,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   }) async {
-    // 1. Client-side size validation
+    // 1. Authoritative session validation (R31-08 / Invariant I07)
+    if (authSessionPort != null) {
+      final freshContext = await authSessionPort!.validateForMutation();
+      if (freshContext == null ||
+          !freshContext.isValidAt(DateTime.now().toUtc())) {
+        throw EvidenceStorageAuthException(
+          const AuthFailureOutcome(
+            storagePath: '',
+            reason:
+                'Unauthenticated or expired session before evidence upload.',
+          ),
+        );
+      }
+      final genToCheck =
+          expectedSessionGeneration ?? context?.sessionGeneration;
+      if (genToCheck != null && freshContext.sessionGeneration != genToCheck) {
+        throw EvidenceStorageAuthException(
+          const AuthFailureOutcome(
+            storagePath: '',
+            reason: 'Session generation changed across asynchronous boundary.',
+          ),
+        );
+      }
+      if (context != null && freshContext.userId != context.userId) {
+        throw EvidenceStorageAuthException(
+          const AuthFailureOutcome(
+            storagePath: '',
+            reason: 'Actor switch detected: active session does not match original actor.',
+          ),
+        );
+      }
+    }
+
+    // 2. Client-side size validation
     if (bytes.length > maxFileSizeBytes) {
       throw const InvalidAssessmentException(
         'Evidence file size must not exceed 10 MiB.',
       );
     }
 
-    // 2. Client-side MIME validation
+    // 3. Client-side MIME validation
     if (mediaType != 'image/jpeg' && mediaType != 'image/png') {
       throw InvalidAssessmentException(
         'Unsupported media type: $mediaType. Only JPEG and PNG are allowed.',
       );
     }
 
-    // 3. Upload object with opaque evidence ID
+    // 4. Upload object with opaque evidence ID and immutable upsert:false
     final storagePath = await storage.uploadEvidence(
       familyId: familyId,
       childId: childId,
@@ -50,27 +91,17 @@ final class UploadAssessmentEvidence {
       evidenceId: evidenceId,
       bytes: bytes,
       mediaType: mediaType,
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
     );
 
-    // 4. Register metadata with compensation cleanup on failure
-    try {
-      return await repository.registerEvidence(
-        assessmentId: assessmentId,
-        storagePath: storagePath,
-        mediaType: mediaType,
-        fileSizeBytes: bytes.length,
-      );
-    } catch (registrationError) {
-      try {
-        await storage.deleteEvidence(storagePath);
-      } catch (cleanupError) {
-        // Report safe cleanup error without leaking signed URLs, tokens, or paths
-        onCleanupError?.call(
-          'Failed to clean up uploaded evidence object after registration failure.',
-          cleanupError,
-        );
-      }
-      rethrow;
-    }
+    // 5. Register metadata. Per I04, if registration fails, we do NOT delete
+    // the remote storage object; it is retained for future reconciliation.
+    return await repository.registerEvidence(
+      assessmentId: assessmentId,
+      storagePath: storagePath,
+      mediaType: mediaType,
+      fileSizeBytes: bytes.length,
+    );
   }
 }
