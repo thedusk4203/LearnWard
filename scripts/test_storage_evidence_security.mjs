@@ -31,6 +31,7 @@ const JWT_SECRET = 'super-secret-jwt-token-with-at-least-32-characters-long';
 
 const FAMILY_A = 'fa000000-0000-4000-c000-000000000001';
 const OWNER_A = 'aa000000-0000-4000-c000-000000000001';
+const PARENT_A = 'aa000000-0000-4000-c000-000000000003';
 const CHILD_A = 'ca000000-0000-4000-c000-000000000001';
 const ASSESSMENT_A = 'ea000000-0000-4000-c000-000000000001';
 
@@ -87,11 +88,12 @@ async function main() {
     delete from public.assessments where id = '${ASSESSMENT_A}';
     delete from public.child_profiles where id in ('${CHILD_A}', '${CHILD_B}');
     delete from public.families where id in ('${FAMILY_A}', '${FAMILY_B}');
-    delete from auth.users where id in ('${OWNER_A}', '${OWNER_B}');
+    delete from auth.users where id in ('${OWNER_A}', '${OWNER_B}', '${PARENT_A}');
 
     insert into auth.users (id, email) values
       ('${OWNER_A}', 'storage_owner_a@example.com'),
-      ('${OWNER_B}', 'storage_owner_b@example.com');
+      ('${OWNER_B}', 'storage_owner_b@example.com'),
+      ('${PARENT_A}', 'storage_parent_a@example.com');
 
     insert into public.families (id, name, timezone, locale, created_by_user_id) values
       ('${FAMILY_A}', 'Storage Family A', 'UTC', 'en-US', '${OWNER_A}'),
@@ -99,6 +101,7 @@ async function main() {
 
     insert into public.family_memberships (family_id, auth_user_id, role, status) values
       ('${FAMILY_A}', '${OWNER_A}', 'owner', 'active'),
+      ('${FAMILY_A}', '${PARENT_A}', 'parent', 'active'),
       ('${FAMILY_B}', '${OWNER_B}', 'owner', 'active');
 
     insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year) values
@@ -124,6 +127,7 @@ async function main() {
   console.log('Fixtures established: Real Draft Assessment A exists.');
 
   const tokenA = createJwt(OWNER_A);
+  const tokenParentA = createJwt(PARENT_A);
   const tokenB = createJwt(OWNER_B);
 
   const pathA = `${FAMILY_A}/${CHILD_A}/${ASSESSMENT_A}/${EVIDENCE_ID_1}.jpg`;
@@ -393,11 +397,31 @@ async function main() {
 
   // P. Revoked actor download -> DENIED
   console.log('\n[Test P] Revoked actor download denial...');
-  await runPsql(`update public.family_memberships set status = 'revoked' where family_id = '${FAMILY_A}' and auth_user_id = '${OWNER_A}';`);
+  // First verify active adult member (PARENT_A) can download evidence
+  const resPActive = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenParentA}`,
+    },
+  });
+  if (!resPActive.ok) {
+    console.error(`FAIL [Test P]: Active adult member initial download failed: ${resPActive.status}`);
+    process.exit(1);
+  }
+  console.log('PASS [Test P]: Active adult member successfully downloads evidence.');
+
+  // Revoke membership for PARENT_A
+  const revokeRes = await runPsql(`update public.family_memberships set status = 'revoked' where family_id = '${FAMILY_A}' and auth_user_id = '${PARENT_A}';`);
+  if (revokeRes.code !== 0) {
+    console.error('FAIL [Test P]: Failed to update membership status to revoked:', revokeRes.stderr);
+    process.exit(1);
+  }
+
+  // Attempt download as revoked actor -> DENIED
   const resP = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
     headers: {
       'apikey': ANON_KEY,
-      'Authorization': `Bearer ${tokenA}`,
+      'Authorization': `Bearer ${tokenParentA}`,
     },
   });
   if (resP.ok) {
@@ -407,11 +431,11 @@ async function main() {
   console.log(`PASS [Test P]: Revoked member download denied (HTTP ${resP.status}).`);
 
   // Restore active membership
-  await runPsql(`update public.family_memberships set status = 'active' where family_id = '${FAMILY_A}' and auth_user_id = '${OWNER_A}';`);
+  await runPsql(`update public.family_memberships set status = 'active' where family_id = '${FAMILY_A}' and auth_user_id = '${PARENT_A}';`);
   const resPRestored = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
     headers: {
       'apikey': ANON_KEY,
-      'Authorization': `Bearer ${tokenA}`,
+      'Authorization': `Bearer ${tokenParentA}`,
     },
   });
   if (!resPRestored.ok) {
@@ -532,7 +556,7 @@ async function main() {
     delete from public.assessments where id = '${ASSESSMENT_A}';
     delete from public.child_profiles where id in ('${CHILD_A}', '${CHILD_B}');
     delete from public.families where id in ('${FAMILY_A}', '${FAMILY_B}');
-    delete from auth.users where id in ('${OWNER_A}', '${OWNER_B}');
+    delete from auth.users where id in ('${OWNER_A}', '${OWNER_B}', '${PARENT_A}');
   `);
 
   console.log('=== All Storage Evidence Security Tests A-Q PASSED ===\n');
