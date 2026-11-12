@@ -1093,7 +1093,46 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
 /// Lightweight in-memory fallback for [AssessmentEvidenceStorage] in local demo mode.
 final class InMemoryAssessmentEvidenceStorage
     implements AssessmentEvidenceStorage {
+  InMemoryAssessmentEvidenceStorage({this.authSessionPort});
+
+  final AuthSessionPort? authSessionPort;
   final Map<String, List<int>> _storage = {};
+
+  Future<void> _checkAuth({
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+    required String storagePath,
+  }) async {
+    if (authSessionPort != null) {
+      final fresh = await authSessionPort!.validateForMutation();
+      if (fresh == null || !fresh.isValidAt(DateTime.now().toUtc())) {
+        throw EvidenceStorageAuthException(
+          AuthFailureOutcome(
+            storagePath: storagePath,
+            reason: 'Unauthenticated or expired session.',
+          ),
+        );
+      }
+      final genToCheck =
+          expectedSessionGeneration ?? context?.sessionGeneration;
+      if (genToCheck != null && fresh.sessionGeneration != genToCheck) {
+        throw EvidenceStorageAuthException(
+          AuthFailureOutcome(
+            storagePath: storagePath,
+            reason: 'Session generation changed across asynchronous boundary.',
+          ),
+        );
+      }
+      if (context != null && fresh.userId != context.userId) {
+        throw EvidenceStorageAuthException(
+          AuthFailureOutcome(
+            storagePath: storagePath,
+            reason: 'Actor switch detected: active session does not match original actor.',
+          ),
+        );
+      }
+    }
+  }
 
   @override
   Future<String> uploadEvidence({
@@ -1109,6 +1148,12 @@ final class InMemoryAssessmentEvidenceStorage
     final ext = mediaType == 'image/png' ? 'png' : 'jpg';
     final path =
         '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
+
+    await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: path,
+    );
 
     if (bytes.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
       throw const InvalidAssessmentException(
@@ -1154,10 +1199,31 @@ final class InMemoryAssessmentEvidenceStorage
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
+    await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: storagePath,
+    );
+
     final data = _storage[storagePath];
     if (data == null) {
       throw StateError('Remote storage object not found: $storagePath');
     }
+
+    if (data.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
+      throw EvidenceStorageConflictException(
+        ContentConflictOutcome(
+          storagePath: storagePath,
+          localSha256: '',
+          remoteSha256: computeSha256Hex(data),
+          localByteCount: 0,
+          remoteByteCount: data.length,
+          reason:
+              'Remote evidence object exceeds maximum allowed size (10 MiB).',
+        ),
+      );
+    }
+
     return List<int>.from(data);
   }
 
@@ -1168,11 +1234,56 @@ final class InMemoryAssessmentEvidenceStorage
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    final remoteBytes = _storage[storagePath];
-    if (remoteBytes == null) {
+    if (authSessionPort != null) {
+      try {
+        await _checkAuth(
+          context: context,
+          expectedSessionGeneration: expectedSessionGeneration,
+          storagePath: storagePath,
+        );
+      } on EvidenceStorageAuthException catch (e) {
+        return e.result;
+      }
+    }
+
+    List<int> remoteBytes;
+    try {
+      remoteBytes = await downloadEvidence(
+        storagePath: storagePath,
+        context: context,
+        expectedSessionGeneration: expectedSessionGeneration,
+      );
+    } on EvidenceStorageAuthException catch (e) {
+      // Finding R32-03: Preserve distinct AuthFailureOutcome
+      return e.result;
+    } on EvidenceStorageConflictException catch (e) {
+      return e.result;
+    } catch (e) {
       return UnknownOutcome(
         storagePath: storagePath,
-        reason: 'Object not found in local demo storage',
+        reason: 'Object not found or unreadable in local demo storage: $e',
+        cause: e,
+      );
+    }
+
+    if (remoteBytes.isEmpty) {
+      return ContentConflictOutcome(
+        storagePath: storagePath,
+        localSha256: computeSha256Hex(localBytes),
+        remoteSha256: '',
+        localByteCount: localBytes.length,
+        remoteByteCount: 0,
+        reason: 'Remote evidence object is empty.',
+      );
+    }
+    if (remoteBytes.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
+      return ContentConflictOutcome(
+        storagePath: storagePath,
+        localSha256: computeSha256Hex(localBytes),
+        remoteSha256: computeSha256Hex(remoteBytes),
+        localByteCount: localBytes.length,
+        remoteByteCount: remoteBytes.length,
+        reason: 'Remote evidence object exceeds maximum allowed size (10 MiB).',
       );
     }
 
@@ -1203,12 +1314,28 @@ final class InMemoryAssessmentEvidenceStorage
   Future<String> getEvidenceSignedUrl({
     required String storagePath,
     Duration expiresIn = const Duration(minutes: 10),
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   }) async {
+    await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: storagePath,
+    );
     return 'https://local-demo-storage.learnward.internal/$storagePath';
   }
 
   @override
-  Future<void> deleteEvidence(String storagePath) async {
+  Future<void> deleteEvidence(
+    String storagePath, {
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) async {
+    await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: storagePath,
+    );
     _storage.remove(storagePath);
   }
 }

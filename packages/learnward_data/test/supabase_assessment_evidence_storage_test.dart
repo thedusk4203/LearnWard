@@ -524,5 +524,116 @@ void main() {
         expect(signedUrl, contains(expectedPath));
       },
     );
+
+    test('R32-03: session change between first and second auth check in reconcileEvidence preserves AuthFailureOutcome and executes zero downloads', () async {
+      final bytes = [1, 2, 3, 4, 5];
+      mockHttp.remoteStorage[expectedPath] = bytes;
+
+      // On 1st validate call (reconcile preflight): succeeds.
+      // On 2nd validate call (downloadEvidence preflight): session generation changed.
+      fakeAuth.onValidateForMutation = (count) {
+        if (count == 2) {
+          fakeAuth.setSessionGeneration('gen-changed-before-download');
+        }
+      };
+
+      final result = await storage.reconcileEvidence(
+        storagePath: expectedPath,
+        localBytes: bytes,
+      );
+
+      // Must be AuthFailureOutcome, NOT UnknownOutcome!
+      expect(result, isA<AuthFailureOutcome>());
+      expect(
+        result.outcome,
+        equals(EvidenceStorageReconciliationOutcome.authFailure),
+      );
+
+      // Assert zero HTTP download requests executed
+      expect(mockHttp.downloadCallCount, equals(0));
+    });
+
+    test('R32-04: getEvidenceSignedUrl and deleteEvidence fail closed on unauthenticated session', () async {
+      fakeAuth.signOut();
+
+      await expectLater(
+        () => storage.getEvidenceSignedUrl(storagePath: expectedPath),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+
+      await expectLater(
+        () => storage.deleteEvidence(expectedPath),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+
+      expect(mockHttp.deleteCallCount, equals(0));
+    });
+
+    test('R32-04: oversized remote download (> 10 MiB) fails closed and rejects false match', () async {
+      // Seed remote storage with 10 MiB + 1 byte
+      final oversizedRemote = List<int>.filled(10 * 1024 * 1024 + 1, 7);
+      mockHttp.remoteStorage[expectedPath] = oversizedRemote;
+
+      final result = await storage.reconcileEvidence(
+        storagePath: expectedPath,
+        localBytes: oversizedRemote,
+      );
+
+      // Reconcile must reject oversized remote object as a conflict
+      expect(result, isA<ContentConflictOutcome>());
+      expect(
+        result.outcome,
+        equals(EvidenceStorageReconciliationOutcome.contentConflict),
+      );
+      expect(
+        (result as ContentConflictOutcome).reason,
+        contains('exceeds maximum allowed size'),
+      );
+
+      // downloadEvidence must also reject oversized object
+      await expectLater(
+        () => storage.downloadEvidence(storagePath: expectedPath),
+        throwsA(isA<EvidenceStorageConflictException>()),
+      );
+    });
+
+    test('R32-04: privacy & redaction: toString() and exceptions do not leak full storage paths, access tokens, or signed URLs', () {
+      const sensitivePath =
+          'fa000000-0000-4000-c000-000000000001/ca000000-0000-4000-c000-000000000001/ea000000-0000-4000-c000-000000000001/evidence-123.jpg';
+
+      final matchOutcome = MatchingBytesOutcome(
+        storagePath: sensitivePath,
+        remoteBytes: [1, 2, 3],
+        remoteSha256: 'abc123',
+      );
+      expect(matchOutcome.toString(), isNot(contains('fa000000')));
+      expect(matchOutcome.toString(), isNot(contains('ca000000')));
+      expect(matchOutcome.toString(), contains('.../evidence-123.jpg'));
+
+      final conflictOutcome = ContentConflictOutcome(
+        storagePath: sensitivePath,
+        localSha256: 'hash1',
+        remoteSha256: 'hash2',
+        localByteCount: 10,
+        remoteByteCount: 10,
+        reason:
+            'Conflict at https://storage.supabase.co/$sensitivePath?token=secret123',
+      );
+      expect(conflictOutcome.toString(), isNot(contains('secret123')));
+      expect(conflictOutcome.toString(), isNot(contains('fa000000')));
+
+      final authOutcome = AuthFailureOutcome(
+        storagePath: sensitivePath,
+        reason: 'Token expired: bearer eyJhbGciOiJIUzI1NiIn...',
+      );
+      expect(authOutcome.toString(), isNot(contains('fa000000')));
+
+      final exc = EvidenceStorageConflictException(
+        conflictOutcome,
+        'Failed for $sensitivePath with token https://url?secret_jwt=abc',
+      );
+      expect(exc.toString(), isNot(contains('fa000000')));
+      expect(exc.toString(), isNot(contains('secret_jwt=abc')));
+    });
   });
 }

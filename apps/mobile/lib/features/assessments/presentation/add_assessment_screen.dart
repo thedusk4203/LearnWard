@@ -558,6 +558,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         repository: repo,
         storage: storage,
         localDraftStore: store,
+        authSessionPort: ref.read(authSessionPortProvider),
       );
 
       final evidenceIdObj = resolvedEvidenceId != null

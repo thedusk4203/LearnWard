@@ -8,6 +8,30 @@ String computeSha256Hex(List<int> bytes) {
   return sha256.convert(bytes).toString();
 }
 
+/// Helper to redact full storage paths for privacy (Invariant I16).
+/// Masks family and child identifiers, preserving only the relative filename.
+String redactStoragePath(String path) {
+  if (path.isEmpty) return '<empty>';
+  final lastSlash = path.lastIndexOf('/');
+  final filename = lastSlash != -1 ? path.substring(lastSlash + 1) : path;
+  return '.../$filename';
+}
+
+/// Helper to sanitize error messages so full paths, signed URLs, and tokens are redacted.
+String sanitizeStorageError(String message) {
+  var sanitized = message;
+  // Redact URL query parameters (which may contain access tokens or signatures)
+  sanitized = sanitized.replaceAll(RegExp(r'\?[^"\s]+'), '?<redacted_params>');
+  // Redact 4-part UUID storage paths: <uuid>/<uuid>/<uuid>/<filename>
+  sanitized = sanitized.replaceAllMapped(
+    RegExp(
+      r'[0-9a-fA-F\-]{36}/[0-9a-fA-F\-]{36}/[0-9a-fA-F\-]{36}/([^/\s\?"]+)',
+    ),
+    (m) => '.../${m.group(1)}',
+  );
+  return sanitized;
+}
+
 /// Typed outcome status for Storage evidence reconciliation.
 enum EvidenceStorageReconciliationOutcome {
   /// Remote object exists and its byte length and SHA-256 match local bytes exactly.
@@ -57,7 +81,7 @@ final class MatchingBytesOutcome extends EvidenceStorageReconciliationResult {
 
   @override
   String toString() =>
-      'MatchingBytesOutcome(storagePath: $storagePath, byteCount: $remoteByteCount)';
+      'MatchingBytesOutcome(path: ${redactStoragePath(storagePath)}, byteCount: $remoteByteCount)';
 }
 
 /// Remote bytes exist at [storagePath], but byte length or SHA-256 differs from local bytes.
@@ -83,7 +107,7 @@ final class ContentConflictOutcome extends EvidenceStorageReconciliationResult {
 
   @override
   String toString() =>
-      'ContentConflictOutcome(storagePath: $storagePath, localBytes: $localByteCount, remoteBytes: $remoteByteCount, reason: $reason)';
+      'ContentConflictOutcome(path: ${redactStoragePath(storagePath)}, localBytes: $localByteCount, remoteBytes: $remoteByteCount, reason: ${sanitizeStorageError(reason)})';
 }
 
 /// Remote status cannot be determined due to transport failure, timeout, 401/403, 404, or RLS filtering.
@@ -103,7 +127,7 @@ final class UnknownOutcome extends EvidenceStorageReconciliationResult {
 
   @override
   String toString() =>
-      'UnknownOutcome(storagePath: $storagePath, reason: $reason)';
+      'UnknownOutcome(path: ${redactStoragePath(storagePath)}, reason: ${sanitizeStorageError(reason)})';
 }
 
 /// Authenticated session check failed before Storage interaction.
@@ -118,7 +142,7 @@ final class AuthFailureOutcome extends EvidenceStorageReconciliationResult {
 
   @override
   String toString() =>
-      'AuthFailureOutcome(storagePath: $storagePath, reason: $reason)';
+      'AuthFailureOutcome(path: ${redactStoragePath(storagePath)}, reason: ${sanitizeStorageError(reason)})';
 }
 
 /// Base exception for remote Storage evidence errors.
@@ -127,7 +151,8 @@ sealed class AssessmentEvidenceStorageException implements Exception {
   final String message;
 
   @override
-  String toString() => 'AssessmentEvidenceStorageException: $message';
+  String toString() =>
+      'AssessmentEvidenceStorageException: ${sanitizeStorageError(message)}';
 }
 
 /// Thrown when remote storage contains conflicting bytes for the same evidence path.
@@ -205,8 +230,14 @@ abstract interface class AssessmentEvidenceStorage {
   Future<String> getEvidenceSignedUrl({
     required String storagePath,
     Duration expiresIn = const Duration(minutes: 10),
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   });
 
   /// Deletes an evidence file from storage (allowed only while assessment is in draft).
-  Future<void> deleteEvidence(String storagePath);
+  Future<void> deleteEvidence(
+    String storagePath, {
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  });
 }

@@ -14,12 +14,16 @@ final class FakeAssessmentEvidenceStorage implements AssessmentEvidenceStorage {
   Object? throwOnReconcile;
   bool returnUnknownOnReconcile = false;
 
+  void Function()? onAfterFirstReconcileAuthCheck;
+  void Function()? onAfterUpload;
+
   int uploadCallCount = 0;
   int downloadCallCount = 0;
   int reconcileCallCount = 0;
   int deleteCallCount = 0;
+  int signedUrlCallCount = 0;
 
-  Future<void> _checkAuth({
+  Future<ValidatedActorContext?> _checkAuth({
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
     required String storagePath,
@@ -52,7 +56,9 @@ final class FakeAssessmentEvidenceStorage implements AssessmentEvidenceStorage {
           ),
         );
       }
+      return fresh;
     }
+    return context;
   }
 
   @override
@@ -117,6 +123,7 @@ final class FakeAssessmentEvidenceStorage implements AssessmentEvidenceStorage {
     }
 
     storage[path] = List<int>.from(bytes);
+    onAfterUpload?.call();
     return path;
   }
 
@@ -141,6 +148,21 @@ final class FakeAssessmentEvidenceStorage implements AssessmentEvidenceStorage {
     if (data == null) {
       throw StateError('Remote storage object not found: $storagePath');
     }
+
+    if (data.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
+      throw EvidenceStorageConflictException(
+        ContentConflictOutcome(
+          storagePath: storagePath,
+          localSha256: '',
+          remoteSha256: computeSha256Hex(data),
+          localByteCount: 0,
+          remoteByteCount: data.length,
+          reason:
+              'Remote evidence object exceeds maximum allowed size (10 MiB).',
+        ),
+      );
+    }
+
     return List<int>.from(data);
   }
 
@@ -152,9 +174,10 @@ final class FakeAssessmentEvidenceStorage implements AssessmentEvidenceStorage {
     String? expectedSessionGeneration,
   }) async {
     reconcileCallCount++;
+    ValidatedActorContext? currentContext;
     if (authSessionPort != null) {
       try {
-        await _checkAuth(
+        currentContext = await _checkAuth(
           context: context,
           expectedSessionGeneration: expectedSessionGeneration,
           storagePath: storagePath,
@@ -163,6 +186,13 @@ final class FakeAssessmentEvidenceStorage implements AssessmentEvidenceStorage {
         return e.result;
       }
     }
+
+    final effectiveSessionGen =
+        expectedSessionGeneration ??
+        context?.sessionGeneration ??
+        currentContext?.sessionGeneration;
+
+    onAfterFirstReconcileAuthCheck?.call();
 
     if (throwOnReconcile != null) {
       return UnknownOutcome(
@@ -183,14 +213,40 @@ final class FakeAssessmentEvidenceStorage implements AssessmentEvidenceStorage {
     try {
       remoteBytes = await downloadEvidence(
         storagePath: storagePath,
-        context: context,
-        expectedSessionGeneration: expectedSessionGeneration,
+        context: context ?? currentContext,
+        expectedSessionGeneration: effectiveSessionGen,
       );
+    } on EvidenceStorageAuthException catch (e) {
+      // Finding R32-03: Preserve distinct AuthFailureOutcome! Do NOT convert to UnknownOutcome!
+      return e.result;
+    } on EvidenceStorageConflictException catch (e) {
+      return e.result;
     } catch (e) {
       return UnknownOutcome(
         storagePath: storagePath,
         reason: 'Download failed during reconciliation: $e',
         cause: e,
+      );
+    }
+
+    if (remoteBytes.isEmpty) {
+      return ContentConflictOutcome(
+        storagePath: storagePath,
+        localSha256: computeSha256Hex(localBytes),
+        remoteSha256: '',
+        localByteCount: localBytes.length,
+        remoteByteCount: 0,
+        reason: 'Remote evidence object is empty.',
+      );
+    }
+    if (remoteBytes.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
+      return ContentConflictOutcome(
+        storagePath: storagePath,
+        localSha256: computeSha256Hex(localBytes),
+        remoteSha256: computeSha256Hex(remoteBytes),
+        localByteCount: localBytes.length,
+        remoteByteCount: remoteBytes.length,
+        reason: 'Remote evidence object exceeds maximum allowed size (10 MiB).',
       );
     }
 
@@ -221,13 +277,30 @@ final class FakeAssessmentEvidenceStorage implements AssessmentEvidenceStorage {
   Future<String> getEvidenceSignedUrl({
     required String storagePath,
     Duration expiresIn = const Duration(minutes: 10),
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   }) async {
+    signedUrlCallCount++;
+    await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: storagePath,
+    );
     return 'https://storage.fake.learnward.local/$storagePath?signed=true';
   }
 
   @override
-  Future<void> deleteEvidence(String storagePath) async {
+  Future<void> deleteEvidence(
+    String storagePath, {
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) async {
     deleteCallCount++;
+    await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: storagePath,
+    );
     deleteCalls.add(storagePath);
     storage.remove(storagePath);
   }

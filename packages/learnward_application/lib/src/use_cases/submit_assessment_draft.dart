@@ -2,6 +2,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../ports/assessment_evidence_storage.dart';
 import '../ports/assessment_repository.dart';
+import '../ports/auth_session_port.dart';
 import '../ports/command_lifecycle_states.dart';
 import '../ports/local_draft_store.dart';
 import 'upload_assessment_evidence.dart';
@@ -16,11 +17,13 @@ final class SubmitAssessmentDraft {
     required this.repository,
     required this.storage,
     this.localDraftStore,
+    this.authSessionPort,
   });
 
   final AssessmentRepository repository;
   final AssessmentEvidenceStorage storage;
   final LocalDraftStore? localDraftStore;
+  final AuthSessionPort? authSessionPort;
 
   Future<Assessment> call({
     required String createCommandId,
@@ -101,6 +104,7 @@ final class SubmitAssessmentDraft {
       final uploadUseCase = UploadAssessmentEvidence(
         repository: repository,
         storage: storage,
+        authSessionPort: authSessionPort,
       );
 
       await uploadUseCase(

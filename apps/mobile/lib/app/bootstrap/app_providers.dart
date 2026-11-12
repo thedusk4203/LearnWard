@@ -188,7 +188,8 @@ final assessmentEvidenceStorageProvider = Provider<AssessmentEvidenceStorage>((
     return SupabaseAssessmentEvidenceStorage(client, authSessionPort: authPort);
   }
   if (config.canUseLocalDemoRepositories) {
-    return InMemoryAssessmentEvidenceStorage();
+    final authPort = ref.watch(authSessionPortProvider);
+    return InMemoryAssessmentEvidenceStorage(authSessionPort: authPort);
   }
   throw MissingSupabaseConfigurationException(config.environment);
 });

@@ -16,6 +16,10 @@
  * K. Public unauthenticated evidence URL -> DENIED
  * L. MIME verification (image/gif, application/pdf, text/plain) -> DENIED
  * M. Oversize upload (> 10 MiB) -> DENIED
+ * N. 409 Conflict with matching bytes -> DENIED overwrite, remote bytes verified intact
+ * O. 409 Conflict with same-size / different-content bytes -> DENIED overwrite, remote bytes intact
+ * P. Revoked actor download -> DENIED
+ * Q. Remote storage retention on registration failure -> RETAINED (I04)
  */
 
 import crypto from 'node:crypto';
@@ -36,6 +40,7 @@ const CHILD_B = 'cb000000-0000-4000-c000-000000000002';
 
 const EVIDENCE_ID_1 = crypto.randomUUID();
 const EVIDENCE_ID_2 = crypto.randomUUID();
+const EVIDENCE_ID_3 = crypto.randomUUID();
 
 function createJwt(userId) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -305,9 +310,189 @@ async function main() {
   }
   console.log(`PASS [Test M]: Oversize upload denied (HTTP ${resM.status}).`);
 
+  // N. 409 Conflict with matching bytes -> DENIED overwrite, remote bytes verified intact
+  console.log('\n[Test N] 409 Conflict with matching bytes on duplicate upload...');
+  const resN = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    method: 'POST',
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'image/jpeg',
+    },
+    body: dummyImageBytes,
+  });
+  if (resN.ok) {
+    console.error('FAIL [Test N]: Duplicate upload unexpectedly succeeded without conflict!');
+    process.exit(1);
+  }
+  const textN = await resN.text();
+  const isConflictN = resN.status === 409 || (resN.status === 400 && (textN.includes('already exists') || textN.includes('Duplicate') || textN.includes('409')));
+  if (!isConflictN) {
+    console.error(`FAIL [Test N]: Expected conflict status (409 or 400 duplicate), got HTTP ${resN.status}: ${textN}`);
+    process.exit(1);
+  }
+  const dlResN = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+    },
+  });
+  if (!dlResN.ok) {
+    console.error(`FAIL [Test N]: Download of existing evidence failed: ${dlResN.status}`);
+    process.exit(1);
+  }
+  const dlBytesN = Buffer.from(await dlResN.arrayBuffer());
+  if (!dlBytesN.equals(dummyImageBytes)) {
+    console.error('FAIL [Test N]: Downloaded bytes do not match expected dummyImageBytes!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test N]: Duplicate upload rejected with conflict (${resN.status}) and remote bytes verified intact.`);
+
+  // O. 409 Conflict with same-size / different-content bytes -> DENIED overwrite, remote bytes intact
+  console.log('\n[Test O] 409 Conflict with same-size / different-content bytes...');
+  const mutatedSameSizeBytes = Buffer.alloc(dummyImageBytes.length, 0x5a); // Same length, all 'Z'
+  const resO = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    method: 'POST',
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'image/jpeg',
+    },
+    body: mutatedSameSizeBytes,
+  });
+  if (resO.ok) {
+    console.error('FAIL [Test O]: Mutated same-size upload unexpectedly succeeded!');
+    process.exit(1);
+  }
+  const textO = await resO.text();
+  const isConflictO = resO.status === 409 || (resO.status === 400 && (textO.includes('already exists') || textO.includes('Duplicate') || textO.includes('409')));
+  if (!isConflictO) {
+    console.error(`FAIL [Test O]: Expected conflict status, got HTTP ${resO.status}: ${textO}`);
+    process.exit(1);
+  }
+  const dlResO = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+    },
+  });
+  if (!dlResO.ok) {
+    console.error(`FAIL [Test O]: Download after failed mutate upload failed: ${dlResO.status}`);
+    process.exit(1);
+  }
+  const dlBytesO = Buffer.from(await dlResO.arrayBuffer());
+  if (!dlBytesO.equals(dummyImageBytes)) {
+    console.error('FAIL [Test O]: Remote bytes altered after conflict upload!');
+    process.exit(1);
+  }
+  if (dlBytesO.equals(mutatedSameSizeBytes)) {
+    console.error('FAIL [Test O]: Remote bytes were overwritten with mutated bytes!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test O]: Same-size conflict upload rejected (${resO.status}) and original bytes preserved.`);
+
+  // P. Revoked actor download -> DENIED
+  console.log('\n[Test P] Revoked actor download denial...');
+  await runPsql(`update public.family_memberships set status = 'revoked' where family_id = '${FAMILY_A}' and auth_user_id = '${OWNER_A}';`);
+  const resP = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+    },
+  });
+  if (resP.ok) {
+    console.error('FAIL [Test P]: Revoked member was able to download evidence!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test P]: Revoked member download denied (HTTP ${resP.status}).`);
+
+  // Restore active membership
+  await runPsql(`update public.family_memberships set status = 'active' where family_id = '${FAMILY_A}' and auth_user_id = '${OWNER_A}';`);
+  const resPRestored = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathA}`, {
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+    },
+  });
+  if (!resPRestored.ok) {
+    console.error(`FAIL [Test P]: Restored active member download failed: ${resPRestored.status}`);
+    process.exit(1);
+  }
+  console.log('PASS [Test P]: Restored active member download succeeds.');
+
+  // Q. Remote storage retention on registration failure (I04)
+  console.log('\n[Test Q] Remote storage retention on registration failure (I04)...');
+  const pathQ = `${FAMILY_A}/${CHILD_A}/${ASSESSMENT_A}/${EVIDENCE_ID_3}.jpg`;
+  const resQUpload = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathQ}`, {
+    method: 'POST',
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'image/jpeg',
+    },
+    body: dummyImageBytes,
+  });
+  if (!resQUpload.ok) {
+    console.error(`FAIL [Test Q]: Initial upload for pathQ failed: ${resQUpload.status}`);
+    process.exit(1);
+  }
+  console.log('Evidence uploaded for pathQ while assessment is draft.');
+
   // Advance Assessment A status to pending_review
   console.log('\nTransitioning Assessment A to pending_review...');
   await runPsql(`update public.assessments set status = 'pending_review' where id = '${ASSESSMENT_A}';`);
+
+  // Attempt registration on non-draft assessment -> must fail with LW109
+  const resQReg = await fetch(`${API_URL}/rest/v1/rpc/register_assessment_evidence`, {
+    method: 'POST',
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      p_assessment_id: ASSESSMENT_A,
+      p_storage_path: pathQ,
+      p_media_type: 'image/jpeg',
+      p_file_size_bytes: dummyImageBytes.length,
+    }),
+  });
+  if (resQReg.ok) {
+    console.error('FAIL [Test Q]: Registration unexpectedly succeeded on non-draft assessment!');
+    process.exit(1);
+  }
+  const textQReg = await resQReg.text();
+  if (!textQReg.includes('LW109')) {
+    console.error(`FAIL [Test Q]: Expected LW109 from register_assessment_evidence, got: ${textQReg}`);
+    process.exit(1);
+  }
+  console.log(`PASS [Test Q]: Evidence registration rejected on non-draft assessment with LW109 (HTTP ${resQReg.status}).`);
+
+  // Verify remote storage bytes are retained and readable (I04)
+  const resQCheck = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pathQ}`, {
+    headers: {
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${tokenA}`,
+    },
+  });
+  if (!resQCheck.ok) {
+    console.error(`FAIL [Test Q]: Remote evidence was deleted or unreadable after registration failure! Status: ${resQCheck.status}`);
+    process.exit(1);
+  }
+  const retainedBytes = Buffer.from(await resQCheck.arrayBuffer());
+  if (!retainedBytes.equals(dummyImageBytes)) {
+    console.error('FAIL [Test Q]: Retained bytes do not match uploaded dummyImageBytes!');
+    process.exit(1);
+  }
+  console.log('PASS [Test Q]: Remote evidence retained and intact after registration failure (I04).');
+
+  // Verify no DB evidence row exists for pathQ
+  const countQ = await runPsql(`select count(*) from public.assessment_evidence where storage_path = '${pathQ}';`);
+  if (!countQ.stdout.includes('0')) {
+    console.error(`FAIL [Test Q]: Database evidence row exists despite registration failure: ${countQ.stdout}`);
+    process.exit(1);
+  }
+  console.log('PASS [Test Q]: Zero evidence rows recorded in database.');
 
   // H. Submit Assessment A then delete evidence -> DENIED
   console.log('\n[Test H] Delete evidence after submission (pending_review status)...');
@@ -350,7 +535,7 @@ async function main() {
     delete from auth.users where id in ('${OWNER_A}', '${OWNER_B}');
   `);
 
-  console.log('=== All Storage Evidence Security Tests A-M PASSED ===\n');
+  console.log('=== All Storage Evidence Security Tests A-Q PASSED ===\n');
 }
 
 main().catch((err) => {

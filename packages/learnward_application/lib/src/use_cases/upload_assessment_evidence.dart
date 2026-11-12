@@ -9,6 +9,11 @@ import '../ports/auth_session_port.dart';
 /// Invariant I04: Unconditional compensation deletion has been removed. If metadata
 /// registration fails or yields an ambiguous response, remote Storage bytes are preserved
 /// for future authorized reconciliation rather than blindly deleted.
+///
+/// Finding R32-02: Authenticated session validity and session generation are validated
+/// both prior to upload AND revalidated across the asynchronous upload boundary before
+/// metadata registration. If the session expires, is revoked, or the actor changes,
+/// registration is aborted with zero remote DB mutation, and remote bytes are preserved.
 final class UploadAssessmentEvidence {
   const UploadAssessmentEvidence({
     required this.repository,
@@ -36,7 +41,9 @@ final class UploadAssessmentEvidence {
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    // 1. Authoritative session validation (R31-08 / Invariant I07)
+    // 1. Initial authoritative session validation (R31-08 / Invariant I07)
+    ValidatedActorContext? initialContext;
+    String? initialSessionGen;
     if (authSessionPort != null) {
       final freshContext = await authSessionPort!.validateForMutation();
       if (freshContext == null ||
@@ -67,6 +74,8 @@ final class UploadAssessmentEvidence {
           ),
         );
       }
+      initialContext = freshContext;
+      initialSessionGen = freshContext.sessionGeneration;
     }
 
     // 2. Client-side size validation
@@ -91,11 +100,47 @@ final class UploadAssessmentEvidence {
       evidenceId: evidenceId,
       bytes: bytes,
       mediaType: mediaType,
-      context: context,
-      expectedSessionGeneration: expectedSessionGeneration,
+      context: initialContext ?? context,
+      expectedSessionGeneration: initialSessionGen ?? expectedSessionGeneration,
     );
 
-    // 5. Register metadata. Per I04, if registration fails, we do NOT delete
+    // 5. Post-upload session revalidation (R32-02 / Invariant I07)
+    // Awaited upload completed. Before calling repository.registerEvidence(), revalidate that
+    // the authenticated session remains valid, unexpired, and actor/generation unchanged.
+    if (authSessionPort != null) {
+      final postUploadContext = await authSessionPort!.validateForMutation();
+      if (postUploadContext == null ||
+          !postUploadContext.isValidAt(DateTime.now().toUtc())) {
+        throw EvidenceStorageAuthException(
+          AuthFailureOutcome(
+            storagePath: storagePath,
+            reason: 'Session became unauthenticated or expired between upload and registration.',
+          ),
+        );
+      }
+      final requiredGen = initialSessionGen ?? expectedSessionGeneration;
+      if (requiredGen != null &&
+          postUploadContext.sessionGeneration != requiredGen) {
+        throw EvidenceStorageAuthException(
+          AuthFailureOutcome(
+            storagePath: storagePath,
+            reason:
+                'Session generation changed between upload and registration.',
+          ),
+        );
+      }
+      final requiredUser = initialContext?.userId ?? context?.userId;
+      if (requiredUser != null && postUploadContext.userId != requiredUser) {
+        throw EvidenceStorageAuthException(
+          AuthFailureOutcome(
+            storagePath: storagePath,
+            reason: 'Actor switch detected between upload and registration.',
+          ),
+        );
+      }
+    }
+
+    // 6. Register metadata. Per I04, if registration fails, we do NOT delete
     // the remote storage object; it is retained for future reconciliation.
     return await repository.registerEvidence(
       assessmentId: assessmentId,

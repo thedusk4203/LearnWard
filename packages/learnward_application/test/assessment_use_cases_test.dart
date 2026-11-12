@@ -153,13 +153,21 @@ final class FailingDeleteStorage implements AssessmentEvidenceStorage {
   Future<String> getEvidenceSignedUrl({
     required String storagePath,
     Duration expiresIn = const Duration(minutes: 10),
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   }) => inner.getEvidenceSignedUrl(
     storagePath: storagePath,
     expiresIn: expiresIn,
+    context: context,
+    expectedSessionGeneration: expectedSessionGeneration,
   );
 
   @override
-  Future<void> deleteEvidence(String storagePath) async {
+  Future<void> deleteEvidence(
+    String storagePath, {
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) async {
     throw StateError('Simulated storage delete failure');
   }
 }
@@ -448,6 +456,56 @@ void main() {
 
     // Zero storage uploads occurred during auth failures
     expect(storage.storage.isEmpty, isTrue);
+  });
+
+  test('R32-02: session change between upload completion and registration aborts with EvidenceStorageAuthException and preserves remote bytes', () async {
+    final fakeAuth = FakeAuthSessionPort(
+      activeUserId: 'user-parent-1',
+      sessionGeneration: 'gen-1',
+    );
+    final uploadUseCase = UploadAssessmentEvidence(
+      repository: repository,
+      storage: storage,
+      authSessionPort: fakeAuth,
+    );
+
+    final draft = await CreateAssessmentDraft(repository)(
+      commandId: 'cmd-create-r32-02',
+      familyId: familyId,
+      childId: childId,
+      subjectKey: SubjectKey.science,
+      subject: 'Science',
+      title: 'Asynchronous Session Invalidation Test',
+      type: AssessmentType.homework,
+      difficulty: AssessmentDifficulty.normal,
+      score: AssessmentScore(rawScore: 9, maxScore: 10),
+    );
+
+    final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440099');
+    final expectedPath =
+        '${familyId.value}/${childId.value}/${draft.id.value}/${evidenceId.value}.jpg';
+
+    // Simulate session generation invalidation immediately after Storage upload completes
+    storage.onAfterUpload = () {
+      fakeAuth.setSessionGeneration('gen-invalidated-after-upload');
+    };
+
+    await expectLater(
+      () => uploadUseCase(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: draft.id,
+        evidenceId: evidenceId,
+        bytes: [1, 2, 3, 4, 5],
+        mediaType: 'image/jpeg',
+      ),
+      throwsA(isA<EvidenceStorageAuthException>()),
+    );
+
+    // Verify remote bytes were preserved and NO remote deletion was invoked (Invariant I04)
+    expect(storage.storage.containsKey(expectedPath), isTrue);
+    expect(storage.storage[expectedPath], equals([1, 2, 3, 4, 5]));
+    expect(storage.deleteCallCount, equals(0));
   });
 
   test('UploadAssessmentEvidence with AuthSessionPort fails closed on actor switch (R31-08)', () async {
