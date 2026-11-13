@@ -174,6 +174,7 @@ final class FailingDeleteStorage implements AssessmentEvidenceStorage {
 
 void main() {
   late FakeAssessmentRepository repository;
+  late FakeAuthSessionPort fakeAuth;
   late FakeAssessmentEvidenceStorage storage;
 
   final familyId = FamilyId('fam-1');
@@ -181,7 +182,11 @@ void main() {
 
   setUp(() {
     repository = FakeAssessmentRepository();
-    storage = FakeAssessmentEvidenceStorage();
+    fakeAuth = FakeAuthSessionPort(
+      activeUserId: 'user-parent-1',
+      sessionGeneration: 'gen-1',
+    );
+    storage = FakeAssessmentEvidenceStorage(authSessionPort: fakeAuth);
   });
 
   test(
@@ -294,6 +299,7 @@ void main() {
     final uploadUseCase = UploadAssessmentEvidence(
       repository: repository,
       storage: storage,
+      authSessionPort: fakeAuth,
     );
 
     final evidence = await uploadUseCase(
@@ -330,6 +336,7 @@ void main() {
     final uploadUseCase = UploadAssessmentEvidence(
       repository: repository,
       storage: storage,
+      authSessionPort: fakeAuth,
     );
 
     // Oversize
@@ -377,6 +384,7 @@ void main() {
     final uploadUseCase = UploadAssessmentEvidence(
       repository: failingRepo,
       storage: storage,
+      authSessionPort: fakeAuth,
     );
 
     final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440003');
@@ -577,6 +585,7 @@ void main() {
     final uploadUseCase = UploadAssessmentEvidence(
       repository: repository,
       storage: storage,
+      authSessionPort: fakeAuth,
     );
 
     final result = await uploadUseCase(
@@ -616,6 +625,7 @@ void main() {
     final uploadUseCase = UploadAssessmentEvidence(
       repository: repository,
       storage: storage,
+      authSessionPort: fakeAuth,
     );
 
     await expectLater(
@@ -659,6 +669,7 @@ void main() {
     final uploadUseCase = UploadAssessmentEvidence(
       repository: repository,
       storage: storage,
+      authSessionPort: fakeAuth,
     );
 
     await expectLater(
@@ -699,6 +710,7 @@ void main() {
     final uploadUseCase = UploadAssessmentEvidence(
       repository: repository,
       storage: storage,
+      authSessionPort: fakeAuth,
     );
 
     await expectLater(
@@ -854,6 +866,7 @@ void main() {
       repository: repository,
       storage: storage,
       localDraftStore: draftStore,
+      authSessionPort: fakeAuth,
     );
 
     final result = await submitWorkflow(
@@ -906,6 +919,7 @@ void main() {
       repository: repository,
       storage: storage,
       localDraftStore: draftStore,
+      authSessionPort: fakeAuth,
     );
 
     await expectLater(
@@ -958,6 +972,7 @@ void main() {
       repository: failingRepo,
       storage: storage,
       localDraftStore: draftStore,
+      authSessionPort: fakeAuth,
     );
 
     await expectLater(
@@ -985,6 +1000,218 @@ void main() {
       draftAfter.submissionStatus,
       DraftSubmissionStatus.submittingAssessment,
     );
+  });
+
+  group('R32-06 / R32-07 / R32-08: Hardened Auth, Size Bounds, and Safe Fake/Demo Modes', () {
+    test('R32-06: SubmitAssessmentDraft fails closed when unauthenticated without marking possiblyDispatched or calling RPCs', () async {
+      final draftStore = InMemoryLocalDraftStore();
+      const localId = 'draft-unauth-test-1';
+      await draftStore.saveLocalDraft(
+        LocalAssessmentDraft(
+          localDraftId: localId,
+          familyId: familyId.value,
+          childId: childId.value,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Unauthenticated Draft',
+          assessmentType: 'quiz',
+          difficulty: 'normal',
+          rawScore: 8.0,
+          maxScore: 10.0,
+          occurredAt: DateTime.utc(2026, 11, 1),
+          updatedAt: DateTime.utc(2026, 11, 1),
+          dispatchState: CommandDispatchState.neverDispatched,
+        ),
+      );
+
+      fakeAuth.signOut();
+      final submitWorkflow = SubmitAssessmentDraft(
+        repository: repository,
+        storage: storage,
+        localDraftStore: draftStore,
+        authSessionPort: fakeAuth,
+      );
+
+      await expectLater(
+        () => submitWorkflow(
+          createCommandId: 'cmd-unauth-create',
+          submitCommandId: 'cmd-unauth-submit',
+          familyId: familyId,
+          childId: childId,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Unauthenticated Draft',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 8, maxScore: 10),
+          localDraftId: localId,
+        ),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+
+      final draftAfter = await draftStore.getLocalDraft(localId);
+      expect(draftAfter!.dispatchState, CommandDispatchState.neverDispatched);
+      expect(repository.assessments, isEmpty);
+    });
+
+    test('R32-06: SubmitAssessmentDraft revalidates auth before final submitAssessment even without evidence', () async {
+      var calls = 0;
+      fakeAuth.onValidateForMutation = (callCount) {
+        calls = callCount;
+        // First check passes preflight before createDraft; second check (before submitAssessment) fails
+        if (callCount >= 2) {
+          fakeAuth.setSessionGeneration('gen-rotated-before-submit');
+        }
+      };
+
+      final submitWorkflow = SubmitAssessmentDraft(
+        repository: repository,
+        storage: storage,
+        authSessionPort: fakeAuth,
+      );
+
+      await expectLater(
+        () => submitWorkflow(
+          createCommandId: 'cmd-submit-revalidate-create',
+          submitCommandId: 'cmd-submit-revalidate-submit',
+          familyId: familyId,
+          childId: childId,
+          subjectKey: SubjectKey.english,
+          subject: 'English',
+          title: 'Reading Log',
+          type: AssessmentType.homework,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 10, maxScore: 10),
+        ),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+
+      expect(calls, equals(2));
+      expect(
+        repository.assessments.values.single.status,
+        equals(AssessmentStatus.draft),
+      );
+    });
+
+    test('R32-06: FakeAssessmentEvidenceStorage fails closed without authSessionPort unless explicitly configured', () async {
+      final unconfiguredStorage = FakeAssessmentEvidenceStorage();
+      final evId = EvidenceId('550e8400-e29b-41d4-a716-446655440200');
+      const path =
+          'fam-1/child-1/asmt-1/550e8400-e29b-41d4-a716-446655440200.jpg';
+
+      await expectLater(
+        () => unconfiguredStorage.uploadEvidence(
+          familyId: familyId,
+          childId: childId,
+          assessmentId: AssessmentId('asmt-1'),
+          evidenceId: evId,
+          bytes: [1, 2, 3],
+          mediaType: 'image/jpeg',
+        ),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+      await expectLater(
+        () => unconfiguredStorage.downloadEvidence(storagePath: path),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+      final reconcile = await unconfiguredStorage.reconcileEvidence(
+        storagePath: path,
+        localBytes: [1, 2, 3],
+      );
+      expect(reconcile, isA<AuthFailureOutcome>());
+      await expectLater(
+        () => unconfiguredStorage.getEvidenceSignedUrl(storagePath: path),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+      await expectLater(
+        () => unconfiguredStorage.deleteEvidence(path),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+
+      // Explicitly configured unauthenticated fake preserves opt-in behavior
+      final explicitUnauth = FakeAssessmentEvidenceStorage.unauthenticated();
+      final uploadedPath = await explicitUnauth.uploadEvidence(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: AssessmentId('asmt-1'),
+        evidenceId: evId,
+        bytes: [1, 2, 3],
+        mediaType: 'image/jpeg',
+      );
+      expect(uploadedPath, isNotEmpty);
+    });
+
+    test('R32-08: UploadAssessmentEvidence and SubmitAssessmentDraft reject zero-length and >10 MiB evidence cleanly', () async {
+      final draft = await CreateAssessmentDraft(repository)(
+        commandId: 'cmd-create-zero-size',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Zero Byte Test',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 5, maxScore: 10),
+      );
+
+      final uploadUseCase = UploadAssessmentEvidence(
+        repository: repository,
+        storage: storage,
+        authSessionPort: fakeAuth,
+      );
+
+      await expectLater(
+        () => uploadUseCase(
+          familyId: familyId,
+          childId: childId,
+          assessmentId: draft.id,
+          evidenceId: EvidenceId('550e8400-e29b-41d4-a716-446655440301'),
+          bytes: const [],
+          mediaType: 'image/jpeg',
+        ),
+        throwsA(isA<InvalidAssessmentException>()),
+      );
+
+      // Exact 10 MiB boundary succeeds
+      final exactMax = List<int>.filled(10 * 1024 * 1024, 9);
+      final registered = await uploadUseCase(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: draft.id,
+        evidenceId: EvidenceId('550e8400-e29b-41d4-a716-446655440302'),
+        bytes: exactMax,
+        mediaType: 'image/png',
+      );
+      expect(registered.fileSizeBytes, equals(10 * 1024 * 1024));
+
+      // SubmitAssessmentDraft rejects zero-length attached evidence BEFORE createDraft
+      final submitWorkflow = SubmitAssessmentDraft(
+        repository: repository,
+        storage: storage,
+        authSessionPort: fakeAuth,
+      );
+      await expectLater(
+        () => submitWorkflow(
+          createCommandId: 'cmd-submit-zero-evidence',
+          submitCommandId: 'cmd-submit-zero-evidence-2',
+          familyId: familyId,
+          childId: childId,
+          subjectKey: SubjectKey.science,
+          subject: 'Science',
+          title: 'Empty Evidence Draft',
+          type: AssessmentType.homework,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 8, maxScore: 10),
+          evidenceBytes: const [],
+          evidenceMediaType: 'image/jpeg',
+          evidenceId: EvidenceId('550e8400-e29b-41d4-a716-446655440303'),
+        ),
+        throwsA(isA<InvalidAssessmentException>()),
+      );
+
+      // Zero new drafts created for rejected empty evidence
+      expect(repository.assessments.length, equals(1));
+    });
   });
 }
 

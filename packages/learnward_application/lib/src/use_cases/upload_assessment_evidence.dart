@@ -4,28 +4,32 @@ import '../ports/assessment_evidence_storage.dart';
 import '../ports/assessment_repository.dart';
 import '../ports/auth_session_port.dart';
 
-/// Use case to upload evidence file to Storage and register the evidence record in the database.
+/// Application use case to upload evidence binary bytes to remote Storage and register
+/// metadata in the database.
 ///
-/// Invariant I04: Unconditional compensation deletion has been removed. If metadata
-/// registration fails or yields an ambiguous response, remote Storage bytes are preserved
-/// for future authorized reconciliation rather than blindly deleted.
-///
-/// Finding R32-02: Authenticated session validity and session generation are validated
-/// both prior to upload AND revalidated across the asynchronous upload boundary before
-/// metadata registration. If the session expires, is revoked, or the actor changes,
-/// registration is aborted with zero remote DB mutation, and remote bytes are preserved.
+/// Invariants and design rules:
+/// - I04: Unconditional compensation deletion is removed. If metadata registration fails
+///   or yields an ambiguous response, remote Storage bytes are preserved for authorized
+///   reconciliation rather than blindly deleted.
+/// - I07 / R32-02 / R32-06: Mandatory live [AuthSessionPort] validation is enforced
+///   prior to upload AND revalidated across the asynchronous upload boundary before
+///   `repository.registerEvidence()`. No production path may skip authentication.
+/// - WP1 -> WP2/WP3 boundary: WP1 enforces live session validity, actor continuity, and
+///   session-generation invariance within the active call. Durable cross-restart draft
+///   actor binding (`actorUserId`, persisted session epoch, and lease-token CAS) is
+///   deferred to WP2/WP3.
 final class UploadAssessmentEvidence {
   const UploadAssessmentEvidence({
     required this.repository,
     required this.storage,
-    this.authSessionPort,
+    required this.authSessionPort,
     @Deprecated('Compensation cleanup is removed per Invariant I04')
     this.onCleanupError,
   });
 
   final AssessmentRepository repository;
   final AssessmentEvidenceStorage storage;
-  final AuthSessionPort? authSessionPort;
+  final AuthSessionPort authSessionPort;
   final void Function(String message, Object? error)? onCleanupError;
 
   static const int maxFileSizeBytes =
@@ -41,58 +45,19 @@ final class UploadAssessmentEvidence {
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    // 1. Initial authoritative session validation (R31-08 / Invariant I07)
-    ValidatedActorContext? initialContext;
-    String? initialSessionGen;
-    if (authSessionPort != null) {
-      final freshContext = await authSessionPort!.validateForMutation();
-      if (freshContext == null ||
-          !freshContext.isValidAt(DateTime.now().toUtc())) {
-        throw EvidenceStorageAuthException(
-          const AuthFailureOutcome(
-            storagePath: '',
-            reason:
-                'Unauthenticated or expired session before evidence upload.',
-          ),
-        );
-      }
-      final genToCheck =
-          expectedSessionGeneration ?? context?.sessionGeneration;
-      if (genToCheck != null && freshContext.sessionGeneration != genToCheck) {
-        throw EvidenceStorageAuthException(
-          const AuthFailureOutcome(
-            storagePath: '',
-            reason: 'Session generation changed across asynchronous boundary.',
-          ),
-        );
-      }
-      if (context != null && freshContext.userId != context.userId) {
-        throw EvidenceStorageAuthException(
-          const AuthFailureOutcome(
-            storagePath: '',
-            reason: 'Actor switch detected: active session does not match original actor.',
-          ),
-        );
-      }
-      initialContext = freshContext;
-      initialSessionGen = freshContext.sessionGeneration;
-    }
+    // 1. Authoritative live session validation (R31-08 / R32-06 / Invariant I07)
+    final initialContext = await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: '',
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      stage: 'evidence upload preflight',
+    );
 
-    // 2. Client-side size validation
-    if (bytes.length > maxFileSizeBytes) {
-      throw const InvalidAssessmentException(
-        'Evidence file size must not exceed 10 MiB.',
-      );
-    }
+    // 2. Client-side size (non-empty and <= 10 MiB) and MIME validation (R32-08)
+    validateEvidenceUploadPayload(bytes: bytes, mediaType: mediaType);
 
-    // 3. Client-side MIME validation
-    if (mediaType != 'image/jpeg' && mediaType != 'image/png') {
-      throw InvalidAssessmentException(
-        'Unsupported media type: $mediaType. Only JPEG and PNG are allowed.',
-      );
-    }
-
-    // 4. Upload object with opaque evidence ID and immutable upsert:false
+    // 3. Upload object with opaque evidence ID and immutable upsert:false
     final storagePath = await storage.uploadEvidence(
       familyId: familyId,
       childId: childId,
@@ -100,48 +65,20 @@ final class UploadAssessmentEvidence {
       evidenceId: evidenceId,
       bytes: bytes,
       mediaType: mediaType,
-      context: initialContext ?? context,
-      expectedSessionGeneration: initialSessionGen ?? expectedSessionGeneration,
+      context: initialContext,
+      expectedSessionGeneration: initialContext.sessionGeneration,
     );
 
-    // 5. Post-upload session revalidation (R32-02 / Invariant I07)
-    // Awaited upload completed. Before calling repository.registerEvidence(), revalidate that
-    // the authenticated session remains valid, unexpired, and actor/generation unchanged.
-    if (authSessionPort != null) {
-      final postUploadContext = await authSessionPort!.validateForMutation();
-      if (postUploadContext == null ||
-          !postUploadContext.isValidAt(DateTime.now().toUtc())) {
-        throw EvidenceStorageAuthException(
-          AuthFailureOutcome(
-            storagePath: storagePath,
-            reason: 'Session became unauthenticated or expired between upload and registration.',
-          ),
-        );
-      }
-      final requiredGen = initialSessionGen ?? expectedSessionGeneration;
-      if (requiredGen != null &&
-          postUploadContext.sessionGeneration != requiredGen) {
-        throw EvidenceStorageAuthException(
-          AuthFailureOutcome(
-            storagePath: storagePath,
-            reason:
-                'Session generation changed between upload and registration.',
-          ),
-        );
-      }
-      final requiredUser = initialContext?.userId ?? context?.userId;
-      if (requiredUser != null && postUploadContext.userId != requiredUser) {
-        throw EvidenceStorageAuthException(
-          AuthFailureOutcome(
-            storagePath: storagePath,
-            reason: 'Actor switch detected between upload and registration.',
-          ),
-        );
-      }
-    }
+    // 4. Post-upload session revalidation across async boundary (R32-02 / I07)
+    await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: storagePath,
+      context: initialContext,
+      expectedSessionGeneration: initialContext.sessionGeneration,
+      stage: 'post-upload metadata registration',
+    );
 
-    // 6. Register metadata. Per I04, if registration fails, we do NOT delete
-    // the remote storage object; it is retained for future reconciliation.
+    // 5. Register metadata. Per I04, if registration fails, remote bytes are retained.
     return await repository.registerEvidence(
       assessmentId: assessmentId,
       storagePath: storagePath,

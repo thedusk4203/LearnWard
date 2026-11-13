@@ -7,59 +7,68 @@ import 'package:supabase/supabase.dart';
 /// Supabase Storage implementation of [AssessmentEvidenceStorage] targeting
 /// the private `assessment-evidence` bucket.
 ///
-/// Invariants enforced:
+/// Invariants and security boundaries enforced:
 /// - I01: Strict byte comparison (length and SHA-256) on HTTP 409 / duplicate responses.
 /// - I03: `upsert = false` enforced on all uploads.
+/// - I04: Remote bytes are preserved on DB registration or reconciliation failure.
 /// - I05: Positive byte proof required before 409 is treated as success.
 /// - I06: Download failures (401/403/404/RLS 0-row/timeout) fail closed as unknown outcome.
-/// - I07: Authoritative session validation via [AuthSessionPort] before mutation or download.
-/// - I16: Storage paths and URL parameters sanitized in logs and errors.
+/// - I07 / R32-06: Mandatory live session validation via [AuthSessionPort] on every call.
+/// - R32-07 / I16: Raw SDK/transport exceptions, bearer tokens, JWTs, URLs, and
+///   private Storage paths are never exposed in thrown errors or outcomes.
+/// - R32-08: Zero-length uploads/downloads rejected and > 10 MiB remote responses are
+///   aborted mid-stream via `storage_client-2.8.1` `StorageFileApi.downloadStream`.
+/// - WP1 -> WP2/WP3 boundary: WP1 verifies live [AuthSessionPort] state and
+///   in-flight [ValidatedActorContext] / `expectedSessionGeneration` invariance.
+///   Durable cross-restart actor provenance (`actorUserId`, persisted session epoch,
+///   and lease-fenced CAS on local drafts) depends on WP2/WP3.
 final class SupabaseAssessmentEvidenceStorage
     implements AssessmentEvidenceStorage {
-  SupabaseAssessmentEvidenceStorage(this._client, {this.authSessionPort});
+  SupabaseAssessmentEvidenceStorage(
+    this._client, {
+    required this.authSessionPort,
+  });
 
   final SupabaseClient _client;
-  final AuthSessionPort? authSessionPort;
+  final AuthSessionPort authSessionPort;
 
   static const String bucketName = 'assessment-evidence';
 
-  Future<ValidatedActorContext?> _assertValidAuthSession({
-    ValidatedActorContext? context,
-    String? expectedSessionGeneration,
-    required String storagePath,
-  }) async {
-    if (authSessionPort != null) {
-      final freshContext = await authSessionPort!.validateForMutation();
-      if (freshContext == null ||
-          !freshContext.isValidAt(DateTime.now().toUtc())) {
-        throw EvidenceStorageAuthException(
-          AuthFailureOutcome(
-            storagePath: storagePath,
-            reason: 'Unauthenticated or expired session.',
-          ),
-        );
-      }
-      final genToCheck =
-          expectedSessionGeneration ?? context?.sessionGeneration;
-      if (genToCheck != null && freshContext.sessionGeneration != genToCheck) {
-        throw EvidenceStorageAuthException(
-          AuthFailureOutcome(
-            storagePath: storagePath,
-            reason: 'Session generation changed across asynchronous boundary.',
-          ),
-        );
-      }
-      if (context != null && freshContext.userId != context.userId) {
-        throw EvidenceStorageAuthException(
-          AuthFailureOutcome(
-            storagePath: storagePath,
-            reason: 'Actor switch detected: active session does not match original actor.',
-          ),
-        );
-      }
-      return freshContext;
+  String _formatStorageStatusReason(String operation, String? statusCode) {
+    final trimmed = statusCode?.trim();
+    if (trimmed != null && RegExp(r'^\d{3}$').hasMatch(trimmed)) {
+      return 'Remote storage error during $operation (status: $trimmed).';
     }
-    return context;
+    return 'Remote storage error during $operation.';
+  }
+
+  /// Streams remote evidence bytes using `StorageFileApi.downloadStream`
+  /// (supported in `storage_client-2.8.1`), cancelling immediately if total bytes
+  /// exceed [AssessmentEvidenceStorage.maxFileSizeBytes] (10 MiB) or rejecting
+  /// empty 0-byte objects.
+  ///
+  /// Unlike `download()`, which buffers the entire response body via
+  /// `http.Response.fromStream`, `downloadStream()` yields chunks directly from
+  /// `http.StreamedResponse.stream` so oversized responses are aborted without
+  /// retaining unbounded bytes in memory.
+  Future<Uint8List> _downloadBoundedBytes(String storagePath) async {
+    final stream = _client.storage.from(bucketName).downloadStream(storagePath);
+    final builder = BytesBuilder(copy: false);
+    var totalBytes = 0;
+
+    await for (final chunk in stream) {
+      totalBytes += chunk.length;
+      if (totalBytes > AssessmentEvidenceStorage.maxFileSizeBytes) {
+        throw _RemoteEvidenceTooLargeException(totalBytes);
+      }
+      builder.add(chunk);
+    }
+
+    final downloaded = builder.takeBytes();
+    if (downloaded.isEmpty) {
+      throw const _RemoteEvidenceEmptyException();
+    }
+    return downloaded;
   }
 
   @override
@@ -73,28 +82,26 @@ final class SupabaseAssessmentEvidenceStorage
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    // 1. Client-side size and MIME validation
-    if (bytes.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
-      throw const InvalidAssessmentException(
-        'Evidence file size must not exceed 10 MiB.',
-      );
-    }
-    if (mediaType != 'image/jpeg' && mediaType != 'image/png') {
-      throw InvalidAssessmentException(
-        'Unsupported media type: $mediaType. Only JPEG and PNG are allowed.',
-      );
-    }
+    final provisionalExt = mediaType == 'image/png' ? '.png' : '.jpg';
+    final candidatePath =
+        '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}$provisionalExt';
 
-    final ext = mediaType == 'image/png' ? 'png' : 'jpg';
-    final storagePath =
-        '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
-
-    // 2. Authoritative session validation (R31-08 / Invariant I07)
-    await _assertValidAuthSession(
+    // 1. Mandatory live session validation before processing upload (R32-06 / I07)
+    final validatedActor = await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: candidatePath,
       context: context,
       expectedSessionGeneration: expectedSessionGeneration,
-      storagePath: storagePath,
+      stage: 'evidence upload',
     );
+
+    // 2. Client-side non-empty, 10 MiB size cap, and MIME validation (R32-08)
+    final ext = validateEvidenceUploadPayload(
+      bytes: bytes,
+      mediaType: mediaType,
+    );
+    final storagePath =
+        '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
 
     // 3. Strictly enforce immutable object identity: upsert = false
     try {
@@ -113,31 +120,55 @@ final class SupabaseAssessmentEvidenceStorage
           msg.contains('duplicate');
 
       if (is409) {
-        // Strict HTTP 409 reconciliation: download remote bytes and compare length and SHA-256
+        // Strict HTTP 409 reconciliation: stream-bounded download and compare length + SHA-256
         final reconciliation = await reconcileEvidence(
           storagePath: storagePath,
           localBytes: bytes,
-          context: context,
-          expectedSessionGeneration: expectedSessionGeneration,
+          context: context ?? validatedActor,
+          expectedSessionGeneration:
+              expectedSessionGeneration ?? validatedActor.sessionGeneration,
         );
 
         switch (reconciliation) {
           case MatchingBytesOutcome():
-            // Positive byte proof: identical bytes and size already present
             return storagePath;
           case ContentConflictOutcome(:final reason):
             throw EvidenceStorageConflictException(reconciliation, reason);
-          case UnknownOutcome(:final reason, :final cause):
+          case UnknownOutcome(:final reason):
             throw EvidenceStorageUnknownOutcomeException(
               reconciliation,
               reason,
-              cause,
             );
           case AuthFailureOutcome(:final reason):
             throw EvidenceStorageAuthException(reconciliation, reason);
         }
       }
+
+      if (e.statusCode?.trim() == '401') {
+        throw EvidenceStorageAuthException(
+          AuthFailureOutcome(
+            storagePath: storagePath,
+            reason:
+                'Remote storage upload rejected due to authentication failure.',
+          ),
+        );
+      }
+
+      final unknownOutcome = UnknownOutcome(
+        storagePath: storagePath,
+        reason: _formatStorageStatusReason('evidence upload', e.statusCode),
+      );
+      throw EvidenceStorageUnknownOutcomeException(unknownOutcome);
+    } on AssessmentEvidenceStorageException {
       rethrow;
+    } on InvalidAssessmentException {
+      rethrow;
+    } catch (_) {
+      final unknownOutcome = UnknownOutcome(
+        storagePath: storagePath,
+        reason: 'Unexpected transport error during evidence upload.',
+      );
+      throw EvidenceStorageUnknownOutcomeException(unknownOutcome);
     }
 
     return storagePath;
@@ -149,32 +180,56 @@ final class SupabaseAssessmentEvidenceStorage
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    await _assertValidAuthSession(
+    await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: storagePath,
       context: context,
       expectedSessionGeneration: expectedSessionGeneration,
-      storagePath: storagePath,
+      stage: 'evidence download',
     );
 
-    final Uint8List downloaded = await _client.storage
-        .from(bucketName)
-        .download(storagePath);
-
-    // Bounding remote download size (Finding R32-04)
-    if (downloaded.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
+    try {
+      return await _downloadBoundedBytes(storagePath);
+    } on _RemoteEvidenceTooLargeException catch (e) {
       throw EvidenceStorageConflictException(
         ContentConflictOutcome(
           storagePath: storagePath,
           localSha256: '',
-          remoteSha256: computeSha256Hex(downloaded),
+          remoteSha256: '',
           localByteCount: 0,
-          remoteByteCount: downloaded.length,
+          remoteByteCount: e.observedByteCount,
           reason:
               'Remote evidence object exceeds maximum allowed size (10 MiB).',
         ),
       );
+    } on _RemoteEvidenceEmptyException {
+      throw EvidenceStorageConflictException(
+        ContentConflictOutcome(
+          storagePath: storagePath,
+          localSha256: '',
+          remoteSha256: '',
+          localByteCount: 0,
+          remoteByteCount: 0,
+          reason: 'Remote evidence object is empty.',
+        ),
+      );
+    } on StorageException catch (e) {
+      throw EvidenceStorageUnknownOutcomeException(
+        UnknownOutcome(
+          storagePath: storagePath,
+          reason: _formatStorageStatusReason('evidence download', e.statusCode),
+        ),
+      );
+    } on AssessmentEvidenceStorageException {
+      rethrow;
+    } catch (_) {
+      throw EvidenceStorageUnknownOutcomeException(
+        UnknownOutcome(
+          storagePath: storagePath,
+          reason: 'Unexpected transport error during evidence download.',
+        ),
+      );
     }
-
-    return downloaded;
   }
 
   @override
@@ -184,13 +239,15 @@ final class SupabaseAssessmentEvidenceStorage
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    // 1. Authoritative session check
-    ValidatedActorContext? currentContext;
+    // 1. Authoritative session check before Storage interaction
+    final ValidatedActorContext currentContext;
     try {
-      currentContext = await _assertValidAuthSession(
+      currentContext = await assertValidStorageAuthSession(
+        authSessionPort: authSessionPort,
+        storagePath: storagePath,
         context: context,
         expectedSessionGeneration: expectedSessionGeneration,
-        storagePath: storagePath,
+        stage: 'evidence reconciliation preflight',
       );
     } on EvidenceStorageAuthException catch (e) {
       return e.result;
@@ -199,10 +256,10 @@ final class SupabaseAssessmentEvidenceStorage
     final effectiveSessionGen =
         expectedSessionGeneration ??
         context?.sessionGeneration ??
-        currentContext?.sessionGeneration;
+        currentContext.sessionGeneration;
 
-    // 2. Download remote object bytes with bounds & auth checks
-    List<int> remoteBytes;
+    // 2. Bounded stream download with revalidated auth & size limits
+    final List<int> remoteBytes;
     try {
       remoteBytes = await downloadEvidence(
         storagePath: storagePath,
@@ -213,64 +270,36 @@ final class SupabaseAssessmentEvidenceStorage
       // Finding R32-03: Preserve distinct AuthFailureOutcome! Do NOT convert to UnknownOutcome!
       return e.result;
     } on EvidenceStorageConflictException catch (e) {
+      return ContentConflictOutcome(
+        storagePath: storagePath,
+        localSha256: computeSha256Hex(localBytes),
+        remoteSha256: e.result.remoteSha256,
+        localByteCount: localBytes.length,
+        remoteByteCount: e.result.remoteByteCount,
+        reason: e.result.reason,
+      );
+    } on EvidenceStorageUnknownOutcomeException catch (e) {
       return e.result;
     } on StorageException catch (e) {
       return UnknownOutcome(
         storagePath: storagePath,
-        reason: 'Storage error during evidence download: ${e.message}',
-        cause: e,
+        reason: _formatStorageStatusReason(
+          'evidence reconciliation',
+          e.statusCode,
+        ),
       );
-    } catch (e) {
+    } catch (_) {
       return UnknownOutcome(
         storagePath: storagePath,
-        reason: 'Unexpected error during evidence download: $e',
-        cause: e,
+        reason: 'Unexpected transport error during evidence reconciliation.',
       );
     }
 
-    // Bounding remote download validation (Finding R32-04)
-    if (remoteBytes.isEmpty) {
-      return ContentConflictOutcome(
-        storagePath: storagePath,
-        localSha256: computeSha256Hex(localBytes),
-        remoteSha256: '',
-        localByteCount: localBytes.length,
-        remoteByteCount: 0,
-        reason: 'Remote evidence object is empty.',
-      );
-    }
-    if (remoteBytes.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
-      return ContentConflictOutcome(
-        storagePath: storagePath,
-        localSha256: computeSha256Hex(localBytes),
-        remoteSha256: computeSha256Hex(remoteBytes),
-        localByteCount: localBytes.length,
-        remoteByteCount: remoteBytes.length,
-        reason: 'Remote evidence object exceeds maximum allowed size (10 MiB).',
-      );
-    }
-
-    // 3. Strict byte length and SHA-256 digest comparison
-    final localSha = computeSha256Hex(localBytes);
-    final remoteSha = computeSha256Hex(remoteBytes);
-
-    if (remoteBytes.length == localBytes.length && remoteSha == localSha) {
-      return MatchingBytesOutcome(
-        storagePath: storagePath,
-        remoteBytes: remoteBytes,
-        remoteSha256: remoteSha,
-      );
-    }
-
-    return ContentConflictOutcome(
+    // 3. Strict byte length and SHA-256 digest comparison (R32-08)
+    return reconcileRemoteEvidenceBytes(
       storagePath: storagePath,
-      localSha256: localSha,
-      remoteSha256: remoteSha,
-      localByteCount: localBytes.length,
-      remoteByteCount: remoteBytes.length,
-      reason: remoteBytes.length != localBytes.length
-          ? 'Byte length mismatch: local=${localBytes.length}, remote=${remoteBytes.length}'
-          : 'SHA-256 digest mismatch with identical length',
+      localBytes: localBytes,
+      remoteBytes: remoteBytes,
     );
   }
 
@@ -281,15 +310,46 @@ final class SupabaseAssessmentEvidenceStorage
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    await _assertValidAuthSession(
+    await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: storagePath,
       context: context,
       expectedSessionGeneration: expectedSessionGeneration,
-      storagePath: storagePath,
+      stage: 'signed URL generation',
     );
 
-    return _client.storage
-        .from(bucketName)
-        .createSignedUrl(storagePath, expiresIn.inSeconds);
+    try {
+      return await _client.storage
+          .from(bucketName)
+          .createSignedUrl(storagePath, expiresIn.inSeconds);
+    } on StorageException catch (e) {
+      if (e.statusCode?.trim() == '401') {
+        throw EvidenceStorageAuthException(
+          AuthFailureOutcome(
+            storagePath: storagePath,
+            reason: 'Remote storage signed URL request rejected due to authentication failure.',
+          ),
+        );
+      }
+      throw EvidenceStorageUnknownOutcomeException(
+        UnknownOutcome(
+          storagePath: storagePath,
+          reason: _formatStorageStatusReason(
+            'signed URL generation',
+            e.statusCode,
+          ),
+        ),
+      );
+    } on AssessmentEvidenceStorageException {
+      rethrow;
+    } catch (_) {
+      throw EvidenceStorageUnknownOutcomeException(
+        UnknownOutcome(
+          storagePath: storagePath,
+          reason: 'Unexpected transport error during signed URL generation.',
+        ),
+      );
+    }
   }
 
   @override
@@ -298,12 +358,50 @@ final class SupabaseAssessmentEvidenceStorage
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    await _assertValidAuthSession(
+    await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: storagePath,
       context: context,
       expectedSessionGeneration: expectedSessionGeneration,
-      storagePath: storagePath,
+      stage: 'evidence deletion',
     );
 
-    await _client.storage.from(bucketName).remove([storagePath]);
+    try {
+      await _client.storage.from(bucketName).remove([storagePath]);
+    } on StorageException catch (e) {
+      if (e.statusCode?.trim() == '401') {
+        throw EvidenceStorageAuthException(
+          AuthFailureOutcome(
+            storagePath: storagePath,
+            reason:
+                'Remote storage delete rejected due to authentication failure.',
+          ),
+        );
+      }
+      throw EvidenceStorageUnknownOutcomeException(
+        UnknownOutcome(
+          storagePath: storagePath,
+          reason: _formatStorageStatusReason('evidence deletion', e.statusCode),
+        ),
+      );
+    } on AssessmentEvidenceStorageException {
+      rethrow;
+    } catch (_) {
+      throw EvidenceStorageUnknownOutcomeException(
+        UnknownOutcome(
+          storagePath: storagePath,
+          reason: 'Unexpected transport error during evidence deletion.',
+        ),
+      );
+    }
   }
+}
+
+final class _RemoteEvidenceTooLargeException implements Exception {
+  const _RemoteEvidenceTooLargeException(this.observedByteCount);
+  final int observedByteCount;
+}
+
+final class _RemoteEvidenceEmptyException implements Exception {
+  const _RemoteEvidenceEmptyException();
 }

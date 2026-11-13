@@ -8,22 +8,29 @@ import '../ports/local_draft_store.dart';
 import 'upload_assessment_evidence.dart';
 
 /// Application use case coordinating the complete assessment submission workflow:
-/// 1. Create or ensure server draft (idempotent via createCommandId)
-/// 2. Upload and register evidence (with compensation cleanup on failure)
-/// 3. Submit assessment for review (idempotent via submitCommandId)
-/// 4. Delete local offline draft upon success
+/// 1. Verify active authenticated session via [AuthSessionPort] (R32-06)
+/// 2. Validate any attached evidence payload before remote mutation (R32-08)
+/// 3. Create or ensure server draft (idempotent via createCommandId)
+/// 4. Upload and register evidence (preserving remote bytes on failure per I04)
+/// 5. Revalidate session before submitting assessment for review (idempotent via submitCommandId)
+/// 6. Delete local offline draft upon success
+///
+/// WP1 -> WP2/WP3 boundary: Live [AuthSessionPort] validity and session-generation
+/// continuity are enforced throughout this workflow. Durable cross-restart draft
+/// actor binding (`actorUserId`, persisted session epoch, and lease-token CAS)
+/// depends on WP2/WP3.
 final class SubmitAssessmentDraft {
   const SubmitAssessmentDraft({
     required this.repository,
     required this.storage,
+    required this.authSessionPort,
     this.localDraftStore,
-    this.authSessionPort,
   });
 
   final AssessmentRepository repository;
   final AssessmentEvidenceStorage storage;
+  final AuthSessionPort authSessionPort;
   final LocalDraftStore? localDraftStore;
-  final AuthSessionPort? authSessionPort;
 
   Future<Assessment> call({
     required String createCommandId,
@@ -42,29 +49,54 @@ final class SubmitAssessmentDraft {
     String? evidenceMediaType,
     EvidenceId? evidenceId,
     String? localDraftId,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   }) async {
-    // Durable pre-dispatch check & provenance:
-    // If draft is unknown_legacy, fail closed immediately.
-    // Otherwise record possibly_dispatched before issuing remote RPC.
+    // 0. Check quarantined legacy drafts locally before touching session/network
+    LocalAssessmentDraft? existingLocal;
     if (localDraftStore != null && localDraftId != null) {
-      final existingLocal = await localDraftStore!.getLocalDraft(localDraftId);
-      if (existingLocal != null) {
-        if (existingLocal.isLegacyUnknown) {
-          throw StateError(
-            'Cannot submit quarantined legacy assessment draft (id: $localDraftId). '
-            'Draft is in unknown_legacy dispatch state and requires reconciliation before submission.',
-          );
-        }
-        await localDraftStore!.saveLocalDraft(
-          existingLocal.copyWith(
-            submissionStatus: DraftSubmissionStatus.submittingAssessment,
-            dispatchState: CommandDispatchState.possiblyDispatched,
-          ),
+      existingLocal = await localDraftStore!.getLocalDraft(localDraftId);
+      if (existingLocal != null && existingLocal.isLegacyUnknown) {
+        throw StateError(
+          'Cannot submit quarantined legacy assessment draft (id: $localDraftId). '
+          'Draft is in unknown_legacy dispatch state and requires reconciliation before submission.',
         );
       }
     }
 
-    // 1. Create server draft via server-authoritative trusted RPC using createCommandId
+    // 1. Authoritative session check before local dispatch state change or remote RPC
+    final initialContext = await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: '',
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      stage: 'assessment submission preflight',
+    );
+
+    // 2. Fail closed on invalid, empty, or oversized evidence before creating draft
+    if (evidenceBytes != null) {
+      if (evidenceMediaType == null || evidenceId == null) {
+        throw const InvalidAssessmentException(
+          'Evidence metadata is incomplete for attached evidence bytes.',
+        );
+      }
+      validateEvidenceUploadPayload(
+        bytes: evidenceBytes,
+        mediaType: evidenceMediaType,
+      );
+    }
+
+    // Record possibly_dispatched durably before issuing remote RPC
+    if (existingLocal != null) {
+      await localDraftStore!.saveLocalDraft(
+        existingLocal.copyWith(
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+      );
+    }
+
+    // 3. Create server draft via server-authoritative trusted RPC using createCommandId
     final draft = await repository.createDraft(
       commandId: createCommandId,
       familyId: familyId,
@@ -82,13 +114,11 @@ final class SubmitAssessmentDraft {
     // If local draft store is present and localDraftId is provided, persist serverAssessmentId
     if (localDraftStore != null && localDraftId != null) {
       try {
-        final existingLocal = await localDraftStore!.getLocalDraft(
-          localDraftId,
-        );
-        if (existingLocal != null &&
-            existingLocal.serverAssessmentId != draft.id.value) {
+        final latestLocal = await localDraftStore!.getLocalDraft(localDraftId);
+        if (latestLocal != null &&
+            latestLocal.serverAssessmentId != draft.id.value) {
           await localDraftStore!.saveLocalDraft(
-            existingLocal.copyWith(serverAssessmentId: draft.id.value),
+            latestLocal.copyWith(serverAssessmentId: draft.id.value),
           );
         }
       } catch (_) {
@@ -96,9 +126,8 @@ final class SubmitAssessmentDraft {
       }
     }
 
-    // 2. Upload evidence if provided (with compensation cleanup on failure)
+    // 4. Upload and register evidence if provided (preserving remote bytes per I04)
     if (evidenceBytes != null &&
-        evidenceBytes.isNotEmpty &&
         evidenceMediaType != null &&
         evidenceId != null) {
       final uploadUseCase = UploadAssessmentEvidence(
@@ -114,17 +143,28 @@ final class SubmitAssessmentDraft {
         evidenceId: evidenceId,
         bytes: evidenceBytes,
         mediaType: evidenceMediaType,
+        context: initialContext,
+        expectedSessionGeneration: initialContext.sessionGeneration,
       );
     }
 
-    // 3. Submit assessment for adult review with distinct submitCommandId
+    // 5. Revalidate session across async boundary before submitAssessment
+    await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: '',
+      context: initialContext,
+      expectedSessionGeneration: initialContext.sessionGeneration,
+      stage: 'assessment submit',
+    );
+
+    // 6. Submit assessment for adult review with distinct submitCommandId
     final submitted = await repository.submitAssessment(
       assessmentId: draft.id,
       expectedVersion: draft.version,
       commandId: submitCommandId,
     );
 
-    // 4. Remove local draft upon successful submission
+    // 7. Remove local draft upon successful submission
     if (localDraftId != null && localDraftStore != null) {
       try {
         await localDraftStore!.deleteLocalDraft(localDraftId);

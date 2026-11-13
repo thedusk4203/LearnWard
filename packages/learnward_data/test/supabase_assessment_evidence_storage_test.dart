@@ -17,10 +17,21 @@ final class _MockStorageHttpClient extends http.BaseClient {
   final List<http.BaseRequest> recordedRequests = [];
 
   bool simulateUpload409 = false;
+  int? customUploadErrorStatus;
+  String? customUploadErrorMessage;
   bool simulateDownload403 = false;
   bool simulateDownload404 = false;
+  bool simulateDownload500 = false;
+  String? customDownloadErrorMessage;
+  bool simulateSign500 = false;
+  String? customSignErrorMessage;
+  bool simulateDelete500 = false;
+  String? customDeleteErrorMessage;
   bool simulateDownloadTimeout = false;
   bool simulateNetworkError = false;
+  String? customNetworkErrorUri;
+  List<List<int>>? chunkedDownloadChunks;
+  int emittedDownloadChunkCount = 0;
 
   int uploadCallCount = 0;
   int downloadCallCount = 0;
@@ -32,10 +43,15 @@ final class _MockStorageHttpClient extends http.BaseClient {
     recordedRequests.add(request);
 
     if (simulateNetworkError) {
-      throw http.ClientException('Simulated network error');
+      throw http.ClientException(
+        'Simulated network error',
+        customNetworkErrorUri != null
+            ? Uri.parse(customNetworkErrorUri!)
+            : request.url,
+      );
     }
     if (simulateDownloadTimeout) {
-      throw http.ClientException('Connection timed out');
+      throw http.ClientException('Connection timed out', request.url);
     }
 
     final path = Uri.decodeComponent(request.url.path);
@@ -45,6 +61,23 @@ final class _MockStorageHttpClient extends http.BaseClient {
     if (method == 'DELETE' &&
         path.contains('/storage/v1/object/assessment-evidence')) {
       deleteCallCount++;
+      if (simulateDelete500) {
+        return http.StreamedResponse(
+          Stream.value(
+            utf8.encode(
+              jsonEncode({
+                'statusCode': '500',
+                'error': 'InternalError',
+                'message':
+                    customDeleteErrorMessage ?? 'Delete failure during test',
+              }),
+            ),
+          ),
+          500,
+          request: request,
+          headers: {'content-type': 'application/json'},
+        );
+      }
       return http.StreamedResponse(
         Stream.value(
           utf8.encode(
@@ -62,6 +95,23 @@ final class _MockStorageHttpClient extends http.BaseClient {
     // 2. POST /storage/v1/object/sign/assessment-evidence/...
     if (method == 'POST' &&
         path.contains('/storage/v1/object/sign/assessment-evidence/')) {
+      if (simulateSign500) {
+        return http.StreamedResponse(
+          Stream.value(
+            utf8.encode(
+              jsonEncode({
+                'statusCode': '500',
+                'error': 'SigningError',
+                'message':
+                    customSignErrorMessage ?? 'Signing failure during test',
+              }),
+            ),
+          ),
+          500,
+          request: request,
+          headers: {'content-type': 'application/json'},
+        );
+      }
       final signedUrl = 'https://mock.supabase.co$path?token=mock-token';
       return http.StreamedResponse(
         Stream.value(utf8.encode(jsonEncode({'signedURL': signedUrl}))),
@@ -81,11 +131,31 @@ final class _MockStorageHttpClient extends http.BaseClient {
               jsonEncode({
                 'statusCode': '403',
                 'error': 'Unauthorized',
-                'message': 'Access denied by Storage RLS',
+                'message':
+                    customDownloadErrorMessage ??
+                    'Access denied by Storage RLS',
               }),
             ),
           ),
           403,
+          request: request,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      if (simulateDownload500) {
+        return http.StreamedResponse(
+          Stream.value(
+            utf8.encode(
+              jsonEncode({
+                'statusCode': '500',
+                'error': 'InternalError',
+                'message':
+                    customDownloadErrorMessage ??
+                    'Download failure during test',
+              }),
+            ),
+          ),
+          500,
           request: request,
           headers: {'content-type': 'application/json'},
         );
@@ -104,6 +174,23 @@ final class _MockStorageHttpClient extends http.BaseClient {
           404,
           request: request,
           headers: {'content-type': 'application/json'},
+        );
+      }
+
+      if (chunkedDownloadChunks != null) {
+        Stream<List<int>> emitChunks() async* {
+          for (final chunk in chunkedDownloadChunks!) {
+            emittedDownloadChunkCount++;
+            yield Uint8List.fromList(chunk);
+            await Future<void>.delayed(Duration.zero);
+          }
+        }
+
+        return http.StreamedResponse(
+          emitChunks(),
+          200,
+          request: request,
+          headers: {'content-type': 'image/jpeg'},
         );
       }
 
@@ -147,6 +234,23 @@ final class _MockStorageHttpClient extends http.BaseClient {
     if (method == 'POST' &&
         path.contains('/storage/v1/object/assessment-evidence/')) {
       uploadCallCount++;
+      if (customUploadErrorStatus != null) {
+        return http.StreamedResponse(
+          Stream.value(
+            utf8.encode(
+              jsonEncode({
+                'statusCode': '$customUploadErrorStatus',
+                'error': 'StorageFailure',
+                'message':
+                    customUploadErrorMessage ?? 'Upload error during test',
+              }),
+            ),
+          ),
+          customUploadErrorStatus!,
+          request: request,
+          headers: {'content-type': 'application/json'},
+        );
+      }
       if (simulateUpload409) {
         return http.StreamedResponse(
           Stream.value(
@@ -597,9 +701,14 @@ void main() {
       );
     });
 
-    test('R32-04: privacy & redaction: toString() and exceptions do not leak full storage paths, access tokens, or signed URLs', () {
+    test('R32-04 / R32-07: privacy & redaction: message, toString(), and outcomes never leak paths, bearer tokens, JWTs, or signed URLs', () {
       const sensitivePath =
           'fa000000-0000-4000-c000-000000000001/ca000000-0000-4000-c000-000000000001/ea000000-0000-4000-c000-000000000001/evidence-123.jpg';
+      const secretBearer = 'superSecretBearer987654';
+      const secretJwt =
+          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEifQ.hmacSignatureSecret555';
+      const secretSignedToken = 'signedTokenSecret444';
+      const secretHost = 'https://secret-project-xyz.supabase.co';
 
       final matchOutcome = MatchingBytesOutcome(
         storagePath: sensitivePath,
@@ -617,23 +726,283 @@ void main() {
         localByteCount: 10,
         remoteByteCount: 10,
         reason:
-            'Conflict at https://storage.supabase.co/$sensitivePath?token=secret123',
+            'Conflict at $secretHost/storage/v1/object/sign/assessment-evidence/$sensitivePath?token=$secretSignedToken',
       );
-      expect(conflictOutcome.toString(), isNot(contains('secret123')));
+      expect(conflictOutcome.reason, isNot(contains(secretSignedToken)));
+      expect(conflictOutcome.reason, isNot(contains(secretHost)));
+      expect(conflictOutcome.reason, isNot(contains('fa000000')));
+      expect(conflictOutcome.toString(), isNot(contains(secretSignedToken)));
       expect(conflictOutcome.toString(), isNot(contains('fa000000')));
 
       final authOutcome = AuthFailureOutcome(
         storagePath: sensitivePath,
-        reason: 'Token expired: bearer eyJhbGciOiJIUzI1NiIn...',
+        reason: 'Token expired: Bearer $secretBearer and jwt $secretJwt',
       );
+      expect(authOutcome.reason, isNot(contains(secretBearer)));
+      expect(authOutcome.reason, isNot(contains(secretJwt)));
+      expect(authOutcome.reason, isNot(contains('eyJhbGci')));
       expect(authOutcome.toString(), isNot(contains('fa000000')));
+      expect(authOutcome.toString(), isNot(contains(secretBearer)));
+      expect(authOutcome.toString(), isNot(contains(secretJwt)));
 
       final exc = EvidenceStorageConflictException(
         conflictOutcome,
-        'Failed for $sensitivePath with token https://url?secret_jwt=abc',
+        'Failed for $sensitivePath with Bearer $secretBearer at $secretHost/object?secret_jwt=$secretJwt',
       );
+      expect(exc.message, isNot(contains('fa000000')));
+      expect(exc.message, isNot(contains(secretBearer)));
+      expect(exc.message, isNot(contains(secretJwt)));
+      expect(exc.message, isNot(contains(secretHost)));
       expect(exc.toString(), isNot(contains('fa000000')));
-      expect(exc.toString(), isNot(contains('secret_jwt=abc')));
+      expect(exc.toString(), isNot(contains(secretBearer)));
+      expect(exc.toString(), isNot(contains(secretJwt)));
+      expect(exc.toString(), isNot(contains(secretHost)));
+    });
+
+    test('R32-07: Storage SDK and HTTP failures never leak bearer tokens, JWTs, URLs, or private Storage paths', () async {
+      const secretBearer = 'topSecretBearerTokenXYZ';
+      const secretJwt =
+          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.verySecretSig999';
+      const secretSignedToken = 'signedUrlQuerySecret111';
+      const secretHost = 'https://private-tenant-host.supabase.co';
+      final leakedDetail =
+          'Upstream error: Authorization: Bearer $secretBearer JWT=$secretJwt url=$secretHost/storage/v1/object/sign/assessment-evidence/$expectedPath?token=$secretSignedToken';
+
+      void assertNoSecrets(Object err) {
+        final msg = err is AssessmentEvidenceStorageException
+            ? err.message
+            : '';
+        final str = err.toString();
+        for (final needle in [
+          secretBearer,
+          secretJwt,
+          'eyJhbGci',
+          secretSignedToken,
+          secretHost,
+          '10000000-0000-0000-0000-000000000001',
+          '20000000-0000-0000-0000-000000000002',
+          '30000000-0000-0000-0000-000000000003',
+        ]) {
+          expect(msg, isNot(contains(needle)));
+          expect(str, isNot(contains(needle)));
+        }
+        if (err is EvidenceStorageUnknownOutcomeException) {
+          expect(err.cause, isNull);
+          expect(err.result.cause, isNull);
+          for (final needle in [
+            secretBearer,
+            secretJwt,
+            secretSignedToken,
+            secretHost,
+            '10000000-0000-0000-0000-000000000001',
+          ]) {
+            expect(err.result.reason, isNot(contains(needle)));
+            expect(err.result.toString(), isNot(contains(needle)));
+          }
+        }
+      }
+
+      // 1. Upload StorageException (500)
+      mockHttp.customUploadErrorStatus = 500;
+      mockHttp.customUploadErrorMessage = leakedDetail;
+      try {
+        await storage.uploadEvidence(
+          familyId: familyId,
+          childId: childId,
+          assessmentId: assessmentId,
+          evidenceId: evidenceId,
+          bytes: [1, 2, 3],
+          mediaType: 'image/jpeg',
+        );
+        fail('Expected EvidenceStorageUnknownOutcomeException');
+      } on EvidenceStorageUnknownOutcomeException catch (e) {
+        assertNoSecrets(e);
+      }
+      mockHttp.customUploadErrorStatus = null;
+
+      // 2. Upload 401 StorageException -> typed EvidenceStorageAuthException without secrets
+      mockHttp.customUploadErrorStatus = 401;
+      mockHttp.customUploadErrorMessage = leakedDetail;
+      try {
+        await storage.uploadEvidence(
+          familyId: familyId,
+          childId: childId,
+          assessmentId: assessmentId,
+          evidenceId: evidenceId,
+          bytes: [1, 2, 3],
+          mediaType: 'image/jpeg',
+        );
+        fail('Expected EvidenceStorageAuthException');
+      } on EvidenceStorageAuthException catch (e) {
+        assertNoSecrets(e);
+      }
+      mockHttp.customUploadErrorStatus = null;
+
+      // 3. Download StorageException (500) and Reconcile failure
+      mockHttp.simulateDownload500 = true;
+      mockHttp.customDownloadErrorMessage = leakedDetail;
+      try {
+        await storage.downloadEvidence(storagePath: expectedPath);
+        fail('Expected EvidenceStorageUnknownOutcomeException');
+      } on EvidenceStorageUnknownOutcomeException catch (e) {
+        assertNoSecrets(e);
+      }
+      final reconcileOn500 = await storage.reconcileEvidence(
+        storagePath: expectedPath,
+        localBytes: [1, 2, 3],
+      );
+      expect(reconcileOn500, isA<UnknownOutcome>());
+      expect(reconcileOn500.toString(), isNot(contains(secretJwt)));
+      expect(
+        (reconcileOn500 as UnknownOutcome).reason,
+        isNot(contains(secretBearer)),
+      );
+      expect(reconcileOn500.cause, isNull);
+      mockHttp.simulateDownload500 = false;
+
+      // 4. Signed URL & Delete StorageException (500)
+      mockHttp.simulateSign500 = true;
+      mockHttp.customSignErrorMessage = leakedDetail;
+      try {
+        await storage.getEvidenceSignedUrl(storagePath: expectedPath);
+        fail('Expected EvidenceStorageUnknownOutcomeException');
+      } on EvidenceStorageUnknownOutcomeException catch (e) {
+        assertNoSecrets(e);
+      }
+      mockHttp.simulateSign500 = false;
+
+      mockHttp.simulateDelete500 = true;
+      mockHttp.customDeleteErrorMessage = leakedDetail;
+      try {
+        await storage.deleteEvidence(expectedPath);
+        fail('Expected EvidenceStorageUnknownOutcomeException');
+      } on EvidenceStorageUnknownOutcomeException catch (e) {
+        assertNoSecrets(e);
+      }
+      mockHttp.simulateDelete500 = false;
+
+      // 5. Raw HTTP transport ClientException carrying private URL & query token
+      mockHttp.simulateNetworkError = true;
+      mockHttp.customNetworkErrorUri =
+          '$secretHost/storage/v1/object/assessment-evidence/$expectedPath?token=$secretSignedToken';
+      try {
+        await storage.downloadEvidence(storagePath: expectedPath);
+        fail('Expected EvidenceStorageUnknownOutcomeException');
+      } on EvidenceStorageUnknownOutcomeException catch (e) {
+        assertNoSecrets(e);
+      }
+      mockHttp.simulateNetworkError = false;
+    });
+
+    test('R32-08: rejects 0-byte uploads, accepts exact 10 MiB, rejects 0-byte downloads, and aborts oversized downloadStream without buffering remaining chunks', () async {
+      // 1. Reject 0-byte upload
+      await expectLater(
+        () => storage.uploadEvidence(
+          familyId: familyId,
+          childId: childId,
+          assessmentId: assessmentId,
+          evidenceId: evidenceId,
+          bytes: const [],
+          mediaType: 'image/jpeg',
+        ),
+        throwsA(isA<InvalidAssessmentException>()),
+      );
+      expect(mockHttp.uploadCallCount, equals(0));
+
+      // 2. Reject 0-byte remote download in both downloadEvidence and reconcileEvidence
+      mockHttp.remoteStorage[expectedPath] = const [];
+      await expectLater(
+        () => storage.downloadEvidence(storagePath: expectedPath),
+        throwsA(isA<EvidenceStorageConflictException>()),
+      );
+      final emptyReconcile = await storage.reconcileEvidence(
+        storagePath: expectedPath,
+        localBytes: [1, 2, 3],
+      );
+      expect(emptyReconcile, isA<ContentConflictOutcome>());
+      expect(
+        (emptyReconcile as ContentConflictOutcome).reason,
+        contains('empty'),
+      );
+
+      // 3. Exact 10 MiB boundary upload and streaming download succeed
+      final exactTenMib = Uint8List(10 * 1024 * 1024);
+      exactTenMib[0] = 77;
+      exactTenMib[exactTenMib.length - 1] = 88;
+      final uploadedPath = await storage.uploadEvidence(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: assessmentId,
+        evidenceId: evidenceId,
+        bytes: exactTenMib,
+        mediaType: 'image/png',
+      );
+      final downloadedTenMib = await storage.downloadEvidence(
+        storagePath: uploadedPath,
+      );
+      expect(downloadedTenMib.length, equals(10 * 1024 * 1024));
+      expect(downloadedTenMib.first, equals(77));
+      expect(downloadedTenMib.last, equals(88));
+
+      // 4. Chunked oversized download (> 10 MiB across multiple chunks) cancels stream immediately
+      final chunk3Mib = List<int>.filled(3 * 1024 * 1024, 5);
+      mockHttp.chunkedDownloadChunks = [
+        chunk3Mib, // 3 MiB
+        chunk3Mib, // 6 MiB
+        chunk3Mib, // 9 MiB
+        chunk3Mib, // 12 MiB -> crosses 10 MiB limit here (chunk 4)
+        chunk3Mib, // chunk 5 (must not be consumed)
+        chunk3Mib, // chunk 6 (must not be consumed)
+      ];
+      mockHttp.emittedDownloadChunkCount = 0;
+
+      await expectLater(
+        () => storage.downloadEvidence(storagePath: expectedPath),
+        throwsA(isA<EvidenceStorageConflictException>()),
+      );
+      expect(
+        mockHttp.emittedDownloadChunkCount,
+        lessThan(6),
+        reason: 'downloadStream consumer should cancel subscription mid-stream once 10 MiB is exceeded',
+      );
+    });
+
+    test('R32-06: all Storage operations fail closed with zero HTTP requests when unauthenticated', () async {
+      fakeAuth.signOut();
+
+      await expectLater(
+        () => storage.uploadEvidence(
+          familyId: familyId,
+          childId: childId,
+          assessmentId: assessmentId,
+          evidenceId: evidenceId,
+          bytes: [1, 2, 3],
+          mediaType: 'image/jpeg',
+        ),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+      await expectLater(
+        () => storage.downloadEvidence(storagePath: expectedPath),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+      final reconcile = await storage.reconcileEvidence(
+        storagePath: expectedPath,
+        localBytes: [1, 2, 3],
+      );
+      expect(reconcile, isA<AuthFailureOutcome>());
+      await expectLater(
+        () => storage.getEvidenceSignedUrl(storagePath: expectedPath),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+      await expectLater(
+        () => storage.deleteEvidence(expectedPath),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+
+      expect(mockHttp.uploadCallCount, equals(0));
+      expect(mockHttp.downloadCallCount, equals(0));
+      expect(mockHttp.deleteCallCount, equals(0));
+      expect(mockHttp.recordedRequests, isEmpty);
     });
   });
 }

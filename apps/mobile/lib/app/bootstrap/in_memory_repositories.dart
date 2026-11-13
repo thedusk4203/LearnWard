@@ -1093,45 +1093,45 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
 /// Lightweight in-memory fallback for [AssessmentEvidenceStorage] in local demo mode.
 final class InMemoryAssessmentEvidenceStorage
     implements AssessmentEvidenceStorage {
-  InMemoryAssessmentEvidenceStorage({this.authSessionPort});
+  InMemoryAssessmentEvidenceStorage({
+    this.authSessionPort,
+    this.allowUnauthenticatedDemo = false,
+  });
+
+  /// Explicitly configures local demo storage for unauthenticated demo usage.
+  InMemoryAssessmentEvidenceStorage.unauthenticatedDemo()
+    : authSessionPort = null,
+      allowUnauthenticatedDemo = true;
 
   final AuthSessionPort? authSessionPort;
+  final bool allowUnauthenticatedDemo;
   final Map<String, List<int>> _storage = {};
 
-  Future<void> _checkAuth({
+  Future<ValidatedActorContext?> _checkAuth({
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
     required String storagePath,
+    required String stage,
   }) async {
-    if (authSessionPort != null) {
-      final fresh = await authSessionPort!.validateForMutation();
-      if (fresh == null || !fresh.isValidAt(DateTime.now().toUtc())) {
-        throw EvidenceStorageAuthException(
-          AuthFailureOutcome(
-            storagePath: storagePath,
-            reason: 'Unauthenticated or expired session.',
-          ),
-        );
+    final port = authSessionPort;
+    if (port == null) {
+      if (allowUnauthenticatedDemo) {
+        return context;
       }
-      final genToCheck =
-          expectedSessionGeneration ?? context?.sessionGeneration;
-      if (genToCheck != null && fresh.sessionGeneration != genToCheck) {
-        throw EvidenceStorageAuthException(
-          AuthFailureOutcome(
-            storagePath: storagePath,
-            reason: 'Session generation changed across asynchronous boundary.',
-          ),
-        );
-      }
-      if (context != null && fresh.userId != context.userId) {
-        throw EvidenceStorageAuthException(
-          AuthFailureOutcome(
-            storagePath: storagePath,
-            reason: 'Actor switch detected: active session does not match original actor.',
-          ),
-        );
-      }
+      throw EvidenceStorageAuthException(
+        AuthFailureOutcome(
+          storagePath: storagePath,
+          reason: 'Missing AuthSessionPort for Storage operation ($stage).',
+        ),
+      );
     }
+    return assertValidStorageAuthSession(
+      authSessionPort: port,
+      storagePath: storagePath,
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      stage: stage,
+    );
   }
 
   @override
@@ -1145,45 +1145,39 @@ final class InMemoryAssessmentEvidenceStorage
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    final ext = mediaType == 'image/png' ? 'png' : 'jpg';
-    final path =
-        '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
+    final provisionalExt = mediaType == 'image/png' ? '.png' : '.jpg';
+    final candidatePath =
+        '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}$provisionalExt';
 
-    await _checkAuth(
+    final validatedActor = await _checkAuth(
       context: context,
       expectedSessionGeneration: expectedSessionGeneration,
-      storagePath: path,
+      storagePath: candidatePath,
+      stage: 'evidence upload',
     );
 
-    if (bytes.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
-      throw const InvalidAssessmentException(
-        'Evidence file size must not exceed 10 MiB.',
-      );
-    }
-    if (mediaType != 'image/jpeg' && mediaType != 'image/png') {
-      throw InvalidAssessmentException(
-        'Unsupported media type: $mediaType. Only JPEG and PNG are allowed.',
-      );
-    }
+    final ext = validateEvidenceUploadPayload(
+      bytes: bytes,
+      mediaType: mediaType,
+    );
+    final path =
+        '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
 
     if (_storage.containsKey(path)) {
       final reconciliation = await reconcileEvidence(
         storagePath: path,
         localBytes: bytes,
-        context: context,
-        expectedSessionGeneration: expectedSessionGeneration,
+        context: context ?? validatedActor,
+        expectedSessionGeneration:
+            expectedSessionGeneration ?? validatedActor?.sessionGeneration,
       );
       switch (reconciliation) {
         case MatchingBytesOutcome():
           return path;
         case ContentConflictOutcome(:final reason):
           throw EvidenceStorageConflictException(reconciliation, reason);
-        case UnknownOutcome(:final reason, :final cause):
-          throw EvidenceStorageUnknownOutcomeException(
-            reconciliation,
-            reason,
-            cause,
-          );
+        case UnknownOutcome(:final reason):
+          throw EvidenceStorageUnknownOutcomeException(reconciliation, reason);
         case AuthFailureOutcome(:final reason):
           throw EvidenceStorageAuthException(reconciliation, reason);
       }
@@ -1203,11 +1197,30 @@ final class InMemoryAssessmentEvidenceStorage
       context: context,
       expectedSessionGeneration: expectedSessionGeneration,
       storagePath: storagePath,
+      stage: 'evidence download',
     );
 
     final data = _storage[storagePath];
     if (data == null) {
-      throw StateError('Remote storage object not found: $storagePath');
+      throw EvidenceStorageUnknownOutcomeException(
+        UnknownOutcome(
+          storagePath: storagePath,
+          reason: 'Remote storage object not found.',
+        ),
+      );
+    }
+
+    if (data.isEmpty) {
+      throw EvidenceStorageConflictException(
+        ContentConflictOutcome(
+          storagePath: storagePath,
+          localSha256: '',
+          remoteSha256: '',
+          localByteCount: 0,
+          remoteByteCount: 0,
+          reason: 'Remote evidence object is empty.',
+        ),
+      );
     }
 
     if (data.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
@@ -1215,7 +1228,7 @@ final class InMemoryAssessmentEvidenceStorage
         ContentConflictOutcome(
           storagePath: storagePath,
           localSha256: '',
-          remoteSha256: computeSha256Hex(data),
+          remoteSha256: '',
           localByteCount: 0,
           remoteByteCount: data.length,
           reason:
@@ -1234,79 +1247,55 @@ final class InMemoryAssessmentEvidenceStorage
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
-    if (authSessionPort != null) {
-      try {
-        await _checkAuth(
-          context: context,
-          expectedSessionGeneration: expectedSessionGeneration,
-          storagePath: storagePath,
-        );
-      } on EvidenceStorageAuthException catch (e) {
-        return e.result;
-      }
+    final ValidatedActorContext? currentContext;
+    try {
+      currentContext = await _checkAuth(
+        context: context,
+        expectedSessionGeneration: expectedSessionGeneration,
+        storagePath: storagePath,
+        stage: 'evidence reconciliation preflight',
+      );
+    } on EvidenceStorageAuthException catch (e) {
+      return e.result;
     }
 
-    List<int> remoteBytes;
+    final effectiveSessionGen =
+        expectedSessionGeneration ??
+        context?.sessionGeneration ??
+        currentContext?.sessionGeneration;
+
+    final List<int> remoteBytes;
     try {
       remoteBytes = await downloadEvidence(
         storagePath: storagePath,
-        context: context,
-        expectedSessionGeneration: expectedSessionGeneration,
+        context: context ?? currentContext,
+        expectedSessionGeneration: effectiveSessionGen,
       );
     } on EvidenceStorageAuthException catch (e) {
       // Finding R32-03: Preserve distinct AuthFailureOutcome
       return e.result;
     } on EvidenceStorageConflictException catch (e) {
+      return ContentConflictOutcome(
+        storagePath: storagePath,
+        localSha256: computeSha256Hex(localBytes),
+        remoteSha256: e.result.remoteSha256,
+        localByteCount: localBytes.length,
+        remoteByteCount: e.result.remoteByteCount,
+        reason: e.result.reason,
+      );
+    } on EvidenceStorageUnknownOutcomeException catch (e) {
       return e.result;
-    } catch (e) {
+    } catch (_) {
       return UnknownOutcome(
         storagePath: storagePath,
-        reason: 'Object not found or unreadable in local demo storage: $e',
-        cause: e,
+        reason: 'Object not found or unreadable in local demo storage.',
       );
     }
 
-    if (remoteBytes.isEmpty) {
-      return ContentConflictOutcome(
-        storagePath: storagePath,
-        localSha256: computeSha256Hex(localBytes),
-        remoteSha256: '',
-        localByteCount: localBytes.length,
-        remoteByteCount: 0,
-        reason: 'Remote evidence object is empty.',
-      );
-    }
-    if (remoteBytes.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
-      return ContentConflictOutcome(
-        storagePath: storagePath,
-        localSha256: computeSha256Hex(localBytes),
-        remoteSha256: computeSha256Hex(remoteBytes),
-        localByteCount: localBytes.length,
-        remoteByteCount: remoteBytes.length,
-        reason: 'Remote evidence object exceeds maximum allowed size (10 MiB).',
-      );
-    }
-
-    final localSha = computeSha256Hex(localBytes);
-    final remoteSha = computeSha256Hex(remoteBytes);
-
-    if (remoteBytes.length == localBytes.length && remoteSha == localSha) {
-      return MatchingBytesOutcome(
-        storagePath: storagePath,
-        remoteBytes: remoteBytes,
-        remoteSha256: remoteSha,
-      );
-    }
-
-    return ContentConflictOutcome(
+    return reconcileRemoteEvidenceBytes(
       storagePath: storagePath,
-      localSha256: localSha,
-      remoteSha256: remoteSha,
-      localByteCount: localBytes.length,
-      remoteByteCount: remoteBytes.length,
-      reason: remoteBytes.length != localBytes.length
-          ? 'Byte length mismatch: local=${localBytes.length}, remote=${remoteBytes.length}'
-          : 'SHA-256 digest mismatch with identical length',
+      localBytes: localBytes,
+      remoteBytes: remoteBytes,
     );
   }
 
@@ -1321,6 +1310,7 @@ final class InMemoryAssessmentEvidenceStorage
       context: context,
       expectedSessionGeneration: expectedSessionGeneration,
       storagePath: storagePath,
+      stage: 'signed URL generation',
     );
     return 'https://local-demo-storage.learnward.internal/$storagePath';
   }
@@ -1335,6 +1325,7 @@ final class InMemoryAssessmentEvidenceStorage
       context: context,
       expectedSessionGeneration: expectedSessionGeneration,
       storagePath: storagePath,
+      stage: 'evidence deletion',
     );
     _storage.remove(storagePath);
   }

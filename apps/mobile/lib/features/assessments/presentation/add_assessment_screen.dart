@@ -610,6 +610,28 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   String _mapFriendlyError(Object error) {
+    if (error is EvidenceStorageAuthException) {
+      return 'Your session is no longer valid. Please sign in again to continue.';
+    }
+    if (error is EvidenceStorageConflictException) {
+      return 'Attached photo could not be reconciled safely with remote storage. Your draft is saved on this device.';
+    }
+    if (error is EvidenceStorageUnknownOutcomeException) {
+      return 'Could not verify photo upload status. Your draft is saved on this device. Please try again.';
+    }
+    if (error is InvalidAssessmentException) {
+      final msg = error.message.toLowerCase();
+      if (msg.contains('empty')) {
+        return 'Attached photo cannot be empty. Please select another file.';
+      }
+      if (msg.contains('10 mib') || msg.contains('size')) {
+        return 'Attached photo exceeds the allowed size limit (10 MiB).';
+      }
+      if (msg.contains('media type')) {
+        return 'Unsupported photo format. Please attach a JPEG or PNG image.';
+      }
+      return 'Please check the assessment details and try again.';
+    }
     final str = error.toString().toLowerCase();
     if (str.contains('socketexception') ||
         str.contains('clientexception') ||
