@@ -59,6 +59,84 @@ class FakeLocalEvidenceFileStore implements LocalEvidenceFileStore {
       deleteDurableEvidence(filePath);
 
   @override
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  }) async {
+    final inspected = inspectAndValidateEvidenceBytes(bytes);
+    final path =
+        '/mock/evidence/${localDraftId}_canonical.${inspected.fileExtension}';
+    files[path] = inspected.bytes;
+    return CanonicalEvidenceSnapshot(
+      localDraftId: localDraftId,
+      filePath: path,
+      mediaType: inspected.mediaType,
+      fileExtension: inspected.fileExtension,
+      byteLength: inspected.byteLength,
+      sha256Checksum: inspected.sha256Checksum,
+      frozenAt: DateTime.now().toUtc(),
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> verifyCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required String canonicalFilePath,
+    required String expectedSha256,
+    int? expectedByteLength,
+    String? expectedMediaType,
+    DateTime? frozenAt,
+  }) async {
+    final raw = files[canonicalFilePath];
+    if (raw == null) {
+      throw EvidenceStorageException(
+        'Canonical evidence snapshot is missing.',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    final verified = verifyCanonicalEvidenceBytes(
+      bytes: raw,
+      expectedSha256: expectedSha256,
+      expectedByteLength: expectedByteLength,
+      expectedMediaType: expectedMediaType,
+    );
+    return VerifiedCanonicalEvidence(
+      snapshot: CanonicalEvidenceSnapshot(
+        localDraftId: localDraftId,
+        filePath: canonicalFilePath,
+        mediaType: verified.mediaType,
+        fileExtension: verified.fileExtension,
+        byteLength: verified.byteLength,
+        sha256Checksum: verified.sha256Checksum,
+        frozenAt: frozenAt ?? DateTime.now().toUtc(),
+      ),
+      bytes: verified.bytes,
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  }) async {
+    final canonicalPath = draft.localCompressedPhotoPath;
+    final expectedSha256 = draft.sha256Checksum;
+    if (canonicalPath == null ||
+        canonicalPath.isEmpty ||
+        expectedSha256 == null) {
+      throw const EvidenceStorageException(
+        'Draft has no frozen canonical evidence snapshot.',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    return verifyCanonicalEvidenceSnapshot(
+      localDraftId: draft.localDraftId,
+      canonicalFilePath: canonicalPath,
+      expectedSha256: expectedSha256,
+      frozenAt: draft.updatedAt,
+    );
+  }
+
+  @override
   Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
     required String filePath,
     required LocalDraftStore draftStore,

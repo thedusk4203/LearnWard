@@ -55,6 +55,45 @@ class _StubEvidenceFileStore implements LocalEvidenceFileStore {
   Future<void> deleteEvidence(String filePath) async {}
 
   @override
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  }) async {
+    final inspected = inspectAndValidateEvidenceBytes(bytes);
+    return CanonicalEvidenceSnapshot(
+      localDraftId: localDraftId,
+      filePath:
+          '/mock/evidence/${localDraftId}_canonical.${inspected.fileExtension}',
+      mediaType: inspected.mediaType,
+      fileExtension: inspected.fileExtension,
+      byteLength: inspected.byteLength,
+      sha256Checksum: inspected.sha256Checksum,
+      frozenAt: DateTime.now().toUtc(),
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> verifyCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required String canonicalFilePath,
+    required String expectedSha256,
+    int? expectedByteLength,
+    String? expectedMediaType,
+    DateTime? frozenAt,
+  }) async => throw const EvidenceStorageException(
+    'Stub canonical snapshot not configured.',
+    kind: EvidenceStorageFailureKind.missingSnapshot,
+  );
+
+  @override
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  }) async => throw const EvidenceStorageException(
+    'Stub canonical snapshot not configured.',
+    kind: EvidenceStorageFailureKind.missingSnapshot,
+  );
+
+  @override
   Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
     required String filePath,
     required LocalDraftStore draftStore,

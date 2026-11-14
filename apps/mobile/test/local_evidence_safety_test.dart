@@ -76,6 +76,198 @@ class FailingLocalDraftStore implements LocalDraftStore {
   @override
   Future<int> countDraftReferencesToFile(String filePath) =>
       inner.countDraftReferencesToFile(filePath);
+
+  @override
+  Future<DraftCasResult> registerOrUpdateDraftIfUnchanged({
+    required LocalAssessmentDraft? expected,
+    required LocalAssessmentDraft desired,
+    DateTime? now,
+  }) => inner.registerOrUpdateDraftIfUnchanged(
+    expected: expected,
+    desired: desired,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> acquireDraftClaim({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    DateTime? now,
+    String? overrideLeaseToken,
+  }) => inner.acquireDraftClaim(
+    localDraftId: localDraftId,
+    actorUserId: actorUserId,
+    familyId: familyId,
+    childId: childId,
+    leaseDuration: leaseDuration,
+    now: now,
+    overrideLeaseToken: overrideLeaseToken,
+  );
+
+  @override
+  Future<DraftCasResult> resumeDraftClaimAfterExpiry({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    required DateTime now,
+    String? overrideLeaseToken,
+  }) => inner.resumeDraftClaimAfterExpiry(
+    localDraftId: localDraftId,
+    actorUserId: actorUserId,
+    familyId: familyId,
+    childId: childId,
+    leaseDuration: leaseDuration,
+    now: now,
+    overrideLeaseToken: overrideLeaseToken,
+  );
+
+  @override
+  Future<DraftCasResult> markDraftStageAndDispatch({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DraftSubmissionStatus targetStage,
+    required DateTime now,
+  }) => inner.markDraftStageAndDispatch(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    targetStage: targetStage,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> persistServerAssessmentId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+  }) => inner.persistServerAssessmentId(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    serverAssessmentId: serverAssessmentId,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> persistServerEvidenceId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverEvidenceId,
+    required String expectedEvidenceId,
+    required String expectedSha256Checksum,
+    required DateTime now,
+  }) => inner.persistServerEvidenceId(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    serverEvidenceId: serverEvidenceId,
+    expectedEvidenceId: expectedEvidenceId,
+    expectedSha256Checksum: expectedSha256Checksum,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> scheduleDraftRetry({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime nextAttemptAt,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) => inner.scheduleDraftRetry(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    nextAttemptAt: nextAttemptAt,
+    recoveryCode: recoveryCode,
+    errorMessage: errorMessage,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> quarantineDraftOutcome({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) => inner.quarantineDraftOutcome(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    recoveryCode: recoveryCode,
+    errorMessage: errorMessage,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> completeDraftSubmission({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+    String? serverEvidenceId,
+  }) => inner.completeDraftSubmission(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    serverAssessmentId: serverAssessmentId,
+    now: now,
+    serverEvidenceId: serverEvidenceId,
+  );
+
+  @override
+  Future<DraftCasResult> releaseDraftClaim({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) => inner.releaseDraftClaim(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> pauseMismatchedActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    String? mismatchReason,
+    DateTime? now,
+  }) => inner.pauseMismatchedActorDraft(
+    localDraftId: localDraftId,
+    familyId: familyId,
+    authenticatedActorId: authenticatedActorId,
+    mismatchReason: mismatchReason,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> resumeOriginalActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) => inner.resumeOriginalActorDraft(
+    localDraftId: localDraftId,
+    familyId: familyId,
+    authenticatedActorId: authenticatedActorId,
+    now: now,
+  );
 }
 
 final class FailingSubmitAssessmentRepository extends FakeAssessmentRepository {
@@ -185,6 +377,70 @@ final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
         status: EvidenceFileDeletionStatus.preservedConservative,
         filePath: filePath,
       );
+
+  @override
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  }) async {
+    if (shouldFailSave) {
+      throw const EvidenceStorageException(
+        'Simulated canonical snapshot write failure (disk full / I/O error)',
+      );
+    }
+    return delegate!.saveCanonicalEvidenceSnapshot(
+      localDraftId: localDraftId,
+      bytes: bytes,
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> verifyCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required String canonicalFilePath,
+    required String expectedSha256,
+    int? expectedByteLength,
+    String? expectedMediaType,
+    DateTime? frozenAt,
+  }) async {
+    if (shouldFailLoad) {
+      throw const EvidenceStorageException(
+        'Simulated I/O disk error verifying canonical snapshot',
+      );
+    }
+    if (shouldReturnNullLoad) {
+      throw const EvidenceStorageException(
+        'Simulated missing canonical snapshot',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    return delegate!.verifyCanonicalEvidenceSnapshot(
+      localDraftId: localDraftId,
+      canonicalFilePath: canonicalFilePath,
+      expectedSha256: expectedSha256,
+      expectedByteLength: expectedByteLength,
+      expectedMediaType: expectedMediaType,
+      frozenAt: frozenAt,
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  }) async {
+    if (shouldFailLoad) {
+      throw const EvidenceStorageException(
+        'Simulated I/O disk error reading canonical snapshot',
+      );
+    }
+    if (shouldReturnNullLoad) {
+      throw const EvidenceStorageException(
+        'Simulated missing canonical snapshot',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    return delegate!.readVerifiedCanonicalSnapshot(draft: draft);
+  }
 }
 
 void _ensureSqliteInitialized() {

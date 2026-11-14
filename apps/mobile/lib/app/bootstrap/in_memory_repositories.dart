@@ -133,6 +133,8 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
 
   @override
   Future<void> saveLocalDraft(LocalAssessmentDraft draft) async {
+    final existing = _drafts[draft.localDraftId];
+    validateLegacySaveLocalDraft(existing: existing, desired: draft);
     _drafts[draft.localDraftId] = draft;
   }
 
@@ -143,11 +145,18 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
 
   @override
   Future<List<LocalAssessmentDraft>> listLocalDrafts(ChildId childId) async {
-    return _drafts.values.where((d) => d.childId == childId.value).toList();
+    final list = _drafts.values
+        .where((d) => d.childId == childId.value)
+        .toList();
+    list.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return list;
   }
 
   @override
   Future<void> deleteLocalDraft(String localDraftId) async {
+    final existing = _drafts[localDraftId];
+    if (existing == null) return;
+    validateRawLocalDraftDelete(existing);
     _drafts.remove(localDraftId);
   }
 
@@ -158,30 +167,14 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
     DateTime? now,
   }) async {
     final current = _drafts[localDraftId];
-    if (current == null) {
-      return DraftDeletionOutcome(
-        status: DraftDeletionStatus.notFound,
-        localDraftId: localDraftId,
-        reason: 'Draft not found in local store.',
-      );
-    }
-
-    if (current.isUnsafeToDelete(now: now)) {
-      return DraftDeletionOutcome(
-        status: DraftDeletionStatus.blockedUnsafeState,
-        localDraftId: localDraftId,
-        reason: current.deletionBlockedReason(now: now),
-        currentDraft: current,
-      );
-    }
-
-    if (current.hasConflictWith(expectedDraft)) {
-      return DraftDeletionOutcome(
-        status: DraftDeletionStatus.concurrencyConflict,
-        localDraftId: localDraftId,
-        reason: 'Draft was modified while deletion was being confirmed.',
-        currentDraft: current,
-      );
+    final blockedOutcome = evaluateDeleteDraftSafelyPreconditions(
+      localDraftId: localDraftId,
+      current: current,
+      expectedDraft: expectedDraft,
+      now: now,
+    );
+    if (blockedOutcome != null) {
+      return blockedOutcome;
     }
 
     _drafts.remove(localDraftId);
@@ -210,6 +203,260 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
         )
         .length;
   }
+
+  @override
+  Future<DraftCasResult> registerOrUpdateDraftIfUnchanged({
+    required LocalAssessmentDraft? expected,
+    required LocalAssessmentDraft desired,
+    DateTime? now,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    desired.localDraftId,
+    (current) => evaluateDraftRegistrationCas(
+      existing: current,
+      expected: expected,
+      desired: desired,
+      now: now,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> acquireDraftClaim({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    DateTime? now,
+    String? overrideLeaseToken,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluateDraftClaim(
+      existing: current,
+      localDraftId: localDraftId,
+      actorUserId: actorUserId,
+      familyId: familyId,
+      childId: childId,
+      leaseDuration: leaseDuration,
+      expectingExpiredLease: false,
+      now: now,
+      overrideLeaseToken: overrideLeaseToken,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> resumeDraftClaimAfterExpiry({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    required DateTime now,
+    String? overrideLeaseToken,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluateDraftClaim(
+      existing: current,
+      localDraftId: localDraftId,
+      actorUserId: actorUserId,
+      familyId: familyId,
+      childId: childId,
+      leaseDuration: leaseDuration,
+      expectingExpiredLease: true,
+      now: now,
+      overrideLeaseToken: overrideLeaseToken,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> markDraftStageAndDispatch({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DraftSubmissionStatus targetStage,
+    required DateTime now,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluateMarkDraftStageAndDispatch(
+      existing: current,
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      targetStage: targetStage,
+      now: now,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> persistServerAssessmentId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluatePersistServerAssessmentId(
+      existing: current,
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      serverAssessmentId: serverAssessmentId,
+      now: now,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> persistServerEvidenceId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverEvidenceId,
+    required String expectedEvidenceId,
+    required String expectedSha256Checksum,
+    required DateTime now,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluatePersistServerEvidenceId(
+      existing: current,
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      serverEvidenceId: serverEvidenceId,
+      expectedEvidenceId: expectedEvidenceId,
+      expectedSha256Checksum: expectedSha256Checksum,
+      now: now,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> scheduleDraftRetry({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime nextAttemptAt,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluateScheduleDraftRetry(
+      existing: current,
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      nextAttemptAt: nextAttemptAt,
+      recoveryCode: recoveryCode,
+      errorMessage: errorMessage,
+      now: now,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> quarantineDraftOutcome({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluateQuarantineDraftOutcome(
+      existing: current,
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      recoveryCode: recoveryCode,
+      errorMessage: errorMessage,
+      now: now,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> completeDraftSubmission({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+    String? serverEvidenceId,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluateCompleteDraftSubmission(
+      existing: current,
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      serverAssessmentId: serverAssessmentId,
+      now: now,
+      serverEvidenceId: serverEvidenceId,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> releaseDraftClaim({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluateReleaseDraftClaim(
+      existing: current,
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      now: now,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> pauseMismatchedActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    String? mismatchReason,
+    DateTime? now,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluatePauseMismatchedActorDraft(
+      existing: current,
+      localDraftId: localDraftId,
+      familyId: familyId,
+      authenticatedActorId: authenticatedActorId,
+      mismatchReason: mismatchReason,
+      now: now,
+    ),
+  );
+
+  @override
+  Future<DraftCasResult> resumeOriginalActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) async => applyInMemoryDraftCas(
+    _drafts,
+    localDraftId,
+    (current) => evaluateResumeOriginalActorDraft(
+      existing: current,
+      localDraftId: localDraftId,
+      familyId: familyId,
+      authenticatedActorId: authenticatedActorId,
+      now: now,
+    ),
+  );
 }
 
 /// Lightweight in-memory fallback for [PendingRewardCommandStore] in test and local demo modes.
