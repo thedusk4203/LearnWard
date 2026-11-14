@@ -1015,14 +1015,19 @@ void main() {
             );
             expect(find.textContaining('in_screen_frozen.jpg'), findsOneWidget);
 
+            // R33-09: Interrupted submit transitions the in-screen draft to possibly_dispatched,
+            // locking evidence editing buttons as well as payload controls immediately.
+            final changeButton = tester.widget<IconButton>(
+              find.byKey(const Key('change_evidence_button')),
+            );
+            final removeButton = tester.widget<IconButton>(
+              find.byKey(const Key('remove_evidence_button')),
+            );
+            expect(changeButton.onPressed, isNull);
+            expect(removeButton.onPressed, isNull);
+
             await tapButton(tester, 'change_evidence_button');
 
-            expect(
-              find.textContaining(
-                'Evidence photo is already locked for this draft',
-              ),
-              findsOneWidget,
-            );
             expect(find.textContaining('in_screen_frozen.jpg'), findsOneWidget);
             expect(find.textContaining('after_freeze_other.jpg'), findsNothing);
 
@@ -1998,6 +2003,803 @@ void main() {
         expect(await appDatabase.listLocalDrafts(testChild.id), isEmpty);
       },
     );
+
+    group('R33-09: Payload Immutability on Dispatched & Locked Drafts', () {
+      void expectAllEditingControlsLocked(
+        WidgetTester tester, {
+        required bool hasAttachedEvidence,
+        bool expectSubmitEnabled = false,
+      }) {
+        expect(
+          tester
+              .widget<DropdownButtonFormField<SubjectKey>>(
+                find.byKey(const Key('assessment_subject_key_dropdown')),
+              )
+              .onChanged,
+          isNull,
+        );
+        expect(
+          tester
+              .widget<DropdownButtonFormField<AssessmentType>>(
+                find.byKey(const Key('assessment_type_dropdown')),
+              )
+              .onChanged,
+          isNull,
+        );
+        expect(
+          tester
+              .widget<DropdownButtonFormField<AssessmentDifficulty>>(
+                find.byKey(const Key('assessment_difficulty_dropdown')),
+              )
+              .onChanged,
+          isNull,
+        );
+        for (final keyName in const [
+          'assessment_subject_field',
+          'assessment_title_field',
+          'assessment_raw_score_field',
+          'assessment_max_score_field',
+        ]) {
+          final field = tester.widget<TextField>(
+            find.descendant(
+              of: find.byKey(Key(keyName)),
+              matching: find.byType(TextField),
+            ),
+          );
+          expect(field.enabled, isFalse, reason: '$keyName must be disabled');
+          expect(field.readOnly, isTrue, reason: '$keyName must be readOnly');
+        }
+        expect(
+          tester
+              .widget<OutlinedButton>(
+                find.byKey(const Key('save_draft_button')),
+              )
+              .enabled,
+          isFalse,
+        );
+        if (hasAttachedEvidence) {
+          expect(
+            tester
+                .widget<IconButton>(
+                  find.byKey(const Key('change_evidence_button')),
+                )
+                .onPressed,
+            isNull,
+          );
+          expect(
+            tester
+                .widget<IconButton>(
+                  find.byKey(const Key('remove_evidence_button')),
+                )
+                .onPressed,
+            isNull,
+          );
+        } else {
+          expect(
+            tester
+                .widget<ButtonStyleButton>(
+                  find.byKey(const Key('attach_evidence_button')),
+                )
+                .onPressed,
+            isNull,
+          );
+        }
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('submit_assessment_button')),
+              )
+              .enabled,
+          equals(expectSubmitEnabled),
+        );
+      }
+
+      Future<LocalAssessmentDraft> insertCleanDraft({
+        required String localDraftId,
+        required SubjectKey subjectKey,
+        required String subject,
+        required String title,
+        String assessmentType = 'quiz',
+        String difficulty = 'normal',
+        double rawScore = 8.0,
+        double maxScore = 10.0,
+        String? createCommandId,
+        String? submitCommandId,
+        String? evidenceId,
+        CanonicalEvidenceSnapshot? snapshot,
+      }) async {
+        final draft = LocalAssessmentDraft(
+          localDraftId: localDraftId,
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          actorUserId: 'parent-actor-1',
+          createCommandId: createCommandId ?? 'cmd-$localDraftId-c',
+          submitCommandId: submitCommandId ?? 'cmd-$localDraftId-s',
+          evidenceId: evidenceId,
+          subjectKey: subjectKey,
+          subject: subject,
+          title: title,
+          assessmentType: assessmentType,
+          difficulty: difficulty,
+          rawScore: rawScore,
+          maxScore: maxScore,
+          localCompressedPhotoPath: snapshot?.filePath,
+          sha256Checksum: snapshot?.sha256Checksum,
+          occurredAt: baseTime,
+          updatedAt: baseTime,
+          dispatchState: CommandDispatchState.neverDispatched,
+          entryContext: EntryContext.sharedChild,
+        );
+        final res = await appDatabase.registerOrUpdateDraftIfUnchanged(
+          expected: null,
+          desired: draft,
+          now: baseTime,
+        );
+        expect(res.isSuccess, isTrue, reason: 'Seed failed: ${res.reason}');
+        return res.draft!;
+      }
+
+      Future<LocalAssessmentDraft> transitionToDispatchedRetryable(
+        LocalAssessmentDraft draft,
+      ) async {
+        final claim = await appDatabase.acquireDraftClaim(
+          localDraftId: draft.localDraftId,
+          actorUserId: 'parent-actor-1',
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          leaseDuration: const Duration(minutes: 5),
+          now: baseTime,
+        );
+        expect(claim.isSuccess, isTrue);
+        final dispatched = await appDatabase.markDraftStageAndDispatch(
+          localDraftId: draft.localDraftId,
+          leaseToken: claim.draft!.leaseToken!,
+          authenticatedActorId: 'parent-actor-1',
+          targetStage: DraftSubmissionStatus.submittingAssessment,
+          now: baseTime,
+        );
+        expect(dispatched.isSuccess, isTrue);
+        final released = await appDatabase.releaseDraftClaim(
+          localDraftId: draft.localDraftId,
+          leaseToken: claim.draft!.leaseToken!,
+          authenticatedActorId: 'parent-actor-1',
+          now: baseTime,
+        );
+        expect(released.isSuccess, isTrue);
+        return released.draft!;
+      }
+
+      testWidgets(
+        'reopened retryable possiblyDispatched draft locks all controls, explains preserved payload, resists edits, and retries exact original payload cleanly',
+        (tester) async {
+          const draftId = 'draft-r3309-dispatched-retry';
+          final snap = await fileStore.saveCanonicalEvidenceSnapshot(
+            localDraftId: draftId,
+            bytes: validJpegBytes,
+          );
+          final clean = await insertCleanDraft(
+            localDraftId: draftId,
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Dispatched Fractions Quiz',
+            rawScore: 8.0,
+            maxScore: 10.0,
+            createCommandId: 'cmd-r3309-create-1',
+            submitCommandId: 'cmd-r3309-submit-1',
+            evidenceId: 'evi-r3309-1',
+            snapshot: snap,
+          );
+          final seeded = await transitionToDispatchedRetryable(clean);
+
+          await tester.pumpWidget(buildRoutedApp(initialDraft: seeded));
+          await tester.pumpAndSettle();
+
+          expect(
+            find.byKey(const Key('payload_locked_banner')),
+            findsOneWidget,
+          );
+          expect(
+            find.textContaining('original submitted payload'),
+            findsOneWidget,
+          );
+          expectAllEditingControlsLocked(
+            tester,
+            hasAttachedEvidence: true,
+            expectSubmitEnabled: true,
+          );
+
+          await tester.enterText(
+            find.byKey(const Key('assessment_title_field')),
+            'Attempted Edited Title',
+          );
+          await tester.enterText(
+            find.byKey(const Key('assessment_subject_field')),
+            'History',
+          );
+          await tester.enterText(
+            find.byKey(const Key('assessment_raw_score_field')),
+            '10',
+          );
+          await tester.pumpAndSettle();
+
+          expect(find.text('Dispatched Fractions Quiz'), findsOneWidget);
+          expect(find.text('Attempted Edited Title'), findsNothing);
+
+          await tapButton(tester, 'submit_assessment_button');
+
+          expect(find.text('HOME_ROUTE'), findsOneWidget);
+          expect(repo.assessments.length, equals(1));
+          final submitted = repo.assessments.values.single;
+          expect(submitted.subjectKey, SubjectKey.math);
+          expect(submitted.subject, equals('Math'));
+          expect(submitted.title, equals('Dispatched Fractions Quiz'));
+          expect(submitted.type, AssessmentType.quiz);
+          expect(submitted.difficulty, AssessmentDifficulty.normal);
+          expect(submitted.score.rawScore, equals(8.0));
+          expect(submitted.score.maxScore, equals(10.0));
+          expect(storage.storage.values.single, equals(validJpegBytes));
+        },
+      );
+
+      testWidgets(
+        'confirmedCommitted, leased, quarantined, waitingOriginalActor, terminalError, and retryScheduled drafts lock all editing controls',
+        (tester) async {
+          final nowUtc = DateTime.now().toUtc();
+
+          // 1. confirmedCommitted
+          final c1 = await insertCleanDraft(
+            localDraftId: 'draft-r3309-committed',
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Committed Draft',
+          );
+          final claim1 = await appDatabase.acquireDraftClaim(
+            localDraftId: c1.localDraftId,
+            actorUserId: 'parent-actor-1',
+            familyId: testFamily.id.value,
+            childId: testChild.id.value,
+            leaseDuration: const Duration(minutes: 5),
+            now: nowUtc,
+          );
+          await appDatabase.markDraftStageAndDispatch(
+            localDraftId: c1.localDraftId,
+            leaseToken: claim1.draft!.leaseToken!,
+            authenticatedActorId: 'parent-actor-1',
+            targetStage: DraftSubmissionStatus.submittingAssessment,
+            now: nowUtc,
+          );
+          final committed = (await appDatabase.completeDraftSubmission(
+            localDraftId: c1.localDraftId,
+            leaseToken: claim1.draft!.leaseToken!,
+            authenticatedActorId: 'parent-actor-1',
+            serverAssessmentId: 'srv-comm-1',
+            now: nowUtc,
+          )).draft!;
+
+          // 2. active lease
+          final c2 = await insertCleanDraft(
+            localDraftId: 'draft-r3309-leased',
+            subjectKey: SubjectKey.science,
+            subject: 'Science',
+            title: 'Leased Draft',
+            assessmentType: 'homework',
+            difficulty: 'hard',
+            rawScore: 7,
+          );
+          final leased = (await appDatabase.acquireDraftClaim(
+            localDraftId: c2.localDraftId,
+            actorUserId: 'parent-actor-1',
+            familyId: testFamily.id.value,
+            childId: testChild.id.value,
+            leaseDuration: const Duration(minutes: 10),
+            now: nowUtc,
+          )).draft!;
+
+          // 3. malformed lease (quarantined)
+          final c3 = await insertCleanDraft(
+            localDraftId: 'draft-r3309-quarantined-lease',
+            subjectKey: SubjectKey.english,
+            subject: 'English',
+            title: 'Malformed Lease Draft',
+            assessmentType: 'exam',
+            difficulty: 'challenge',
+          );
+          await appDatabase.customStatement(
+            "UPDATE local_assessment_drafts "
+            "SET lease_token = 'orphan-token', lease_expires_at = NULL "
+            "WHERE local_draft_id = 'draft-r3309-quarantined-lease';",
+          );
+          final malformedLease = (await appDatabase.getLocalDraft(
+            c3.localDraftId,
+          ))!;
+
+          // 4. waitingOriginalActor
+          final c4 = await insertCleanDraft(
+            localDraftId: 'draft-r3309-wait-actor',
+            subjectKey: SubjectKey.literature,
+            subject: 'Literature',
+            title: 'Waiting Actor Draft',
+            assessmentType: 'practice',
+            difficulty: 'normal',
+            rawScore: 8.5,
+          );
+          await transitionToDispatchedRetryable(c4);
+          final waitingActor = (await appDatabase.pauseMismatchedActorDraft(
+            localDraftId: c4.localDraftId,
+            familyId: testFamily.id.value,
+            authenticatedActorId: 'parent-actor-2',
+            now: nowUtc,
+          )).draft!;
+
+          // 5. terminalError
+          final c5 = await insertCleanDraft(
+            localDraftId: 'draft-r3309-terminal',
+            subjectKey: SubjectKey.other,
+            subject: 'Other',
+            title: 'Terminal Error Draft',
+            rawScore: 6,
+          );
+          final claim5 = await appDatabase.acquireDraftClaim(
+            localDraftId: c5.localDraftId,
+            actorUserId: 'parent-actor-1',
+            familyId: testFamily.id.value,
+            childId: testChild.id.value,
+            leaseDuration: const Duration(minutes: 5),
+            now: nowUtc,
+          );
+          await appDatabase.markDraftStageAndDispatch(
+            localDraftId: c5.localDraftId,
+            leaseToken: claim5.draft!.leaseToken!,
+            authenticatedActorId: 'parent-actor-1',
+            targetStage: DraftSubmissionStatus.submittingAssessment,
+            now: nowUtc,
+          );
+          final terminalError = (await appDatabase.quarantineDraftOutcome(
+            localDraftId: c5.localDraftId,
+            leaseToken: claim5.draft!.leaseToken!,
+            authenticatedActorId: 'parent-actor-1',
+            recoveryCode: DraftRecoveryCode.unknownWireStatus,
+            errorMessage: 'Terminal error',
+            now: nowUtc,
+          )).draft!;
+
+          // 6. retryScheduled (editing locked, safe retry allowed)
+          final c6 = await insertCleanDraft(
+            localDraftId: 'draft-r3309-retry-sched',
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Retry Scheduled Draft',
+            rawScore: 9,
+          );
+          final claim6 = await appDatabase.acquireDraftClaim(
+            localDraftId: c6.localDraftId,
+            actorUserId: 'parent-actor-1',
+            familyId: testFamily.id.value,
+            childId: testChild.id.value,
+            leaseDuration: const Duration(minutes: 5),
+            now: nowUtc,
+          );
+          await appDatabase.markDraftStageAndDispatch(
+            localDraftId: c6.localDraftId,
+            leaseToken: claim6.draft!.leaseToken!,
+            authenticatedActorId: 'parent-actor-1',
+            targetStage: DraftSubmissionStatus.submittingAssessment,
+            now: nowUtc,
+          );
+          final retryScheduled = (await appDatabase.scheduleDraftRetry(
+            localDraftId: c6.localDraftId,
+            leaseToken: claim6.draft!.leaseToken!,
+            authenticatedActorId: 'parent-actor-1',
+            nextAttemptAt: nowUtc.add(const Duration(minutes: 1)),
+            recoveryCode: DraftRecoveryCode.retryScheduled,
+            errorMessage: 'Retry later',
+            now: nowUtc,
+          )).draft!;
+
+          final cases =
+              <({String name, LocalAssessmentDraft draft, bool allowSubmit})>[
+                (
+                  name: 'confirmedCommitted',
+                  draft: committed,
+                  allowSubmit: false,
+                ),
+                (name: 'leased', draft: leased, allowSubmit: false),
+                (
+                  name: 'malformedLeaseQuarantined',
+                  draft: malformedLease,
+                  allowSubmit: false,
+                ),
+                (
+                  name: 'waitingOriginalActor',
+                  draft: waitingActor,
+                  allowSubmit: false,
+                ),
+                (
+                  name: 'terminalError',
+                  draft: terminalError,
+                  allowSubmit: false,
+                ),
+                (
+                  name: 'retryScheduled',
+                  draft: retryScheduled,
+                  allowSubmit: true,
+                ),
+              ];
+
+          for (final testCase in cases) {
+            await tester.pumpWidget(const SizedBox.shrink());
+            await tester.pumpAndSettle();
+            await tester.pumpWidget(
+              buildRoutedApp(initialDraft: testCase.draft),
+            );
+            await tester.pumpAndSettle();
+
+            expect(
+              find.byKey(const Key('payload_locked_banner')),
+              findsOneWidget,
+              reason: '${testCase.name} must display locked payload banner',
+            );
+            expect(
+              find.textContaining('original submitted payload'),
+              findsOneWidget,
+              reason: '${testCase.name} must explain payload is preserved',
+            );
+            expectAllEditingControlsLocked(
+              tester,
+              hasAttachedEvidence: false,
+              expectSubmitEnabled: testCase.allowSubmit,
+            );
+          }
+        },
+      );
+
+      testWidgets(
+        'stale-screen text/score edits after background transition to possiblyDispatched recheck store, lock controls, reject submit, and leave SQLite/RPC untouched',
+        (tester) async {
+          const draftId = 'draft-r3309-stale-text-race';
+          final snap = await fileStore.saveCanonicalEvidenceSnapshot(
+            localDraftId: draftId,
+            bytes: validJpegBytes,
+          );
+          final staleInitial = await insertCleanDraft(
+            localDraftId: draftId,
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Stale Original Title',
+            rawScore: 8.0,
+            maxScore: 10.0,
+            createCommandId: 'cmd-r3309-stale-c',
+            submitCommandId: 'cmd-r3309-stale-s',
+            evidenceId: 'evi-r3309-stale',
+            snapshot: snap,
+          );
+
+          await tester.pumpWidget(buildRoutedApp(initialDraft: staleInitial));
+          await tester.pumpAndSettle();
+
+          // While this stale screen remains open, SQLite transitions to possiblyDispatched.
+          await transitionToDispatchedRetryable(staleInitial);
+
+          // User edits title, subject, and raw score on the stale screen.
+          await tester.enterText(
+            find.byKey(const Key('assessment_title_field')),
+            'Diverged Title',
+          );
+          await tester.pumpAndSettle();
+          await tester.enterText(
+            find.byKey(const Key('assessment_subject_field')),
+            'Physics',
+          );
+          await tester.pumpAndSettle();
+          await tester.enterText(
+            find.byKey(const Key('assessment_raw_score_field')),
+            '10',
+          );
+          await tester.pumpAndSettle();
+
+          // Recheck must lock controls and surface explicit rejection.
+          expect(
+            find.byKey(const Key('payload_locked_banner')),
+            findsOneWidget,
+          );
+          expect(
+            find.textContaining(
+              'Edits made on this screen cannot be submitted',
+            ),
+            findsOneWidget,
+          );
+          expectAllEditingControlsLocked(
+            tester,
+            hasAttachedEvidence: true,
+            expectSubmitEnabled: true,
+          );
+
+          // Attempting Submit for Review must fail closed with ZERO remote RPCs.
+          await tapButton(tester, 'submit_assessment_button');
+
+          expect(find.byType(AddAssessmentScreen), findsOneWidget);
+          expect(find.text('HOME_ROUTE'), findsNothing);
+          expect(
+            find.textContaining(
+              'Edits made on this screen cannot be submitted',
+            ),
+            findsOneWidget,
+          );
+          expect(repo.createDraftCalls, equals(0));
+          expect(storage.uploadCallCount, equals(0));
+          expect(repo.registerEvidenceCalls, equals(0));
+          expect(repo.submitAssessmentCalls, equals(0));
+
+          final persisted = await appDatabase.getLocalDraft(draftId);
+          expect(persisted!.title, equals('Stale Original Title'));
+          expect(persisted.subject, equals('Math'));
+          expect(persisted.rawScore, equals(8.0));
+          expect(persisted.maxScore, equals(10.0));
+          expect(persisted.createCommandId, equals('cmd-r3309-stale-c'));
+          expect(persisted.submitCommandId, equals('cmd-r3309-stale-s'));
+          expect(persisted.evidenceId, equals('evi-r3309-stale'));
+          expect(persisted.sha256Checksum, equals(snap.sha256Checksum));
+        },
+      );
+
+      testWidgets(
+        'stale-screen dropdown changes (subjectKey, type, difficulty) after background transition reject edit, lock controls, and reject subsequent submit',
+        (tester) async {
+          Future<void> runDropdownAttempt({
+            required String draftId,
+            required Key dropdownKey,
+            required String optionLabel,
+          }) async {
+            final staleInitial = await insertCleanDraft(
+              localDraftId: draftId,
+              subjectKey: SubjectKey.math,
+              subject: 'Math',
+              title: 'Stale Dropdown Draft',
+              rawScore: 7.0,
+              maxScore: 10.0,
+            );
+            await tester.pumpWidget(const SizedBox.shrink());
+            await tester.pumpAndSettle();
+            await tester.pumpWidget(buildRoutedApp(initialDraft: staleInitial));
+            await tester.pumpAndSettle();
+
+            await transitionToDispatchedRetryable(staleInitial);
+
+            await tester.ensureVisible(find.byKey(dropdownKey));
+            await tester.tap(find.byKey(dropdownKey));
+            await tester.pumpAndSettle();
+            await tester.tap(find.text(optionLabel).last);
+            await tester.pumpAndSettle();
+
+            expect(
+              find.byKey(const Key('payload_locked_banner')),
+              findsOneWidget,
+            );
+            expect(
+              find.textContaining(
+                'Edits made on this screen cannot be submitted',
+              ),
+              findsOneWidget,
+            );
+            expectAllEditingControlsLocked(
+              tester,
+              hasAttachedEvidence: false,
+              expectSubmitEnabled: true,
+            );
+
+            await tapButton(tester, 'submit_assessment_button');
+
+            expect(find.byType(AddAssessmentScreen), findsOneWidget);
+            expect(repo.createDraftCalls, equals(0));
+            expect(repo.submitAssessmentCalls, equals(0));
+            final persisted = await appDatabase.getLocalDraft(draftId);
+            expect(persisted!.subjectKey, equals(SubjectKey.math));
+            expect(persisted.assessmentType, equals('quiz'));
+            expect(persisted.difficulty, equals('normal'));
+          }
+
+          await runDropdownAttempt(
+            draftId: 'draft-r3309-stale-dd-type',
+            dropdownKey: const Key('assessment_type_dropdown'),
+            optionLabel: 'EXAM',
+          );
+          await runDropdownAttempt(
+            draftId: 'draft-r3309-stale-dd-diff',
+            dropdownKey: const Key('assessment_difficulty_dropdown'),
+            optionLabel: 'hard',
+          );
+          await runDropdownAttempt(
+            draftId: 'draft-r3309-stale-dd-subj',
+            dropdownKey: const Key('assessment_subject_key_dropdown'),
+            optionLabel: SubjectKey.science.displayLabel,
+          );
+        },
+      );
+
+      testWidgets(
+        'stale-screen direct retry fails closed when SQLite payload differs from displayed form even without user edits',
+        (tester) async {
+          const draftId = 'draft-r3309-stale-direct-submit';
+          final staleInitial = await insertCleanDraft(
+            localDraftId: draftId,
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Screen Original Title',
+            rawScore: 8.0,
+            maxScore: 10.0,
+          );
+
+          await tester.pumpWidget(buildRoutedApp(initialDraft: staleInitial));
+          await tester.pumpAndSettle();
+
+          // Update payload concurrently while still neverDispatched, then transition to possiblyDispatched.
+          final bgUpdated = staleInitial.copyWith(
+            title: 'Authoritative Updated Title',
+            rawScore: 9.0,
+            updatedAt: baseTime.add(const Duration(seconds: 2)),
+          );
+          final updateRes = await appDatabase.registerOrUpdateDraftIfUnchanged(
+            expected: staleInitial,
+            desired: bgUpdated,
+            now: baseTime.add(const Duration(seconds: 2)),
+          );
+          expect(updateRes.isSuccess, isTrue);
+          await transitionToDispatchedRetryable(updateRes.draft!);
+
+          await tapButton(tester, 'submit_assessment_button');
+
+          expect(find.byType(AddAssessmentScreen), findsOneWidget);
+          expect(find.text('HOME_ROUTE'), findsNothing);
+          expect(
+            find.textContaining(
+              'Edits made on this screen cannot be submitted',
+            ),
+            findsOneWidget,
+          );
+          expect(repo.createDraftCalls, equals(0));
+          expect(repo.submitAssessmentCalls, equals(0));
+          expectAllEditingControlsLocked(
+            tester,
+            hasAttachedEvidence: false,
+            expectSubmitEnabled: true,
+          );
+        },
+      );
+
+      testWidgets(
+        'in-screen transition: failed submit moves fresh draft to possiblyDispatched, locks all controls immediately, and allows unmodified retry',
+        (tester) async {
+          repo.nextSubmitError = StateError('SocketException: dropped');
+
+          await tester.pumpWidget(buildRoutedApp());
+          await tester.pumpAndSettle();
+
+          await fillRequiredForm(
+            tester,
+            title: 'In-Screen Transition Quiz',
+            rawScore: '9',
+          );
+          await tapButton(tester, 'submit_assessment_button');
+
+          // Still on AddAssessmentScreen after failure; controls are immediately locked.
+          expect(find.byType(AddAssessmentScreen), findsOneWidget);
+          expect(
+            find.byKey(const Key('payload_locked_banner')),
+            findsOneWidget,
+          );
+          expect(
+            find.textContaining('original submitted payload'),
+            findsOneWidget,
+          );
+          expectAllEditingControlsLocked(
+            tester,
+            hasAttachedEvidence: false,
+            expectSubmitEnabled: true,
+          );
+
+          // Safe retry without edits succeeds and dispatches exact original payload.
+          await tapButton(tester, 'submit_assessment_button');
+
+          expect(find.text('HOME_ROUTE'), findsOneWidget);
+          expect(repo.assessments.length, equals(1));
+          expect(
+            repo.assessments.values.single.title,
+            equals('In-Screen Transition Quiz'),
+          );
+          expect(repo.assessments.values.single.score.rawScore, equals(9.0));
+        },
+      );
+
+      testWidgets(
+        'clean neverDispatched draft remains editable across all payload fields and submits edited values',
+        (tester) async {
+          const draftId = 'draft-r3309-editable-clean';
+          final cleanDraft = await insertCleanDraft(
+            localDraftId: draftId,
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Initial Clean Title',
+            rawScore: 6.0,
+            maxScore: 10.0,
+          );
+
+          await tester.pumpWidget(buildRoutedApp(initialDraft: cleanDraft));
+          await tester.pumpAndSettle();
+
+          expect(find.byKey(const Key('payload_locked_banner')), findsNothing);
+          expect(
+            find.byKey(const Key('legacy_draft_quarantine_banner')),
+            findsNothing,
+          );
+
+          await tester.tap(
+            find.byKey(const Key('assessment_subject_key_dropdown')),
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(find.text(SubjectKey.science.displayLabel).last);
+          await tester.pumpAndSettle();
+
+          await tester.enterText(
+            find.byKey(const Key('assessment_subject_field')),
+            'Chemistry',
+          );
+          await tester.enterText(
+            find.byKey(const Key('assessment_title_field')),
+            'Edited Clean Assessment',
+          );
+          await tester.ensureVisible(
+            find.byKey(const Key('assessment_type_dropdown')),
+          );
+          await tester.tap(find.byKey(const Key('assessment_type_dropdown')));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('HOMEWORK').last);
+          await tester.pumpAndSettle();
+
+          await tester.tap(
+            find.byKey(const Key('assessment_difficulty_dropdown')),
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('hard').last);
+          await tester.pumpAndSettle();
+
+          await tester.enterText(
+            find.byKey(const Key('assessment_raw_score_field')),
+            '9.5',
+          );
+          await tester.enterText(
+            find.byKey(const Key('assessment_max_score_field')),
+            '10',
+          );
+          await tester.pumpAndSettle();
+
+          await tapButton(tester, 'save_draft_button');
+          expect(find.text('Draft saved locally.'), findsOneWidget);
+          await tester.pump(const Duration(seconds: 5));
+          await tester.pumpAndSettle();
+
+          final saved = await appDatabase.getLocalDraft(draftId);
+          expect(saved!.subjectKey, SubjectKey.science);
+          expect(saved.subject, equals('Chemistry'));
+          expect(saved.title, equals('Edited Clean Assessment'));
+          expect(saved.assessmentType, equals('homework'));
+          expect(saved.difficulty, equals('hard'));
+          expect(saved.rawScore, equals(9.5));
+
+          await tapButton(tester, 'submit_assessment_button');
+
+          expect(find.text('HOME_ROUTE'), findsOneWidget);
+          expect(repo.assessments.length, equals(1));
+          final submitted = repo.assessments.values.single;
+          expect(submitted.subjectKey, SubjectKey.science);
+          expect(submitted.subject, equals('Chemistry'));
+          expect(submitted.title, equals('Edited Clean Assessment'));
+          expect(submitted.type, AssessmentType.homework);
+          expect(submitted.difficulty, AssessmentDifficulty.hard);
+          expect(submitted.score.rawScore, equals(9.5));
+          expect(submitted.score.maxScore, equals(10.0));
+        },
+      );
+    });
   });
 }
 

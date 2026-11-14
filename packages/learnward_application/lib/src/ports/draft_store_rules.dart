@@ -106,6 +106,46 @@ String normalizeAssessmentTitle(String rawTitle, {String? fallbackTitle}) {
   return trimmed;
 }
 
+/// Whether a persisted draft's assessment payload (`subjectKey`, `subject`,
+/// `title`, `assessmentType`, `difficulty`, `rawScore`, `maxScore`, `occurredAt`,
+/// `entryContext`, and evidence) must be treated as immutable in UI/presentation.
+bool isDraftPayloadLocked(LocalAssessmentDraft draft, {DateTime? now}) {
+  final effectiveNow = normalizeDraftUtcNow(now);
+  return draft.dispatchState != CommandDispatchState.neverDispatched ||
+      draft.submissionStatus != DraftSubmissionStatus.draft ||
+      draft.isReadOnlyQuarantined ||
+      draft.isLegacyUnknown ||
+      draft.hasRecoveryMarker ||
+      draft.hasActiveLease(now: effectiveNow) ||
+      draft.leaseToken != null ||
+      draft.leaseExpiresAt != null ||
+      draft.hasMalformedLease ||
+      draft.hasUnboundActor ||
+      _hasText(draft.serverAssessmentId) ||
+      _hasText(draft.serverEvidenceId);
+}
+
+/// Whether [draft] is in a safe state for direct retry/submission in UI,
+/// assuming the displayed payload still matches the persisted row identically.
+bool isDraftDirectRetryAllowed(LocalAssessmentDraft draft) {
+  if (draft.isLegacyUnknown ||
+      draft.hasUnboundActor ||
+      draft.isReadOnlyQuarantined ||
+      draft.hasMalformedLease) {
+    return false;
+  }
+  if (draft.dispatchState == CommandDispatchState.confirmedCommitted ||
+      draft.hasWaitingOriginalActorMarker ||
+      draft.submissionStatus == DraftSubmissionStatus.terminalError ||
+      (draft.hasRecoveryMarker &&
+          draft.recoveryCode != DraftRecoveryCode.retryScheduled) ||
+      draft.leaseToken != null ||
+      draft.leaseExpiresAt != null) {
+    return false;
+  }
+  return true;
+}
+
 /// Returns whether a string is present and non-empty.
 bool _hasText(String? value) => value != null && value.isNotEmpty;
 

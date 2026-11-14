@@ -929,6 +929,7 @@ void main() {
         retryCount: 2,
         actorUserId: 'usr-legacy-actor',
       );
+      await fakeDraftStore.saveLocalDraft(legacyDraft);
 
       await tester.pumpWidget(
         ProviderScope(
@@ -980,9 +981,15 @@ void main() {
         reason: 'Submit button must be disabled for quarantined legacy drafts',
       );
 
-      // 3. Tap Save Local Draft and verify metadata is preserved
+      // 3. Save Local Draft is also locked (R33-09) and metadata remains preserved
       final saveButtonFinder = find.byKey(const Key('save_draft_button'));
       expect(saveButtonFinder, findsOneWidget);
+      final saveButton = tester.widget<OutlinedButton>(saveButtonFinder);
+      expect(
+        saveButton.enabled,
+        isFalse,
+        reason: 'Save button must be disabled for quarantined legacy drafts',
+      );
       await tester.ensureVisible(saveButtonFinder);
       await tester.tap(saveButtonFinder);
       await tester.pumpAndSettle();

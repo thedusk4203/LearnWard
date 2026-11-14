@@ -745,14 +745,18 @@ final class SubmitAssessmentDraft {
             );
           }
 
+          final committedDraft = completion.draft;
+          final bool hasMatchingServerAssessment =
+              committedDraft != null &&
+              committedDraft.serverAssessmentId == draft.id.value;
+          final bool hasMatchingServerEvidence = knownServerEvidenceId != null
+              ? committedDraft?.serverEvidenceId == knownServerEvidenceId
+              : committedDraft?.serverEvidenceId == null;
           final committedSuccessfully =
               completion.isSuccess ||
               (completion.status == DraftCasStatus.alreadyCommitted &&
-                  completion.draft?.serverAssessmentId == draft.id.value &&
-                  (knownServerEvidenceId == null ||
-                      completion.draft?.serverEvidenceId == null ||
-                      completion.draft?.serverEvidenceId ==
-                          knownServerEvidenceId));
+                  hasMatchingServerAssessment &&
+                  hasMatchingServerEvidence);
           if (!committedSuccessfully) {
             throw AssessmentReconciliationPendingException(
               submittedAssessment: submitted,

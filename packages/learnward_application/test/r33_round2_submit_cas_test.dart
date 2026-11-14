@@ -1447,4 +1447,448 @@ void main() {
       expect(verifiedOriginal.bytes, equals(jpegBytes));
     });
   });
+
+  group('R33-10: Strict alreadyCommitted evidence identity', () {
+    test('evidence-bearing submission accepts alreadyCommitted when serverAssessmentId and serverEvidenceId both match', () async {
+      const draftId = 'draft-r33-10-match-evidence';
+      final snap = await snapshotStore.saveCanonicalEvidenceSnapshot(
+        localDraftId: draftId,
+        bytes: jpegBytes,
+      );
+      final initial = buildDraft(
+        localDraftId: draftId,
+        evidenceId: 'evi-r3310-1',
+        localCompressedPhotoPath: snap.filePath,
+        sha256Checksum: snap.sha256Checksum,
+      );
+      await draftStore.saveLocalDraft(initial);
+
+      final useCase = SubmitAssessmentDraft(
+        repository: repo,
+        storage: storage,
+        authSessionPort: authPort,
+        localDraftStore: draftStore,
+        canonicalSnapshotStore: snapshotStore,
+      );
+
+      late LocalAssessmentDraft tombstone;
+      draftStore.onCompleteDraftSubmissionOverride = (id, serverId) async {
+        final registeredEvidence = repo.evidence.values.firstWhere(
+          (e) => e.assessmentId.value == serverId,
+        );
+        tombstone = initial.copyWith(
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+          serverAssessmentId: serverId,
+          serverEvidenceId: registeredEvidence.id.value,
+          leaseToken: null,
+          leaseExpiresAt: null,
+          updatedAt: DateTime.utc(2026, 11, 14, 10, 0),
+        );
+        draftStore.seedRawDraft(tombstone);
+        return DraftCasResult(
+          status: DraftCasStatus.alreadyCommitted,
+          draft: tombstone,
+        );
+      };
+
+      final submitted = await useCase(
+        createCommandId: 'cmd-create-1',
+        submitCommandId: 'cmd-submit-1',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Fraction Checkpoint',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: DateTime.utc(2026, 11, 14, 9, 0),
+        evidenceBytes: jpegBytes,
+        evidenceMediaType: 'image/jpeg',
+        evidenceId: EvidenceId('evi-r3310-1'),
+        localDraftId: draftId,
+      );
+
+      expect(submitted.status, AssessmentStatus.pendingReview);
+      final after = await draftStore.getLocalDraft(draftId);
+      expect(after!.dispatchState, CommandDispatchState.confirmedCommitted);
+      expect(after.serverAssessmentId, equals(submitted.id.value));
+      expect(
+        after.serverEvidenceId,
+        equals(repo.evidence.values.first.id.value),
+      );
+      expect(draftStore.deleteLocalDraftCallCount, equals(0));
+    });
+
+    test('evidence-bearing submission fails closed with AssessmentReconciliationPendingException when alreadyCommitted has missing serverEvidenceId without backfilling tombstone', () async {
+      const draftId = 'draft-r33-10-missing-evidence';
+      final snap = await snapshotStore.saveCanonicalEvidenceSnapshot(
+        localDraftId: draftId,
+        bytes: jpegBytes,
+      );
+      final initial = buildDraft(
+        localDraftId: draftId,
+        evidenceId: 'evi-r3310-2',
+        localCompressedPhotoPath: snap.filePath,
+        sha256Checksum: snap.sha256Checksum,
+      );
+      await draftStore.saveLocalDraft(initial);
+
+      final useCase = SubmitAssessmentDraft(
+        repository: repo,
+        storage: storage,
+        authSessionPort: authPort,
+        localDraftStore: draftStore,
+        canonicalSnapshotStore: snapshotStore,
+      );
+
+      draftStore.onCompleteDraftSubmissionOverride = (id, serverId) async {
+        final tombstoneWithoutEvidence = initial.copyWith(
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+          serverAssessmentId: serverId,
+          serverEvidenceId: null,
+          leaseToken: null,
+          leaseExpiresAt: null,
+          updatedAt: DateTime.utc(2026, 11, 14, 10, 0),
+        );
+        draftStore.seedRawDraft(tombstoneWithoutEvidence);
+        return DraftCasResult(
+          status: DraftCasStatus.alreadyCommitted,
+          draft: tombstoneWithoutEvidence,
+        );
+      };
+
+      await expectLater(
+        () => useCase(
+          createCommandId: 'cmd-create-1',
+          submitCommandId: 'cmd-submit-1',
+          familyId: familyId,
+          childId: childId,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Fraction Checkpoint',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 9, maxScore: 10),
+          occurredAt: DateTime.utc(2026, 11, 14, 9, 0),
+          evidenceBytes: jpegBytes,
+          evidenceMediaType: 'image/jpeg',
+          evidenceId: EvidenceId('evi-r3310-2'),
+          localDraftId: draftId,
+        ),
+        throwsA(
+          isA<AssessmentReconciliationPendingException>()
+              .having(
+                (e) => e.casStatus,
+                'casStatus',
+                DraftCasStatus.alreadyCommitted,
+              )
+              .having((e) => e.serverEvidenceId, 'serverEvidenceId', isNotNull),
+        ),
+      );
+
+      final after = await draftStore.getLocalDraft(draftId);
+      expect(after!.dispatchState, CommandDispatchState.confirmedCommitted);
+      expect(after.serverEvidenceId, isNull);
+      expect(draftStore.deleteLocalDraftCallCount, equals(0));
+    });
+
+    test('evidence-bearing submission fails closed when alreadyCommitted returns completion.draft == null', () async {
+      const draftId = 'draft-r33-10-null-draft';
+      final snap = await snapshotStore.saveCanonicalEvidenceSnapshot(
+        localDraftId: draftId,
+        bytes: jpegBytes,
+      );
+      final initial = buildDraft(
+        localDraftId: draftId,
+        evidenceId: 'evi-r3310-3',
+        localCompressedPhotoPath: snap.filePath,
+        sha256Checksum: snap.sha256Checksum,
+      );
+      await draftStore.saveLocalDraft(initial);
+
+      final useCase = SubmitAssessmentDraft(
+        repository: repo,
+        storage: storage,
+        authSessionPort: authPort,
+        localDraftStore: draftStore,
+        canonicalSnapshotStore: snapshotStore,
+      );
+
+      draftStore.onCompleteDraftSubmissionOverride = (id, serverId) async =>
+          const DraftCasResult(
+            status: DraftCasStatus.alreadyCommitted,
+            draft: null,
+          );
+
+      await expectLater(
+        () => useCase(
+          createCommandId: 'cmd-create-1',
+          submitCommandId: 'cmd-submit-1',
+          familyId: familyId,
+          childId: childId,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Fraction Checkpoint',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 9, maxScore: 10),
+          occurredAt: DateTime.utc(2026, 11, 14, 9, 0),
+          evidenceBytes: jpegBytes,
+          evidenceMediaType: 'image/jpeg',
+          evidenceId: EvidenceId('evi-r3310-3'),
+          localDraftId: draftId,
+        ),
+        throwsA(
+          isA<AssessmentReconciliationPendingException>().having(
+            (e) => e.casStatus,
+            'casStatus',
+            DraftCasStatus.alreadyCommitted,
+          ),
+        ),
+      );
+
+      final after = await draftStore.getLocalDraft(draftId);
+      expect(after!.dispatchState, CommandDispatchState.possiblyDispatched);
+      expect(after.leaseToken, isNull);
+      expect(
+        after.serverEvidenceId,
+        equals(repo.evidence.values.first.id.value),
+      );
+    });
+
+    test('evidence-bearing submission fails closed when alreadyCommitted has different serverEvidenceId without overwriting persisted tombstone', () async {
+      const draftId = 'draft-r33-10-diff-evidence';
+      final snap = await snapshotStore.saveCanonicalEvidenceSnapshot(
+        localDraftId: draftId,
+        bytes: jpegBytes,
+      );
+      final initial = buildDraft(
+        localDraftId: draftId,
+        evidenceId: 'evi-r3310-4',
+        localCompressedPhotoPath: snap.filePath,
+        sha256Checksum: snap.sha256Checksum,
+      );
+      await draftStore.saveLocalDraft(initial);
+
+      final useCase = SubmitAssessmentDraft(
+        repository: repo,
+        storage: storage,
+        authSessionPort: authPort,
+        localDraftStore: draftStore,
+        canonicalSnapshotStore: snapshotStore,
+      );
+
+      draftStore.onCompleteDraftSubmissionOverride = (id, serverId) async {
+        final otherTombstone = initial.copyWith(
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+          serverAssessmentId: serverId,
+          serverEvidenceId: 'evi-different-server-id',
+          leaseToken: null,
+          leaseExpiresAt: null,
+          updatedAt: DateTime.utc(2026, 11, 14, 10, 0),
+        );
+        draftStore.seedRawDraft(otherTombstone);
+        return DraftCasResult(
+          status: DraftCasStatus.alreadyCommitted,
+          draft: otherTombstone,
+        );
+      };
+
+      await expectLater(
+        () => useCase(
+          createCommandId: 'cmd-create-1',
+          submitCommandId: 'cmd-submit-1',
+          familyId: familyId,
+          childId: childId,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Fraction Checkpoint',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 9, maxScore: 10),
+          occurredAt: DateTime.utc(2026, 11, 14, 9, 0),
+          evidenceBytes: jpegBytes,
+          evidenceMediaType: 'image/jpeg',
+          evidenceId: EvidenceId('evi-r3310-4'),
+          localDraftId: draftId,
+        ),
+        throwsA(isA<AssessmentReconciliationPendingException>()),
+      );
+
+      final after = await draftStore.getLocalDraft(draftId);
+      expect(after!.dispatchState, CommandDispatchState.confirmedCommitted);
+      expect(after.serverEvidenceId, equals('evi-different-server-id'));
+      expect(draftStore.deleteLocalDraftCallCount, equals(0));
+    });
+
+    test('evidence-bearing submission fails closed when alreadyCommitted has different serverAssessmentId even if serverEvidenceId matches', () async {
+      const draftId = 'draft-r33-10-diff-assessment';
+      final snap = await snapshotStore.saveCanonicalEvidenceSnapshot(
+        localDraftId: draftId,
+        bytes: jpegBytes,
+      );
+      final initial = buildDraft(
+        localDraftId: draftId,
+        evidenceId: 'evi-r3310-5',
+        localCompressedPhotoPath: snap.filePath,
+        sha256Checksum: snap.sha256Checksum,
+      );
+      await draftStore.saveLocalDraft(initial);
+
+      final useCase = SubmitAssessmentDraft(
+        repository: repo,
+        storage: storage,
+        authSessionPort: authPort,
+        localDraftStore: draftStore,
+        canonicalSnapshotStore: snapshotStore,
+      );
+
+      draftStore.onCompleteDraftSubmissionOverride = (id, serverId) async {
+        final registeredEvidence = repo.evidence.values.firstWhere(
+          (e) => e.assessmentId.value == serverId,
+        );
+        final otherAssessmentTombstone = initial.copyWith(
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+          serverAssessmentId: 'other-server-assessment-id',
+          serverEvidenceId: registeredEvidence.id.value,
+          leaseToken: null,
+          leaseExpiresAt: null,
+          updatedAt: DateTime.utc(2026, 11, 14, 10, 0),
+        );
+        draftStore.seedRawDraft(otherAssessmentTombstone);
+        return DraftCasResult(
+          status: DraftCasStatus.alreadyCommitted,
+          draft: otherAssessmentTombstone,
+        );
+      };
+
+      await expectLater(
+        () => useCase(
+          createCommandId: 'cmd-create-1',
+          submitCommandId: 'cmd-submit-1',
+          familyId: familyId,
+          childId: childId,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Fraction Checkpoint',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 9, maxScore: 10),
+          occurredAt: DateTime.utc(2026, 11, 14, 9, 0),
+          evidenceBytes: jpegBytes,
+          evidenceMediaType: 'image/jpeg',
+          evidenceId: EvidenceId('evi-r3310-5'),
+          localDraftId: draftId,
+        ),
+        throwsA(isA<AssessmentReconciliationPendingException>()),
+      );
+
+      final after = await draftStore.getLocalDraft(draftId);
+      expect(after!.serverAssessmentId, equals('other-server-assessment-id'));
+      expect(draftStore.deleteLocalDraftCallCount, equals(0));
+    });
+
+    test('no-evidence submission accepts alreadyCommitted with null serverEvidenceId and rejects unexpected non-null serverEvidenceId', () async {
+      const matchDraftId = 'draft-r33-10-no-ev-match';
+      final initialMatch = buildDraft(
+        localDraftId: matchDraftId,
+        createCommandId: 'cmd-create-noev-1',
+        submitCommandId: 'cmd-submit-noev-1',
+      );
+      await draftStore.saveLocalDraft(initialMatch);
+
+      final useCase = SubmitAssessmentDraft(
+        repository: repo,
+        storage: storage,
+        authSessionPort: authPort,
+        localDraftStore: draftStore,
+      );
+
+      draftStore.onCompleteDraftSubmissionOverride = (id, serverId) async {
+        final tombstone = initialMatch.copyWith(
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+          serverAssessmentId: serverId,
+          serverEvidenceId: null,
+          leaseToken: null,
+          leaseExpiresAt: null,
+        );
+        draftStore.seedRawDraft(tombstone);
+        return DraftCasResult(
+          status: DraftCasStatus.alreadyCommitted,
+          draft: tombstone,
+        );
+      };
+
+      final submitted = await useCase(
+        createCommandId: 'cmd-create-noev-1',
+        submitCommandId: 'cmd-submit-noev-1',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Fraction Checkpoint',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: DateTime.utc(2026, 11, 14, 9, 0),
+        localDraftId: matchDraftId,
+      );
+      expect(submitted.status, AssessmentStatus.pendingReview);
+
+      const mismatchDraftId = 'draft-r33-10-no-ev-mismatch';
+      final initialMismatch = buildDraft(
+        localDraftId: mismatchDraftId,
+        createCommandId: 'cmd-create-noev-2',
+        submitCommandId: 'cmd-submit-noev-2',
+      );
+      await draftStore.saveLocalDraft(initialMismatch);
+
+      draftStore.onCompleteDraftSubmissionOverride = (id, serverId) async {
+        final tombstoneWithUnexpectedEvidence = initialMismatch.copyWith(
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+          serverAssessmentId: serverId,
+          serverEvidenceId: 'unexpected-server-evidence-id',
+          leaseToken: null,
+          leaseExpiresAt: null,
+        );
+        draftStore.seedRawDraft(tombstoneWithUnexpectedEvidence);
+        return DraftCasResult(
+          status: DraftCasStatus.alreadyCommitted,
+          draft: tombstoneWithUnexpectedEvidence,
+        );
+      };
+
+      await expectLater(
+        () => useCase(
+          createCommandId: 'cmd-create-noev-2',
+          submitCommandId: 'cmd-submit-noev-2',
+          familyId: familyId,
+          childId: childId,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Fraction Checkpoint',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 9, maxScore: 10),
+          occurredAt: DateTime.utc(2026, 11, 14, 9, 0),
+          localDraftId: mismatchDraftId,
+        ),
+        throwsA(isA<AssessmentReconciliationPendingException>()),
+      );
+
+      final afterMismatch = await draftStore.getLocalDraft(mismatchDraftId);
+      expect(
+        afterMismatch!.serverEvidenceId,
+        equals('unexpected-server-evidence-id'),
+      );
+      expect(draftStore.deleteLocalDraftCallCount, equals(0));
+    });
+  });
 }
