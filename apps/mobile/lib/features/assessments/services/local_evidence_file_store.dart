@@ -93,7 +93,8 @@ final class EvidenceFileDeletionResult {
 /// disabled across all cleanup paths to eliminate the risk of destroying unsynced
 /// or unverified evidence. Physical garbage collection is explicitly deferred
 /// pending an approved design.
-abstract interface class LocalEvidenceFileStore {
+abstract interface class LocalEvidenceFileStore
+    implements CanonicalEvidenceSnapshotStore {
   /// Saves durable evidence attached to [localDraftId] using exclusive, non-overwriting creation.
   ///
   /// Throws [EvidenceStorageException] if [localDraftId] is invalid, if path traversal is attempted,
@@ -146,6 +147,7 @@ abstract interface class LocalEvidenceFileStore {
   /// Freezes an immutable canonical JPEG/PNG evidence snapshot for [localDraftId]
   /// using exclusive file creation, `RandomAccessFile` write + `flushSync` + `closeSync`,
   /// and mandatory disk re-read checksum verification.
+  @override
   Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
     required String localDraftId,
     required List<int> bytes,
@@ -164,6 +166,7 @@ abstract interface class LocalEvidenceFileStore {
 
   /// Reads and verifies ONLY the immutable `draft.localCompressedPhotoPath` using
   /// `draft.sha256Checksum`. Never falls back to mutable `draft.localPhotoPath`.
+  @override
   Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
     required LocalAssessmentDraft draft,
   });

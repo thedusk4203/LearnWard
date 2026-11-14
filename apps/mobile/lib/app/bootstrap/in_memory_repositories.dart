@@ -1307,6 +1307,12 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
   }) async {
     final assessment = _assessments[assessmentId.value];
     if (assessment == null) throw StateError('Assessment not found');
+    for (final existing in _evidence.values) {
+      if (existing.assessmentId == assessmentId &&
+          existing.storagePath == storagePath) {
+        return existing;
+      }
+    }
     final id = EvidenceId('local-evidence-${_evidenceCounter++}');
     final ev = AssessmentEvidence(
       id: id,

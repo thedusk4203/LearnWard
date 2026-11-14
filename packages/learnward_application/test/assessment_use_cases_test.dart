@@ -760,8 +760,8 @@ void main() {
   test('SubmitAssessmentDraft coordinates distinct create/submit commands, evidence upload, and confirmed_committed tombstone', () async {
     final draftStore = InMemoryLocalDraftStore();
     const localId = 'local-draft-42';
-    const validSha =
-        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    final evidenceBytes = <int>[0xFF, 0xD8, 0xFF, 0xE0, 9, 8, 7];
+    final validSha = computeSha256Hex(evidenceBytes);
     await draftStore.saveLocalDraft(
       LocalAssessmentDraft(
         localDraftId: localId,
@@ -806,7 +806,7 @@ void main() {
       type: AssessmentType.quiz,
       difficulty: AssessmentDifficulty.normal,
       score: AssessmentScore(rawScore: 9, maxScore: 10),
-      evidenceBytes: [9, 8, 7],
+      evidenceBytes: evidenceBytes,
       evidenceMediaType: 'image/jpeg',
       evidenceId: EvidenceId('550e8400-e29b-41d4-a716-446655440099'),
       localDraftId: localId,
@@ -819,10 +819,11 @@ void main() {
     expect(tombstone, isNotNull);
     expect(tombstone!.dispatchState, CommandDispatchState.confirmedCommitted);
     expect(tombstone.serverAssessmentId, equals(result.id.value));
+    expect(tombstone.serverEvidenceId, isNotNull);
     expect(tombstone.leaseToken, isNull);
     expect(draftStore.deleteLocalDraftCallCount, equals(0));
     // Verify storage has evidence
-    expect(storage.storage.values.first, equals([9, 8, 7]));
+    expect(storage.storage.values.first, equals(evidenceBytes));
   });
 
   test('SubmitAssessmentDraft blocks quarantined legacy draft with StateError before network call', () async {
@@ -997,7 +998,7 @@ void main() {
         }
       };
 
-      final submitWorkflow = SubmitAssessmentDraft(
+      final submitWorkflow = SubmitAssessmentDraft.unjournaledForTesting(
         repository: repository,
         storage: storage,
         authSessionPort: fakeAuth,
@@ -1118,7 +1119,7 @@ void main() {
       expect(registered.fileSizeBytes, equals(10 * 1024 * 1024));
 
       // SubmitAssessmentDraft rejects zero-length attached evidence BEFORE createDraft
-      final submitWorkflow = SubmitAssessmentDraft(
+      final submitWorkflow = SubmitAssessmentDraft.unjournaledForTesting(
         repository: repository,
         storage: storage,
         authSessionPort: fakeAuth,
@@ -1161,8 +1162,9 @@ void main() {
       const localPhotoPath = '/tmp/r32-09-evidence.jpg';
       const actorUserId = 'user-parent-1';
 
-      const validSha =
-          'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      final evidenceBytes = <int>[0xFF, 0xD8, 0xFF, 0xE0, 10, 20, 30, 40];
+      final expectedEvidenceBytes = List<int>.from(evidenceBytes);
+      final validSha = computeSha256Hex(evidenceBytes);
       await draftStore.saveLocalDraft(
         LocalAssessmentDraft(
           localDraftId: localId,
@@ -1198,9 +1200,6 @@ void main() {
           await releaseSave.future;
         }
       };
-
-      final evidenceBytes = <int>[10, 20, 30, 40];
-      final expectedEvidenceBytes = List<int>.from(evidenceBytes);
 
       final submitWorkflow = SubmitAssessmentDraft(
         repository: recordingRepo,

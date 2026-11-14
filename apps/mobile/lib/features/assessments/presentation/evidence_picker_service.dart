@@ -61,7 +61,19 @@ final class SimulatedEvidencePickerService implements EvidencePickerService {
     return stubFile ??
         SelectedEvidenceFile(
           fileName: 'evidence_mock.jpg',
-          bytes: List<int>.generate(1024, (i) => (i * 37) % 256),
+          bytes: <int>[
+            0xFF,
+            0xD8,
+            0xFF,
+            0xE0,
+            0x00,
+            0x10,
+            0x4A,
+            0x46,
+            0x49,
+            0x46,
+            ...List<int>.generate(1014, (i) => (i * 37) % 256),
+          ],
           mediaType: 'image/jpeg',
           localPath: '/tmp/evidence_mock.jpg',
         );

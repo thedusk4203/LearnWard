@@ -16,6 +16,37 @@ final class TestLocalDraftStore implements LocalDraftStore {
   Future<void> Function(String localDraftId, DraftCasResult result)?
   onMarkDraftStageAndDispatch;
 
+  /// Optional test overrides that return a simulated [DraftCasResult] (or throw) before mutating state.
+  Future<DraftCasResult?> Function(
+    LocalAssessmentDraft? expected,
+    LocalAssessmentDraft desired,
+  )?
+  onRegisterOrUpdateDraftIfUnchangedOverride;
+  Future<DraftCasResult?> Function(String localDraftId)?
+  onAcquireDraftClaimOverride;
+  Future<DraftCasResult?> Function(
+    String localDraftId,
+    DraftSubmissionStatus targetStage,
+  )?
+  onMarkDraftStageOverride;
+  Future<DraftCasResult?> Function(
+    String localDraftId,
+    String serverAssessmentId,
+  )?
+  onPersistServerAssessmentIdOverride;
+  Future<DraftCasResult?> Function(
+    String localDraftId,
+    String serverEvidenceId,
+  )?
+  onPersistServerEvidenceIdOverride;
+  Future<DraftCasResult?> Function(
+    String localDraftId,
+    String serverAssessmentId,
+  )?
+  onCompleteDraftSubmissionOverride;
+  Future<DraftCasResult?> Function(String localDraftId)?
+  onReleaseDraftClaimOverride;
+
   int deleteLocalDraftCallCount = 0;
 
   /// Seeds a raw draft bypassing [saveLocalDraft] validation for malformed-state tests.
@@ -146,15 +177,22 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required LocalAssessmentDraft? expected,
     required LocalAssessmentDraft desired,
     DateTime? now,
-  }) async => _applyCas(
-    desired.localDraftId,
-    (current) => evaluateDraftRegistrationCas(
-      existing: current,
-      expected: expected,
-      desired: desired,
-      now: now,
-    ),
-  );
+  }) async {
+    final override = await onRegisterOrUpdateDraftIfUnchangedOverride?.call(
+      expected,
+      desired,
+    );
+    if (override != null) return override;
+    return _applyCas(
+      desired.localDraftId,
+      (current) => evaluateDraftRegistrationCas(
+        existing: current,
+        expected: expected,
+        desired: desired,
+        now: now,
+      ),
+    );
+  }
 
   @override
   Future<DraftCasResult> acquireDraftClaim({
@@ -165,20 +203,24 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     DateTime? now,
     String? overrideLeaseToken,
-  }) async => _applyCas(
-    localDraftId,
-    (current) => evaluateDraftClaim(
-      existing: current,
-      localDraftId: localDraftId,
-      actorUserId: actorUserId,
-      familyId: familyId,
-      childId: childId,
-      leaseDuration: leaseDuration,
-      expectingExpiredLease: false,
-      now: now,
-      overrideLeaseToken: overrideLeaseToken,
-    ),
-  );
+  }) async {
+    final override = await onAcquireDraftClaimOverride?.call(localDraftId);
+    if (override != null) return override;
+    return _applyCas(
+      localDraftId,
+      (current) => evaluateDraftClaim(
+        existing: current,
+        localDraftId: localDraftId,
+        actorUserId: actorUserId,
+        familyId: familyId,
+        childId: childId,
+        leaseDuration: leaseDuration,
+        expectingExpiredLease: false,
+        now: now,
+        overrideLeaseToken: overrideLeaseToken,
+      ),
+    );
+  }
 
   @override
   Future<DraftCasResult> resumeDraftClaimAfterExpiry({
@@ -212,6 +254,11 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required DraftSubmissionStatus targetStage,
     required DateTime now,
   }) async {
+    final override = await onMarkDraftStageOverride?.call(
+      localDraftId,
+      targetStage,
+    );
+    if (override != null) return override;
     final result = _applyCas(
       localDraftId,
       (current) => evaluateMarkDraftStageAndDispatch(
@@ -234,17 +281,24 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required String authenticatedActorId,
     required String serverAssessmentId,
     required DateTime now,
-  }) async => _applyCas(
-    localDraftId,
-    (current) => evaluatePersistServerAssessmentId(
-      existing: current,
-      localDraftId: localDraftId,
-      leaseToken: leaseToken,
-      authenticatedActorId: authenticatedActorId,
-      serverAssessmentId: serverAssessmentId,
-      now: now,
-    ),
-  );
+  }) async {
+    final override = await onPersistServerAssessmentIdOverride?.call(
+      localDraftId,
+      serverAssessmentId,
+    );
+    if (override != null) return override;
+    return _applyCas(
+      localDraftId,
+      (current) => evaluatePersistServerAssessmentId(
+        existing: current,
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: authenticatedActorId,
+        serverAssessmentId: serverAssessmentId,
+        now: now,
+      ),
+    );
+  }
 
   @override
   Future<DraftCasResult> persistServerEvidenceId({
@@ -255,19 +309,26 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required String expectedEvidenceId,
     required String expectedSha256Checksum,
     required DateTime now,
-  }) async => _applyCas(
-    localDraftId,
-    (current) => evaluatePersistServerEvidenceId(
-      existing: current,
-      localDraftId: localDraftId,
-      leaseToken: leaseToken,
-      authenticatedActorId: authenticatedActorId,
-      serverEvidenceId: serverEvidenceId,
-      expectedEvidenceId: expectedEvidenceId,
-      expectedSha256Checksum: expectedSha256Checksum,
-      now: now,
-    ),
-  );
+  }) async {
+    final override = await onPersistServerEvidenceIdOverride?.call(
+      localDraftId,
+      serverEvidenceId,
+    );
+    if (override != null) return override;
+    return _applyCas(
+      localDraftId,
+      (current) => evaluatePersistServerEvidenceId(
+        existing: current,
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: authenticatedActorId,
+        serverEvidenceId: serverEvidenceId,
+        expectedEvidenceId: expectedEvidenceId,
+        expectedSha256Checksum: expectedSha256Checksum,
+        now: now,
+      ),
+    );
+  }
 
   @override
   Future<DraftCasResult> scheduleDraftRetry({
@@ -321,18 +382,25 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required String serverAssessmentId,
     required DateTime now,
     String? serverEvidenceId,
-  }) async => _applyCas(
-    localDraftId,
-    (current) => evaluateCompleteDraftSubmission(
-      existing: current,
-      localDraftId: localDraftId,
-      leaseToken: leaseToken,
-      authenticatedActorId: authenticatedActorId,
-      serverAssessmentId: serverAssessmentId,
-      now: now,
-      serverEvidenceId: serverEvidenceId,
-    ),
-  );
+  }) async {
+    final override = await onCompleteDraftSubmissionOverride?.call(
+      localDraftId,
+      serverAssessmentId,
+    );
+    if (override != null) return override;
+    return _applyCas(
+      localDraftId,
+      (current) => evaluateCompleteDraftSubmission(
+        existing: current,
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: authenticatedActorId,
+        serverAssessmentId: serverAssessmentId,
+        now: now,
+        serverEvidenceId: serverEvidenceId,
+      ),
+    );
+  }
 
   @override
   Future<DraftCasResult> releaseDraftClaim({
@@ -340,16 +408,20 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required String leaseToken,
     required String authenticatedActorId,
     DateTime? now,
-  }) async => _applyCas(
-    localDraftId,
-    (current) => evaluateReleaseDraftClaim(
-      existing: current,
-      localDraftId: localDraftId,
-      leaseToken: leaseToken,
-      authenticatedActorId: authenticatedActorId,
-      now: now,
-    ),
-  );
+  }) async {
+    final override = await onReleaseDraftClaimOverride?.call(localDraftId);
+    if (override != null) return override;
+    return _applyCas(
+      localDraftId,
+      (current) => evaluateReleaseDraftClaim(
+        existing: current,
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: authenticatedActorId,
+        now: now,
+      ),
+    );
+  }
 
   @override
   Future<DraftCasResult> pauseMismatchedActorDraft({

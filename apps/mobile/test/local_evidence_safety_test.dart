@@ -305,6 +305,7 @@ final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
   bool shouldFailLoad;
   bool shouldReturnNullLoad;
   Completer<List<int>?>? pendingLoadCompleter;
+  final Set<String> _savedCanonicalPaths = {};
 
   @override
   Future<String> saveEvidence({
@@ -389,10 +390,12 @@ final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
         'Simulated canonical snapshot write failure (disk full / I/O error)',
       );
     }
-    return delegate!.saveCanonicalEvidenceSnapshot(
+    final snap = await delegate!.saveCanonicalEvidenceSnapshot(
       localDraftId: localDraftId,
       bytes: bytes,
     );
+    _savedCanonicalPaths.add(snap.filePath);
+    return snap;
   }
 
   @override
@@ -409,7 +412,8 @@ final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
         'Simulated I/O disk error verifying canonical snapshot',
       );
     }
-    if (shouldReturnNullLoad) {
+    if (shouldReturnNullLoad &&
+        !_savedCanonicalPaths.contains(canonicalFilePath)) {
       throw const EvidenceStorageException(
         'Simulated missing canonical snapshot',
         kind: EvidenceStorageFailureKind.missingSnapshot,
@@ -434,7 +438,8 @@ final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
         'Simulated I/O disk error reading canonical snapshot',
       );
     }
-    if (shouldReturnNullLoad) {
+    if (shouldReturnNullLoad &&
+        !_savedCanonicalPaths.contains(draft.localCompressedPhotoPath)) {
       throw const EvidenceStorageException(
         'Simulated missing canonical snapshot',
         kind: EvidenceStorageFailureKind.missingSnapshot,
@@ -1007,7 +1012,7 @@ void main() {
     testWidgets(
       'B03: Remote submission succeeds; local evidence bytes are preserved on disk',
       (tester) async {
-        final photoBytes = [1, 2, 3, 4, 5];
+        final photoBytes = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4, 5];
         final photoPath = await fileStore.saveEvidence(
           fileName: 'submit_preserve.jpg',
           bytes: photoBytes,
@@ -1077,7 +1082,7 @@ void main() {
     testWidgets(
       'B03: Uncertain submission failure retains local evidence bytes and possiblyDispatched state',
       (tester) async {
-        final photoBytes = [11, 22, 33];
+        final photoBytes = [0xFF, 0xD8, 0xFF, 0xE0, 11, 22, 33];
         final photoPath = await fileStore.saveEvidence(
           fileName: 'failing_upload.jpg',
           bytes: photoBytes,
@@ -2783,7 +2788,7 @@ void main() {
         final picker = SimulatedEvidencePickerService(
           stubFile: const SelectedEvidenceFile(
             fileName: 'fresh_replacement.jpg',
-            bytes: [10, 20, 30, 40],
+            bytes: [0xFF, 0xD8, 0xFF, 0xE0, 10, 20, 30, 40],
             mediaType: 'image/jpeg',
           ),
         );

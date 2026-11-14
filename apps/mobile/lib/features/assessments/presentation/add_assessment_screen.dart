@@ -7,6 +7,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../shared/utils/uuid_generator.dart';
+import '../services/local_evidence_file_store.dart';
 import 'evidence_picker_service.dart';
 
 /// Screen where a learner captures an academic result, attaches evidence,
@@ -93,7 +94,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _selectedType = AssessmentType.fromValue(draft.assessmentType);
       _selectedDifficulty = AssessmentDifficulty.fromValue(draft.difficulty);
       _occurredAt = draft.occurredAt;
-      if (draft.localPhotoPath != null) {
+      if (draft.hasVerifiedEvidenceSnapshot) {
+        _unrestoredPhotoPath =
+            draft.localPhotoPath ?? draft.localCompressedPhotoPath;
+        _restorationStatus = ExistingEvidenceRestorationStatus.loading;
+        _restoreCanonicalEvidenceSnapshot(draft);
+      } else if (draft.localPhotoPath != null) {
         _unrestoredPhotoPath = draft.localPhotoPath;
         _restorationStatus = ExistingEvidenceRestorationStatus.loading;
         _restoreEvidenceFile(draft.localPhotoPath!);
@@ -123,6 +129,42 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     _rawScoreController.addListener(_updateScorePreview);
     _maxScoreController.addListener(_updateScorePreview);
     _updateScorePreview();
+  }
+
+  Future<void> _restoreCanonicalEvidenceSnapshot(
+    LocalAssessmentDraft draft,
+  ) async {
+    final generation = ++_restorationGeneration;
+    try {
+      final store = ref.read(localEvidenceFileStoreProvider);
+      final verified = await store.readVerifiedCanonicalSnapshot(draft: draft);
+      if (!mounted || generation != _restorationGeneration) return;
+
+      final sourcePath =
+          draft.localCompressedPhotoPath ?? draft.localPhotoPath ?? '';
+      final fileName = sourcePath.isNotEmpty
+          ? sourcePath.split(RegExp(r'[/\\]')).last
+          : 'evidence_${draft.localDraftId}.${verified.mediaType == 'image/png' ? 'png' : 'jpg'}';
+      setState(() {
+        _restorationStatus = ExistingEvidenceRestorationStatus.restored;
+        _unrestoredPhotoPath = null;
+        _selectedEvidence = SelectedEvidenceFile(
+          bytes: verified.bytes,
+          fileName: fileName,
+          mediaType: verified.mediaType,
+          localPath: draft.localPhotoPath ?? draft.localCompressedPhotoPath,
+        );
+      });
+    } catch (_) {
+      if (!mounted || generation != _restorationGeneration) return;
+      setState(() {
+        _restorationStatus =
+            ExistingEvidenceRestorationStatus.missingOrUnreadable;
+        _errorMessage =
+            'Existing evidence snapshot could not be verified on this device. '
+            'The draft cannot be submitted without valid evidence.';
+      });
+    }
   }
 
   Future<void> _restoreEvidenceFile(String path) async {
@@ -447,6 +489,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   Future<void> _submitAssessment() async {
     final store = ref.read(localDraftStoreProvider);
     final existingFromStore = await store.getLocalDraft(_localDraftId);
+    if (widget.initialDraft != null && existingFromStore == null) {
+      setState(() {
+        _errorMessage = 'Local draft record is missing from storage. Reopen drafts before submitting.';
+      });
+      return;
+    }
     final prior = existingFromStore ?? widget.initialDraft;
 
     final isQuarantined =
@@ -501,19 +549,6 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       return;
     }
 
-    if (!_evidenceRemoved && _selectedEvidence != null) {
-      final fileStore = ref.read(localEvidenceFileStoreProvider);
-      final verifiedBytes = _selectedEvidence!.localPath != null
-          ? await fileStore.readEvidenceBytes(_selectedEvidence!.localPath!)
-          : null;
-      if (verifiedBytes == null) {
-        setState(() {
-          _errorMessage = 'Cannot submit assessment: the selected photo could not be verified in local storage. Please re-select a photo or remove it.';
-        });
-        return;
-      }
-    }
-
     if (!_formKey.currentState!.validate()) return;
 
     final activeChild = ref.read(activeChildModeProvider);
@@ -533,8 +568,45 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     try {
       final repo = ref.read(assessmentRepositoryProvider);
       final storage = ref.read(assessmentEvidenceStorageProvider);
+      final fileStore = ref.read(localEvidenceFileStoreProvider);
+      final authPort = ref.read(authSessionPortProvider);
 
-      if (_selectedEvidence != null && _evidenceId == null) {
+      // R31-08: Authoritative live session validation before staging/dispatch.
+      final validatedActor = await assertValidStorageAuthSession(
+        authSessionPort: authPort,
+        storagePath: '',
+        stage: 'assessment UI preflight',
+      );
+      if (!validatedActor.isValidAt(DateTime.now().toUtc())) {
+        throw EvidenceStorageAuthException(
+          const AuthFailureOutcome(
+            storagePath: '',
+            reason: 'Session expired before assessment submission.',
+          ),
+        );
+      }
+      if (prior != null) {
+        if (prior.actorUserId == null ||
+            prior.actorUserId!.trim().isEmpty ||
+            prior.actorUserId != validatedActor.userId) {
+          throw EvidenceStorageAuthException(
+            const AuthFailureOutcome(
+              storagePath: '',
+              reason: 'Authenticated actor does not match the original local draft author.',
+            ),
+          );
+        }
+        if (prior.familyId != activeChild.familyId.value ||
+            prior.childId != activeChild.id.value) {
+          throw const InvalidAssessmentException(
+            'Active child selection does not match the original draft scope.',
+          );
+        }
+      }
+
+      if (!_evidenceRemoved &&
+          _selectedEvidence != null &&
+          _evidenceId == null) {
         _evidenceId = prior?.evidenceId ?? generateUuid();
       }
 
@@ -542,43 +614,89 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
       _serverAssessmentId ??= prior?.serverAssessmentId;
 
-      final resolvedPhotoPath = _evidenceRemoved
-          ? null
-          : (_selectedEvidence?.localPath ?? prior?.localPhotoPath);
-      final resolvedEvidenceId = _evidenceRemoved
-          ? null
-          : (_evidenceId ?? prior?.evidenceId);
-
-      String? resolvedActorUserId;
-      if (prior != null) {
-        resolvedActorUserId = prior.actorUserId;
-      } else {
-        resolvedActorUserId = ref.read(currentUserIdProvider);
-        if (resolvedActorUserId == null) {
-          try {
-            resolvedActorUserId =
-                (await ref.read(authSessionPortProvider).validateForMutation())
-                    ?.userId;
-          } catch (_) {}
-        }
-      }
-
-      // Stage editable/new pre-dispatch draft cleanly before handing off to
-      // SubmitAssessmentDraft's leased CAS lifecycle (R31-06 / R33-01..03).
-      final isPreDispatchEditable =
-          prior == null ||
-          (prior.dispatchState == CommandDispatchState.neverDispatched &&
-              prior.submissionStatus == DraftSubmissionStatus.draft);
-      final hasFrozenOrServerIds =
+      final isDispatchedRetry =
           prior != null &&
-          ((prior.localCompressedPhotoPath?.isNotEmpty ?? false) ||
-              (prior.sha256Checksum?.isNotEmpty ?? false) ||
-              (prior.serverEvidenceId?.isNotEmpty ?? false) ||
-              (prior.serverAssessmentId?.isNotEmpty ?? false));
-      if (isPreDispatchEditable &&
-          !hasFrozenOrServerIds &&
-          resolvedActorUserId != null &&
-          resolvedActorUserId.isNotEmpty) {
+          prior.dispatchState == CommandDispatchState.possiblyDispatched;
+
+      List<int>? dispatchEvidenceBytes;
+      String? dispatchEvidenceMediaType;
+      String? dispatchEvidenceIdStr;
+
+      if (isDispatchedRetry) {
+        if (prior.hasVerifiedEvidenceSnapshot) {
+          final verified = await fileStore.readVerifiedCanonicalSnapshot(
+            draft: prior,
+          );
+          dispatchEvidenceBytes = verified.bytes;
+          dispatchEvidenceMediaType = verified.mediaType;
+          dispatchEvidenceIdStr = prior.evidenceId;
+        } else if ((prior.evidenceId?.isNotEmpty ?? false) ||
+            (prior.localPhotoPath?.isNotEmpty ?? false)) {
+          throw MissingCanonicalEvidenceSnapshotException(
+            localDraftId: prior.localDraftId,
+            message: 'Cannot resume evidence draft without a verified canonical snapshot.',
+          );
+        }
+      } else {
+        final resolvedPhotoPath = _evidenceRemoved
+            ? null
+            : (_selectedEvidence?.localPath ?? prior?.localPhotoPath);
+        var resolvedEvidenceId = _evidenceRemoved
+            ? null
+            : (_evidenceId ?? prior?.evidenceId);
+        var resolvedCompressedPath = prior?.localCompressedPhotoPath;
+        var resolvedSha256 = prior?.sha256Checksum;
+
+        final hasAttachedEvidence =
+            !_evidenceRemoved &&
+            (_selectedEvidence != null ||
+                (resolvedPhotoPath?.isNotEmpty ?? false) ||
+                (prior?.hasVerifiedEvidenceSnapshot ?? false));
+
+        if (hasAttachedEvidence) {
+          if (prior != null && prior.hasVerifiedEvidenceSnapshot) {
+            final verified = await fileStore.readVerifiedCanonicalSnapshot(
+              draft: prior,
+            );
+            dispatchEvidenceBytes = verified.bytes;
+            dispatchEvidenceMediaType = verified.mediaType;
+            dispatchEvidenceIdStr = prior.evidenceId;
+            resolvedEvidenceId = prior.evidenceId;
+            resolvedCompressedPath = prior.localCompressedPhotoPath;
+            resolvedSha256 = prior.sha256Checksum;
+          } else {
+            final diskBytes = resolvedPhotoPath != null
+                ? await fileStore.readEvidenceBytes(resolvedPhotoPath)
+                : null;
+            if (diskBytes == null || diskBytes.isEmpty) {
+              throw const InvalidAssessmentException(
+                'Cannot submit assessment: attached evidence bytes are missing or empty.',
+              );
+            }
+            resolvedEvidenceId ??= generateUuid();
+            _evidenceId = resolvedEvidenceId;
+            final snapshot = await fileStore.saveCanonicalEvidenceSnapshot(
+              localDraftId: _localDraftId,
+              bytes: diskBytes,
+            );
+            resolvedCompressedPath = snapshot.filePath;
+            resolvedSha256 = snapshot.sha256Checksum;
+            dispatchEvidenceBytes = diskBytes;
+            dispatchEvidenceMediaType = snapshot.mediaType;
+            dispatchEvidenceIdStr = resolvedEvidenceId;
+
+            // Revalidate session generation across canonical snapshot write.
+            await assertValidStorageAuthSession(
+              authSessionPort: authPort,
+              storagePath: '',
+              context: validatedActor,
+              expectedSessionGeneration: validatedActor.sessionGeneration,
+              stage: 'assessment canonical evidence staging',
+            );
+          }
+        }
+
+        final nowUtc = DateTime.now().toUtc();
         final localDraft = LocalAssessmentDraft(
           localDraftId: _localDraftId,
           familyId: activeChild.familyId.value,
@@ -600,34 +718,45 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           maxScore: max,
           localPhotoPath: resolvedPhotoPath,
           occurredAt: _occurredAt,
-          updatedAt: DateTime.now().toUtc(),
-          entryContext: EntryContext.sharedChild,
+          updatedAt: nowUtc,
+          entryContext: prior?.entryContext ?? EntryContext.sharedChild,
           serverEvidenceId: prior?.serverEvidenceId,
-          sha256Checksum: prior?.sha256Checksum,
-          localCompressedPhotoPath: prior?.localCompressedPhotoPath,
-          submissionStatus: DraftSubmissionStatus.draft,
+          sha256Checksum: resolvedSha256,
+          localCompressedPhotoPath: resolvedCompressedPath,
+          submissionStatus:
+              prior?.submissionStatus ?? DraftSubmissionStatus.draft,
           retryCount: prior?.retryCount ?? 0,
           dispatchState: CommandDispatchState.neverDispatched,
           lastErrorMessage: null,
-          actorUserId: resolvedActorUserId,
-          actorRole: prior?.actorRole,
+          actorUserId: prior?.actorUserId ?? validatedActor.userId,
+          actorRole: prior?.actorRole ?? validatedActor.role,
         );
-        await store.saveLocalDraft(localDraft);
+
+        final regResult = await store.registerOrUpdateDraftIfUnchanged(
+          expected: existingFromStore,
+          desired: localDraft,
+          now: nowUtc,
+        );
+        if (!regResult.isSuccess) {
+          throw DraftSubmissionCasException(
+            stage: DraftCasFailureStage.registerPreDispatchDraft,
+            localDraftId: _localDraftId,
+            casStatus: regResult.status,
+            serverAssessmentId: _serverAssessmentId,
+            message:
+                'Failed to persist pre-dispatch local draft journal (${regResult.status.name}).',
+          );
+        }
       }
 
       final submitUseCase = SubmitAssessmentDraft(
         repository: repo,
         storage: storage,
         localDraftStore: store,
-        authSessionPort: ref.read(authSessionPortProvider),
+        canonicalSnapshotStore: fileStore,
+        authSessionPort: authPort,
       );
 
-      final isDispatchedRetry =
-          prior != null &&
-          prior.dispatchState == CommandDispatchState.possiblyDispatched;
-      final dispatchEvidenceIdStr = isDispatchedRetry
-          ? prior.evidenceId
-          : resolvedEvidenceId;
       final evidenceIdObj = dispatchEvidenceIdStr != null
           ? EvidenceId(dispatchEvidenceIdStr)
           : null;
@@ -668,12 +797,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         entryContext: isDispatchedRetry
             ? prior.entryContext
             : EntryContext.sharedChild,
-        evidenceBytes: _evidenceRemoved ? null : _selectedEvidence?.bytes,
-        evidenceMediaType: _evidenceRemoved
-            ? null
-            : _selectedEvidence?.mediaType,
+        evidenceBytes: dispatchEvidenceBytes,
+        evidenceMediaType: dispatchEvidenceMediaType,
         evidenceId: evidenceIdObj,
         localDraftId: _localDraftId,
+        context: validatedActor,
+        expectedSessionGeneration: validatedActor.sessionGeneration,
       );
 
       // B03: Do NOT delete physical evidence solely because submission returned.
@@ -689,9 +818,11 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         context.pop(true);
       }
     } catch (e) {
-      setState(() {
-        _errorMessage = _mapFriendlyError(e);
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = _mapFriendlyError(e);
+        });
+      }
     } finally {
       if (mounted) {
         setState(() => _isSubmitting = false);
@@ -700,6 +831,30 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   String _mapFriendlyError(Object error) {
+    if (error is AssessmentReconciliationPendingException) {
+      return 'Assessment was submitted to the server, and this device preserved your draft and photo pending local sync confirmation.';
+    }
+    if (error is DraftSubmissionCasException) {
+      return 'Could not safely update your local draft state before syncing. Your draft and photo remain preserved on this device.';
+    }
+    if (error is MissingLocalDraftJournalException ||
+        error is MissingCanonicalEvidenceSnapshotException) {
+      return 'Could not verify your local draft journal or photo snapshot before submitting. Your data has not been submitted.';
+    }
+    if (error is CanonicalEvidenceValidationException) {
+      return switch (error.code) {
+        CanonicalEvidenceValidationCode.emptyBytes =>
+          'Attached photo cannot be empty. Please select another file.',
+        CanonicalEvidenceValidationCode.oversizedBytes =>
+          'Attached photo exceeds the allowed size limit (10 MiB).',
+        CanonicalEvidenceValidationCode.unsupportedMagicBytes =>
+          'Unsupported photo format. Please attach a JPEG or PNG image.',
+        _ => 'Attached photo failed local integrity verification. Please re-attach the photo and try again.',
+      };
+    }
+    if (error is EvidenceStorageException) {
+      return 'Could not read or save the attached photo safely on this device.';
+    }
     if (error is EvidenceStorageAuthException) {
       return 'Your session is no longer valid. Please sign in again to continue.';
     }

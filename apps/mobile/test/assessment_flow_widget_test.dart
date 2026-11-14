@@ -281,7 +281,7 @@ void main() {
               SimulatedEvidencePickerService(
                 stubFile: const SelectedEvidenceFile(
                   fileName: 'math_quiz.jpg',
-                  bytes: [1, 2, 3],
+                  bytes: [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3],
                   mediaType: 'image/jpeg',
                   localPath: '/tmp/math_quiz.jpg',
                 ),

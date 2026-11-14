@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'assessment_evidence_storage.dart';
+import 'local_draft_store.dart';
 
 /// Machine-readable failure reason codes for canonical evidence byte inspection.
 enum CanonicalEvidenceValidationCode {
@@ -200,4 +201,19 @@ InspectedEvidenceBytes verifyCanonicalEvidenceBytes({
     );
   }
   return inspected;
+}
+
+/// Application port for durable canonical evidence snapshot creation and verification.
+///
+/// Implementations write immutable, magic-byte-validated bytes keyed by `localDraftId`
+/// and re-verify file length, MIME magic bytes, and SHA-256 digest before upload.
+abstract interface class CanonicalEvidenceSnapshotStore {
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  });
+
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  });
 }
