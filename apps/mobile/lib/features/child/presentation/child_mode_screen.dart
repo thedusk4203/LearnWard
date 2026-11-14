@@ -9,6 +9,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../app/routing/app_routes.dart';
+import '../../assessments/presentation/assessment_recovery_presentation.dart';
 import '../../assessments/presentation/growth_result_screen.dart';
 import '../../shared_device/presentation/parent_gate_dialog.dart';
 
@@ -25,6 +26,10 @@ class ChildModeScreen extends ConsumerStatefulWidget {
 
 class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
   List<LocalAssessmentDraft> _localDrafts = [];
+  List<LocalAssessmentDraft> _confirmedDrafts = [];
+  ValidatedActorContext? _liveActor;
+  bool _liveAuthChecked = false;
+  bool _liveAuthInvalid = false;
   ChildBalance? _childBalance;
   GrowthEvent? _latestGrowth;
   List<GrowthEvent> _growthHistory = [];
@@ -42,20 +47,78 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
   Future<void> _loadLocalDrafts() async {
     final activeChild = ref.read(activeChildModeProvider);
     if (activeChild == null) return;
+    ValidatedActorContext? liveActor;
+    var liveAuthInvalid = false;
+    try {
+      liveActor = await ref.read(authSessionPortProvider).validateForMutation();
+      final nowUtc = ref.read(appClockProvider)().toUtc();
+      if (liveActor == null || !liveActor.isValidAt(nowUtc)) {
+        liveAuthInvalid = true;
+      }
+    } catch (_) {
+      liveAuthInvalid = true;
+    }
     try {
       final store = ref.read(localDraftStoreProvider);
       final drafts = await store.listLocalDrafts(activeChild.id);
       if (mounted) {
-        setState(
-          () => _localDrafts = drafts
+        setState(() {
+          _liveActor = liveActor;
+          _liveAuthChecked = true;
+          _liveAuthInvalid = liveAuthInvalid;
+          _localDrafts = drafts
               .where(
                 (d) =>
                     d.dispatchState != CommandDispatchState.confirmedCommitted,
               )
-              .toList(),
-        );
+              .toList();
+          _confirmedDrafts = drafts
+              .where(
+                (d) =>
+                    d.dispatchState == CommandDispatchState.confirmedCommitted,
+              )
+              .toList();
+        });
       }
     } catch (_) {}
+  }
+
+  Color _badgeBackgroundColor(
+    ThemeData theme,
+    RecoveryBannerSeverity severity,
+  ) {
+    return switch (severity) {
+      RecoveryBannerSeverity.success => Colors.green.shade100,
+      RecoveryBannerSeverity.error => theme.colorScheme.errorContainer,
+      RecoveryBannerSeverity.warning => theme.colorScheme.tertiaryContainer,
+      RecoveryBannerSeverity.info => theme.colorScheme.primaryContainer,
+      RecoveryBannerSeverity.neutral => theme.colorScheme.secondaryContainer,
+    };
+  }
+
+  Color _badgeForegroundColor(
+    ThemeData theme,
+    RecoveryBannerSeverity severity,
+  ) {
+    return switch (severity) {
+      RecoveryBannerSeverity.success => Colors.green.shade900,
+      RecoveryBannerSeverity.error => theme.colorScheme.onErrorContainer,
+      RecoveryBannerSeverity.warning => theme.colorScheme.onTertiaryContainer,
+      RecoveryBannerSeverity.info => theme.colorScheme.onPrimaryContainer,
+      RecoveryBannerSeverity.neutral => theme.colorScheme.onSecondaryContainer,
+    };
+  }
+
+  IconData _dispositionIcon(DraftRecoveryDisposition disposition) {
+    return switch (disposition) {
+      DraftRecoveryDisposition.editableDraft => Icons.edit_note,
+      DraftRecoveryDisposition.inProgressSameSession => Icons.sync,
+      DraftRecoveryDisposition.retryScheduled => Icons.schedule,
+      DraftRecoveryDisposition.verificationPending => Icons.cloud_sync_outlined,
+      DraftRecoveryDisposition.waitingOriginalActor => Icons.person_outline,
+      DraftRecoveryDisposition.confirmedSubmitted => Icons.verified_outlined,
+      _ => Icons.warning_amber_rounded,
+    };
   }
 
   Future<void> _loadEconomyData() async {
@@ -354,8 +417,8 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                             final result = await context.push<bool>(
                               AppRoutes.childAddAssessment,
                             );
+                            unawaited(_loadLocalDrafts());
                             if (result == true) {
-                              unawaited(_loadLocalDrafts());
                               unawaited(_loadEconomyData());
                             }
                           },
@@ -391,23 +454,98 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                       itemCount: _localDrafts.length,
                       itemBuilder: (ctx, i) {
                         final draft = _localDrafts[i];
+                        final nowUtc = ref.read(appClockProvider)().toUtc();
+                        final presentation =
+                            buildAssessmentRecoveryPresentation(
+                              draft: draft,
+                              now: nowUtc,
+                              liveActor: _liveActor,
+                              liveAuthChecked: _liveAuthChecked,
+                              liveAuthInvalid: _liveAuthInvalid,
+                            );
+                        final secondarySummary =
+                            presentation.disposition ==
+                                    DraftRecoveryDisposition.editableDraft &&
+                                presentation.actionKind ==
+                                    AssessmentRecoveryUiActionKind
+                                        .submitEditable
+                            ? null
+                            : (presentation.scheduleDetail ??
+                                  presentation.leaseDetail ??
+                                  presentation.signInGuidance ??
+                                  presentation.manualReviewNotice ??
+                                  presentation.explanation);
                         return Card(
                           elevation: 0,
                           color: theme.colorScheme.surfaceContainerHighest,
                           child: ListTile(
                             key: Key('local_draft_${draft.localDraftId}'),
-                            leading: const Icon(Icons.edit_note),
-                            title: Text(draft.title),
-                            subtitle: Text(
-                              '${draft.subject} (${draft.subjectKey.displayLabel}) • ${draft.rawScore} / ${draft.maxScore}',
+                            leading: Icon(
+                              _dispositionIcon(presentation.disposition),
+                            ),
+                            title: Row(
+                              children: [
+                                Expanded(child: Text(draft.title)),
+                                const SizedBox(width: AppSpacing.xs),
+                                Container(
+                                  key: Key(
+                                    'draft_disposition_badge_${draft.localDraftId}',
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: _badgeBackgroundColor(
+                                      theme,
+                                      presentation.severity,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    presentation.badgeLabel,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: _badgeForegroundColor(
+                                        theme,
+                                        presentation.severity,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${draft.subject} (${draft.subjectKey.displayLabel}) • ${draft.rawScore} / ${draft.maxScore}',
+                                ),
+                                if (secondarySummary != null) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    secondarySummary,
+                                    key: Key(
+                                      'draft_status_summary_${draft.localDraftId}',
+                                    ),
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: _badgeForegroundColor(
+                                        theme,
+                                        presentation.severity,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                             onTap: () async {
                               final result = await context.push<bool>(
                                 AppRoutes.childAddAssessment,
                                 extra: draft,
                               );
+                              unawaited(_loadLocalDrafts());
                               if (result == true) {
-                                unawaited(_loadLocalDrafts());
                                 unawaited(_loadEconomyData());
                               }
                             },
@@ -576,6 +714,96 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
                           ),
                         );
                       },
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
+
+                  if (_confirmedDrafts.isNotEmpty) ...[
+                    Column(
+                      key: const Key('confirmed_local_drafts_section'),
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Confirmed Submissions (${_confirmedDrafts.length})',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.xs),
+                        ListView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: _confirmedDrafts.length,
+                          itemBuilder: (ctx, i) {
+                            final draft = _confirmedDrafts[i];
+                            final nowUtc = ref.read(appClockProvider)().toUtc();
+                            final presentation =
+                                buildAssessmentRecoveryPresentation(
+                                  draft: draft,
+                                  now: nowUtc,
+                                  liveActor: _liveActor,
+                                  liveAuthChecked: _liveAuthChecked,
+                                  liveAuthInvalid: _liveAuthInvalid,
+                                );
+                            return Card(
+                              elevation: 0,
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              child: ListTile(
+                                key: Key(
+                                  'confirmed_local_draft_${draft.localDraftId}',
+                                ),
+                                leading: const Icon(
+                                  Icons.verified_outlined,
+                                  color: Colors.green,
+                                ),
+                                title: Row(
+                                  children: [
+                                    Expanded(child: Text(draft.title)),
+                                    const SizedBox(width: AppSpacing.xs),
+                                    Container(
+                                      key: Key(
+                                        'draft_disposition_badge_${draft.localDraftId}',
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: _badgeBackgroundColor(
+                                          theme,
+                                          presentation.severity,
+                                        ),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text(
+                                        presentation.badgeLabel,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: _badgeForegroundColor(
+                                            theme,
+                                            presentation.severity,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                subtitle: Text(
+                                  '${draft.subject} (${draft.subjectKey.displayLabel}) • ${draft.rawScore} / ${draft.maxScore}\nTap to review confirmed server status.',
+                                ),
+                                onTap: () async {
+                                  await context.push<bool>(
+                                    AppRoutes.childAddAssessment,
+                                    extra: draft,
+                                  );
+                                  unawaited(_loadLocalDrafts());
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                      ],
                     ),
                     const SizedBox(height: AppSpacing.md),
                   ],

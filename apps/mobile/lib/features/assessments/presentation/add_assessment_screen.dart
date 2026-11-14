@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,7 +10,17 @@ import 'package:learnward_domain/learnward_domain.dart';
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../shared/utils/uuid_generator.dart';
 import '../services/local_evidence_file_store.dart';
+import 'assessment_recovery_presentation.dart';
 import 'evidence_picker_service.dart';
+
+final class _ProviderClock implements Clock {
+  const _ProviderClock(this._now);
+
+  final DateTime Function() _now;
+
+  @override
+  DateTime now() => _now();
+}
 
 /// Screen where a learner captures an academic result, attaches evidence,
 /// and either saves a local draft or submits for parent review.
@@ -39,7 +51,8 @@ class AddAssessmentScreen extends ConsumerStatefulWidget {
       _AddAssessmentScreenState();
 }
 
-class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
+class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
+    with WidgetsBindingObserver {
   final _formKey = GlobalKey<FormState>();
 
   late String _localDraftId;
@@ -76,6 +89,22 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   bool _staleLockedDraftRejection = false;
   int _dropdownEpoch = 0;
 
+  ValidatedActorContext? _liveActor;
+  bool _liveAuthChecked = false;
+  bool _liveAuthInvalid = false;
+  AdultTargetAuthorizationResult? _liveTargetAuthorization;
+  bool _isRefreshingRecovery = false;
+  bool _isLoadingConfirmedStatus = false;
+  Assessment? _confirmedServerAssessment;
+  List<AssessmentEvidence>? _confirmedServerEvidence;
+  String? _confirmedServerStatusError;
+  String? _confirmedResultActorUserId;
+  String? _confirmedResultSessionGeneration;
+  String? _activeConfirmedReadSessionGeneration;
+  int _authContextSyncGeneration = 0;
+  int _confirmedReadGeneration = 0;
+  StreamSubscription<String?>? _authGenerationSubscription;
+
   static const String _payloadLockedEditRejectedMessage =
       'Original submitted or quarantined assessment payload, IDs, and evidence are locked and preserved on this device and cannot be edited.';
   static const String _staleScreenPayloadDivergedMessage =
@@ -84,6 +113,21 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   LocalAssessmentDraft? get _effectiveKnownDraft =>
       _authoritativeDraft ?? widget.initialDraft;
 
+  bool get _hasActorMismatchOnKnownDraft {
+    final draft = _effectiveKnownDraft;
+    if (draft == null || !_liveAuthChecked || _liveAuthInvalid) {
+      return false;
+    }
+    final actor = _liveActor;
+    if (actor == null) {
+      return false;
+    }
+    final storedActor = draft.actorUserId;
+    return storedActor != null &&
+        storedActor.trim().isNotEmpty &&
+        storedActor != actor.userId;
+  }
+
   bool get _isPayloadLocked {
     if (_isQuarantined) {
       return true;
@@ -91,6 +135,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final draft = _effectiveKnownDraft;
     if (draft == null) {
       return false;
+    }
+    if (_hasActorMismatchOnKnownDraft) {
+      return true;
+    }
+    if (isTargetAuthorizationDenied(_liveTargetAuthorization)) {
+      return true;
     }
     return isDraftPayloadLocked(draft);
   }
@@ -103,7 +153,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     if (draft == null) {
       return true;
     }
-    return isDraftDirectRetryAllowed(draft);
+    if (isTargetAuthorizationDenied(_liveTargetAuthorization)) {
+      return false;
+    }
+    return isDraftDirectRetryAllowed(
+      draft,
+      now: ref.read(appClockProvider)().toUtc(),
+    );
   }
 
   bool get _isEvidenceLocked =>
@@ -115,6 +171,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _evidenceRemoved = false;
     final draft = widget.initialDraft;
     _authoritativeDraft = draft;
@@ -153,7 +210,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       } else {
         _restorationStatus = ExistingEvidenceRestorationStatus.none;
       }
-      _syncAuthoritativeDraftFromStore();
+      _syncAuthoritativeDraftFromStore(refreshAuthContext: true);
     } else {
       _localDraftId = generateUuid();
       _createCommandId = generateUuid();
@@ -177,6 +234,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     _rawScoreController.addListener(_updateScorePreview);
     _maxScoreController.addListener(_updateScorePreview);
     _updateScorePreview();
+    _authGenerationSubscription = ref
+        .read(authSessionPortProvider)
+        .sessionGenerationStream
+        .listen(_handleAuthSessionGenerationEvent, onError: (_) {});
   }
 
   Future<void> _restoreCanonicalEvidenceSnapshot(
@@ -247,13 +308,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
               'Please attach a replacement photo or explicitly remove the attachment.';
         });
       }
-    } catch (e) {
+    } catch (_) {
       if (!mounted || generation != _restorationGeneration) return;
       setState(() {
         _restorationStatus =
             ExistingEvidenceRestorationStatus.missingOrUnreadable;
         _errorMessage =
-            'Failed to read existing evidence file: $e. '
+            'Failed to read existing evidence file (${sanitizeDiagnosticBasename(path)}). '
             'The draft cannot be saved or submitted without evidence. '
             'Please attach a replacement photo or explicitly remove the attachment.';
       });
@@ -261,7 +322,16 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _effectiveKnownDraft != null) {
+      _syncAuthoritativeDraftFromStore(refreshAuthContext: true);
+    }
+  }
+
+  @override
   void dispose() {
+    _authGenerationSubscription?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _rawScoreController.dispose();
     _maxScoreController.dispose();
     _subjectController.dispose();
@@ -289,14 +359,204 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   static const String _frozenEvidenceLockedRemoveMessage =
       'Evidence photo is already locked for this draft and cannot be removed or replaced. Start a new assessment draft to submit without this photo.';
 
+  void _handleAuthSessionGenerationEvent(String? generation) {
+    if (!mounted) {
+      return;
+    }
+    final liveChanged =
+        _liveAuthChecked && generation != _liveActor?.sessionGeneration;
+    final activeReadChanged =
+        _isLoadingConfirmedStatus &&
+        _activeConfirmedReadSessionGeneration != null &&
+        generation != _activeConfirmedReadSessionGeneration;
+    final confirmedCacheStale =
+        _confirmedResultSessionGeneration != null &&
+        generation != _confirmedResultSessionGeneration;
+    final confirmedPresent =
+        _confirmedServerAssessment != null || _confirmedServerEvidence != null;
+    if (!liveChanged &&
+        !activeReadChanged &&
+        !confirmedCacheStale &&
+        !confirmedPresent) {
+      return;
+    }
+    if (activeReadChanged) {
+      _confirmedReadGeneration++;
+    }
+    setState(() {
+      if (confirmedCacheStale ||
+          activeReadChanged ||
+          liveChanged ||
+          confirmedPresent) {
+        _confirmedServerAssessment = null;
+        _confirmedServerEvidence = null;
+        _confirmedResultActorUserId = null;
+        _confirmedResultSessionGeneration = null;
+        _confirmedServerStatusError = null;
+      }
+      if (liveChanged) {
+        _liveTargetAuthorization = null;
+        _liveAuthInvalid = true;
+      }
+    });
+  }
+
+  void _clearConfirmedServerCache({
+    bool bumpReadGeneration = false,
+    bool clearError = true,
+  }) {
+    if (bumpReadGeneration) {
+      _confirmedReadGeneration++;
+    }
+    _confirmedServerAssessment = null;
+    _confirmedServerEvidence = null;
+    _confirmedResultActorUserId = null;
+    _confirmedResultSessionGeneration = null;
+    if (clearError) {
+      _confirmedServerStatusError = null;
+    }
+  }
+
+  Future<ValidatedActorContext?> _validateMatchingLiveSession({
+    required AuthSessionPort authPort,
+    required DateTime nowUtc,
+    ValidatedActorContext? anchoredActor,
+    String? anchoredGeneration,
+  }) async {
+    final fresh = await authPort.validateForMutation();
+    if (fresh == null || !fresh.isValidAt(nowUtc)) {
+      return null;
+    }
+    if (anchoredActor != null && fresh.userId != anchoredActor.userId) {
+      return null;
+    }
+    if (anchoredGeneration != null &&
+        fresh.sessionGeneration != anchoredGeneration) {
+      return null;
+    }
+    return fresh;
+  }
+
   Future<LocalAssessmentDraft?> _syncAuthoritativeDraftFromStore({
     bool updateUiState = true,
+    bool refreshAuthContext = false,
   }) async {
+    final generation = refreshAuthContext ? ++_authContextSyncGeneration : null;
     final persisted = await ref
         .read(localDraftStoreProvider)
         .getLocalDraft(_localDraftId);
     final latest = persisted ?? widget.initialDraft;
     if (!mounted) {
+      return latest;
+    }
+    if (refreshAuthContext && generation != _authContextSyncGeneration) {
+      return latest;
+    }
+
+    ValidatedActorContext? verifiedActor = _liveActor;
+    bool nextAuthChecked = _liveAuthChecked;
+    bool nextAuthInvalid = _liveAuthInvalid;
+    AdultTargetAuthorizationResult? nextTargetAuthorization =
+        _liveTargetAuthorization;
+
+    if (refreshAuthContext && latest != null) {
+      final authPort = ref.read(authSessionPortProvider);
+      final nowUtc = ref.read(appClockProvider)().toUtc();
+      try {
+        final actor = await authPort.validateForMutation();
+        if (!mounted || generation != _authContextSyncGeneration) {
+          return latest;
+        }
+        if (actor != null && actor.isValidAt(nowUtc)) {
+          verifiedActor = actor;
+          nextAuthChecked = true;
+          nextAuthInvalid = false;
+          final actorMatches =
+              latest.actorUserId != null &&
+              latest.actorUserId!.trim().isNotEmpty &&
+              latest.actorUserId == actor.userId;
+          final needsTargetCheck =
+              !latest.isLegacyUnknown &&
+              !latest.hasUnboundActor &&
+              !latest.hasMalformedLease &&
+              (latest.dispatchState ==
+                      CommandDispatchState.confirmedCommitted ||
+                  (actorMatches &&
+                      (latest.dispatchState ==
+                              CommandDispatchState.possiblyDispatched ||
+                          latest.submissionStatus !=
+                              DraftSubmissionStatus.draft ||
+                          latest.hasRecoveryMarker)));
+          if (needsTargetCheck) {
+            final anchoredActor = actor;
+            final anchoredGeneration = actor.sessionGeneration;
+            AdultTargetAuthorizationResult candidateTargetAuth;
+            try {
+              candidateTargetAuth = await ref
+                  .read(recoveryAuthorizationPortProvider)
+                  .verifyAssessmentTarget(
+                    context: actor,
+                    familyId: latest.familyId,
+                    childId: latest.childId,
+                  );
+            } catch (_) {
+              candidateTargetAuth =
+                  const AdultTargetAuthorizationResult.unverified(
+                    reason: AdultTargetVerificationReason
+                        .transientVerificationFailure,
+                  );
+            }
+            if (!mounted || generation != _authContextSyncGeneration) {
+              return latest;
+            }
+            final postCheckActor = await _validateMatchingLiveSession(
+              authPort: authPort,
+              nowUtc: ref.read(appClockProvider)().toUtc(),
+              anchoredActor: anchoredActor,
+              anchoredGeneration: anchoredGeneration,
+            );
+            if (!mounted || generation != _authContextSyncGeneration) {
+              return latest;
+            }
+            if (postCheckActor == null) {
+              final freshAfterSwitch = await authPort.validateForMutation();
+              if (!mounted || generation != _authContextSyncGeneration) {
+                return latest;
+              }
+              final freshValid =
+                  freshAfterSwitch != null &&
+                  freshAfterSwitch.isValidAt(
+                    ref.read(appClockProvider)().toUtc(),
+                  );
+              verifiedActor = freshValid ? freshAfterSwitch : null;
+              nextAuthChecked = true;
+              nextAuthInvalid = !freshValid;
+              nextTargetAuthorization = null;
+            } else {
+              verifiedActor = postCheckActor;
+              nextTargetAuthorization = candidateTargetAuth;
+            }
+          } else {
+            nextTargetAuthorization = null;
+          }
+        } else {
+          verifiedActor = null;
+          nextAuthChecked = true;
+          nextAuthInvalid = true;
+          nextTargetAuthorization = null;
+        }
+      } catch (_) {
+        verifiedActor = null;
+        nextAuthChecked = true;
+        nextAuthInvalid = true;
+        nextTargetAuthorization = null;
+      }
+    }
+
+    if (!mounted) {
+      return latest;
+    }
+    if (refreshAuthContext && generation != _authContextSyncGeneration) {
       return latest;
     }
     if (latest != null) {
@@ -309,13 +569,58 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           latest.hasUnboundActor ||
           latest.isReadOnlyQuarantined ||
           latest.hasMalformedLease;
+      final sessionIdentityChanged =
+          refreshAuthContext &&
+          ((_liveActor != null &&
+                  (_liveActor?.userId != verifiedActor?.userId ||
+                      _liveActor?.sessionGeneration !=
+                          verifiedActor?.sessionGeneration ||
+                      nextAuthInvalid)) ||
+              (_confirmedResultActorUserId != null &&
+                  (_confirmedResultActorUserId != verifiedActor?.userId ||
+                      _confirmedResultSessionGeneration !=
+                          verifiedActor?.sessionGeneration ||
+                      nextAuthInvalid ||
+                      nextTargetAuthorization?.status !=
+                          TargetAuthorizationStatus.authorized)));
+      final confirmedShouldClear =
+          refreshAuthContext &&
+          (nextAuthInvalid ||
+              nextTargetAuthorization?.status !=
+                  TargetAuthorizationStatus.authorized ||
+              (_confirmedResultActorUserId != null &&
+                  _confirmedResultActorUserId != verifiedActor?.userId) ||
+              (_confirmedResultSessionGeneration != null &&
+                  _confirmedResultSessionGeneration !=
+                      verifiedActor?.sessionGeneration));
+      final authChanged =
+          refreshAuthContext &&
+          (_liveActor != verifiedActor ||
+              _liveAuthChecked != nextAuthChecked ||
+              _liveAuthInvalid != nextAuthInvalid ||
+              _liveTargetAuthorization != nextTargetAuthorization ||
+              (confirmedShouldClear &&
+                  (_confirmedServerAssessment != null ||
+                      _confirmedServerEvidence != null)));
       if (updateUiState &&
           (_authoritativeDraft != latest ||
-              (latestQuarantined && !_isQuarantined))) {
+              (latestQuarantined && !_isQuarantined) ||
+              authChanged)) {
         setState(() {
           _authoritativeDraft = latest;
           if (latestQuarantined) {
             _isQuarantined = true;
+          }
+          if (refreshAuthContext) {
+            _liveActor = verifiedActor;
+            _liveAuthChecked = nextAuthChecked;
+            _liveAuthInvalid = nextAuthInvalid;
+            _liveTargetAuthorization = nextTargetAuthorization;
+            if (confirmedShouldClear) {
+              _clearConfirmedServerCache(
+                bumpReadGeneration: sessionIdentityChanged,
+              );
+            }
           }
         });
       } else {
@@ -323,9 +628,251 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         if (latestQuarantined) {
           _isQuarantined = true;
         }
+        if (refreshAuthContext) {
+          _liveActor = verifiedActor;
+          _liveAuthChecked = nextAuthChecked;
+          _liveAuthInvalid = nextAuthInvalid;
+          _liveTargetAuthorization = nextTargetAuthorization;
+          if (confirmedShouldClear) {
+            _clearConfirmedServerCache(
+              bumpReadGeneration: sessionIdentityChanged,
+            );
+          }
+        }
       }
     }
     return latest;
+  }
+
+  Future<void> _refreshRecoveryStatus() async {
+    if (_isRefreshingRecovery) {
+      return;
+    }
+    setState(() {
+      _isRefreshingRecovery = true;
+    });
+    try {
+      await _syncAuthoritativeDraftFromStore(refreshAuthContext: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRefreshingRecovery = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _reviewConfirmedServerResult() async {
+    if (_isLoadingConfirmedStatus) {
+      return;
+    }
+    final readGeneration = ++_confirmedReadGeneration;
+    setState(() {
+      _isLoadingConfirmedStatus = true;
+      _confirmedServerStatusError = null;
+    });
+
+    try {
+      final store = ref.read(localDraftStoreProvider);
+      final persisted = await store.getLocalDraft(_localDraftId);
+      final latest = persisted ?? widget.initialDraft;
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+      final serverAssessmentId = latest?.serverAssessmentId;
+      if (latest == null ||
+          latest.localDraftId != _localDraftId ||
+          latest.dispatchState != CommandDispatchState.confirmedCommitted ||
+          serverAssessmentId == null ||
+          serverAssessmentId.trim().isEmpty) {
+        setState(() {
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError =
+              'Confirmed server assessment identifier is unavailable locally.';
+        });
+        return;
+      }
+
+      final authPort = ref.read(authSessionPortProvider);
+      final authzPort = ref.read(recoveryAuthorizationPortProvider);
+      final anchoredActor = await _validateMatchingLiveSession(
+        authPort: authPort,
+        nowUtc: ref.read(appClockProvider)().toUtc(),
+      );
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+      if (anchoredActor == null) {
+        setState(() {
+          _liveActor = null;
+          _liveAuthChecked = true;
+          _liveAuthInvalid = true;
+          _liveTargetAuthorization = null;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Your session is no longer valid. Sign in again to inspect confirmed server status.';
+        });
+        return;
+      }
+      final anchoredGeneration = anchoredActor.sessionGeneration;
+      _activeConfirmedReadSessionGeneration = anchoredGeneration;
+
+      AdultTargetAuthorizationResult targetAuth;
+      try {
+        targetAuth = await authzPort.verifyAssessmentTarget(
+          context: anchoredActor,
+          familyId: latest.familyId,
+          childId: latest.childId,
+        );
+      } catch (_) {
+        targetAuth = const AdultTargetAuthorizationResult.unverified(
+          reason: AdultTargetVerificationReason.transientVerificationFailure,
+        );
+      }
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+
+      final postAuthzActor = await _validateMatchingLiveSession(
+        authPort: authPort,
+        nowUtc: ref.read(appClockProvider)().toUtc(),
+        anchoredActor: anchoredActor,
+        anchoredGeneration: anchoredGeneration,
+      );
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+      if (postAuthzActor == null) {
+        setState(() {
+          _liveTargetAuthorization = null;
+          _liveAuthInvalid = true;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Your active session changed while verifying permissions. Refresh and try again.';
+        });
+        return;
+      }
+
+      if (targetAuth.status != TargetAuthorizationStatus.authorized) {
+        setState(() {
+          _liveActor = postAuthzActor;
+          _liveAuthChecked = true;
+          _liveAuthInvalid = false;
+          _liveTargetAuthorization = targetAuth;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = isTargetAuthorizationDenied(targetAuth)
+              ? 'Target family or child authorization does not permit reading this server assessment.'
+              : 'Could not verify confirmed status permissions offline. Try again when connected.';
+        });
+        return;
+      }
+
+      final repo = ref.read(assessmentRepositoryProvider);
+      final assessmentId = AssessmentId(serverAssessmentId);
+      final serverAssessment = await repo.getAssessment(assessmentId);
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+
+      final postAssessmentActor = await _validateMatchingLiveSession(
+        authPort: authPort,
+        nowUtc: ref.read(appClockProvider)().toUtc(),
+        anchoredActor: anchoredActor,
+        anchoredGeneration: anchoredGeneration,
+      );
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+      if (postAssessmentActor == null) {
+        setState(() {
+          _liveTargetAuthorization = null;
+          _liveAuthInvalid = true;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Your active session changed before reading server evidence. Refresh and try again.';
+        });
+        return;
+      }
+
+      if (serverAssessment == null) {
+        setState(() {
+          _liveActor = postAssessmentActor;
+          _liveAuthChecked = true;
+          _liveAuthInvalid = false;
+          _liveTargetAuthorization = targetAuth;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Server record was not found or is not currently accessible for your account.';
+        });
+        return;
+      }
+      if (serverAssessment.id.value != serverAssessmentId ||
+          serverAssessment.familyId.value != latest.familyId ||
+          serverAssessment.childId.value != latest.childId) {
+        setState(() {
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError =
+              'Server record scope did not match this draft family or child.';
+        });
+        return;
+      }
+
+      final serverEvidence = await repo.listEvidenceForAssessment(assessmentId);
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+
+      final prePublishActor = await _validateMatchingLiveSession(
+        authPort: authPort,
+        nowUtc: ref.read(appClockProvider)().toUtc(),
+        anchoredActor: anchoredActor,
+        anchoredGeneration: anchoredGeneration,
+      );
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+      if (prePublishActor == null) {
+        setState(() {
+          _liveTargetAuthorization = null;
+          _liveAuthInvalid = true;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Your active session changed before confirmed results could be displayed. Refresh and try again.';
+        });
+        return;
+      }
+      if (serverEvidence.any(
+        (evidence) => evidence.assessmentId.value != serverAssessmentId,
+      )) {
+        setState(() {
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError =
+              'Server evidence scope did not match the confirmed assessment.';
+        });
+        return;
+      }
+
+      setState(() {
+        _authoritativeDraft = latest;
+        _liveActor = prePublishActor;
+        _liveAuthChecked = true;
+        _liveAuthInvalid = false;
+        _liveTargetAuthorization = targetAuth;
+        _confirmedResultActorUserId = prePublishActor.userId;
+        _confirmedResultSessionGeneration = prePublishActor.sessionGeneration;
+        _confirmedServerAssessment = serverAssessment;
+        _confirmedServerEvidence = serverEvidence;
+        _confirmedServerStatusError = null;
+      });
+    } catch (e) {
+      if (mounted && readGeneration == _confirmedReadGeneration) {
+        setState(() {
+          _confirmedServerStatusError = _mapFriendlyError(e);
+        });
+      }
+    } finally {
+      if (mounted && readGeneration == _confirmedReadGeneration) {
+        _activeConfirmedReadSessionGeneration = null;
+        setState(() {
+          _isLoadingConfirmedStatus = false;
+        });
+      }
+    }
   }
 
   String? _findFormPayloadDivergence(LocalAssessmentDraft prior) {
@@ -402,7 +949,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     if (prior.hasVerifiedEvidenceSnapshot &&
         _restorationStatus != ExistingEvidenceRestorationStatus.loading) {
       final displayed = _selectedEvidence;
-      if (displayed == null ||
+      if (displayed == null &&
+          _restorationStatus !=
+              ExistingEvidenceRestorationStatus.missingOrUnreadable) {
+        return 'evidence';
+      }
+      if (displayed != null &&
           computeSha256Hex(displayed.bytes) != prior.sha256Checksum) {
         return 'evidence';
       }
@@ -837,6 +1389,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                 AdultTargetVerificationReason.transientVerificationFailure);
     if (!isAllowedTargetForLocalSave) {
       setState(() {
+        if (isTargetAuthorizationDenied(authzResult)) {
+          _liveTargetAuthorization = authzResult;
+        }
         _errorMessage = 'You do not have permission to save drafts for this family or child.';
       });
       return;
@@ -999,134 +1554,190 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     }
   }
 
-  Future<void> _submitAssessment() async {
-    final store = ref.read(localDraftStoreProvider);
-    final existingFromStore = await store.getLocalDraft(_localDraftId);
-    if (widget.initialDraft != null && existingFromStore == null) {
-      setState(() {
-        _errorMessage = 'Local draft record is missing from storage. Reopen drafts before submitting.';
-      });
+  Future<void> _submitAssessment() =>
+      _executeSubmissionOrRecovery(allowWaitingOriginalActorResume: false);
+
+  Future<void> _resumeOriginalActorAndSubmit() =>
+      _executeSubmissionOrRecovery(allowWaitingOriginalActorResume: true);
+
+  Future<void> _executeSubmissionOrRecovery({
+    required bool allowWaitingOriginalActorResume,
+  }) async {
+    if (_isSubmitting) {
       return;
     }
-    final prior = existingFromStore ?? widget.initialDraft;
-    if (prior != null && mounted) {
-      setState(() {
-        _authoritativeDraft = prior;
-        if (prior.hasVerifiedEvidenceSnapshot) {
-          _frozenEvidenceSha256 ??= prior.sha256Checksum;
-          _frozenCanonicalPath ??= prior.localCompressedPhotoPath;
-        }
-      });
-    }
-
-    final isQuarantined =
-        (prior?.isLegacyUnknown ?? false) ||
-        (prior?.hasUnboundActor ?? false) ||
-        (prior?.isReadOnlyQuarantined ?? false) ||
-        (prior?.hasMalformedLease ?? false) ||
-        _isQuarantined;
-    if (isQuarantined) {
-      setState(() {
-        _authoritativeDraft = prior;
-        _isQuarantined = true;
-        _errorMessage = 'Cannot submit a quarantined draft. Recovery reconciliation is required.';
-      });
-      return;
-    }
-    if (prior != null && !isDraftDirectRetryAllowed(prior)) {
-      setState(() {
-        _authoritativeDraft = prior;
-        _errorMessage = 'Cannot submit this draft directly while recovery reconciliation or active lease processing is pending.';
-      });
-      return;
-    }
-    if (prior != null && isDraftPayloadLocked(prior)) {
-      if (_staleLockedDraftRejection ||
-          _findFormPayloadDivergence(prior) != null) {
-        setState(() {
-          _authoritativeDraft = prior;
-          _staleLockedDraftRejection = true;
-          _errorMessage = _staleScreenPayloadDivergedMessage;
-        });
-        return;
-      }
-    }
-
-    // R26-6-01: Evidence restoration in progress or missing/unreadable must fail closed.
-    if (_restorationStatus == ExistingEvidenceRestorationStatus.loading) {
-      setState(() {
-        _errorMessage = 'Evidence restoration is in progress. Please wait a moment before submitting.';
-      });
-      return;
-    }
-    if (_restorationStatus ==
-        ExistingEvidenceRestorationStatus.missingOrUnreadable) {
-      setState(() {
-        _errorMessage = _isEvidenceLocked
-            ? 'Cannot submit assessment: the locked evidence photo snapshot is missing or corrupted on disk and cannot be replaced.'
-            : 'Cannot submit assessment: existing evidence is missing or unreadable. '
-                  'Please attach a replacement photo or explicitly remove the attachment.';
-      });
-      return;
-    }
-    if (prior != null && isDraftPayloadLocked(prior)) {
-      if (_staleLockedDraftRejection ||
-          _findFormPayloadDivergence(prior) != null) {
-        setState(() {
-          _authoritativeDraft = prior;
-          _staleLockedDraftRejection = true;
-          _errorMessage = _staleScreenPayloadDivergedMessage;
-        });
-        return;
-      }
-    }
-
-    // R33-08: Fail closed in UI boundary if frozen snapshot was marked removed or diverged.
-    if ((prior?.hasVerifiedEvidenceSnapshot ?? false) ||
-        _frozenEvidenceSha256 != null) {
-      if (_evidenceRemoved) {
-        setState(() {
-          _errorMessage = _frozenEvidenceLockedRemoveMessage;
-        });
-        return;
-      }
-      final expectedSha = _frozenEvidenceSha256 ?? prior?.sha256Checksum;
-      final displayed = _selectedEvidence;
-      if (displayed != null &&
-          expectedSha != null &&
-          computeSha256Hex(displayed.bytes) != expectedSha) {
-        setState(() {
-          _errorMessage = _frozenEvidenceLockedReplaceMessage;
-        });
-        return;
-      }
-    }
-
-    // R26-5-01: Do not begin a remote submission involving a newly selected attachment whose durable persistence failed.
-    if (_evidenceSaveFailed) {
-      setState(() {
-        _errorMessage = 'Cannot submit assessment: the selected photo could not be saved locally. Please re-select a photo or remove it.';
-      });
-      return;
-    }
-
-    if (!_formKey.currentState!.validate()) return;
-
-    final activeChild = ref.read(activeChildModeProvider);
-    if (activeChild == null) {
-      setState(() => _errorMessage = 'No active child session');
-      return;
-    }
-
-    final raw = double.parse(_rawScoreController.text.trim());
-    final max = double.parse(_maxScoreController.text.trim());
-
     setState(() {
       _isSubmitting = true;
       _errorMessage = null;
     });
 
     try {
+      final nowClock = ref.read(appClockProvider);
+      final nowUtc = nowClock().toUtc();
+      final store = ref.read(localDraftStoreProvider);
+      final existingFromStore = await store.getLocalDraft(_localDraftId);
+      if (widget.initialDraft != null && existingFromStore == null) {
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'Local draft record is missing from storage. Reopen drafts before submitting.';
+          });
+        }
+        return;
+      }
+      final prior = existingFromStore ?? widget.initialDraft;
+      if (prior != null && mounted) {
+        setState(() {
+          _authoritativeDraft = prior;
+          if (prior.hasVerifiedEvidenceSnapshot) {
+            _frozenEvidenceSha256 ??= prior.sha256Checksum;
+            _frozenCanonicalPath ??= prior.localCompressedPhotoPath;
+          }
+        });
+      }
+
+      final isQuarantined =
+          (prior?.isLegacyUnknown ?? false) ||
+          (prior?.hasUnboundActor ?? false) ||
+          (prior?.isReadOnlyQuarantined ?? false) ||
+          (prior?.hasMalformedLease ?? false) ||
+          _isQuarantined;
+      if (isQuarantined) {
+        if (mounted) {
+          setState(() {
+            _authoritativeDraft = prior;
+            _isQuarantined = true;
+            _errorMessage = 'Cannot submit a quarantined draft. Recovery reconciliation is required.';
+          });
+        }
+        return;
+      }
+      final waitingActorResumeAllowed =
+          allowWaitingOriginalActorResume &&
+          prior != null &&
+          prior.hasWaitingOriginalActorMarker &&
+          !prior.hasActiveLease(now: nowUtc) &&
+          !prior.hasMalformedLease &&
+          !prior.isReadOnlyQuarantined &&
+          !prior.isLegacyUnknown &&
+          !prior.hasUnboundActor &&
+          prior.dispatchState != CommandDispatchState.confirmedCommitted;
+      if (prior != null &&
+          isTargetAuthorizationDenied(_liveTargetAuthorization)) {
+        if (mounted) {
+          setState(() {
+            _authoritativeDraft = prior;
+            _errorMessage = 'Target permissions for this family or child do not allow submitting this draft.';
+          });
+        }
+        return;
+      }
+      if (prior != null &&
+          !waitingActorResumeAllowed &&
+          !isDraftDirectRetryAllowed(prior, now: nowUtc)) {
+        if (mounted) {
+          setState(() {
+            _authoritativeDraft = prior;
+            _errorMessage = 'Cannot submit this draft directly while recovery reconciliation or active lease processing is pending.';
+          });
+        }
+        return;
+      }
+      if (prior != null && isDraftPayloadLocked(prior)) {
+        if (_staleLockedDraftRejection ||
+            _findFormPayloadDivergence(prior) != null) {
+          if (mounted) {
+            setState(() {
+              _authoritativeDraft = prior;
+              _staleLockedDraftRejection = true;
+              _errorMessage = _staleScreenPayloadDivergedMessage;
+            });
+          }
+          return;
+        }
+      }
+
+      final isDispatchedRetry =
+          prior != null &&
+          prior.dispatchState == CommandDispatchState.possiblyDispatched;
+      final isExistingRecoveryRetry =
+          prior != null &&
+          (isDispatchedRetry ||
+              prior.submissionStatus != DraftSubmissionStatus.draft ||
+              prior.hasRecoveryMarker);
+
+      // R26-6-01: Evidence restoration in progress or missing/unreadable must fail closed.
+      if (_restorationStatus == ExistingEvidenceRestorationStatus.loading) {
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'Evidence restoration is in progress. Please wait a moment before submitting.';
+          });
+        }
+        return;
+      }
+      if (_restorationStatus ==
+              ExistingEvidenceRestorationStatus.missingOrUnreadable &&
+          !(isExistingRecoveryRetry && prior.hasVerifiedEvidenceSnapshot)) {
+        if (mounted) {
+          setState(() {
+            _errorMessage = _isEvidenceLocked
+                ? 'Cannot submit assessment: the locked evidence photo snapshot is missing or corrupted on disk and cannot be replaced.'
+                : 'Cannot submit assessment: existing evidence is missing or unreadable. '
+                      'Please attach a replacement photo or explicitly remove the attachment.';
+          });
+        }
+        return;
+      }
+
+      // R33-08: Fail closed in UI boundary if frozen snapshot was marked removed or diverged.
+      if ((prior?.hasVerifiedEvidenceSnapshot ?? false) ||
+          _frozenEvidenceSha256 != null) {
+        if (_evidenceRemoved) {
+          if (mounted) {
+            setState(() {
+              _errorMessage = _frozenEvidenceLockedRemoveMessage;
+            });
+          }
+          return;
+        }
+        final expectedSha = _frozenEvidenceSha256 ?? prior?.sha256Checksum;
+        final displayed = _selectedEvidence;
+        if (displayed != null &&
+            expectedSha != null &&
+            computeSha256Hex(displayed.bytes) != expectedSha) {
+          if (mounted) {
+            setState(() {
+              _errorMessage = _frozenEvidenceLockedReplaceMessage;
+            });
+          }
+          return;
+        }
+      }
+
+      // R26-5-01: Do not begin a remote submission involving a newly selected attachment whose durable persistence failed.
+      if (_evidenceSaveFailed) {
+        if (mounted) {
+          setState(() {
+            _errorMessage = 'Cannot submit assessment: the selected photo could not be saved locally. Please re-select a photo or remove it.';
+          });
+        }
+        return;
+      }
+
+      if (!_formKey.currentState!.validate()) {
+        return;
+      }
+
+      final activeChild = ref.read(activeChildModeProvider);
+      if (activeChild == null) {
+        if (mounted) {
+          setState(() => _errorMessage = 'No active child session');
+        }
+        return;
+      }
+
+      final raw = double.parse(_rawScoreController.text.trim());
+      final max = double.parse(_maxScoreController.text.trim());
+
       final repo = ref.read(assessmentRepositoryProvider);
       final storage = ref.read(assessmentEvidenceStorageProvider);
       final fileStore = ref.read(localEvidenceFileStoreProvider);
@@ -1140,7 +1751,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         storagePath: '',
         stage: 'assessment UI preflight',
       );
-      if (!validatedActor.isValidAt(DateTime.now().toUtc())) {
+      if (!validatedActor.isValidAt(nowClock().toUtc())) {
         throw EvidenceStorageAuthException(
           const AuthFailureOutcome(
             storagePath: '',
@@ -1177,9 +1788,6 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
       _serverAssessmentId ??= prior?.serverAssessmentId;
 
-      final isDispatchedRetry =
-          prior != null &&
-          prior.dispatchState == CommandDispatchState.possiblyDispatched;
       if (prior != null && isDraftPayloadLocked(prior)) {
         final divergedField = _findFormPayloadDivergence(prior);
         if (_staleLockedDraftRejection || divergedField != null) {
@@ -1242,15 +1850,32 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       String? dispatchEvidenceMediaType;
       String? dispatchEvidenceIdStr;
 
-      if (isDispatchedRetry) {
+      if (isExistingRecoveryRetry) {
         if (prior.hasVerifiedEvidenceSnapshot) {
-          final verified = await fileStore.readVerifiedCanonicalSnapshot(
-            draft: prior,
-          );
-          assertDisplayedSelectionMatchesFrozen(verified, prior.evidenceId);
-          dispatchEvidenceBytes = verified.bytes;
-          dispatchEvidenceMediaType = verified.mediaType;
-          dispatchEvidenceIdStr = prior.evidenceId;
+          VerifiedCanonicalEvidence? verified;
+          try {
+            verified = await fileStore.readVerifiedCanonicalSnapshot(
+              draft: prior,
+            );
+          } on MissingCanonicalEvidenceSnapshotException {
+            verified = null;
+          } on CanonicalEvidenceValidationException {
+            verified = null;
+          } on EvidenceStorageException {
+            verified = null;
+          }
+          if (verified != null) {
+            assertDisplayedSelectionMatchesFrozen(verified, prior.evidenceId);
+            dispatchEvidenceBytes = verified.bytes;
+            dispatchEvidenceMediaType = verified.mediaType;
+            dispatchEvidenceIdStr = prior.evidenceId;
+          } else {
+            // Defer missing/corrupted canonical snapshot handling to WP3 under lease
+            // so durable quarantine state is recorded safely.
+            dispatchEvidenceBytes = null;
+            dispatchEvidenceMediaType = null;
+            dispatchEvidenceIdStr = prior.evidenceId;
+          }
         } else if ((prior.evidenceId?.isNotEmpty ?? false) ||
             (prior.localPhotoPath?.isNotEmpty ?? false)) {
           throw MissingCanonicalEvidenceSnapshotException(
@@ -1378,15 +2003,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         canonicalSnapshotStore: fileStore,
         authSessionPort: authPort,
         recoveryAuthorizationPort: authzPort,
+        clock: _ProviderClock(nowClock),
         jitterSource: config.canUseLocalDemoRepositories
             ? const DeterministicJitterSource(0.0)
             : const RandomJitterSource(),
       );
 
-      final trigger =
-          (isDispatchedRetry ||
-              (prior?.hasWaitingOriginalActorMarker ?? false) ||
-              prior?.recoveryCode == DraftRecoveryCode.retryScheduled)
+      final trigger = isExistingRecoveryRetry
           ? CommandExecutionTrigger.foregroundRetry
           : CommandExecutionTrigger.foreground;
 
@@ -1395,10 +2018,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           : null;
 
       final outcome = await submitUseCase.execute(
-        createCommandId: isDispatchedRetry
+        createCommandId: isExistingRecoveryRetry
             ? (prior.createCommandId ?? _createCommandId!)
             : _createCommandId!,
-        submitCommandId: isDispatchedRetry
+        submitCommandId: isExistingRecoveryRetry
             ? (prior.submitCommandId ?? _submitCommandId!)
             : _submitCommandId!,
         familyId: activeChild.familyId,
@@ -1432,7 +2055,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         });
       }
     } finally {
-      await _syncAuthoritativeDraftFromStore(updateUiState: false);
+      await _syncAuthoritativeDraftFromStore(
+        updateUiState: false,
+        refreshAuthContext: true,
+      );
       if (mounted) {
         setState(() => _isSubmitting = false);
       }
@@ -1619,10 +2245,249 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     if (draft?.dispatchState == CommandDispatchState.confirmedCommitted) {
       return 'This assessment has already been committed. Its original submitted payload, IDs, and evidence are locked and preserved on this device.';
     }
-    if (draft != null && !isDraftDirectRetryAllowed(draft)) {
+    if (_hasActorMismatchOnKnownDraft ||
+        (draft?.hasWaitingOriginalActorMarker ?? false)) {
+      return 'This draft belongs to the original author account. Its original submitted payload, IDs, and evidence are locked and cannot be altered or reassigned.';
+    }
+    if (isTargetAuthorizationDenied(_liveTargetAuthorization)) {
+      return 'Permissions for this child or family do not permit edits or submission. Its original submitted payload, IDs, and evidence are locked read-only on this device.';
+    }
+    if (draft != null &&
+        !isDraftDirectRetryAllowed(
+          draft,
+          now: ref.read(appClockProvider)().toUtc(),
+        )) {
       return 'Editing is locked for this draft while recovery reconciliation or active sync processing is pending. Its original submitted payload, IDs, and evidence remain preserved on this device.';
     }
     return 'This draft has already entered submission. Editing is locked so its original submitted payload, command IDs, score, and evidence remain preserved while retrying.';
+  }
+
+  Widget _buildRecoveryStatusCard(
+    ThemeData theme,
+    AssessmentRecoveryPresentation presentation,
+  ) {
+    final (
+      containerColor,
+      foregroundColor,
+      icon,
+    ) = switch (presentation.severity) {
+      RecoveryBannerSeverity.success => (
+        Colors.green.shade50,
+        Colors.green.shade900,
+        Icons.verified_outlined,
+      ),
+      RecoveryBannerSeverity.error => (
+        theme.colorScheme.errorContainer,
+        theme.colorScheme.onErrorContainer,
+        Icons.error_outline,
+      ),
+      RecoveryBannerSeverity.warning => (
+        theme.colorScheme.tertiaryContainer,
+        theme.colorScheme.onTertiaryContainer,
+        Icons.warning_amber_rounded,
+      ),
+      RecoveryBannerSeverity.info => (
+        theme.colorScheme.secondaryContainer,
+        theme.colorScheme.onSecondaryContainer,
+        Icons.sync,
+      ),
+      RecoveryBannerSeverity.neutral => (
+        theme.colorScheme.surfaceContainerHighest,
+        theme.colorScheme.onSurface,
+        Icons.edit_note,
+      ),
+    };
+
+    return Card(
+      key: const Key('recovery_status_card'),
+      color: containerColor,
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, color: foregroundColor),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    presentation.title,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: foregroundColor,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Container(
+                  key: const Key('recovery_disposition_badge'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: foregroundColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    presentation.badgeLabel,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: foregroundColor,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              presentation.explanation,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: foregroundColor,
+              ),
+            ),
+            if (presentation.safeRecoveryCode != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Recovery code: ${presentation.safeRecoveryCode}',
+                key: const Key('recovery_code_label'),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: foregroundColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            if (presentation.scheduleDetail != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                presentation.scheduleDetail!,
+                key: const Key('recovery_schedule_detail'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: foregroundColor,
+                ),
+              ),
+            ],
+            if (presentation.leaseDetail != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                presentation.leaseDetail!,
+                key: const Key('recovery_lease_detail'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: foregroundColor,
+                ),
+              ),
+            ],
+            if (presentation.signInGuidance != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                presentation.signInGuidance!,
+                key: const Key('recovery_sign_in_guidance'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: foregroundColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            if (presentation.manualReviewNotice != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                presentation.manualReviewNotice!,
+                key: const Key('recovery_manual_review_notice'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: foregroundColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            if (presentation.canResumeOriginalActor ||
+                presentation.canReviewConfirmed ||
+                presentation.canRefreshStatus) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Wrap(
+                spacing: AppSpacing.sm,
+                runSpacing: AppSpacing.xs,
+                children: [
+                  if (presentation.canResumeOriginalActor)
+                    FilledButton.icon(
+                      key: const Key('resume_original_actor_button'),
+                      onPressed: _isSubmitting
+                          ? null
+                          : _resumeOriginalActorAndSubmit,
+                      icon: const Icon(Icons.play_arrow, size: 18),
+                      label: const Text('Resume Submission'),
+                    ),
+                  if (presentation.canReviewConfirmed)
+                    FilledButton.tonalIcon(
+                      key: const Key('review_confirmed_result_button'),
+                      onPressed: _isLoadingConfirmedStatus
+                          ? null
+                          : _reviewConfirmedServerResult,
+                      icon: _isLoadingConfirmedStatus
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.fact_check_outlined, size: 18),
+                      label: const Text('Review Confirmed Result'),
+                    ),
+                  if (presentation.canRefreshStatus)
+                    OutlinedButton.icon(
+                      key: const Key('refresh_recovery_inline_button'),
+                      onPressed: _isRefreshingRecovery
+                          ? null
+                          : _refreshRecoveryStatus,
+                      icon: _isRefreshingRecovery
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh, size: 18),
+                      label: const Text('Refresh Status'),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildConfirmedServerStatusCard(ThemeData theme) {
+    final assessment = _confirmedServerAssessment;
+    final evidenceList = _confirmedServerEvidence;
+    final error = _confirmedServerStatusError;
+    return Card(
+      key: const Key('confirmed_server_status_card'),
+      color: theme.colorScheme.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Confirmed Server Status (Read-Only)',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            if (error != null)
+              Text(error, style: TextStyle(color: theme.colorScheme.error))
+            else if (assessment != null) ...[
+              Text('Title: ${assessment.title}'),
+              Text('Status: ${assessment.status.name}'),
+              Text(
+                'Score: ${assessment.score.rawScore} / ${assessment.score.maxScore}',
+              ),
+              Text('Registered evidence files: ${evidenceList?.length ?? 0}'),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -1634,6 +2499,16 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final isLegacyQuarantined =
         (knownDraft?.isLegacyUnknown ?? false) ||
         (widget.initialDraft?.isLegacyUnknown ?? false);
+    final recoveryPresentation = knownDraft != null
+        ? buildAssessmentRecoveryPresentation(
+            draft: knownDraft,
+            now: ref.read(appClockProvider)().toUtc(),
+            liveActor: _liveActor,
+            liveAuthChecked: _liveAuthChecked,
+            liveAuthInvalid: _liveAuthInvalid,
+            liveTargetAuthorization: _liveTargetAuthorization,
+          )
+        : null;
 
     return Scaffold(
       appBar: AppBar(
@@ -1642,6 +2517,15 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
               ? 'Edit Assessment Draft'
               : 'Add Assessment Result',
         ),
+        actions: [
+          if (knownDraft != null)
+            IconButton(
+              key: const Key('refresh_recovery_status_button'),
+              tooltip: 'Refresh Recovery Status',
+              onPressed: _isRefreshingRecovery ? null : _refreshRecoveryStatus,
+              icon: const Icon(Icons.refresh),
+            ),
+        ],
       ),
       body: SafeArea(
         child: Center(
@@ -1711,6 +2595,15 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                           ),
                         ),
                       ),
+                      const SizedBox(height: AppSpacing.md),
+                    ],
+                    if (recoveryPresentation != null) ...[
+                      _buildRecoveryStatusCard(theme, recoveryPresentation),
+                      const SizedBox(height: AppSpacing.md),
+                    ],
+                    if (_confirmedServerAssessment != null ||
+                        _confirmedServerStatusError != null) ...[
+                      _buildConfirmedServerStatusCard(theme),
                       const SizedBox(height: AppSpacing.md),
                     ],
                     if (_errorMessage != null) ...[
@@ -2062,9 +2955,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                     const SizedBox(height: AppSpacing.xs),
                                     Text(
                                       _isEvidenceLocked
-                                          ? 'Path: ${_unrestoredPhotoPath ?? 'unknown'}\n'
+                                          ? 'File: ${sanitizeDiagnosticBasename(_unrestoredPhotoPath)}\n'
                                                 'This draft\'s locked evidence snapshot is missing or corrupted on disk and cannot be replaced or removed.'
-                                          : 'Path: ${_unrestoredPhotoPath ?? 'unknown'}\n'
+                                          : 'File: ${sanitizeDiagnosticBasename(_unrestoredPhotoPath)}\n'
                                                 'To protect against data loss, you cannot save or submit until you attach a replacement photo or explicitly remove this attachment.',
                                       style: TextStyle(
                                         fontSize: 12,
@@ -2213,7 +3106,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                       strokeWidth: 2,
                                     ),
                                   )
-                                : const Text('Submit for Review'),
+                                : Text(
+                                    recoveryPresentation?.actionKind ==
+                                            AssessmentRecoveryUiActionKind
+                                                .retryNow
+                                        ? 'Retry Now'
+                                        : 'Submit for Review',
+                                  ),
                           ),
                         ),
                       ],
