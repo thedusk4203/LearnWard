@@ -1093,7 +1093,46 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
 /// Lightweight in-memory fallback for [AssessmentEvidenceStorage] in local demo mode.
 final class InMemoryAssessmentEvidenceStorage
     implements AssessmentEvidenceStorage {
+  InMemoryAssessmentEvidenceStorage({
+    this.authSessionPort,
+    this.allowUnauthenticatedDemo = false,
+  });
+
+  /// Explicitly configures local demo storage for unauthenticated demo usage.
+  InMemoryAssessmentEvidenceStorage.unauthenticatedDemo()
+    : authSessionPort = null,
+      allowUnauthenticatedDemo = true;
+
+  final AuthSessionPort? authSessionPort;
+  final bool allowUnauthenticatedDemo;
   final Map<String, List<int>> _storage = {};
+
+  Future<ValidatedActorContext?> _checkAuth({
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+    required String storagePath,
+    required String stage,
+  }) async {
+    final port = authSessionPort;
+    if (port == null) {
+      if (allowUnauthenticatedDemo) {
+        return context;
+      }
+      throw EvidenceStorageAuthException(
+        AuthFailureOutcome(
+          storagePath: storagePath,
+          reason: 'Missing AuthSessionPort for Storage operation ($stage).',
+        ),
+      );
+    }
+    return assertValidStorageAuthSession(
+      authSessionPort: port,
+      storagePath: storagePath,
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      stage: stage,
+    );
+  }
 
   @override
   Future<String> uploadEvidence({
@@ -1103,24 +1142,191 @@ final class InMemoryAssessmentEvidenceStorage
     required EvidenceId evidenceId,
     required List<int> bytes,
     required String mediaType,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   }) async {
-    final ext = mediaType == 'image/png' ? 'png' : 'jpg';
+    final provisionalExt = mediaType == 'image/png' ? '.png' : '.jpg';
+    final candidatePath =
+        '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}$provisionalExt';
+
+    final validatedActor = await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: candidatePath,
+      stage: 'evidence upload',
+    );
+
+    final ext = validateEvidenceUploadPayload(
+      bytes: bytes,
+      mediaType: mediaType,
+    );
     final path =
         '${familyId.value}/${childId.value}/${assessmentId.value}/${evidenceId.value}.$ext';
-    _storage[path] = bytes;
+
+    if (_storage.containsKey(path)) {
+      final reconciliation = await reconcileEvidence(
+        storagePath: path,
+        localBytes: bytes,
+        context: context ?? validatedActor,
+        expectedSessionGeneration:
+            expectedSessionGeneration ?? validatedActor?.sessionGeneration,
+      );
+      switch (reconciliation) {
+        case MatchingBytesOutcome():
+          return path;
+        case ContentConflictOutcome(:final reason):
+          throw EvidenceStorageConflictException(reconciliation, reason);
+        case UnknownOutcome(:final reason):
+          throw EvidenceStorageUnknownOutcomeException(reconciliation, reason);
+        case AuthFailureOutcome(:final reason):
+          throw EvidenceStorageAuthException(reconciliation, reason);
+      }
+    }
+
+    _storage[path] = List<int>.from(bytes);
     return path;
+  }
+
+  @override
+  Future<List<int>> downloadEvidence({
+    required String storagePath,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) async {
+    await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: storagePath,
+      stage: 'evidence download',
+    );
+
+    final data = _storage[storagePath];
+    if (data == null) {
+      throw EvidenceStorageUnknownOutcomeException(
+        UnknownOutcome(
+          storagePath: storagePath,
+          reason: 'Remote storage object not found.',
+        ),
+      );
+    }
+
+    if (data.isEmpty) {
+      throw EvidenceStorageConflictException(
+        ContentConflictOutcome(
+          storagePath: storagePath,
+          localSha256: '',
+          remoteSha256: '',
+          localByteCount: 0,
+          remoteByteCount: 0,
+          reason: 'Remote evidence object is empty.',
+        ),
+      );
+    }
+
+    if (data.length > AssessmentEvidenceStorage.maxFileSizeBytes) {
+      throw EvidenceStorageConflictException(
+        ContentConflictOutcome(
+          storagePath: storagePath,
+          localSha256: '',
+          remoteSha256: '',
+          localByteCount: 0,
+          remoteByteCount: data.length,
+          reason:
+              'Remote evidence object exceeds maximum allowed size (10 MiB).',
+        ),
+      );
+    }
+
+    return List<int>.from(data);
+  }
+
+  @override
+  Future<EvidenceStorageReconciliationResult> reconcileEvidence({
+    required String storagePath,
+    required List<int> localBytes,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) async {
+    final ValidatedActorContext? currentContext;
+    try {
+      currentContext = await _checkAuth(
+        context: context,
+        expectedSessionGeneration: expectedSessionGeneration,
+        storagePath: storagePath,
+        stage: 'evidence reconciliation preflight',
+      );
+    } on EvidenceStorageAuthException catch (e) {
+      return e.result;
+    }
+
+    final effectiveSessionGen =
+        expectedSessionGeneration ??
+        context?.sessionGeneration ??
+        currentContext?.sessionGeneration;
+
+    final List<int> remoteBytes;
+    try {
+      remoteBytes = await downloadEvidence(
+        storagePath: storagePath,
+        context: context ?? currentContext,
+        expectedSessionGeneration: effectiveSessionGen,
+      );
+    } on EvidenceStorageAuthException catch (e) {
+      // Finding R32-03: Preserve distinct AuthFailureOutcome
+      return e.result;
+    } on EvidenceStorageConflictException catch (e) {
+      return ContentConflictOutcome(
+        storagePath: storagePath,
+        localSha256: computeSha256Hex(localBytes),
+        remoteSha256: e.result.remoteSha256,
+        localByteCount: localBytes.length,
+        remoteByteCount: e.result.remoteByteCount,
+        reason: e.result.reason,
+      );
+    } on EvidenceStorageUnknownOutcomeException catch (e) {
+      return e.result;
+    } catch (_) {
+      return UnknownOutcome(
+        storagePath: storagePath,
+        reason: 'Object not found or unreadable in local demo storage.',
+      );
+    }
+
+    return reconcileRemoteEvidenceBytes(
+      storagePath: storagePath,
+      localBytes: localBytes,
+      remoteBytes: remoteBytes,
+    );
   }
 
   @override
   Future<String> getEvidenceSignedUrl({
     required String storagePath,
     Duration expiresIn = const Duration(minutes: 10),
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
   }) async {
+    await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: storagePath,
+      stage: 'signed URL generation',
+    );
     return 'https://local-demo-storage.learnward.internal/$storagePath';
   }
 
   @override
-  Future<void> deleteEvidence(String storagePath) async {
+  Future<void> deleteEvidence(
+    String storagePath, {
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+  }) async {
+    await _checkAuth(
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      storagePath: storagePath,
+      stage: 'evidence deletion',
+    );
     _storage.remove(storagePath);
   }
 }

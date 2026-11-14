@@ -230,6 +230,7 @@ void main() {
     late FakeFamilyRepository fakeFamilyRepo;
     late FakeChildProfileRepository fakeChildRepo;
     late FailingSubmitAssessmentRepository fakeAssessmentRepo;
+    late FakeAuthSessionPort fakeAuth;
     late FakeAssessmentEvidenceStorage fakeStorage;
     late InMemoryGrowthRepository fakeGrowthRepo;
     late InMemoryLocalMetadataStore fakeMetadataStore;
@@ -264,7 +265,11 @@ void main() {
       fakeFamilyRepo = FakeFamilyRepository();
       fakeChildRepo = FakeChildProfileRepository();
       fakeAssessmentRepo = FailingSubmitAssessmentRepository();
-      fakeStorage = FakeAssessmentEvidenceStorage();
+      fakeAuth = FakeAuthSessionPort(
+        activeUserId: 'local-parent-user',
+        sessionGeneration: 'demo-generation-1',
+      );
+      fakeStorage = FakeAssessmentEvidenceStorage(authSessionPort: fakeAuth);
       fakeGrowthRepo = InMemoryGrowthRepository();
       fakeMetadataStore = InMemoryLocalMetadataStore();
 

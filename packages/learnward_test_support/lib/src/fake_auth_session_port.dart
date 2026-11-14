@@ -94,8 +94,13 @@ final class FakeAuthSessionPort implements AuthSessionPort {
   @override
   Stream<String?> get sessionGenerationStream => _controller.stream;
 
+  int validateCallCount = 0;
+  void Function(int callCount)? onValidateForMutation;
+
   @override
   Future<ValidatedActorContext?> validateForMutation() async {
+    validateCallCount++;
+    onValidateForMutation?.call(validateCallCount);
     return _currentContext;
   }
 
