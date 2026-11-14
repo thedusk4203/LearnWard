@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_data/learnward_data.dart';
@@ -862,4 +863,407 @@ void main() {
       });
     },
   );
+
+  group('R33-01 / R33-02 / R33-03: Legacy Save, Raw Delete, and Unbound Actor Hardening', () {
+    late Directory tempDir;
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('learnward_r33_hardening_');
+    });
+
+    tearDown(() {
+      if (tempDir.existsSync()) {
+        try {
+          tempDir.deleteSync(recursive: true);
+        } catch (_) {}
+      }
+    });
+
+    Future<void> verifyR33Suite(
+      LocalDraftStore initialStore, {
+      required Future<void> Function(
+        LocalDraftStore store,
+        LocalAssessmentDraft malformedDraft,
+      )
+      seedCorruptDraft,
+      Future<LocalDraftStore> Function(LocalDraftStore current)? reopenStore,
+    }) async {
+      var store = initialStore;
+      final now = DateTime.utc(2026, 11, 14, 12, 0, 0);
+
+      // =====================================================================
+      // R33-01: Unbound actor quarantine against legacy saveLocalDraft
+      // =====================================================================
+      final unboundNever = _buildDraft(
+        localDraftId: 'r33-unbound-never',
+        actorUserId: null,
+        actorRole: null,
+        title: 'Unbound Never Original',
+        rawScore: 6.5,
+        localPhotoPath: '${tempDir.path}/u1.jpg',
+        dispatchState: CommandDispatchState.neverDispatched,
+        submissionStatus: DraftSubmissionStatus.draft,
+      );
+      final unboundDispatched = _buildDraft(
+        localDraftId: 'r33-unbound-disp',
+        actorUserId: null,
+        actorRole: null,
+        title: 'Unbound Dispatched Original',
+        rawScore: 7.5,
+        dispatchState: CommandDispatchState.possiblyDispatched,
+        submissionStatus: DraftSubmissionStatus.submittingAssessment,
+      );
+      final unboundLegacy = _buildDraft(
+        localDraftId: 'r33-unbound-legacy',
+        actorUserId: '',
+        actorRole: null,
+        createCommandId: null,
+        submitCommandId: null,
+        title: 'Unbound Legacy Original',
+        rawScore: 5.5,
+        dispatchState: CommandDispatchState.unknownLegacy,
+        submissionStatus: DraftSubmissionStatus.draft,
+      );
+
+      await store.saveLocalDraft(unboundNever);
+      await store.saveLocalDraft(unboundDispatched);
+      await store.saveLocalDraft(unboundLegacy);
+
+      for (final row in [unboundNever, unboundDispatched, unboundLegacy]) {
+        // 1. Actor adoption / backfill must fail closed
+        await expectLater(
+          () => store.saveLocalDraft(
+            row.copyWith(actorUserId: 'adopted-user-999'),
+          ),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
+        // 2. Content / score / file edits without actor backfill must fail closed
+        await expectLater(
+          () => store.saveLocalDraft(
+            row.copyWith(
+              title: 'Tampered Title',
+              rawScore: 10.0,
+              localPhotoPath: '${tempDir.path}/tampered.jpg',
+            ),
+          ),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
+      }
+
+      if (reopenStore != null) {
+        store = await reopenStore(store);
+      }
+
+      final persistedUnboundNever = await store.getLocalDraft(
+        'r33-unbound-never',
+      );
+      expect(persistedUnboundNever!.actorUserId, isNull);
+      expect(persistedUnboundNever.title, 'Unbound Never Original');
+      expect(persistedUnboundNever.rawScore, 6.5);
+      expect(persistedUnboundNever.localPhotoPath, '${tempDir.path}/u1.jpg');
+      expect(persistedUnboundNever.isReadOnlyQuarantined, isTrue);
+
+      final persistedUnboundLegacy = await store.getLocalDraft(
+        'r33-unbound-legacy',
+      );
+      expect(persistedUnboundLegacy!.hasUnboundActor, isTrue);
+      expect(persistedUnboundLegacy.createCommandId, isNull);
+      expect(persistedUnboundLegacy.submitCommandId, isNull);
+      expect(persistedUnboundLegacy.title, 'Unbound Legacy Original');
+
+      // =====================================================================
+      // R33-02: Raw deleteLocalDraft blocks ALL unsafe states (including unleased/expired)
+      // =====================================================================
+      final unsafeFiles = <String, File>{};
+      File makeEvidenceFile(String tag) {
+        final f = File('${tempDir.path}/ev_$tag.jpg')
+          ..writeAsBytesSync(<int>[1, 2, 3, tag.length]);
+        unsafeFiles[tag] = f;
+        return f;
+      }
+
+      final unsafeDeleteCases = <String, LocalAssessmentDraft>{
+        'possibly_dispatched_unleased': _buildDraft(
+          localDraftId: 'r33-del-possibly',
+          dispatchState: CommandDispatchState.possiblyDispatched,
+          submissionStatus: DraftSubmissionStatus.draft,
+          localPhotoPath: makeEvidenceFile('possibly').path,
+        ),
+        'confirmed_committed_unleased': _buildDraft(
+          localDraftId: 'r33-del-committed',
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+          serverAssessmentId: 'srv-1',
+          localPhotoPath: makeEvidenceFile('committed').path,
+        ),
+        'uploading_evidence_unleased': _buildDraft(
+          localDraftId: 'r33-del-uploading',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.uploadingEvidence,
+          localPhotoPath: makeEvidenceFile('uploading').path,
+        ),
+        'submitting_assessment_unleased': _buildDraft(
+          localDraftId: 'r33-del-submitting',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+        ),
+        'failed_retryable_unleased': _buildDraft(
+          localDraftId: 'r33-del-retryable',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.failedRetryable,
+        ),
+        'terminal_error_unleased': _buildDraft(
+          localDraftId: 'r33-del-terminal',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.terminalError,
+          lastErrorMessage: DraftRecoveryCode.format(
+            DraftRecoveryCode.terminalPolicyDenial,
+          ),
+        ),
+        'server_assessment_id_unleased': _buildDraft(
+          localDraftId: 'r33-del-srv-assess',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.draft,
+          serverAssessmentId: 'srv-assess-persisted',
+        ),
+        'server_evidence_id_unleased': _buildDraft(
+          localDraftId: 'r33-del-srv-ev',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.draft,
+          serverEvidenceId: 'srv-ev-persisted',
+        ),
+        'frozen_snapshot_unleased': _buildDraft(
+          localDraftId: 'r33-del-frozen-snap',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.draft,
+          localCompressedPhotoPath: makeEvidenceFile('frozen').path,
+          sha256Checksum: _validShaA,
+        ),
+        'unbound_actor_unleased': unboundNever,
+        'unknown_legacy_unleased': _buildDraft(
+          localDraftId: 'r33-del-legacy',
+          dispatchState: CommandDispatchState.unknownLegacy,
+          submissionStatus: DraftSubmissionStatus.draft,
+        ),
+        'recovery_marker_unleased': _buildDraft(
+          localDraftId: 'r33-del-marker',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.draft,
+          lastErrorMessage: DraftRecoveryCode.format(
+            DraftRecoveryCode.waitingOriginalActor,
+            'User switched',
+          ),
+        ),
+        'active_lease': _buildDraft(
+          localDraftId: 'r33-del-active-lease',
+          leaseToken: 'tok-active-1',
+          leaseExpiresAt: now.add(const Duration(minutes: 5)),
+        ),
+        'expired_lease': _buildDraft(
+          localDraftId: 'r33-del-expired-lease',
+          leaseToken: 'tok-expired-1',
+          leaseExpiresAt: now.subtract(const Duration(minutes: 5)),
+        ),
+        'malformed_lease_token_only': _buildDraft(
+          localDraftId: 'r33-del-half-token',
+          leaseToken: 'tok-half-1',
+          leaseExpiresAt: null,
+        ),
+        'malformed_lease_expiry_only': _buildDraft(
+          localDraftId: 'r33-del-half-exp',
+          leaseToken: null,
+          leaseExpiresAt: now.add(const Duration(minutes: 5)),
+        ),
+      };
+
+      for (final entry in unsafeDeleteCases.entries) {
+        final draft = entry.value;
+        if (draft.localDraftId != unboundNever.localDraftId) {
+          if (draft.hasMalformedLease) {
+            await seedCorruptDraft(store, draft);
+          } else {
+            await store.saveLocalDraft(draft);
+          }
+        }
+        await expectLater(
+          () => store.deleteLocalDraft(draft.localDraftId),
+          throwsA(isA<DraftWriteConflictException>()),
+          reason: 'deleteLocalDraft must block ${entry.key}',
+        );
+        final stillPresent = await store.getLocalDraft(draft.localDraftId);
+        expect(
+          stillPresent,
+          isNotNull,
+          reason: 'Row for ${entry.key} must remain preserved',
+        );
+      }
+
+      // Physical evidence files for blocked drafts must remain on disk
+      for (final f in unsafeFiles.values) {
+        expect(f.existsSync(), isTrue);
+      }
+
+      // Unbound actor row also blocks deleteDraftSafely
+      final unboundSafeDel = await store.deleteDraftSafely(
+        localDraftId: unboundNever.localDraftId,
+        expectedDraft: persistedUnboundNever,
+        now: now,
+      );
+      expect(unboundSafeDel.status, DraftDeletionStatus.blockedUnsafeState);
+
+      // Positive control: clean bound-actor neverDispatched unleased draft deletes cleanly
+      // while preserving its physical file on disk
+      final cleanFile = makeEvidenceFile('clean');
+      final cleanDraft = _buildDraft(
+        localDraftId: 'r33-del-clean-ok',
+        localPhotoPath: cleanFile.path,
+        actorUserId: 'actor-1',
+      );
+      await store.saveLocalDraft(cleanDraft);
+      await store.deleteLocalDraft('r33-del-clean-ok');
+      expect(await store.getLocalDraft('r33-del-clean-ok'), isNull);
+      expect(cleanFile.existsSync(), isTrue);
+
+      // =====================================================================
+      // R33-03: saveLocalDraft blocks content/command/evidence/actor edits once dispatched or non-draft
+      // =====================================================================
+      final inFlightNoSnap = _buildDraft(
+        localDraftId: 'r33-inflight-nosnap',
+        actorUserId: 'actor-1',
+        createCommandId: 'cmd-orig-create',
+        submitCommandId: 'cmd-orig-submit',
+        evidenceId: 'ev-orig-1',
+        title: 'Original In-Flight Title',
+        rawScore: 8.5,
+        localPhotoPath: '${tempDir.path}/inflight_raw.jpg',
+        localCompressedPhotoPath: null,
+        sha256Checksum: null,
+        serverEvidenceId: null,
+        dispatchState: CommandDispatchState.possiblyDispatched,
+        submissionStatus: DraftSubmissionStatus.submittingAssessment,
+      );
+      await store.saveLocalDraft(inFlightNoSnap);
+
+      final forbiddenEdits = <String, LocalAssessmentDraft>{
+        'title': inFlightNoSnap.copyWith(title: 'Autosave Mutated Title'),
+        'rawScore': inFlightNoSnap.copyWith(rawScore: 10.0),
+        'subject': inFlightNoSnap.copyWith(
+          subject: 'Science',
+          subjectKey: SubjectKey.science,
+        ),
+        'commandIds': inFlightNoSnap.copyWith(
+          createCommandId: 'cmd-rot-create',
+          submitCommandId: 'cmd-rot-submit',
+        ),
+        'evidenceRef': inFlightNoSnap.copyWith(
+          evidenceId: 'ev-mutated',
+          localPhotoPath: '${tempDir.path}/other.jpg',
+        ),
+        'actorSwap': inFlightNoSnap.copyWith(actorUserId: 'actor-2'),
+        'actorClear': inFlightNoSnap.copyWith(actorUserId: null),
+        'recoveryMarker': inFlightNoSnap.copyWith(
+          lastErrorMessage: DraftRecoveryCode.format(
+            DraftRecoveryCode.retryScheduled,
+          ),
+        ),
+      };
+      for (final editEntry in forbiddenEdits.entries) {
+        await expectLater(
+          () => store.saveLocalDraft(editEntry.value),
+          throwsA(isA<DraftWriteConflictException>()),
+          reason:
+              'saveLocalDraft must reject ${editEntry.key} on possiblyDispatched row',
+        );
+      }
+
+      // Legacy saveLocalDraft also cannot forge dispatch/lease/server IDs on a clean draft
+      final editable = _buildDraft(
+        localDraftId: 'r33-editable-guard',
+        actorUserId: 'actor-1',
+        title: 'Initial Editable',
+      );
+      await store.saveLocalDraft(editable);
+      for (final forged in <LocalAssessmentDraft>[
+        editable.copyWith(
+          dispatchState: CommandDispatchState.possiblyDispatched,
+        ),
+        editable.copyWith(
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+        ),
+        editable.copyWith(serverAssessmentId: 'forged-srv-1'),
+        editable.copyWith(actorUserId: null),
+        editable.copyWith(actorUserId: 'actor-2'),
+      ]) {
+        await expectLater(
+          () => store.saveLocalDraft(forged),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
+      }
+
+      if (reopenStore != null) {
+        store = await reopenStore(store);
+      }
+
+      final persistedInFlight = await store.getLocalDraft(
+        'r33-inflight-nosnap',
+      );
+      expect(persistedInFlight, isNotNull);
+      expect(persistedInFlight!.title, 'Original In-Flight Title');
+      expect(persistedInFlight.rawScore, 8.5);
+      expect(persistedInFlight.subject, 'Math');
+      expect(persistedInFlight.subjectKey, SubjectKey.math);
+      expect(persistedInFlight.createCommandId, 'cmd-orig-create');
+      expect(persistedInFlight.submitCommandId, 'cmd-orig-submit');
+      expect(persistedInFlight.evidenceId, 'ev-orig-1');
+      expect(persistedInFlight.actorUserId, 'actor-1');
+      expect(
+        persistedInFlight.dispatchState,
+        CommandDispatchState.possiblyDispatched,
+      );
+    }
+
+    test(
+      'SQLite AppDatabase enforces R33-01, R33-02, R33-03 across restart',
+      () async {
+        final dbFile = File('${tempDir.path}/r33_sqlite.sqlite');
+        var db = AppDatabase(NativeDatabase(dbFile));
+        try {
+          await verifyR33Suite(
+            db,
+            seedCorruptDraft: (store, malformed) async {
+              final targetDb = store as AppDatabase;
+              await targetDb.saveLocalDraft(
+                malformed.copyWith(leaseToken: null, leaseExpiresAt: null),
+              );
+              await (targetDb.update(targetDb.localAssessmentDrafts)..where(
+                    (t) => t.localDraftId.equals(malformed.localDraftId),
+                  ))
+                  .write(
+                    LocalAssessmentDraftsCompanion(
+                      leaseToken: Value(malformed.leaseToken),
+                      leaseExpiresAt: Value(malformed.leaseExpiresAt),
+                    ),
+                  );
+            },
+            reopenStore: (current) async {
+              await (current as AppDatabase).close();
+              db = AppDatabase(NativeDatabase(dbFile));
+              return db;
+            },
+          );
+        } finally {
+          await db.close();
+        }
+      },
+    );
+
+    test('TestLocalDraftStore mirrors R33-01, R33-02, R33-03 invariants identically', () async {
+      await verifyR33Suite(
+        TestLocalDraftStore(),
+        seedCorruptDraft: (store, malformed) async {
+          (store as TestLocalDraftStore).seedRawDraft(malformed);
+        },
+      );
+    });
+  });
 }

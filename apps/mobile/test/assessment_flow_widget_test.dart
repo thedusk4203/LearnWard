@@ -515,6 +515,7 @@ void main() {
       difficulty: 'normal',
       rawScore: 9.0,
       maxScore: 10.0,
+      actorUserId: 'local-parent-user',
       occurredAt: now,
       updatedAt: now,
     );
@@ -564,9 +565,17 @@ void main() {
     await tester.tap(find.byKey(const Key('submit_assessment_button')));
     await tester.pumpAndSettle();
 
-    // Returns to Child Mode screen, local draft should be removed
+    // Returns to Child Mode screen, local draft is transitioned to confirmedCommitted and excluded from unsubmitted list
     expect(find.text('Hi, Lucas!'), findsOneWidget);
     expect(find.text('Unsubmitted Local Drafts (1)'), findsNothing);
+    final persistedAfterSubmit = await fakeDraftStore.getLocalDraft(
+      'draft-offline-123',
+    );
+    expect(persistedAfterSubmit, isNotNull);
+    expect(
+      persistedAfterSubmit!.dispatchState,
+      equals(CommandDispatchState.confirmedCommitted),
+    );
     expect(fakeAssessmentRepo.assessments.length, equals(1));
     expect(
       fakeAssessmentRepo.assessments.values.first.title,
@@ -823,11 +832,19 @@ void main() {
       expect(trackingRepo.recordedSubmitCommandIds.length, equals(2));
       expect(trackingRepo.recordedSubmitCommandIds[1], equals(firstSubmitCmd));
 
-      // Submission succeeded and draft was deleted
+      // Submission succeeded: draft transitioned to confirmed_committed tombstone (I14)
+      // and is excluded from unsubmitted drafts in Child Mode
       final remainingDrafts = await fakeDraftStore.listLocalDrafts(
         testChild.id,
       );
-      expect(remainingDrafts.isEmpty, isTrue);
+      expect(remainingDrafts.length, equals(1));
+      expect(
+        remainingDrafts.first.dispatchState,
+        equals(CommandDispatchState.confirmedCommitted),
+      );
+      expect(remainingDrafts.first.serverAssessmentId, isNotNull);
+      expect(remainingDrafts.first.leaseToken, isNull);
+      expect(find.text('Unsubmitted Local Drafts (1)'), findsNothing);
     },
   );
 
@@ -985,7 +1002,7 @@ void main() {
   );
 
   testWidgets(
-    'Fresh draft timeout -> Save Local Draft preserves possibly_dispatched and exact command IDs',
+    'Fresh draft timeout -> Save Local Draft fails closed (R33-03) and preserves possibly_dispatched, content, and command IDs',
     (tester) async {
       final failingSubmitRepo = _FailingSubmitAssessmentRepository();
 
@@ -1056,7 +1073,7 @@ void main() {
       await tester.tap(saveFinder);
       await tester.pumpAndSettle();
 
-      // 4. Verify draft in store NEVER regressed to never_dispatched and command IDs are preserved
+      // 4. Verify draft in store NEVER regressed to never_dispatched and original content/command IDs remain immutable
       final draftsAfterSave = await fakeDraftStore.listLocalDrafts(
         testChild.id,
       );
@@ -1077,7 +1094,7 @@ void main() {
         equals(originalSubmitCmdId),
         reason: 'submitCommandId must be preserved',
       );
-      expect(draftAfterSave.title, equals('Fresh Quiz After Save'));
+      expect(draftAfterSave.title, equals('Fresh Quiz Before Drop'));
     },
   );
 
@@ -1269,7 +1286,7 @@ void main() {
           isFalse,
           reason: 'Legacy draft must remain non-submittable (quarantined)',
         );
-        expect(persisted.title, equals('Edited V4 Physics Lab Title'));
+        expect(persisted.title, equals('Original V4 Physics Lab Title'));
         expect(
           persisted.evidenceId,
           equals('ev-legacy-fixture-123'),

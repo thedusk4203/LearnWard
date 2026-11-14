@@ -343,8 +343,20 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
       resolvedCreateCommandId = _createCommandId;
       resolvedSubmitCommandId = _submitCommandId;
-      resolvedActorUserId =
-          prior?.actorUserId ?? ref.read(currentUserIdProvider);
+      if (prior != null) {
+        // Never adopt or backfill actorUserId onto an existing draft row (R33-01).
+        resolvedActorUserId = prior.actorUserId;
+      } else {
+        var freshActorId = ref.read(currentUserIdProvider);
+        if (freshActorId == null) {
+          try {
+            freshActorId =
+                (await ref.read(authSessionPortProvider).validateForMutation())
+                    ?.userId;
+          } catch (_) {}
+        }
+        resolvedActorUserId = freshActorId;
+      }
       resolvedActorRole = prior?.actorRole;
       resolvedDispatchState = _resolveSafeDispatchState(prior);
     }
@@ -421,10 +433,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           context,
         ).showSnackBar(const SnackBar(content: Text('Draft saved locally.')));
       }
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = 'Could not save draft locally. Please check storage space and try again.';
+          _errorMessage = e is DraftWriteConflictException
+              ? 'Cannot save changes: this draft is locked or requires recovery reconciliation.'
+              : 'Could not save draft locally. Please check storage space and try again.';
         });
       }
     }
@@ -435,11 +449,29 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final existingFromStore = await store.getLocalDraft(_localDraftId);
     final prior = existingFromStore ?? widget.initialDraft;
 
-    final isQuarantined = (prior?.isLegacyUnknown ?? false) || _isQuarantined;
+    final isQuarantined =
+        (prior?.isLegacyUnknown ?? false) ||
+        (prior?.hasUnboundActor ?? false) ||
+        (prior?.isReadOnlyQuarantined ?? false) ||
+        (prior?.hasMalformedLease ?? false) ||
+        _isQuarantined;
     if (isQuarantined) {
       setState(() {
         _isQuarantined = true;
         _errorMessage = 'Cannot submit a quarantined legacy draft. Recovery reconciliation is required.';
+      });
+      return;
+    }
+    if (prior != null &&
+        (prior.dispatchState == CommandDispatchState.confirmedCommitted ||
+            prior.hasWaitingOriginalActorMarker ||
+            prior.submissionStatus == DraftSubmissionStatus.terminalError ||
+            (prior.hasRecoveryMarker &&
+                prior.recoveryCode != DraftRecoveryCode.retryScheduled) ||
+            prior.leaseToken != null ||
+            prior.leaseExpiresAt != null)) {
+      setState(() {
+        _errorMessage = 'Cannot submit this draft directly while recovery reconciliation or active lease processing is pending.';
       });
       return;
     }
@@ -517,42 +549,71 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           ? null
           : (_evidenceId ?? prior?.evidenceId);
 
-      // Persist local draft state before submitting so that any crash/drop
-      // during or before submit preserves the stable command and evidence IDs.
-      final localDraft = LocalAssessmentDraft(
-        localDraftId: _localDraftId,
-        familyId: activeChild.familyId.value,
-        childId: activeChild.id.value,
-        createCommandId: _createCommandId,
-        submitCommandId: _submitCommandId,
-        evidenceId: resolvedEvidenceId,
-        serverAssessmentId: _serverAssessmentId,
-        subjectKey: _selectedSubjectKey,
-        subject: _subjectController.text.trim().isEmpty
-            ? _selectedSubjectKey.displayLabel
-            : _subjectController.text.trim(),
-        title: _titleController.text.trim().isEmpty
-            ? 'Draft Assessment'
-            : _titleController.text.trim(),
-        assessmentType: _selectedType.value,
-        difficulty: _selectedDifficulty.value,
-        rawScore: raw,
-        maxScore: max,
-        localPhotoPath: resolvedPhotoPath,
-        occurredAt: _occurredAt,
-        updatedAt: DateTime.now().toUtc(),
-        entryContext: EntryContext.sharedChild,
-        serverEvidenceId: prior?.serverEvidenceId,
-        sha256Checksum: prior?.sha256Checksum,
-        localCompressedPhotoPath: prior?.localCompressedPhotoPath,
-        submissionStatus: DraftSubmissionStatus.submittingAssessment,
-        retryCount: prior?.retryCount ?? 0,
-        dispatchState: CommandDispatchState.possiblyDispatched,
-        lastErrorMessage: null,
-        actorUserId: prior?.actorUserId ?? ref.read(currentUserIdProvider),
-        actorRole: prior?.actorRole,
-      );
-      await store.saveLocalDraft(localDraft);
+      String? resolvedActorUserId;
+      if (prior != null) {
+        resolvedActorUserId = prior.actorUserId;
+      } else {
+        resolvedActorUserId = ref.read(currentUserIdProvider);
+        if (resolvedActorUserId == null) {
+          try {
+            resolvedActorUserId =
+                (await ref.read(authSessionPortProvider).validateForMutation())
+                    ?.userId;
+          } catch (_) {}
+        }
+      }
+
+      // Stage editable/new pre-dispatch draft cleanly before handing off to
+      // SubmitAssessmentDraft's leased CAS lifecycle (R31-06 / R33-01..03).
+      final isPreDispatchEditable =
+          prior == null ||
+          (prior.dispatchState == CommandDispatchState.neverDispatched &&
+              prior.submissionStatus == DraftSubmissionStatus.draft);
+      final hasFrozenOrServerIds =
+          prior != null &&
+          ((prior.localCompressedPhotoPath?.isNotEmpty ?? false) ||
+              (prior.sha256Checksum?.isNotEmpty ?? false) ||
+              (prior.serverEvidenceId?.isNotEmpty ?? false) ||
+              (prior.serverAssessmentId?.isNotEmpty ?? false));
+      if (isPreDispatchEditable &&
+          !hasFrozenOrServerIds &&
+          resolvedActorUserId != null &&
+          resolvedActorUserId.isNotEmpty) {
+        final localDraft = LocalAssessmentDraft(
+          localDraftId: _localDraftId,
+          familyId: activeChild.familyId.value,
+          childId: activeChild.id.value,
+          createCommandId: _createCommandId,
+          submitCommandId: _submitCommandId,
+          evidenceId: resolvedEvidenceId,
+          serverAssessmentId: _serverAssessmentId,
+          subjectKey: _selectedSubjectKey,
+          subject: _subjectController.text.trim().isEmpty
+              ? _selectedSubjectKey.displayLabel
+              : _subjectController.text.trim(),
+          title: _titleController.text.trim().isEmpty
+              ? 'Draft Assessment'
+              : _titleController.text.trim(),
+          assessmentType: _selectedType.value,
+          difficulty: _selectedDifficulty.value,
+          rawScore: raw,
+          maxScore: max,
+          localPhotoPath: resolvedPhotoPath,
+          occurredAt: _occurredAt,
+          updatedAt: DateTime.now().toUtc(),
+          entryContext: EntryContext.sharedChild,
+          serverEvidenceId: prior?.serverEvidenceId,
+          sha256Checksum: prior?.sha256Checksum,
+          localCompressedPhotoPath: prior?.localCompressedPhotoPath,
+          submissionStatus: DraftSubmissionStatus.draft,
+          retryCount: prior?.retryCount ?? 0,
+          dispatchState: CommandDispatchState.neverDispatched,
+          lastErrorMessage: null,
+          actorUserId: resolvedActorUserId,
+          actorRole: prior?.actorRole,
+        );
+        await store.saveLocalDraft(localDraft);
+      }
 
       final submitUseCase = SubmitAssessmentDraft(
         repository: repo,
@@ -561,23 +622,52 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         authSessionPort: ref.read(authSessionPortProvider),
       );
 
-      final evidenceIdObj = resolvedEvidenceId != null
-          ? EvidenceId(resolvedEvidenceId)
+      final isDispatchedRetry =
+          prior != null &&
+          prior.dispatchState == CommandDispatchState.possiblyDispatched;
+      final dispatchEvidenceIdStr = isDispatchedRetry
+          ? prior.evidenceId
+          : resolvedEvidenceId;
+      final evidenceIdObj = dispatchEvidenceIdStr != null
+          ? EvidenceId(dispatchEvidenceIdStr)
           : null;
 
       await submitUseCase(
-        createCommandId: _createCommandId!,
-        submitCommandId: _submitCommandId!,
+        createCommandId: isDispatchedRetry
+            ? (prior.createCommandId ?? _createCommandId!)
+            : _createCommandId!,
+        submitCommandId: isDispatchedRetry
+            ? (prior.submitCommandId ?? _submitCommandId!)
+            : _submitCommandId!,
         familyId: activeChild.familyId,
         childId: activeChild.id,
-        subjectKey: _selectedSubjectKey,
-        subject: _subjectController.text.trim(),
-        title: _titleController.text.trim(),
-        type: _selectedType,
-        difficulty: _selectedDifficulty,
-        score: AssessmentScore(rawScore: raw, maxScore: max),
-        occurredAt: _occurredAt,
-        entryContext: EntryContext.sharedChild,
+        subjectKey: isDispatchedRetry ? prior.subjectKey : _selectedSubjectKey,
+        subject: isDispatchedRetry
+            ? prior.subject
+            : _subjectController.text.trim(),
+        title: isDispatchedRetry ? prior.title : _titleController.text.trim(),
+        type: isDispatchedRetry
+            ? AssessmentType.values.firstWhere(
+                (t) => t.value == prior.assessmentType,
+                orElse: () => _selectedType,
+              )
+            : _selectedType,
+        difficulty: isDispatchedRetry
+            ? AssessmentDifficulty.values.firstWhere(
+                (d) => d.value == prior.difficulty,
+                orElse: () => _selectedDifficulty,
+              )
+            : _selectedDifficulty,
+        score: isDispatchedRetry
+            ? AssessmentScore(
+                rawScore: prior.rawScore,
+                maxScore: prior.maxScore,
+              )
+            : AssessmentScore(rawScore: raw, maxScore: max),
+        occurredAt: isDispatchedRetry ? prior.occurredAt : _occurredAt,
+        entryContext: isDispatchedRetry
+            ? prior.entryContext
+            : EntryContext.sharedChild,
         evidenceBytes: _evidenceRemoved ? null : _selectedEvidence?.bytes,
         evidenceMediaType: _evidenceRemoved
             ? null

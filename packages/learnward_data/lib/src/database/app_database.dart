@@ -473,7 +473,27 @@ class AppDatabase extends _$AppDatabase
             (entry) =>
                 entry.localDraftId.equals(localDraftId) &
                 entry.leaseToken.isNull() &
-                entry.leaseExpiresAt.isNull(),
+                entry.leaseExpiresAt.isNull() &
+                entry.actorUserId.isNotNull() &
+                entry.actorUserId.equals('').not() &
+                entry.dispatchState.equals(
+                  CommandDispatchState.neverDispatched.wireValue,
+                ) &
+                entry.submissionStatus.equals(
+                  DraftSubmissionStatus.draft.wireValue,
+                ) &
+                (entry.serverAssessmentId.isNull() |
+                    entry.serverAssessmentId.equals('')) &
+                (entry.serverEvidenceId.isNull() |
+                    entry.serverEvidenceId.equals('')) &
+                (entry.localCompressedPhotoPath.isNull() |
+                    entry.localCompressedPhotoPath.equals('')) &
+                (entry.sha256Checksum.isNull() |
+                    entry.sha256Checksum.equals('')) &
+                (entry.lastErrorMessage.isNull() |
+                    entry.lastErrorMessage
+                        .like('${DraftRecoveryCode.prefix}%')
+                        .not()),
           );
         final deleted = await query.go();
         if (deleted != 1) {

@@ -82,9 +82,14 @@ bool _hasText(String? value) => value != null && value.isNotEmpty;
 bool _mutatedExistingImmutableText(String? existing, String? desired) =>
     _hasText(existing) && desired != existing;
 
-/// Validates `deleteLocalDraft` against active leases, malformed leases, and
-/// fail-closed Slice 4B-1 quarantine / pause markers.
-void validateRawLocalDraftDelete(LocalAssessmentDraft existing) {
+/// Validates `deleteLocalDraft` against ALL unsafe local draft states:
+/// active/expired/malformed leases, unbound actor quarantine, legacy unknown,
+/// non-draft submission stages, in-flight or committed dispatch states,
+/// frozen canonical snapshots, persisted server IDs, and recovery markers.
+void validateRawLocalDraftDelete(
+  LocalAssessmentDraft existing, {
+  DateTime? now,
+}) {
   if (existing.hasMalformedLease) {
     throw DraftWriteConflictException(
       localDraftId: existing.localDraftId,
@@ -101,16 +106,41 @@ void validateRawLocalDraftDelete(LocalAssessmentDraft existing) {
           'Cannot delete draft ${existing.localDraftId} while lease metadata is held.',
     );
   }
+  if (existing.hasUnboundActor) {
+    throw DraftWriteConflictException(
+      localDraftId: existing.localDraftId,
+      code: 'unbound_actor_delete_blocked',
+      message:
+          'Cannot delete quarantined draft ${existing.localDraftId} without bound actor provenance.',
+    );
+  }
   if (existing.isLegacyUnknown) {
     throw DraftWriteConflictException(
       localDraftId: existing.localDraftId,
       code: 'legacy_quarantine_delete_blocked',
       message:
-          'Cannot delete unknown_legacy draft ${existing.localDraftId} via unguarded deleteLocalDraft.',
+          'Cannot delete unknown_legacy draft ${existing.localDraftId} via deleteLocalDraft.',
+    );
+  }
+  if (existing.dispatchState == CommandDispatchState.confirmedCommitted) {
+    throw DraftWriteConflictException(
+      localDraftId: existing.localDraftId,
+      code: 'confirmed_committed_delete_blocked',
+      message:
+          'Cannot delete confirmed_committed draft ${existing.localDraftId}.',
+    );
+  }
+  if (existing.dispatchState != CommandDispatchState.neverDispatched) {
+    throw DraftWriteConflictException(
+      localDraftId: existing.localDraftId,
+      code: 'dispatched_draft_delete_blocked',
+      message:
+          'Cannot delete dispatched draft ${existing.localDraftId} while outcome reconciliation may be needed.',
     );
   }
   if (existing.submissionStatus == DraftSubmissionStatus.terminalError ||
-      existing.hasRecoveryMarker) {
+      existing.hasRecoveryMarker ||
+      existing.isReadOnlyQuarantined) {
     throw DraftWriteConflictException(
       localDraftId: existing.localDraftId,
       code: 'quarantined_draft_delete_blocked',
@@ -118,11 +148,44 @@ void validateRawLocalDraftDelete(LocalAssessmentDraft existing) {
           'Cannot delete quarantined or paused draft ${existing.localDraftId}.',
     );
   }
+  if (existing.submissionStatus != DraftSubmissionStatus.draft) {
+    throw DraftWriteConflictException(
+      localDraftId: existing.localDraftId,
+      code: 'non_draft_stage_delete_blocked',
+      message:
+          'Cannot delete draft ${existing.localDraftId} in stage ${existing.submissionStatus.wireValue}.',
+    );
+  }
+  if (_hasText(existing.serverAssessmentId) ||
+      _hasText(existing.serverEvidenceId)) {
+    throw DraftWriteConflictException(
+      localDraftId: existing.localDraftId,
+      code: 'server_linked_delete_blocked',
+      message:
+          'Cannot delete draft ${existing.localDraftId} with persisted server IDs.',
+    );
+  }
+  if (_hasText(existing.localCompressedPhotoPath) ||
+      _hasText(existing.sha256Checksum)) {
+    throw DraftWriteConflictException(
+      localDraftId: existing.localDraftId,
+      code: 'frozen_evidence_delete_blocked',
+      message:
+          'Cannot delete draft ${existing.localDraftId} with frozen canonical evidence.',
+    );
+  }
+  if (existing.isUnsafeToDelete(now: now)) {
+    throw DraftWriteConflictException(
+      localDraftId: existing.localDraftId,
+      code: 'unsafe_draft_delete_blocked',
+      message: 'Cannot delete unsafe draft ${existing.localDraftId}.',
+    );
+  }
 }
 
-/// Validates legacy WP1/4B-0 `saveLocalDraft` writes against active leases,
-/// frozen canonical snapshots, server evidence IDs, and quarantine states while
-/// preserving existing unmigrated WP1 foreground compatibility until WP3.
+/// Validates legacy `saveLocalDraft` writes against unbound actor provenance
+/// (R33-01), dispatched/in-flight immutability (R33-03), leases, frozen
+/// canonical snapshots, server IDs, and quarantine states.
 void validateLegacySaveLocalDraft({
   required LocalAssessmentDraft? existing,
   required LocalAssessmentDraft desired,
@@ -159,12 +222,30 @@ void validateLegacySaveLocalDraft({
           'Cannot overwrite draft ${desired.localDraftId}: existing row has malformed lease metadata.',
     );
   }
-  if (existing.hasActiveLease(now: effectiveNow)) {
+  if (existing.leaseToken != null ||
+      existing.leaseExpiresAt != null ||
+      existing.hasActiveLease(now: effectiveNow)) {
     throw DraftWriteConflictException(
       localDraftId: desired.localDraftId,
       code: 'active_lease_conflict',
       message:
-          'Cannot overwrite draft ${desired.localDraftId}: an active lease is currently held.',
+          'Cannot overwrite draft ${desired.localDraftId}: lease metadata is currently held.',
+    );
+  }
+  if (existing.hasUnboundActor) {
+    throw DraftWriteConflictException(
+      localDraftId: desired.localDraftId,
+      code: 'unbound_actor_immutable',
+      message:
+          'Cannot overwrite or adopt unbound-actor draft ${desired.localDraftId} via saveLocalDraft.',
+    );
+  }
+  if (existing.isLegacyUnknown) {
+    throw DraftWriteConflictException(
+      localDraftId: desired.localDraftId,
+      code: 'legacy_unknown_immutable',
+      message:
+          'Cannot overwrite unknown_legacy draft ${desired.localDraftId} via saveLocalDraft.',
     );
   }
   if (existing.dispatchState == CommandDispatchState.confirmedCommitted) {
@@ -176,7 +257,8 @@ void validateLegacySaveLocalDraft({
     );
   }
   if (existing.submissionStatus == DraftSubmissionStatus.terminalError ||
-      existing.hasRecoveryMarker) {
+      existing.hasRecoveryMarker ||
+      existing.isReadOnlyQuarantined) {
     throw DraftWriteConflictException(
       localDraftId: desired.localDraftId,
       code: 'quarantined_or_paused_immutable',
@@ -184,55 +266,36 @@ void validateLegacySaveLocalDraft({
           'Cannot overwrite quarantined or paused draft ${desired.localDraftId}.',
     );
   }
+  if (existing.dispatchState != CommandDispatchState.neverDispatched ||
+      existing.submissionStatus != DraftSubmissionStatus.draft) {
+    throw DraftWriteConflictException(
+      localDraftId: desired.localDraftId,
+      code: 'dispatched_or_non_draft_immutable',
+      message:
+          'Cannot overwrite draft ${desired.localDraftId} via saveLocalDraft once dispatch or submission has started.',
+    );
+  }
   if (_hasText(existing.localCompressedPhotoPath) ||
       _hasText(existing.sha256Checksum) ||
-      _hasText(existing.serverEvidenceId)) {
+      _hasText(existing.serverEvidenceId) ||
+      _hasText(existing.serverAssessmentId)) {
     throw DraftWriteConflictException(
       localDraftId: desired.localDraftId,
       code: 'frozen_evidence_immutable',
       message:
-          'Cannot use saveLocalDraft to overwrite draft ${desired.localDraftId} once canonical evidence or server evidence ID is frozen.',
+          'Cannot use saveLocalDraft to overwrite draft ${desired.localDraftId} once canonical evidence or server IDs exist.',
     );
   }
-  if (existing.isLegacyUnknown && !desired.isLegacyUnknown) {
+  if (desired.hasUnboundActor || desired.actorUserId != existing.actorUserId) {
     throw DraftWriteConflictException(
       localDraftId: desired.localDraftId,
-      code: 'legacy_downgrade_forbidden',
+      code: 'actor_provenance_immutable',
       message:
-          'Cannot promote unknown_legacy draft ${desired.localDraftId} via saveLocalDraft.',
+          'Cannot clear or change actorUserId on existing draft ${desired.localDraftId}.',
     );
   }
-  if (existing.dispatchState == CommandDispatchState.possiblyDispatched &&
-      desired.dispatchState == CommandDispatchState.neverDispatched) {
-    throw DraftWriteConflictException(
-      localDraftId: desired.localDraftId,
-      code: 'dispatch_state_rollback_forbidden',
-      message:
-          'Cannot revert possibly_dispatched draft ${desired.localDraftId} back to never_dispatched.',
-    );
-  }
-  if (existing.isLegacyUnknown &&
-      (desired.actorUserId != existing.actorUserId ||
-          desired.createCommandId != existing.createCommandId ||
-          desired.submitCommandId != existing.submitCommandId)) {
-    throw DraftWriteConflictException(
-      localDraftId: desired.localDraftId,
-      code: 'legacy_provenance_mutation_forbidden',
-      message:
-          'Cannot backfill provenance or command IDs on unknown_legacy draft ${desired.localDraftId}.',
-    );
-  }
-
-  final hasBoundScopeOrDispatch =
-      existing.dispatchState != CommandDispatchState.neverDispatched ||
-      _hasText(existing.actorUserId) ||
-      _hasText(existing.createCommandId) ||
-      _hasText(existing.submitCommandId) ||
-      _hasText(existing.serverAssessmentId);
-
-  if (hasBoundScopeOrDispatch &&
-      (desired.familyId != existing.familyId ||
-          desired.childId != existing.childId)) {
+  if (desired.familyId != existing.familyId ||
+      desired.childId != existing.childId) {
     throw DraftWriteConflictException(
       localDraftId: desired.localDraftId,
       code: 'bound_scope_immutable',
@@ -240,10 +303,7 @@ void validateLegacySaveLocalDraft({
           'Cannot change familyId or childId on bound draft ${desired.localDraftId}.',
     );
   }
-  if (_mutatedExistingImmutableText(
-        existing.actorUserId,
-        desired.actorUserId,
-      ) ||
+  if (_mutatedExistingImmutableText(existing.actorRole, desired.actorRole) ||
       _mutatedExistingImmutableText(
         existing.createCommandId,
         desired.createCommandId,
@@ -252,25 +312,29 @@ void validateLegacySaveLocalDraft({
         existing.submitCommandId,
         desired.submitCommandId,
       ) ||
-      _mutatedExistingImmutableText(
-        existing.serverAssessmentId,
-        desired.serverAssessmentId,
-      ) ||
       _mutatedExistingImmutableText(existing.evidenceId, desired.evidenceId)) {
     throw DraftWriteConflictException(
       localDraftId: desired.localDraftId,
       code: 'immutable_identity_conflict',
       message:
-          'Cannot overwrite immutable identity or server ID on draft ${desired.localDraftId}.',
+          'Cannot overwrite immutable identity or command ID on draft ${desired.localDraftId}.',
     );
   }
-  if (existing.dispatchState != CommandDispatchState.neverDispatched &&
-      desired.localPhotoPath != existing.localPhotoPath) {
+  if (desired.leaseToken != null ||
+      desired.leaseExpiresAt != null ||
+      desired.dispatchState != CommandDispatchState.neverDispatched ||
+      desired.submissionStatus != DraftSubmissionStatus.draft ||
+      desired.hasRecoveryMarker ||
+      _hasText(desired.serverAssessmentId) ||
+      _hasText(desired.serverEvidenceId) ||
+      _hasText(desired.localCompressedPhotoPath) ||
+      _hasText(desired.sha256Checksum) ||
+      desired.nextAttemptAt != null) {
     throw DraftWriteConflictException(
       localDraftId: desired.localDraftId,
-      code: 'dispatched_photo_path_immutable',
+      code: 'legacy_lifecycle_transition_forbidden',
       message:
-          'Cannot mutate localPhotoPath on dispatched draft ${desired.localDraftId}.',
+          'Cannot advance lifecycle, lease, snapshot, or server IDs via saveLocalDraft on ${desired.localDraftId}; use CAS draft store operations.',
     );
   }
   if (desired.retryCount < existing.retryCount) {

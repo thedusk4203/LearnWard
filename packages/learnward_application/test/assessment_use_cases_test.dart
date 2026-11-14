@@ -757,9 +757,11 @@ void main() {
     },
   );
 
-  test('SubmitAssessmentDraft coordinates distinct create/submit commands, evidence upload, and draft deletion', () async {
+  test('SubmitAssessmentDraft coordinates distinct create/submit commands, evidence upload, and confirmed_committed tombstone', () async {
     final draftStore = InMemoryLocalDraftStore();
     const localId = 'local-draft-42';
+    const validSha =
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     await draftStore.saveLocalDraft(
       LocalAssessmentDraft(
         localDraftId: localId,
@@ -775,6 +777,10 @@ void main() {
         difficulty: 'normal',
         rawScore: 9.0,
         maxScore: 10.0,
+        localPhotoPath: '/tmp/local-draft-42-raw.jpg',
+        localCompressedPhotoPath: '/tmp/local-draft-42-snap.jpg',
+        sha256Checksum: validSha,
+        actorUserId: 'user-parent-1',
         occurredAt: DateTime.utc(2026, 11, 1),
         updatedAt: DateTime.utc(2026, 11, 1),
       ),
@@ -808,8 +814,13 @@ void main() {
 
     expect(result.status, equals(AssessmentStatus.pendingReview));
     expect(result.subjectKey, equals(SubjectKey.english));
-    // Verify local draft was deleted after successful submission
-    expect(await draftStore.getLocalDraft(localId), isNull);
+    // Verify local draft transitioned to confirmedCommitted tombstone (I14; never deleteLocalDraft)
+    final tombstone = await draftStore.getLocalDraft(localId);
+    expect(tombstone, isNotNull);
+    expect(tombstone!.dispatchState, CommandDispatchState.confirmedCommitted);
+    expect(tombstone.serverAssessmentId, equals(result.id.value));
+    expect(tombstone.leaseToken, isNull);
+    expect(draftStore.deleteLocalDraftCallCount, equals(0));
     // Verify storage has evidence
     expect(storage.storage.values.first, equals([9, 8, 7]));
   });
@@ -880,6 +891,7 @@ void main() {
         difficulty: 'normal',
         rawScore: 8.0,
         maxScore: 10.0,
+        actorUserId: 'user-parent-1',
         occurredAt: DateTime.utc(2026, 11, 1),
         updatedAt: DateTime.utc(2026, 11, 1),
         dispatchState: CommandDispatchState.neverDispatched,
@@ -938,6 +950,7 @@ void main() {
           difficulty: 'normal',
           rawScore: 8.0,
           maxScore: 10.0,
+          actorUserId: 'user-parent-1',
           occurredAt: DateTime.utc(2026, 11, 1),
           updatedAt: DateTime.utc(2026, 11, 1),
           dispatchState: CommandDispatchState.neverDispatched,
@@ -1148,6 +1161,8 @@ void main() {
       const localPhotoPath = '/tmp/r32-09-evidence.jpg';
       const actorUserId = 'user-parent-1';
 
+      const validSha =
+          'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
       await draftStore.saveLocalDraft(
         LocalAssessmentDraft(
           localDraftId: localId,
@@ -1164,6 +1179,8 @@ void main() {
           rawScore: 9.0,
           maxScore: 10.0,
           localPhotoPath: localPhotoPath,
+          localCompressedPhotoPath: '/tmp/r32-09-snap.jpg',
+          sha256Checksum: validSha,
           actorUserId: actorUserId,
           occurredAt: DateTime.utc(2026, 11, 1),
           updatedAt: DateTime.utc(2026, 11, 1),
@@ -1174,7 +1191,7 @@ void main() {
       final enteredSave = Completer<void>();
       final releaseSave = Completer<void>();
       var armBarrier = true;
-      draftStore.onSaveLocalDraft = (_) async {
+      draftStore.onMarkDraftStageAndDispatch = (_, _) async {
         if (armBarrier) {
           armBarrier = false;
           enteredSave.complete();

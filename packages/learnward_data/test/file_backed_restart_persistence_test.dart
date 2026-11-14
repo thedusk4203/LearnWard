@@ -381,7 +381,7 @@ void main() {
       await dbB.close();
     });
 
-    test('Test A: Fresh draft timeout -> Save Local Draft -> close SQLite -> reopen on real file-backed SQLite: preserves possibly_dispatched and exact command IDs', () async {
+    test('Test A: Fresh draft timeout -> legacy saveLocalDraft fails closed (R33-03) -> close SQLite -> reopen on real file-backed SQLite: preserves original content, possibly_dispatched, and exact command IDs', () async {
       final dbA = AppDatabase(NativeDatabase(dbFile));
       final draftId = 'draft-fresh-timeout-001';
       final createCmdId = 'cmd-create-timeout-111';
@@ -412,8 +412,7 @@ void main() {
       );
       await dbA.saveLocalDraft(inFlightDraft);
 
-      // 2. Network drop occurs. User taps "Save Local Draft" while still on screen.
-      // Reconciles with existing persisted row: edits title/score and saves
+      // 2. Network drop occurs. Stale legacy saveLocalDraft attempt while still on screen must fail closed.
       final persistedBeforeSave = await dbA.getLocalDraft(draftId);
       expect(persistedBeforeSave, isNotNull);
       expect(
@@ -426,7 +425,10 @@ void main() {
         rawScore: 9.5,
         updatedAt: DateTime.now().toUtc(),
       );
-      await dbA.saveLocalDraft(editedDraft);
+      await expectLater(
+        () => dbA.saveLocalDraft(editedDraft),
+        throwsA(isA<DraftWriteConflictException>()),
+      );
 
       // 3. Close SQLite database (simulating process termination / crash)
       await dbA.close();
@@ -449,14 +451,14 @@ void main() {
         recoveredDraft.submissionStatus,
         equals(DraftSubmissionStatus.submittingAssessment),
       );
-      expect(recoveredDraft.title, equals('Quiz 1 (Edited After Timeout)'));
-      expect(recoveredDraft.rawScore, equals(9.5));
+      expect(recoveredDraft.title, equals('Quiz 1'));
+      expect(recoveredDraft.rawScore, equals(9.0));
       expect(recoveredDraft.actorUserId, equals('usr-child-1'));
 
       await dbB.close();
     });
 
-    test('Test B: Existing unknown_legacy draft remains quarantined after edit and local save', () async {
+    test('Test B: Existing unknown_legacy draft rejects legacy saveLocalDraft and remains quarantined after reopen', () async {
       final dbA = AppDatabase(NativeDatabase(dbFile));
       final legacyDraftId = 'draft-legacy-quarantine-002';
 
@@ -482,7 +484,7 @@ void main() {
       );
       await dbA.saveLocalDraft(legacyDraft);
 
-      // 2. Edit draft and save locally
+      // 2. Legacy saveLocalDraft must fail closed on unknown_legacy draft
       final loaded = await dbA.getLocalDraft(legacyDraftId);
       expect(loaded, isNotNull);
       expect(loaded!.isLegacyUnknown, isTrue);
@@ -492,7 +494,10 @@ void main() {
         rawScore: 8.5,
         updatedAt: DateTime.now().toUtc(),
       );
-      await dbA.saveLocalDraft(editedLegacy);
+      await expectLater(
+        () => dbA.saveLocalDraft(editedLegacy),
+        throwsA(isA<DraftWriteConflictException>()),
+      );
 
       // 3. Close and reopen to ensure disk integrity
       await dbA.close();
@@ -512,8 +517,8 @@ void main() {
         isFalse,
         reason: 'Quarantined draft must remain ineligible for auto submission',
       );
-      expect(recovered.title, equals('Legacy Essay (Edited Locally)'));
-      expect(recovered.rawScore, equals(8.5));
+      expect(recovered.title, equals('Legacy Essay'));
+      expect(recovered.rawScore, equals(8.0));
 
       await dbB.close();
     });

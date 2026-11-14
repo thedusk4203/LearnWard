@@ -236,8 +236,12 @@ final class LocalAssessmentDraft {
   /// must block deletion even before comparing concurrent metadata snapshots.
   bool hasCoreUnsafeDeletionState({DateTime? now}) {
     return hasActiveLease(now: now) ||
+        leaseToken != null ||
+        leaseExpiresAt != null ||
         hasMalformedLease ||
+        hasUnboundActor ||
         isLegacyUnknown ||
+        isReadOnlyQuarantined ||
         dispatchState != CommandDispatchState.neverDispatched ||
         submissionStatus != DraftSubmissionStatus.draft ||
         hasRecoveryMarker;
@@ -245,9 +249,10 @@ final class LocalAssessmentDraft {
 
   /// Returns whether this draft is in an unsafe state that forbids local deletion.
   ///
-  /// Fails closed on active or malformed leases, unknown legacy rows, non-draft
-  /// submission stages, non-neverDispatched states, frozen canonical snapshots,
-  /// persisted server IDs, or Slice 4B-1 recovery/quarantine markers.
+  /// Fails closed on active, expired, or malformed leases, missing actor
+  /// provenance, unknown legacy rows, non-draft submission stages,
+  /// non-neverDispatched states, frozen canonical snapshots, persisted server
+  /// IDs, or Slice 4B-1 recovery/quarantine markers.
   bool isUnsafeToDelete({DateTime? now}) {
     return hasCoreUnsafeDeletionState(now: now) ||
         (serverAssessmentId != null && serverAssessmentId!.isNotEmpty) ||
@@ -269,6 +274,12 @@ final class LocalAssessmentDraft {
     }
     if (hasActiveLease(now: now)) {
       return 'This draft is currently being processed under an active lease.';
+    }
+    if (leaseToken != null || leaseExpiresAt != null) {
+      return 'This draft holds unreleased lease metadata and requires recovery reconciliation before deletion.';
+    }
+    if (hasUnboundActor) {
+      return 'This draft is missing original author provenance and is quarantined until recovery reconciliation.';
     }
     if (hasWaitingOriginalActorMarker) {
       return 'This draft is paused waiting for the original author session before it can be modified or deleted.';

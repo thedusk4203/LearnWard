@@ -436,6 +436,91 @@ void main() {
         expect(released.isSuccess, isTrue);
         expect(released.draft!.leaseToken, isNull);
       });
+
+      test('InMemoryLocalDraftStore enforces R33-01, R33-02, and R33-03 hardening rules', () async {
+        final memStore = InMemoryLocalDraftStore();
+        final t0 = DateTime.utc(2026, 11, 14, 12, 0);
+
+        // R33-01: Unbound actor row rejects edits & actor adoption
+        final unbound = LocalAssessmentDraft(
+          localDraftId: 'mem-unbound-1',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: null,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Unbound Row',
+          assessmentType: 'quiz',
+          difficulty: 'normal',
+          rawScore: 6,
+          maxScore: 10,
+          occurredAt: t0,
+          updatedAt: t0,
+        );
+        await memStore.saveLocalDraft(unbound);
+        await expectLater(
+          () => memStore.saveLocalDraft(
+            unbound.copyWith(actorUserId: 'adopted-user'),
+          ),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
+        await expectLater(
+          () => memStore.saveLocalDraft(unbound.copyWith(title: 'Mutated')),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
+        final persistedUnbound = await memStore.getLocalDraft('mem-unbound-1');
+        expect(persistedUnbound!.actorUserId, isNull);
+        expect(persistedUnbound.title, 'Unbound Row');
+
+        // R33-02: deleteLocalDraft rejects unbound, dispatched, non-draft, expired lease, server IDs
+        await expectLater(
+          () => memStore.deleteLocalDraft('mem-unbound-1'),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
+
+        final inFlightNoSnap = LocalAssessmentDraft(
+          localDraftId: 'mem-inflight-1',
+          familyId: 'fam-1',
+          childId: 'child-1',
+          actorUserId: 'actor-1',
+          createCommandId: 'cmd-c',
+          submitCommandId: 'cmd-s',
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Original In-Flight',
+          assessmentType: 'quiz',
+          difficulty: 'normal',
+          rawScore: 8,
+          maxScore: 10,
+          dispatchState: CommandDispatchState.possiblyDispatched,
+          submissionStatus: DraftSubmissionStatus.submittingAssessment,
+          occurredAt: t0,
+          updatedAt: t0,
+        );
+        await memStore.saveLocalDraft(inFlightNoSnap);
+        await expectLater(
+          () => memStore.deleteLocalDraft('mem-inflight-1'),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
+        // R33-03: saveLocalDraft rejects content or command mutation once possiblyDispatched
+        await expectLater(
+          () => memStore.saveLocalDraft(
+            inFlightNoSnap.copyWith(title: 'Overwritten Title'),
+          ),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
+        await expectLater(
+          () => memStore.saveLocalDraft(
+            inFlightNoSnap.copyWith(createCommandId: 'cmd-new'),
+          ),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
+        final persistedInFlight = await memStore.getLocalDraft(
+          'mem-inflight-1',
+        );
+        expect(persistedInFlight!.title, 'Original In-Flight');
+        expect(persistedInFlight.createCommandId, 'cmd-c');
+      });
     },
   );
 }

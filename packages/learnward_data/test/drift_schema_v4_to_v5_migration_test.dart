@@ -629,48 +629,53 @@ void main() {
       }
     });
 
-    test('preserves NULL command identity provenance through domain read-save-reopen cycle', () async {
+    test('preserves NULL command identity and unbound actor provenance by failing closed on saveLocalDraft across reopen (R33-01 / R33-03)', () async {
       createAndPopulateV4Database(dbFile);
 
       final database = AppDatabase(NativeDatabase(dbFile));
       try {
-        // Read draft with NULL create/submit command IDs and partial server progress
+        // Read draft with NULL create/submit command IDs and NULL actor
         final offlineDraft = await database.getLocalDraft('draft-v4-offline');
         expect(offlineDraft, isNotNull);
         expect(offlineDraft!.createCommandId, isNull);
         expect(offlineDraft.submitCommandId, isNull);
+        expect(offlineDraft.actorUserId, isNull);
 
-        // Update draft with partial server progress while keeping command IDs null
+        // Attempting legacy saveLocalDraft overwrite or actor backfill must fail closed
         final updatedDraft = offlineDraft.copyWith(
           title: 'Updated Offline Quiz Title',
           serverAssessmentId: 'srv-partial-draft-101',
+          actorUserId: 'adopted-user-1',
         );
-        expect(updatedDraft.createCommandId, isNull);
-        expect(updatedDraft.submitCommandId, isNull);
+        await expectLater(
+          () => database.saveLocalDraft(updatedDraft),
+          throwsA(isA<DraftWriteConflictException>()),
+        );
 
-        await database.saveLocalDraft(updatedDraft);
-
-        // Reload within same connection
+        // Reload within same connection: original metadata and NULLs preserved untouched
         final reloaded = await database.getLocalDraft('draft-v4-offline');
         expect(reloaded, isNotNull);
-        expect(reloaded!.title, 'Updated Offline Quiz Title');
-        expect(reloaded.serverAssessmentId, 'srv-partial-draft-101');
+        expect(reloaded!.title, 'Weekly Quiz 1');
+        expect(reloaded.serverAssessmentId, isNull);
         expect(reloaded.createCommandId, isNull);
         expect(reloaded.submitCommandId, isNull);
+        expect(reloaded.actorUserId, isNull);
       } finally {
         await database.close();
       }
 
-      // Reopen database and verify SQLite persisted real NULL values (not fabricated localDraftId)
+      // Reopen database and verify SQLite persisted real NULL values untouched
       final reopenedDb = AppDatabase(NativeDatabase(dbFile));
       try {
         final reloadedAfterReopen = await reopenedDb.getLocalDraft(
           'draft-v4-offline',
         );
         expect(reloadedAfterReopen, isNotNull);
-        expect(reloadedAfterReopen!.createCommandId, isNull);
+        expect(reloadedAfterReopen!.title, 'Weekly Quiz 1');
+        expect(reloadedAfterReopen.createCommandId, isNull);
         expect(reloadedAfterReopen.submitCommandId, isNull);
-        expect(reloadedAfterReopen.serverAssessmentId, 'srv-partial-draft-101');
+        expect(reloadedAfterReopen.actorUserId, isNull);
+        expect(reloadedAfterReopen.serverAssessmentId, isNull);
       } finally {
         await reopenedDb.close();
       }

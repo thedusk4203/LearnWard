@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -570,6 +571,7 @@ void main() {
         updatedAt: now,
         dispatchState: dispatchState,
         submissionStatus: submissionStatus,
+        actorUserId: 'local-parent-user',
       );
     }
 
@@ -1492,12 +1494,17 @@ void main() {
           findsOneWidget,
         );
 
-        // While dialog is open, mutate draft in appDatabase to possiblyDispatched
-        final mutatedDraft = draft.copyWith(
-          dispatchState: CommandDispatchState.possiblyDispatched,
-          updatedAt: now.add(const Duration(seconds: 5)),
+        // While dialog is open, mutate draft directly in SQLite to possiblyDispatched
+        await (appDatabase.update(
+          appDatabase.localAssessmentDrafts,
+        )..where((t) => t.localDraftId.equals('d-stale-disp'))).write(
+          LocalAssessmentDraftsCompanion(
+            dispatchState: Value(
+              CommandDispatchState.possiblyDispatched.wireValue,
+            ),
+            updatedAt: Value(now.add(const Duration(seconds: 5))),
+          ),
         );
-        await appDatabase.saveLocalDraft(mutatedDraft);
 
         // Now tap "Delete" in dialog
         await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));
@@ -1638,13 +1645,15 @@ void main() {
           findsOneWidget,
         );
 
-        // Concurrently modify actorUserId and submitCommandId WITHOUT changing updatedAt
-        final updatedDraft = persistedInitial!.copyWith(
-          actorUserId: 'new-worker-id',
-          submitCommandId: 'new-submit-cmd',
-          updatedAt: persistedInitial.updatedAt,
+        // Concurrently modify actorUserId and submitCommandId directly in SQLite WITHOUT changing updatedAt
+        await (appDatabase.update(
+          appDatabase.localAssessmentDrafts,
+        )..where((t) => t.localDraftId.equals('d-stale-id-conflict'))).write(
+          const LocalAssessmentDraftsCompanion(
+            actorUserId: Value('new-worker-id'),
+            submitCommandId: Value('new-submit-cmd'),
+          ),
         );
-        await appDatabase.saveLocalDraft(updatedDraft);
 
         // Tap Delete in dialog
         await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));
@@ -1707,15 +1716,16 @@ void main() {
           findsOneWidget,
         );
 
-        // While dialog open, background worker claims lease
-        final leasedDraft = draft.copyWith(
-          leaseToken: 'worker-lease-token-abc',
-          leaseExpiresAt: DateTime.now().toUtc().add(
-            const Duration(minutes: 5),
-          ),
-          updatedAt: DateTime.now().toUtc(),
+        // While dialog open, background worker claims lease via CAS
+        final claim = await appDatabase.acquireDraftClaim(
+          localDraftId: 'd-stale-lease',
+          actorUserId: 'local-parent-user',
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          leaseDuration: const Duration(minutes: 5),
+          overrideLeaseToken: 'worker-lease-token-abc',
         );
-        await appDatabase.saveLocalDraft(leasedDraft);
+        expect(claim.isSuccess, isTrue);
 
         // Tap "Delete" in dialog
         await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));

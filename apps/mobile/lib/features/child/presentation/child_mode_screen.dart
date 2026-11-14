@@ -46,7 +46,14 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
       final store = ref.read(localDraftStoreProvider);
       final drafts = await store.listLocalDrafts(activeChild.id);
       if (mounted) {
-        setState(() => _localDrafts = drafts);
+        setState(
+          () => _localDrafts = drafts
+              .where(
+                (d) =>
+                    d.dispatchState != CommandDispatchState.confirmedCommitted,
+              )
+              .toList(),
+        );
       }
     } catch (_) {}
   }

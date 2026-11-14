@@ -12,6 +12,10 @@ final class TestLocalDraftStore implements LocalDraftStore {
   /// Optional async hook invoked right before persisting in [saveLocalDraft].
   Future<void> Function(LocalAssessmentDraft draft)? onSaveLocalDraft;
 
+  /// Optional async hook invoked inside [markDraftStageAndDispatch] after applying the stage change.
+  Future<void> Function(String localDraftId, DraftCasResult result)?
+  onMarkDraftStageAndDispatch;
+
   int deleteLocalDraftCallCount = 0;
 
   /// Seeds a raw draft bypassing [saveLocalDraft] validation for malformed-state tests.
@@ -207,17 +211,21 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required String authenticatedActorId,
     required DraftSubmissionStatus targetStage,
     required DateTime now,
-  }) async => _applyCas(
-    localDraftId,
-    (current) => evaluateMarkDraftStageAndDispatch(
-      existing: current,
-      localDraftId: localDraftId,
-      leaseToken: leaseToken,
-      authenticatedActorId: authenticatedActorId,
-      targetStage: targetStage,
-      now: now,
-    ),
-  );
+  }) async {
+    final result = _applyCas(
+      localDraftId,
+      (current) => evaluateMarkDraftStageAndDispatch(
+        existing: current,
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: authenticatedActorId,
+        targetStage: targetStage,
+        now: now,
+      ),
+    );
+    await onMarkDraftStageAndDispatch?.call(localDraftId, result);
+    return result;
+  }
 
   @override
   Future<DraftCasResult> persistServerAssessmentId({
