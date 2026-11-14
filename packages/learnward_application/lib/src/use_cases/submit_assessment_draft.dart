@@ -6,6 +6,7 @@ import '../ports/auth_session_port.dart';
 import '../ports/canonical_evidence_snapshot.dart';
 import '../ports/clock.dart';
 import '../ports/command_lifecycle_states.dart';
+import '../ports/draft_store_rules.dart';
 import '../ports/local_draft_store.dart';
 import 'upload_assessment_evidence.dart';
 
@@ -175,6 +176,17 @@ final class SubmitAssessmentDraft {
     ValidatedActorContext? context,
     String? expectedSessionGeneration,
   }) async {
+    final normalizedSubject = normalizeAssessmentSubject(subject);
+    final normalizedTitle = normalizeAssessmentTitle(title);
+    final normalizedOccurredAt = occurredAt != null
+        ? normalizeAssessmentOccurredAt(occurredAt)
+        : null;
+    if (normalizedSubject.isEmpty || normalizedTitle.isEmpty) {
+      throw const InvalidAssessmentException(
+        'Assessment subject and title must not be empty.',
+      );
+    }
+
     // 0. Fail closed on missing or unsafe local draft journal BEFORE auth/network RPCs (R33-06).
     LocalAssessmentDraft? existingLocal;
     if (localDraftStore == null) {
@@ -268,6 +280,7 @@ final class SubmitAssessmentDraft {
     String? resolvedMediaType;
     EvidenceId? resolvedEvidenceId;
     String? resolvedSha256;
+    String? verifiedCanonicalPath;
 
     if (existingLocal == null) {
       if (evidenceBytes != null) {
@@ -321,12 +334,14 @@ final class SubmitAssessmentDraft {
         }
 
         final boundEvidenceId = existingLocal.evidenceId!;
-        if (evidenceId != null && evidenceId.value != boundEvidenceId) {
+        if (evidenceId == null || evidenceId.value != boundEvidenceId) {
           throw DraftSubmissionCasException(
             stage: DraftCasFailureStage.acquireLease,
             localDraftId: existingLocal.localDraftId,
             casStatus: DraftCasStatus.casConflict,
-            message: 'Provided evidenceId does not match the bound canonical draft evidenceId.',
+            serverAssessmentId: existingLocal.serverAssessmentId,
+            serverEvidenceId: existingLocal.serverEvidenceId,
+            message: 'Attached evidenceId is required and must match the bound canonical draft evidenceId.',
           );
         }
 
@@ -353,6 +368,7 @@ final class SubmitAssessmentDraft {
           resolvedBytes = verifiedSnapshot.bytes;
           resolvedMediaType = verifiedSnapshot.mediaType;
           resolvedSha256 = verifiedSnapshot.sha256Checksum;
+          verifiedCanonicalPath = verifiedSnapshot.snapshot.filePath;
         } else {
           if (evidenceBytes == null || evidenceBytes.isEmpty) {
             throw MissingCanonicalEvidenceSnapshotException(
@@ -368,9 +384,44 @@ final class SubmitAssessmentDraft {
           resolvedBytes = inspected.bytes;
           resolvedMediaType = inspected.mediaType;
           resolvedSha256 = inspected.sha256Checksum;
+          verifiedCanonicalPath = existingLocal.localCompressedPhotoPath;
         }
 
         resolvedEvidenceId = EvidenceId(boundEvidenceId);
+      }
+
+      // Bind caller payload to persisted local journal before acquiring a claim (R33-07).
+      final preClaimMismatch = _findJournalPayloadMismatch(
+        candidate: existingLocal,
+        authenticatedActorId: initialContext.userId,
+        familyId: familyId,
+        childId: childId,
+        createCommandId: createCommandId,
+        submitCommandId: submitCommandId,
+        subjectKey: subjectKey,
+        normalizedSubject: normalizedSubject,
+        normalizedTitle: normalizedTitle,
+        type: type,
+        difficulty: difficulty,
+        score: score,
+        normalizedOccurredAt: normalizedOccurredAt,
+        entryContext: entryContext,
+        callerEvidenceId: evidenceId,
+        resolvedEvidenceId: resolvedEvidenceId,
+        resolvedSha256: resolvedSha256,
+        expectedCanonicalPath: verifiedCanonicalPath,
+        expectedHasEvidence: resolvedBytes != null,
+      );
+      if (preClaimMismatch != null) {
+        throw DraftSubmissionCasException(
+          stage: DraftCasFailureStage.acquireLease,
+          localDraftId: existingLocal.localDraftId,
+          casStatus: DraftCasStatus.casConflict,
+          serverAssessmentId: existingLocal.serverAssessmentId,
+          serverEvidenceId: existingLocal.serverEvidenceId,
+          message:
+              'Submission payload does not match persisted local draft journal ($preClaimMismatch).',
+        );
       }
     }
 
@@ -416,8 +467,45 @@ final class SubmitAssessmentDraft {
                   'Failed to acquire submission lease for draft (${claimResult.status.name}).',
             );
           }
-          final leaseToken = claimResult.draft!.leaseToken!;
+          final claimedDraft = claimResult.draft!;
+          final leaseToken = claimedDraft.leaseToken!;
           activeLeaseToken = leaseToken;
+
+          // Validate claimed row returned by acquireDraftClaim against intended payload
+          // and pre-claim snapshot identity BEFORE markDraftStageAndDispatch or RPC (R33-07).
+          final postClaimMismatch = _findJournalPayloadMismatch(
+            candidate: claimedDraft,
+            baselineRow: existingLocal,
+            authenticatedActorId: initialContext.userId,
+            familyId: familyId,
+            childId: childId,
+            createCommandId: createCommandId,
+            submitCommandId: submitCommandId,
+            subjectKey: subjectKey,
+            normalizedSubject: normalizedSubject,
+            normalizedTitle: normalizedTitle,
+            type: type,
+            difficulty: difficulty,
+            score: score,
+            normalizedOccurredAt: normalizedOccurredAt,
+            entryContext: entryContext,
+            callerEvidenceId: evidenceId,
+            resolvedEvidenceId: resolvedEvidenceId,
+            resolvedSha256: resolvedSha256,
+            expectedCanonicalPath: verifiedCanonicalPath,
+            expectedHasEvidence: hasResolvedEvidence,
+          );
+          if (postClaimMismatch != null) {
+            throw DraftSubmissionCasException(
+              stage: DraftCasFailureStage.acquireLease,
+              localDraftId: localDraftId,
+              casStatus: DraftCasStatus.casConflict,
+              serverAssessmentId: claimedDraft.serverAssessmentId,
+              serverEvidenceId: claimedDraft.serverEvidenceId,
+              message:
+                  'Claimed local draft journal no longer matches intended submission payload ($postClaimMismatch).',
+            );
+          }
 
           final DraftCasResult dispatchResult;
           try {
@@ -468,12 +556,12 @@ final class SubmitAssessmentDraft {
           familyId: familyId,
           childId: childId,
           subjectKey: subjectKey,
-          subject: subject,
-          title: title,
+          subject: normalizedSubject,
+          title: normalizedTitle,
           type: type,
           difficulty: difficulty,
           score: score,
-          occurredAt: occurredAt,
+          occurredAt: normalizedOccurredAt,
           entryContext: entryContext,
         );
         knownServerAssessmentId = draft.id.value;
@@ -726,5 +814,127 @@ final class SubmitAssessmentDraft {
         }
       }
     }
+  }
+
+  /// Compares caller submission inputs and pre-claim snapshot identity against a
+  /// persisted/claimed [LocalAssessmentDraft] row (R33-07). Returns `null` if exact match.
+  static String? _findJournalPayloadMismatch({
+    required LocalAssessmentDraft candidate,
+    LocalAssessmentDraft? baselineRow,
+    required String authenticatedActorId,
+    required FamilyId familyId,
+    required ChildId childId,
+    required String createCommandId,
+    required String submitCommandId,
+    required SubjectKey subjectKey,
+    required String normalizedSubject,
+    required String normalizedTitle,
+    required AssessmentType type,
+    required AssessmentDifficulty difficulty,
+    required AssessmentScore score,
+    required DateTime? normalizedOccurredAt,
+    required EntryContext entryContext,
+    required EvidenceId? callerEvidenceId,
+    required EvidenceId? resolvedEvidenceId,
+    required String? resolvedSha256,
+    required String? expectedCanonicalPath,
+    required bool expectedHasEvidence,
+  }) {
+    if (candidate.actorUserId == null ||
+        candidate.actorUserId != authenticatedActorId) {
+      return 'actor provenance';
+    }
+    if (candidate.familyId != familyId.value) return 'familyId';
+    if (candidate.childId != childId.value) return 'childId';
+    if (candidate.createCommandId == null ||
+        candidate.createCommandId != createCommandId) {
+      return 'createCommandId';
+    }
+    if (candidate.submitCommandId == null ||
+        candidate.submitCommandId != submitCommandId) {
+      return 'submitCommandId';
+    }
+    if (candidate.subjectKey != subjectKey) return 'subjectKey';
+    if (normalizeAssessmentSubject(candidate.subject) != normalizedSubject) {
+      return 'subject';
+    }
+    if (normalizeAssessmentTitle(candidate.title) != normalizedTitle) {
+      return 'title';
+    }
+    if (candidate.assessmentType != type.value) return 'assessmentType';
+    if (candidate.difficulty != difficulty.value) return 'difficulty';
+    if (candidate.rawScore != score.rawScore ||
+        candidate.maxScore != score.maxScore) {
+      return 'score';
+    }
+    if (normalizedOccurredAt == null ||
+        normalizeAssessmentOccurredAt(candidate.occurredAt) !=
+            normalizedOccurredAt) {
+      return 'occurredAt';
+    }
+    if (candidate.entryContext != entryContext) return 'entryContext';
+
+    final candidateHasEvidenceRef =
+        candidate.hasVerifiedEvidenceSnapshot ||
+        (candidate.evidenceId?.isNotEmpty ?? false) ||
+        (candidate.localPhotoPath?.isNotEmpty ?? false) ||
+        (candidate.localCompressedPhotoPath?.isNotEmpty ?? false) ||
+        (candidate.sha256Checksum?.isNotEmpty ?? false);
+    if (expectedHasEvidence) {
+      if (!candidate.hasVerifiedEvidenceSnapshot) {
+        return 'canonical evidence snapshot';
+      }
+      if (callerEvidenceId == null ||
+          candidate.evidenceId != callerEvidenceId.value) {
+        return 'evidenceId';
+      }
+      if (resolvedEvidenceId != null &&
+          candidate.evidenceId != resolvedEvidenceId.value) {
+        return 'bound evidenceId';
+      }
+      if (resolvedSha256 != null &&
+          candidate.sha256Checksum != resolvedSha256) {
+        return 'canonical snapshot SHA-256';
+      }
+      if (expectedCanonicalPath != null &&
+          candidate.localCompressedPhotoPath != expectedCanonicalPath) {
+        return 'canonical snapshot path';
+      }
+    } else if (candidateHasEvidenceRef) {
+      return 'unexpected evidence attachment';
+    }
+
+    if (baselineRow != null) {
+      if (candidate.actorUserId != baselineRow.actorUserId) {
+        return 'persisted actor provenance';
+      }
+      if (candidate.subject != baselineRow.subject) return 'persisted subject';
+      if (candidate.title != baselineRow.title) return 'persisted title';
+      if (normalizeAssessmentOccurredAt(candidate.occurredAt) !=
+          normalizeAssessmentOccurredAt(baselineRow.occurredAt)) {
+        return 'persisted occurredAt';
+      }
+      if (candidate.localPhotoPath != baselineRow.localPhotoPath) {
+        return 'persisted localPhotoPath';
+      }
+      if (candidate.dispatchState != baselineRow.dispatchState ||
+          candidate.submissionStatus != baselineRow.submissionStatus ||
+          candidate.serverAssessmentId != baselineRow.serverAssessmentId ||
+          candidate.serverEvidenceId != baselineRow.serverEvidenceId) {
+        return 'persisted dispatch provenance';
+      }
+      if (candidate.isLegacyUnknown ||
+          candidate.hasUnboundActor ||
+          candidate.hasMalformedLease ||
+          candidate.isReadOnlyQuarantined ||
+          candidate.hasWaitingOriginalActorMarker ||
+          candidate.submissionStatus == DraftSubmissionStatus.terminalError ||
+          (candidate.hasRecoveryMarker &&
+              candidate.recoveryCode != DraftRecoveryCode.retryScheduled)) {
+        return 'draft recovery state';
+      }
+    }
+
+    return null;
   }
 }

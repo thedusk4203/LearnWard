@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:learnward_domain/learnward_domain.dart';
+
 import 'assessment_evidence_storage.dart';
 import 'canonical_evidence_snapshot.dart';
 import 'command_lifecycle_states.dart';
@@ -73,6 +75,36 @@ String generateDraftLeaseToken() {
 
 /// Normalizes [now] to UTC (defaults to [DateTime.now]).
 DateTime normalizeDraftUtcNow(DateTime? now) => (now ?? DateTime.now()).toUtc();
+
+/// Normalizes an assessment occurrence timestamp to UTC whole seconds to match
+/// Drift SQLite persistence precision across registration and remote dispatch.
+DateTime normalizeAssessmentOccurredAt(DateTime occurredAt) {
+  final utc = occurredAt.toUtc();
+  final millis = utc.millisecondsSinceEpoch;
+  final wholeSeconds = millis >= 0 ? millis ~/ 1000 : (millis - 999) ~/ 1000;
+  return DateTime.fromMillisecondsSinceEpoch(wholeSeconds * 1000, isUtc: true);
+}
+
+/// Normalizes an assessment subject consistently across draft registration and dispatch.
+String normalizeAssessmentSubject(
+  String rawSubject, {
+  SubjectKey? fallbackSubjectKey,
+}) {
+  final trimmed = rawSubject.trim();
+  if (trimmed.isEmpty && fallbackSubjectKey != null) {
+    return fallbackSubjectKey.displayLabel;
+  }
+  return trimmed;
+}
+
+/// Normalizes an assessment title consistently across draft registration and dispatch.
+String normalizeAssessmentTitle(String rawTitle, {String? fallbackTitle}) {
+  final trimmed = rawTitle.trim();
+  if (trimmed.isEmpty && fallbackTitle != null) {
+    return fallbackTitle;
+  }
+  return trimmed;
+}
 
 /// Returns whether a string is present and non-empty.
 bool _hasText(String? value) => value != null && value.isNotEmpty;

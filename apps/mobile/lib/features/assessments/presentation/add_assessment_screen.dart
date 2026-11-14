@@ -67,8 +67,19 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       ExistingEvidenceRestorationStatus.none;
   int _restorationGeneration = 0;
   String? _unrestoredPhotoPath;
+  String? _frozenEvidenceSha256;
+  String? _frozenCanonicalPath;
   String? _errorMessage;
   double? _liveNormalizedScore;
+
+  bool get _isEvidenceLocked =>
+      _frozenEvidenceSha256 != null ||
+      _frozenCanonicalPath != null ||
+      (widget.initialDraft?.hasVerifiedEvidenceSnapshot ?? false) ||
+      widget.initialDraft?.dispatchState ==
+          CommandDispatchState.possiblyDispatched ||
+      widget.initialDraft?.dispatchState ==
+          CommandDispatchState.confirmedCommitted;
 
   @override
   void initState() {
@@ -93,8 +104,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       );
       _selectedType = AssessmentType.fromValue(draft.assessmentType);
       _selectedDifficulty = AssessmentDifficulty.fromValue(draft.difficulty);
-      _occurredAt = draft.occurredAt;
+      _occurredAt = normalizeAssessmentOccurredAt(draft.occurredAt);
       if (draft.hasVerifiedEvidenceSnapshot) {
+        _frozenEvidenceSha256 = draft.sha256Checksum;
+        _frozenCanonicalPath = draft.localCompressedPhotoPath;
         _unrestoredPhotoPath =
             draft.localPhotoPath ?? draft.localCompressedPhotoPath;
         _restorationStatus = ExistingEvidenceRestorationStatus.loading;
@@ -122,7 +135,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _maxScoreController = TextEditingController(text: '10');
       _selectedType = AssessmentType.quiz;
       _selectedDifficulty = AssessmentDifficulty.normal;
-      _occurredAt = DateTime.now();
+      _occurredAt = normalizeAssessmentOccurredAt(DateTime.now());
       _restorationStatus = ExistingEvidenceRestorationStatus.none;
     }
 
@@ -235,12 +248,39 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     }
   }
 
+  static const String _frozenEvidenceLockedReplaceMessage =
+      'Evidence photo is already locked for this draft and cannot be replaced or removed. Start a new assessment draft to attach a different photo.';
+
+  static const String _frozenEvidenceLockedRemoveMessage =
+      'Evidence photo is already locked for this draft and cannot be removed or replaced. Start a new assessment draft to submit without this photo.';
+
+  Future<LocalAssessmentDraft?> _loadLatestKnownDraft() async {
+    final persisted = await ref
+        .read(localDraftStoreProvider)
+        .getLocalDraft(_localDraftId);
+    final latest = persisted ?? widget.initialDraft;
+    if (latest != null && latest.hasVerifiedEvidenceSnapshot) {
+      _frozenEvidenceSha256 ??= latest.sha256Checksum;
+      _frozenCanonicalPath ??= latest.localCompressedPhotoPath;
+    }
+    return latest;
+  }
+
   Future<void> _pickEvidence() async {
     final picker = ref.read(evidencePickerServiceProvider);
     final file = await picker.pickEvidencePhoto();
     if (file == null) return;
 
+    if (file.bytes.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'The selected photo is empty. Please choose a valid JPEG or PNG photo.';
+      });
+      return;
+    }
+
     if (file.bytes.length > 10 * 1024 * 1024) {
+      if (!mounted) return;
       setState(() {
         _errorMessage =
             'The selected photo exceeds the 10 MB limit (${(file.bytes.length / (1024 * 1024)).toStringAsFixed(1)} MB). Please choose a smaller photo.';
@@ -249,8 +289,43 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     }
 
     if (file.mediaType != 'image/jpeg' && file.mediaType != 'image/png') {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Only JPEG and PNG photos are supported.';
+      });
+      return;
+    }
+
+    // R33-08: Reject replacement once a canonical snapshot has been frozen or dispatch started.
+    // Preserve both the original canonical file and newly selected file on disk without deletion.
+    final latestDraft = await _loadLatestKnownDraft();
+    final frozenSha256 =
+        _frozenEvidenceSha256 ??
+        ((latestDraft?.hasVerifiedEvidenceSnapshot ?? false)
+            ? latestDraft?.sha256Checksum
+            : null);
+    final isDispatchedOrCommitted =
+        latestDraft != null &&
+        (latestDraft.dispatchState == CommandDispatchState.possiblyDispatched ||
+            latestDraft.dispatchState ==
+                CommandDispatchState.confirmedCommitted);
+    if (frozenSha256 != null || isDispatchedOrCommitted) {
+      final pickedSha256 = computeSha256Hex(file.bytes);
+      final currentBytes = _selectedEvidence?.bytes;
+      final matchesFrozenDigest =
+          frozenSha256 != null &&
+          pickedSha256 == frozenSha256 &&
+          (currentBytes == null || currentBytes.length == file.bytes.length);
+      if (!matchesFrozenDigest) {
+        if (!mounted) return;
+        setState(() {
+          _errorMessage = _frozenEvidenceLockedReplaceMessage;
+        });
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = null;
       });
       return;
     }
@@ -262,6 +337,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         bytes: file.bytes,
       );
       _restorationGeneration++;
+      if (!mounted) return;
       setState(() {
         _evidenceSaveFailed = false;
         _evidenceRemoved = false;
@@ -277,6 +353,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         _errorMessage = null;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         // R26-5-01: Evidence persistence failure must not be treated as success.
         // Do NOT silently accept an unsaved picked file as durable evidence.
@@ -288,6 +365,23 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   Future<void> _removeEvidence() async {
+    // R33-08: Once a canonical snapshot is frozen or dispatch has started, removal
+    // must fail closed without clearing displayed evidence, rotating IDs, or deleting files.
+    final latestDraft = await _loadLatestKnownDraft();
+    final isFrozenOrDispatched =
+        _frozenEvidenceSha256 != null ||
+        _frozenCanonicalPath != null ||
+        (latestDraft?.hasVerifiedEvidenceSnapshot ?? false) ||
+        latestDraft?.dispatchState == CommandDispatchState.possiblyDispatched ||
+        latestDraft?.dispatchState == CommandDispatchState.confirmedCommitted;
+    if (isFrozenOrDispatched) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = _frozenEvidenceLockedRemoveMessage;
+      });
+      return;
+    }
+
     // B01: Do NOT physically delete the file here!
     // Removing an image from the UI must not immediately unlink its physical file.
     // Keep original evidence available on disk until a new draft state is durably
@@ -425,8 +519,42 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       }
     }
 
+    final isLockedForSave =
+        _frozenEvidenceSha256 != null ||
+        _frozenCanonicalPath != null ||
+        (prior?.hasVerifiedEvidenceSnapshot ?? false) ||
+        prior?.dispatchState == CommandDispatchState.possiblyDispatched ||
+        prior?.dispatchState == CommandDispatchState.confirmedCommitted;
+    if (isLockedForSave) {
+      final frozenSha = _frozenEvidenceSha256 ?? prior?.sha256Checksum;
+      final selectedMismatch =
+          _evidenceRemoved ||
+          (frozenSha != null &&
+              _selectedEvidence != null &&
+              computeSha256Hex(_selectedEvidence!.bytes) != frozenSha);
+      if (selectedMismatch) {
+        setState(() {
+          _errorMessage = _evidenceRemoved
+              ? _frozenEvidenceLockedRemoveMessage
+              : _frozenEvidenceLockedReplaceMessage;
+        });
+        return;
+      }
+    }
+
     final raw = double.tryParse(_rawScoreController.text.trim()) ?? 0.0;
     final max = double.tryParse(_maxScoreController.text.trim()) ?? 10.0;
+    final normalizedSubject = normalizeAssessmentSubject(
+      _subjectController.text,
+      fallbackSubjectKey: _selectedSubjectKey,
+    );
+    final normalizedTitle = normalizeAssessmentTitle(
+      _titleController.text,
+      fallbackTitle: 'Draft Assessment',
+    );
+    final normalizedOccurredAt = normalizeAssessmentOccurredAt(_occurredAt);
+    final resolvedEntryContext =
+        prior?.entryContext ?? EntryContext.sharedChild;
 
     final draft = LocalAssessmentDraft(
       localDraftId: _localDraftId,
@@ -437,20 +565,16 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       evidenceId: resolvedEvidenceId,
       serverAssessmentId: resolvedServerAssessmentId,
       subjectKey: _selectedSubjectKey,
-      subject: _subjectController.text.trim().isEmpty
-          ? _selectedSubjectKey.displayLabel
-          : _subjectController.text.trim(),
-      title: _titleController.text.trim().isEmpty
-          ? 'Draft Assessment'
-          : _titleController.text.trim(),
+      subject: normalizedSubject,
+      title: normalizedTitle,
       assessmentType: _selectedType.value,
       difficulty: _selectedDifficulty.value,
       rawScore: raw,
       maxScore: max,
       localPhotoPath: resolvedPhotoPath,
-      occurredAt: _occurredAt,
+      occurredAt: normalizedOccurredAt,
       updatedAt: DateTime.now().toUtc(),
-      entryContext: EntryContext.sharedChild,
+      entryContext: resolvedEntryContext,
       serverEvidenceId: prior?.serverEvidenceId,
       sha256Checksum: prior?.sha256Checksum,
       localCompressedPhotoPath: prior?.localCompressedPhotoPath,
@@ -534,11 +658,33 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     if (_restorationStatus ==
         ExistingEvidenceRestorationStatus.missingOrUnreadable) {
       setState(() {
-        _errorMessage =
-            'Cannot submit assessment: existing evidence is missing or unreadable. '
-            'Please attach a replacement photo or explicitly remove the attachment.';
+        _errorMessage = _isEvidenceLocked
+            ? 'Cannot submit assessment: the locked evidence photo snapshot is missing or corrupted on disk and cannot be replaced.'
+            : 'Cannot submit assessment: existing evidence is missing or unreadable. '
+                  'Please attach a replacement photo or explicitly remove the attachment.';
       });
       return;
+    }
+
+    // R33-08: Fail closed in UI boundary if frozen snapshot was marked removed or diverged.
+    if ((prior?.hasVerifiedEvidenceSnapshot ?? false) ||
+        _frozenEvidenceSha256 != null) {
+      if (_evidenceRemoved) {
+        setState(() {
+          _errorMessage = _frozenEvidenceLockedRemoveMessage;
+        });
+        return;
+      }
+      final expectedSha = _frozenEvidenceSha256 ?? prior?.sha256Checksum;
+      final displayed = _selectedEvidence;
+      if (displayed != null &&
+          expectedSha != null &&
+          computeSha256Hex(displayed.bytes) != expectedSha) {
+        setState(() {
+          _errorMessage = _frozenEvidenceLockedReplaceMessage;
+        });
+        return;
+      }
     }
 
     // R26-5-01: Do not begin a remote submission involving a newly selected attachment whose durable persistence failed.
@@ -618,6 +764,56 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           prior != null &&
           prior.dispatchState == CommandDispatchState.possiblyDispatched;
 
+      final normalizedSubject = isDispatchedRetry
+          ? normalizeAssessmentSubject(prior.subject)
+          : normalizeAssessmentSubject(
+              _subjectController.text,
+              fallbackSubjectKey: _selectedSubjectKey,
+            );
+      final normalizedTitle = isDispatchedRetry
+          ? normalizeAssessmentTitle(prior.title)
+          : normalizeAssessmentTitle(
+              _titleController.text,
+              fallbackTitle: 'Draft Assessment',
+            );
+      final normalizedOccurredAt = normalizeAssessmentOccurredAt(
+        isDispatchedRetry ? prior.occurredAt : _occurredAt,
+      );
+      final resolvedEntryContext =
+          prior?.entryContext ?? EntryContext.sharedChild;
+
+      void assertDisplayedSelectionMatchesFrozen(
+        VerifiedCanonicalEvidence verified,
+        String? boundEvidenceId,
+      ) {
+        if (_evidenceRemoved) {
+          throw const CanonicalEvidenceValidationException(
+            CanonicalEvidenceValidationCode.sha256Mismatch,
+            'Locked evidence photo cannot be removed from this draft.',
+          );
+        }
+        final displayed = _selectedEvidence;
+        if (displayed == null ||
+            displayed.bytes.length != verified.bytes.length ||
+            computeSha256Hex(displayed.bytes) != verified.sha256Checksum ||
+            displayed.mediaType != verified.mediaType) {
+          throw const CanonicalEvidenceValidationException(
+            CanonicalEvidenceValidationCode.sha256Mismatch,
+            'Displayed evidence photo does not match this draft\'s locked canonical snapshot.',
+          );
+        }
+        if (boundEvidenceId != null &&
+            _evidenceId != null &&
+            _evidenceId != boundEvidenceId) {
+          throw DraftSubmissionCasException(
+            stage: DraftCasFailureStage.registerPreDispatchDraft,
+            localDraftId: _localDraftId,
+            casStatus: DraftCasStatus.casConflict,
+            message: 'Displayed evidenceId does not match the bound canonical draft evidenceId.',
+          );
+        }
+      }
+
       List<int>? dispatchEvidenceBytes;
       String? dispatchEvidenceMediaType;
       String? dispatchEvidenceIdStr;
@@ -627,6 +823,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           final verified = await fileStore.readVerifiedCanonicalSnapshot(
             draft: prior,
           );
+          assertDisplayedSelectionMatchesFrozen(verified, prior.evidenceId);
           dispatchEvidenceBytes = verified.bytes;
           dispatchEvidenceMediaType = verified.mediaType;
           dispatchEvidenceIdStr = prior.evidenceId;
@@ -658,6 +855,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
             final verified = await fileStore.readVerifiedCanonicalSnapshot(
               draft: prior,
             );
+            assertDisplayedSelectionMatchesFrozen(verified, prior.evidenceId);
             dispatchEvidenceBytes = verified.bytes;
             dispatchEvidenceMediaType = verified.mediaType;
             dispatchEvidenceIdStr = prior.evidenceId;
@@ -706,20 +904,16 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           evidenceId: resolvedEvidenceId,
           serverAssessmentId: _serverAssessmentId,
           subjectKey: _selectedSubjectKey,
-          subject: _subjectController.text.trim().isEmpty
-              ? _selectedSubjectKey.displayLabel
-              : _subjectController.text.trim(),
-          title: _titleController.text.trim().isEmpty
-              ? 'Draft Assessment'
-              : _titleController.text.trim(),
+          subject: normalizedSubject,
+          title: normalizedTitle,
           assessmentType: _selectedType.value,
           difficulty: _selectedDifficulty.value,
           rawScore: raw,
           maxScore: max,
           localPhotoPath: resolvedPhotoPath,
-          occurredAt: _occurredAt,
+          occurredAt: normalizedOccurredAt,
           updatedAt: nowUtc,
-          entryContext: prior?.entryContext ?? EntryContext.sharedChild,
+          entryContext: resolvedEntryContext,
           serverEvidenceId: prior?.serverEvidenceId,
           sha256Checksum: resolvedSha256,
           localCompressedPhotoPath: resolvedCompressedPath,
@@ -747,6 +941,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                 'Failed to persist pre-dispatch local draft journal (${regResult.status.name}).',
           );
         }
+        if (resolvedSha256 != null && resolvedCompressedPath != null) {
+          _frozenEvidenceSha256 = resolvedSha256;
+          _frozenCanonicalPath = resolvedCompressedPath;
+        }
       }
 
       final submitUseCase = SubmitAssessmentDraft(
@@ -771,10 +969,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         familyId: activeChild.familyId,
         childId: activeChild.id,
         subjectKey: isDispatchedRetry ? prior.subjectKey : _selectedSubjectKey,
-        subject: isDispatchedRetry
-            ? prior.subject
-            : _subjectController.text.trim(),
-        title: isDispatchedRetry ? prior.title : _titleController.text.trim(),
+        subject: normalizedSubject,
+        title: normalizedTitle,
         type: isDispatchedRetry
             ? AssessmentType.values.firstWhere(
                 (t) => t.value == prior.assessmentType,
@@ -793,10 +989,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                 maxScore: prior.maxScore,
               )
             : AssessmentScore(rawScore: raw, maxScore: max),
-        occurredAt: isDispatchedRetry ? prior.occurredAt : _occurredAt,
-        entryContext: isDispatchedRetry
-            ? prior.entryContext
-            : EntryContext.sharedChild,
+        occurredAt: normalizedOccurredAt,
+        entryContext: resolvedEntryContext,
         evidenceBytes: dispatchEvidenceBytes,
         evidenceMediaType: dispatchEvidenceMediaType,
         evidenceId: evidenceIdObj,
@@ -849,7 +1043,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           'Attached photo exceeds the allowed size limit (10 MiB).',
         CanonicalEvidenceValidationCode.unsupportedMagicBytes =>
           'Unsupported photo format. Please attach a JPEG or PNG image.',
-        _ => 'Attached photo failed local integrity verification. Please re-attach the photo and try again.',
+        CanonicalEvidenceValidationCode.sha256Mismatch ||
+        CanonicalEvidenceValidationCode.lengthMismatch ||
+        CanonicalEvidenceValidationCode.mediaTypeMismatch => 'The selected photo does not match this draft\'s locked evidence snapshot and cannot replace it. Start a new assessment draft to use a different photo.',
+        _ => 'Attached photo failed local integrity verification and cannot be submitted.',
       };
     }
     if (error is EvidenceStorageException) {
@@ -1285,8 +1482,11 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                     ),
                                     const SizedBox(height: AppSpacing.xs),
                                     Text(
-                                      'Path: ${_unrestoredPhotoPath ?? 'unknown'}\n'
-                                      'To protect against data loss, you cannot save or submit until you attach a replacement photo or explicitly remove this attachment.',
+                                      _isEvidenceLocked
+                                          ? 'Path: ${_unrestoredPhotoPath ?? 'unknown'}\n'
+                                                'This draft\'s locked evidence snapshot is missing or corrupted on disk and cannot be replaced or removed.'
+                                          : 'Path: ${_unrestoredPhotoPath ?? 'unknown'}\n'
+                                                'To protect against data loss, you cannot save or submit until you attach a replacement photo or explicitly remove this attachment.',
                                       style: TextStyle(
                                         fontSize: 12,
                                         color:
@@ -1330,32 +1530,56 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                 ),
                               )
                             else if (_selectedEvidence != null)
-                              Row(
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Icon(
-                                    Icons.check_circle,
-                                    color: Colors.green,
-                                    size: 18,
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.check_circle,
+                                        color: Colors.green,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: AppSpacing.xs),
+                                      Expanded(
+                                        child: Text(
+                                          '${_selectedEvidence!.fileName} (${(_selectedEvidence!.bytes.length / 1024).toStringAsFixed(1)} KB)',
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      IconButton(
+                                        key: const Key(
+                                          'change_evidence_button',
+                                        ),
+                                        tooltip: _isEvidenceLocked
+                                            ? 'Photo locked for this draft'
+                                            : 'Change Photo',
+                                        icon: const Icon(Icons.edit, size: 18),
+                                        onPressed: _pickEvidence,
+                                      ),
+                                      IconButton(
+                                        key: const Key(
+                                          'remove_evidence_button',
+                                        ),
+                                        tooltip: _isEvidenceLocked
+                                            ? 'Photo locked for this draft'
+                                            : 'Remove Photo',
+                                        icon: const Icon(Icons.close, size: 18),
+                                        onPressed: _removeEvidence,
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(width: AppSpacing.xs),
-                                  Expanded(
-                                    child: Text(
-                                      '${_selectedEvidence!.fileName} (${(_selectedEvidence!.bytes.length / 1024).toStringAsFixed(1)} KB)',
-                                      overflow: TextOverflow.ellipsis,
+                                  if (_isEvidenceLocked)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Text(
+                                        'Evidence photo locked for this draft. Start a new assessment draft to attach a different photo.',
+                                        key: const Key(
+                                          'frozen_evidence_locked_hint',
+                                        ),
+                                        style: theme.textTheme.bodySmall,
+                                      ),
                                     ),
-                                  ),
-                                  IconButton(
-                                    key: const Key('change_evidence_button'),
-                                    tooltip: 'Change Photo',
-                                    icon: const Icon(Icons.edit, size: 18),
-                                    onPressed: _pickEvidence,
-                                  ),
-                                  IconButton(
-                                    key: const Key('remove_evidence_button'),
-                                    tooltip: 'Remove Photo',
-                                    icon: const Icon(Icons.close, size: 18),
-                                    onPressed: _removeEvidence,
-                                  ),
                                 ],
                               )
                             else

@@ -134,8 +134,14 @@ final class _InterceptableSqliteDraftStore implements LocalDraftStore {
   final LocalDraftStore inner;
 
   Future<DraftCasResult?> Function()? onRegisterOrUpdateOverride;
+  Future<DraftCasResult?> Function(String localDraftId)?
+  onAcquireDraftClaimOverride;
   Future<DraftCasResult?> Function()? onPersistServerAssessmentIdOverride;
   Future<DraftCasResult?> Function()? onCompleteDraftSubmissionOverride;
+
+  int markDraftStageCallCount = 0;
+  int releaseDraftClaimCallCount = 0;
+  String? lastReleasedLeaseToken;
 
   @override
   Future<void> saveLocalDraft(LocalAssessmentDraft draft) =>
@@ -196,15 +202,19 @@ final class _InterceptableSqliteDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     DateTime? now,
     String? overrideLeaseToken,
-  }) => inner.acquireDraftClaim(
-    localDraftId: localDraftId,
-    actorUserId: actorUserId,
-    familyId: familyId,
-    childId: childId,
-    leaseDuration: leaseDuration,
-    now: now,
-    overrideLeaseToken: overrideLeaseToken,
-  );
+  }) async {
+    final override = await onAcquireDraftClaimOverride?.call(localDraftId);
+    if (override != null) return override;
+    return inner.acquireDraftClaim(
+      localDraftId: localDraftId,
+      actorUserId: actorUserId,
+      familyId: familyId,
+      childId: childId,
+      leaseDuration: leaseDuration,
+      now: now,
+      overrideLeaseToken: overrideLeaseToken,
+    );
+  }
 
   @override
   Future<DraftCasResult> resumeDraftClaimAfterExpiry({
@@ -232,13 +242,16 @@ final class _InterceptableSqliteDraftStore implements LocalDraftStore {
     required String authenticatedActorId,
     required DraftSubmissionStatus targetStage,
     required DateTime now,
-  }) => inner.markDraftStageAndDispatch(
-    localDraftId: localDraftId,
-    leaseToken: leaseToken,
-    authenticatedActorId: authenticatedActorId,
-    targetStage: targetStage,
-    now: now,
-  );
+  }) {
+    markDraftStageCallCount++;
+    return inner.markDraftStageAndDispatch(
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      targetStage: targetStage,
+      now: now,
+    );
+  }
 
   @override
   Future<DraftCasResult> persistServerAssessmentId({
@@ -341,12 +354,16 @@ final class _InterceptableSqliteDraftStore implements LocalDraftStore {
     required String leaseToken,
     required String authenticatedActorId,
     DateTime? now,
-  }) => inner.releaseDraftClaim(
-    localDraftId: localDraftId,
-    leaseToken: leaseToken,
-    authenticatedActorId: authenticatedActorId,
-    now: now,
-  );
+  }) {
+    releaseDraftClaimCallCount++;
+    lastReleasedLeaseToken = leaseToken;
+    return inner.releaseDraftClaim(
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      now: now,
+    );
+  }
 
   @override
   Future<DraftCasResult> pauseMismatchedActorDraft({
@@ -383,6 +400,19 @@ final class _ManualClock implements Clock {
 
   @override
   DateTime now() => current;
+}
+
+final class _QueueEvidencePickerService implements EvidencePickerService {
+  _QueueEvidencePickerService(List<SelectedEvidenceFile?> selections)
+    : _queue = List<SelectedEvidenceFile?>.from(selections);
+
+  final List<SelectedEvidenceFile?> _queue;
+
+  @override
+  Future<SelectedEvidenceFile?> pickEvidencePhoto() async {
+    if (_queue.isEmpty) return null;
+    return _queue.removeAt(0);
+  }
 }
 
 void main() {
@@ -557,6 +587,680 @@ void main() {
       await tester.tap(finder);
       await tester.pumpAndSettle();
     }
+
+    group('R33-07: Claimed SQLite Journal Payload Binding & Fencing', () {
+      test('two-connection SQLite race: conn2 update between initial read and conn1 claim fails closed before markDraftStageAndDispatch and releases only own lease token', () async {
+        const draftId = 'draft-r33-07-sqlite-1';
+        final snap = await fileStore.saveCanonicalEvidenceSnapshot(
+          localDraftId: draftId,
+          bytes: validJpegBytes,
+        );
+        final initial = LocalAssessmentDraft(
+          localDraftId: draftId,
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          actorUserId: 'parent-actor-1',
+          createCommandId: 'cmd-r3307-create-1',
+          submitCommandId: 'cmd-r3307-submit-1',
+          evidenceId: 'evi-r3307-1',
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Worker1 Original Title',
+          assessmentType: 'quiz',
+          difficulty: 'normal',
+          rawScore: 9,
+          maxScore: 10,
+          localCompressedPhotoPath: snap.filePath,
+          sha256Checksum: snap.sha256Checksum,
+          occurredAt: baseTime,
+          updatedAt: baseTime,
+          entryContext: EntryContext.sharedChild,
+        );
+        final seedRes = await appDatabase.registerOrUpdateDraftIfUnchanged(
+          expected: null,
+          desired: initial,
+          now: baseTime,
+        );
+        expect(seedRes.isSuccess, isTrue);
+
+        final conn2 = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(conn2.close);
+
+        final spyConn1 = _InterceptableSqliteDraftStore(appDatabase);
+        String? capturedOwnLeaseToken;
+        var injected = false;
+        spyConn1.onAcquireDraftClaimOverride = (id) async {
+          if (!injected && id == draftId) {
+            injected = true;
+            final mutated = initial.copyWith(
+              subjectKey: SubjectKey.science,
+              subject: 'Science',
+              title: 'Conn2 Updated Title',
+              assessmentType: AssessmentType.homework.name,
+              difficulty: AssessmentDifficulty.hard.name,
+              rawScore: 7,
+              maxScore: 10,
+              occurredAt: baseTime.add(const Duration(minutes: 5)),
+              updatedAt: baseTime.add(const Duration(minutes: 5)),
+              entryContext: EntryContext.adult,
+            );
+            final conn2Update = await conn2.registerOrUpdateDraftIfUnchanged(
+              expected: initial,
+              desired: mutated,
+              now: baseTime.add(const Duration(minutes: 5)),
+            );
+            expect(conn2Update.isSuccess, isTrue);
+
+            spyConn1.onAcquireDraftClaimOverride = null;
+            final claimRes = await appDatabase.acquireDraftClaim(
+              localDraftId: id,
+              actorUserId: 'parent-actor-1',
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              leaseDuration: const Duration(minutes: 2),
+              now: baseTime.add(const Duration(minutes: 6)),
+            );
+            capturedOwnLeaseToken = claimRes.draft?.leaseToken;
+            return claimRes;
+          }
+          return null;
+        };
+
+        final useCase = SubmitAssessmentDraft(
+          repository: repo,
+          storage: storage,
+          authSessionPort: authPort,
+          localDraftStore: spyConn1,
+          canonicalSnapshotStore: fileStore,
+        );
+
+        await expectLater(
+          () => useCase(
+            createCommandId: 'cmd-r3307-create-1',
+            submitCommandId: 'cmd-r3307-submit-1',
+            familyId: testFamily.id,
+            childId: testChild.id,
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Worker1 Original Title',
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.normal,
+            score: AssessmentScore(rawScore: 9, maxScore: 10),
+            occurredAt: baseTime,
+            entryContext: EntryContext.sharedChild,
+            evidenceId: EvidenceId('evi-r3307-1'),
+            localDraftId: draftId,
+          ),
+          throwsA(
+            isA<DraftSubmissionCasException>()
+                .having(
+                  (e) => e.stage,
+                  'stage',
+                  DraftCasFailureStage.acquireLease,
+                )
+                .having(
+                  (e) => e.casStatus,
+                  'casStatus',
+                  DraftCasStatus.casConflict,
+                ),
+          ),
+        );
+
+        expect(capturedOwnLeaseToken, isNotNull);
+        expect(spyConn1.markDraftStageCallCount, equals(0));
+        expect(spyConn1.releaseDraftClaimCallCount, equals(1));
+        expect(spyConn1.lastReleasedLeaseToken, equals(capturedOwnLeaseToken));
+        expect(repo.createDraftCalls, equals(0));
+        expect(storage.uploadCallCount, equals(0));
+        expect(repo.registerEvidenceCalls, equals(0));
+        expect(repo.submitAssessmentCalls, equals(0));
+
+        final persisted = await conn2.getLocalDraft(draftId);
+        expect(persisted, isNotNull);
+        expect(persisted!.title, equals('Conn2 Updated Title'));
+        expect(persisted.subject, equals('Science'));
+        expect(persisted.subjectKey, equals(SubjectKey.science));
+        expect(persisted.rawScore, equals(7));
+        expect(
+          persisted.occurredAt,
+          equals(baseTime.add(const Duration(minutes: 5))),
+        );
+        expect(persisted.entryContext, equals(EntryContext.adult));
+        expect(persisted.createCommandId, equals('cmd-r3307-create-1'));
+        expect(persisted.submitCommandId, equals('cmd-r3307-submit-1'));
+        expect(persisted.evidenceId, equals('evi-r3307-1'));
+        expect(persisted.dispatchState, CommandDispatchState.neverDispatched);
+        expect(persisted.leaseToken, isNull);
+        expect(File(snap.filePath).existsSync(), isTrue);
+
+        // Verify SQLite token-fenced lease release cannot clobber another
+        // connection's active lease token.
+        final conn2Claim = await conn2.acquireDraftClaim(
+          localDraftId: draftId,
+          actorUserId: 'parent-actor-1',
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          leaseDuration: const Duration(minutes: 2),
+          overrideLeaseToken: 'conn2-active-token',
+        );
+        expect(conn2Claim.isSuccess, isTrue);
+
+        final wrongRelease = await appDatabase.releaseDraftClaim(
+          localDraftId: draftId,
+          leaseToken: capturedOwnLeaseToken!,
+          authenticatedActorId: 'parent-actor-1',
+        );
+        expect(wrongRelease.status, DraftCasStatus.leaseConflict);
+        final stillOwnedByConn2 = await conn2.getLocalDraft(draftId);
+        expect(stillOwnedByConn2!.leaseToken, equals('conn2-active-token'));
+      });
+
+      test('two-connection SQLite race: conn2 attaches canonical snapshot after photo-less getLocalDraft fails closed before markDraftStageAndDispatch', () async {
+        const draftId = 'draft-r33-07-sqlite-snap-race';
+        final photoLessInitial = LocalAssessmentDraft(
+          localDraftId: draftId,
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          actorUserId: 'parent-actor-1',
+          createCommandId: 'cmd-r3307-snap-create',
+          submitCommandId: 'cmd-r3307-snap-submit',
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Photo-less When Started',
+          assessmentType: 'quiz',
+          difficulty: 'normal',
+          rawScore: 8,
+          maxScore: 10,
+          occurredAt: baseTime,
+          updatedAt: baseTime,
+          entryContext: EntryContext.sharedChild,
+        );
+        expect(
+          (await appDatabase.registerOrUpdateDraftIfUnchanged(
+            expected: null,
+            desired: photoLessInitial,
+            now: baseTime,
+          )).isSuccess,
+          isTrue,
+        );
+
+        final conn2 = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(conn2.close);
+
+        final snap = await fileStore.saveCanonicalEvidenceSnapshot(
+          localDraftId: draftId,
+          bytes: validPngBytes,
+        );
+
+        final spyConn1 = _InterceptableSqliteDraftStore(appDatabase);
+        var injected = false;
+        spyConn1.onAcquireDraftClaimOverride = (id) async {
+          if (!injected && id == draftId) {
+            injected = true;
+            final withSnapshot = photoLessInitial.copyWith(
+              evidenceId: 'evi-added-by-conn2',
+              localCompressedPhotoPath: snap.filePath,
+              sha256Checksum: snap.sha256Checksum,
+              updatedAt: baseTime.add(const Duration(seconds: 30)),
+            );
+            final updateRes = await conn2.registerOrUpdateDraftIfUnchanged(
+              expected: photoLessInitial,
+              desired: withSnapshot,
+              now: baseTime.add(const Duration(seconds: 30)),
+            );
+            expect(updateRes.isSuccess, isTrue);
+            spyConn1.onAcquireDraftClaimOverride = null;
+            return appDatabase.acquireDraftClaim(
+              localDraftId: id,
+              actorUserId: 'parent-actor-1',
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              leaseDuration: const Duration(minutes: 2),
+              now: baseTime.add(const Duration(minutes: 1)),
+            );
+          }
+          return null;
+        };
+
+        final useCase = SubmitAssessmentDraft(
+          repository: repo,
+          storage: storage,
+          authSessionPort: authPort,
+          localDraftStore: spyConn1,
+          canonicalSnapshotStore: fileStore,
+        );
+
+        await expectLater(
+          () => useCase(
+            createCommandId: 'cmd-r3307-snap-create',
+            submitCommandId: 'cmd-r3307-snap-submit',
+            familyId: testFamily.id,
+            childId: testChild.id,
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Photo-less When Started',
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.normal,
+            score: AssessmentScore(rawScore: 8, maxScore: 10),
+            occurredAt: baseTime,
+            entryContext: EntryContext.sharedChild,
+            localDraftId: draftId,
+          ),
+          throwsA(
+            isA<DraftSubmissionCasException>().having(
+              (e) => e.casStatus,
+              'casStatus',
+              DraftCasStatus.casConflict,
+            ),
+          ),
+        );
+
+        expect(spyConn1.markDraftStageCallCount, equals(0));
+        expect(repo.createDraftCalls, equals(0));
+        expect(storage.uploadCallCount, equals(0));
+
+        final persisted = await conn2.getLocalDraft(draftId);
+        expect(persisted!.evidenceId, equals('evi-added-by-conn2'));
+        expect(persisted.sha256Checksum, equals(snap.sha256Checksum));
+        expect(persisted.leaseToken, isNull);
+        expect(File(snap.filePath).existsSync(), isTrue);
+      });
+    });
+
+    group(
+      'R33-08: Frozen Evidence Immutability UI & End-to-End Regression',
+      () {
+        testWidgets(
+          'frozen JPEG draft rejects different JPEG selection via change_evidence_button, keeps UI/IDs/files intact with zero upload',
+          (tester) async {
+            const draftId = 'draft-frozen-jpeg-replace';
+            final snap = await fileStore.saveCanonicalEvidenceSnapshot(
+              localDraftId: draftId,
+              bytes: validJpegBytes,
+            );
+            final originalCanonicalName = snap.filePath
+                .split(RegExp(r'[/\\]'))
+                .last;
+            final rawOriginalPath = await fileStore.saveEvidence(
+              fileName: 'raw_original.jpg',
+              bytes: validJpegBytes,
+            );
+            final seeded = LocalAssessmentDraft(
+              localDraftId: draftId,
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-actor-1',
+              createCommandId: 'cmd-frozen-jpg-create',
+              submitCommandId: 'cmd-frozen-jpg-submit',
+              evidenceId: 'evi-frozen-jpg-1',
+              subjectKey: SubjectKey.math,
+              subject: 'Math',
+              title: 'Locked JPEG Draft',
+              assessmentType: 'quiz',
+              difficulty: 'normal',
+              rawScore: 9,
+              maxScore: 10,
+              localPhotoPath: rawOriginalPath,
+              localCompressedPhotoPath: snap.filePath,
+              sha256Checksum: snap.sha256Checksum,
+              occurredAt: baseTime,
+              updatedAt: baseTime,
+              entryContext: EntryContext.sharedChild,
+            );
+            await appDatabase.registerOrUpdateDraftIfUnchanged(
+              expected: null,
+              desired: seeded,
+              now: baseTime,
+            );
+
+            final pickedReplacementFile = File(
+              '${tempDir.path}/picked_other_photo.jpg',
+            )..writeAsBytesSync(<int>[...validJpegBytes, 0xAA, 0xBB]);
+            final picker = _QueueEvidencePickerService([
+              SelectedEvidenceFile(
+                fileName: 'picked_other_photo.jpg',
+                bytes: pickedReplacementFile.readAsBytesSync(),
+                mediaType: 'image/jpeg',
+                localPath: pickedReplacementFile.path,
+              ),
+            ]);
+
+            await tester.pumpWidget(
+              buildRoutedApp(initialDraft: seeded, customPicker: picker),
+            );
+            await tester.pumpAndSettle();
+
+            expect(
+              find.byKey(const Key('frozen_evidence_locked_hint')),
+              findsOneWidget,
+            );
+            expect(find.textContaining(originalCanonicalName), findsOneWidget);
+
+            // Attempt to replace the frozen JPEG with a different JPEG.
+            await tapButton(tester, 'change_evidence_button');
+
+            expect(
+              find.textContaining(
+                'Evidence photo is already locked for this draft',
+              ),
+              findsOneWidget,
+            );
+            expect(find.textContaining(originalCanonicalName), findsOneWidget);
+            expect(find.textContaining('picked_other_photo.jpg'), findsNothing);
+
+            expect(storage.uploadCallCount, equals(0));
+            expect(repo.createDraftCalls, equals(0));
+            expect(repo.registerEvidenceCalls, equals(0));
+            expect(repo.submitAssessmentCalls, equals(0));
+
+            final afterAttempt = await appDatabase.getLocalDraft(draftId);
+            expect(afterAttempt!.evidenceId, equals('evi-frozen-jpg-1'));
+            expect(
+              afterAttempt.createCommandId,
+              equals('cmd-frozen-jpg-create'),
+            );
+            expect(
+              afterAttempt.submitCommandId,
+              equals('cmd-frozen-jpg-submit'),
+            );
+            expect(afterAttempt.sha256Checksum, equals(snap.sha256Checksum));
+            expect(File(snap.filePath).existsSync(), isTrue);
+            expect(File(rawOriginalPath).existsSync(), isTrue);
+            expect(pickedReplacementFile.existsSync(), isTrue);
+            final verifiedSnap = await fileStore.readVerifiedCanonicalSnapshot(
+              draft: afterAttempt,
+            );
+            expect(verifiedSnap.bytes, equals(validJpegBytes));
+          },
+        );
+
+        testWidgets(
+          'in-screen freeze after interrupted submit locks evidence and rejects different photo selection with zero extra RPC',
+          (tester) async {
+            final pickedOther = File('${tempDir.path}/after_freeze_other.jpg')
+              ..writeAsBytesSync(<int>[...validJpegBytes, 0xCC, 0xDD]);
+            final picker = _QueueEvidencePickerService([
+              SelectedEvidenceFile(
+                fileName: 'in_screen_frozen.jpg',
+                bytes: validJpegBytes,
+                mediaType: 'image/jpeg',
+              ),
+              SelectedEvidenceFile(
+                fileName: 'after_freeze_other.jpg',
+                bytes: pickedOther.readAsBytesSync(),
+                mediaType: 'image/jpeg',
+                localPath: pickedOther.path,
+              ),
+            ]);
+            repo.nextRegisterError = StateError('Simulated offline failure');
+
+            await tester.pumpWidget(buildRoutedApp(customPicker: picker));
+            await tester.pumpAndSettle();
+
+            await fillRequiredForm(tester, title: 'In-Screen Freeze Draft');
+            await tapButton(tester, 'attach_evidence_button');
+            await tapButton(tester, 'submit_assessment_button');
+
+            final uploadsAtFailure = storage.uploadCallCount;
+            final createsAtFailure = repo.createDraftCalls;
+            final registersAtFailure = repo.registerEvidenceCalls;
+            final submitsAtFailure = repo.submitAssessmentCalls;
+
+            final frozen = (await appDatabase.listLocalDrafts(testChild.id))
+                .single;
+            expect(frozen.hasVerifiedEvidenceSnapshot, isTrue);
+            expect(
+              find.byKey(const Key('frozen_evidence_locked_hint')),
+              findsOneWidget,
+            );
+            expect(find.textContaining('in_screen_frozen.jpg'), findsOneWidget);
+
+            await tapButton(tester, 'change_evidence_button');
+
+            expect(
+              find.textContaining(
+                'Evidence photo is already locked for this draft',
+              ),
+              findsOneWidget,
+            );
+            expect(find.textContaining('in_screen_frozen.jpg'), findsOneWidget);
+            expect(find.textContaining('after_freeze_other.jpg'), findsNothing);
+
+            expect(storage.uploadCallCount, equals(uploadsAtFailure));
+            expect(repo.createDraftCalls, equals(createsAtFailure));
+            expect(repo.registerEvidenceCalls, equals(registersAtFailure));
+            expect(repo.submitAssessmentCalls, equals(submitsAtFailure));
+            expect(File(frozen.localCompressedPhotoPath!).existsSync(), isTrue);
+            expect(pickedOther.existsSync(), isTrue);
+          },
+        );
+
+        testWidgets(
+          'frozen PNG draft rejects different image selection via change_evidence_button, preserves original PNG & newly picked file with zero upload',
+          (tester) async {
+            const draftId = 'draft-frozen-png-replace';
+            final snap = await fileStore.saveCanonicalEvidenceSnapshot(
+              localDraftId: draftId,
+              bytes: validPngBytes,
+            );
+            final originalCanonicalName = snap.filePath
+                .split(RegExp(r'[/\\]'))
+                .last;
+            final seeded = LocalAssessmentDraft(
+              localDraftId: draftId,
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-actor-1',
+              createCommandId: 'cmd-frozen-png-create',
+              submitCommandId: 'cmd-frozen-png-submit',
+              evidenceId: 'evi-frozen-png-1',
+              subjectKey: SubjectKey.math,
+              subject: 'Math',
+              title: 'Locked PNG Draft',
+              assessmentType: 'quiz',
+              difficulty: 'normal',
+              rawScore: 9,
+              maxScore: 10,
+              localCompressedPhotoPath: snap.filePath,
+              sha256Checksum: snap.sha256Checksum,
+              occurredAt: baseTime,
+              updatedAt: baseTime,
+              entryContext: EntryContext.sharedChild,
+            );
+            await appDatabase.registerOrUpdateDraftIfUnchanged(
+              expected: null,
+              desired: seeded,
+              now: baseTime,
+            );
+
+            final pickedOtherPng = File('${tempDir.path}/other_image.png')
+              ..writeAsBytesSync(<int>[...validPngBytes, 0x09, 0x0A]);
+            final picker = _QueueEvidencePickerService([
+              SelectedEvidenceFile(
+                fileName: 'other_image.png',
+                bytes: pickedOtherPng.readAsBytesSync(),
+                mediaType: 'image/png',
+                localPath: pickedOtherPng.path,
+              ),
+            ]);
+
+            await tester.pumpWidget(
+              buildRoutedApp(initialDraft: seeded, customPicker: picker),
+            );
+            await tester.pumpAndSettle();
+
+            expect(find.textContaining(originalCanonicalName), findsOneWidget);
+
+            await tapButton(tester, 'change_evidence_button');
+
+            expect(
+              find.textContaining(
+                'Evidence photo is already locked for this draft',
+              ),
+              findsOneWidget,
+            );
+            expect(find.textContaining(originalCanonicalName), findsOneWidget);
+            expect(find.textContaining('other_image.png'), findsNothing);
+            expect(storage.uploadCallCount, equals(0));
+            expect(repo.createDraftCalls, equals(0));
+            expect(repo.registerEvidenceCalls, equals(0));
+            expect(repo.submitAssessmentCalls, equals(0));
+
+            final afterAttempt = await appDatabase.getLocalDraft(draftId);
+            expect(afterAttempt!.evidenceId, equals('evi-frozen-png-1'));
+            expect(afterAttempt.sha256Checksum, equals(snap.sha256Checksum));
+            expect(File(snap.filePath).existsSync(), isTrue);
+            expect(pickedOtherPng.existsSync(), isTrue);
+            final verifiedSnap = await fileStore.readVerifiedCanonicalSnapshot(
+              draft: afterAttempt,
+            );
+            expect(verifiedSnap.bytes, equals(validPngBytes));
+          },
+        );
+
+        testWidgets(
+          'explicit removal of frozen evidence shows clear error, retains displayed attachment/IDs/files with zero remote RPC',
+          (tester) async {
+            const draftId = 'draft-frozen-remove';
+            final snap = await fileStore.saveCanonicalEvidenceSnapshot(
+              localDraftId: draftId,
+              bytes: validJpegBytes,
+            );
+            final originalCanonicalName = snap.filePath
+                .split(RegExp(r'[/\\]'))
+                .last;
+            final seeded = LocalAssessmentDraft(
+              localDraftId: draftId,
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-actor-1',
+              createCommandId: 'cmd-frozen-rem-create',
+              submitCommandId: 'cmd-frozen-rem-submit',
+              evidenceId: 'evi-frozen-rem-1',
+              subjectKey: SubjectKey.math,
+              subject: 'Math',
+              title: 'Locked Remove Check',
+              assessmentType: 'quiz',
+              difficulty: 'normal',
+              rawScore: 9,
+              maxScore: 10,
+              localCompressedPhotoPath: snap.filePath,
+              sha256Checksum: snap.sha256Checksum,
+              occurredAt: baseTime,
+              updatedAt: baseTime,
+              entryContext: EntryContext.sharedChild,
+            );
+            await appDatabase.registerOrUpdateDraftIfUnchanged(
+              expected: null,
+              desired: seeded,
+              now: baseTime,
+            );
+
+            await tester.pumpWidget(buildRoutedApp(initialDraft: seeded));
+            await tester.pumpAndSettle();
+
+            expect(find.textContaining(originalCanonicalName), findsOneWidget);
+
+            await tapButton(tester, 'remove_evidence_button');
+
+            expect(
+              find.textContaining(
+                'Evidence photo is already locked for this draft',
+              ),
+              findsOneWidget,
+            );
+            expect(find.textContaining(originalCanonicalName), findsOneWidget);
+            expect(
+              find.byKey(const Key('frozen_evidence_locked_hint')),
+              findsOneWidget,
+            );
+
+            expect(storage.uploadCallCount, equals(0));
+            expect(repo.createDraftCalls, equals(0));
+            expect(repo.registerEvidenceCalls, equals(0));
+            expect(repo.submitAssessmentCalls, equals(0));
+
+            final afterAttempt = await appDatabase.getLocalDraft(draftId);
+            expect(afterAttempt!.evidenceId, equals('evi-frozen-rem-1'));
+            expect(
+              afterAttempt.createCommandId,
+              equals('cmd-frozen-rem-create'),
+            );
+            expect(
+              afterAttempt.submitCommandId,
+              equals('cmd-frozen-rem-submit'),
+            );
+            expect(afterAttempt.sha256Checksum, equals(snap.sha256Checksum));
+            expect(File(snap.filePath).existsSync(), isTrue);
+          },
+        );
+
+        testWidgets(
+          'reopening saved draft with unchanged canonical snapshot preserves IDs and submits exact frozen bytes cleanly',
+          (tester) async {
+            const draftId = 'draft-reopen-unchanged-snap';
+            final snap = await fileStore.saveCanonicalEvidenceSnapshot(
+              localDraftId: draftId,
+              bytes: validPngBytes,
+            );
+            final seeded = LocalAssessmentDraft(
+              localDraftId: draftId,
+              familyId: testFamily.id.value,
+              childId: testChild.id.value,
+              actorUserId: 'parent-actor-1',
+              createCommandId: 'cmd-reopen-create-1',
+              submitCommandId: 'cmd-reopen-submit-1',
+              evidenceId: 'evi-reopen-1',
+              subjectKey: SubjectKey.math,
+              subject: 'Math',
+              title: 'Reopened Snapshot Quiz',
+              assessmentType: 'quiz',
+              difficulty: 'normal',
+              rawScore: 9,
+              maxScore: 10,
+              localCompressedPhotoPath: snap.filePath,
+              sha256Checksum: snap.sha256Checksum,
+              occurredAt: baseTime,
+              updatedAt: baseTime,
+              entryContext: EntryContext.sharedChild,
+            );
+            await appDatabase.registerOrUpdateDraftIfUnchanged(
+              expected: null,
+              desired: seeded,
+              now: baseTime,
+            );
+
+            await tester.pumpWidget(buildRoutedApp(initialDraft: seeded));
+            await tester.pumpAndSettle();
+
+            expect(
+              find.byKey(const Key('frozen_evidence_locked_hint')),
+              findsOneWidget,
+            );
+            await tapButton(tester, 'submit_assessment_button');
+
+            expect(find.text('HOME_ROUTE'), findsOneWidget);
+            expect(repo.createDraftCalls, equals(1));
+            expect(storage.uploadCallCount, equals(1));
+            expect(repo.registerEvidenceCalls, equals(1));
+            expect(repo.submitAssessmentCalls, equals(1));
+            expect(storage.storage.values.single, equals(validPngBytes));
+
+            final committed = await appDatabase.getLocalDraft(draftId);
+            expect(
+              committed!.dispatchState,
+              CommandDispatchState.confirmedCommitted,
+            );
+            expect(committed.createCommandId, equals('cmd-reopen-create-1'));
+            expect(committed.submitCommandId, equals('cmd-reopen-submit-1'));
+            expect(committed.evidenceId, equals('evi-reopen-1'));
+            expect(committed.sha256Checksum, equals(snap.sha256Checksum));
+            expect(committed.serverAssessmentId, isNotNull);
+            expect(committed.serverEvidenceId, isNotNull);
+          },
+        );
+      },
+    );
 
     testWidgets(
       'Matrix 1: New assessment without photo commits remotely and writes confirmedCommitted SQLite tombstone',
@@ -1023,6 +1727,8 @@ void main() {
           type: AssessmentType.quiz,
           difficulty: AssessmentDifficulty.normal,
           score: AssessmentScore(rawScore: 9, maxScore: 10),
+          occurredAt: baseTime,
+          evidenceId: EvidenceId('evi-conc-1'),
           localDraftId: draftId,
         ),
         throwsA(
