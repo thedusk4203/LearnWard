@@ -95,16 +95,20 @@ final class FailingDeleteStorage implements AssessmentEvidenceStorage {
 void main() {
   late FakeAssessmentRepository repository;
   late FakeAuthSessionPort fakeAuth;
+  late FakeRecoveryAuthorizationPort authzPort;
   late FakeAssessmentEvidenceStorage storage;
 
   final familyId = FamilyId('fam-1');
   final childId = ChildId('child-1');
 
   setUp(() {
-    repository = FakeAssessmentRepository();
     fakeAuth = FakeAuthSessionPort(
       activeUserId: 'user-parent-1',
       sessionGeneration: 'gen-1',
+    );
+    authzPort = FakeRecoveryAuthorizationPort();
+    repository = FakeAssessmentRepository(
+      activeActorIdProvider: () => fakeAuth.currentContext?.userId,
     );
     storage = FakeAssessmentEvidenceStorage(authSessionPort: fakeAuth);
   });
@@ -220,6 +224,7 @@ void main() {
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final evidence = await uploadUseCase(
@@ -257,6 +262,7 @@ void main() {
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     // Oversize
@@ -305,6 +311,7 @@ void main() {
       repository: failingRepo,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440003');
@@ -338,6 +345,7 @@ void main() {
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final draft = await CreateAssessmentDraft(repository)(
@@ -395,6 +403,7 @@ void main() {
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final draft = await CreateAssessmentDraft(repository)(
@@ -445,6 +454,7 @@ void main() {
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final draft = await CreateAssessmentDraft(repository)(
@@ -506,6 +516,7 @@ void main() {
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final result = await uploadUseCase(
@@ -546,6 +557,7 @@ void main() {
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -590,6 +602,7 @@ void main() {
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -631,6 +644,7 @@ void main() {
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -793,6 +807,7 @@ void main() {
       storage: storage,
       localDraftStore: draftStore,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final result = await submitWorkflow(
@@ -853,6 +868,7 @@ void main() {
       storage: storage,
       localDraftStore: draftStore,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -910,6 +926,7 @@ void main() {
       storage: storage,
       localDraftStore: draftStore,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -971,6 +988,7 @@ void main() {
         storage: storage,
         localDraftStore: draftStore,
         authSessionPort: fakeAuth,
+        recoveryAuthorizationPort: authzPort,
       );
 
       await expectLater(
@@ -1100,6 +1118,7 @@ void main() {
         repository: repository,
         storage: storage,
         authSessionPort: fakeAuth,
+        recoveryAuthorizationPort: authzPort,
       );
 
       await expectLater(
@@ -1162,7 +1181,9 @@ void main() {
       required void Function(FakeAuthSessionPort auth) mutateSession,
     }) async {
       final draftStore = InMemoryLocalDraftStore();
-      final recordingRepo = _RecordingAssessmentRepository();
+      final recordingRepo = _RecordingAssessmentRepository(
+        activeActorIdProvider: () => fakeAuth.currentContext?.userId,
+      );
       const localId = 'draft-r32-09-barrier';
       const createCommandId = 'cmd-r32-09-create';
       const submitCommandId = 'cmd-r32-09-submit';
@@ -1214,6 +1235,7 @@ void main() {
         storage: storage,
         localDraftStore: draftStore,
         authSessionPort: fakeAuth,
+        recoveryAuthorizationPort: authzPort,
       );
 
       final submissionExpectation = expectLater(
@@ -1320,6 +1342,8 @@ void main() {
 }
 
 final class _RecordingAssessmentRepository extends FakeAssessmentRepository {
+  _RecordingAssessmentRepository({super.activeActorIdProvider});
+
   int createDraftCallCount = 0;
   int registerEvidenceCallCount = 0;
   int submitAssessmentCallCount = 0;

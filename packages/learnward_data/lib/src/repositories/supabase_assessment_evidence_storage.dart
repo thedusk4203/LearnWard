@@ -150,6 +150,7 @@ final class SupabaseAssessmentEvidenceStorage
             storagePath: storagePath,
             reason:
                 'Remote storage upload rejected due to authentication failure.',
+            isServerHttpAuthRejection: true,
           ),
         );
       }
@@ -328,6 +329,7 @@ final class SupabaseAssessmentEvidenceStorage
           AuthFailureOutcome(
             storagePath: storagePath,
             reason: 'Remote storage signed URL request rejected due to authentication failure.',
+            isServerHttpAuthRejection: true,
           ),
         );
       }
@@ -375,6 +377,7 @@ final class SupabaseAssessmentEvidenceStorage
             storagePath: storagePath,
             reason:
                 'Remote storage delete rejected due to authentication failure.',
+            isServerHttpAuthRejection: true,
           ),
         );
       }

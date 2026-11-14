@@ -1,0 +1,1037 @@
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:learnward_application/learnward_application.dart';
+import 'package:learnward_domain/learnward_domain.dart';
+import 'package:learnward_test_support/learnward_test_support.dart';
+import 'package:test/test.dart';
+
+final class _InMemoryCanonicalSnapshotStore
+    implements CanonicalEvidenceSnapshotStore {
+  final Map<String, CanonicalEvidenceSnapshot> _snapshots = {};
+  final Map<String, List<int>> _bytes = {};
+
+  @override
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  }) async {
+    final inspected = inspectAndValidateEvidenceBytes(bytes);
+    final path = '/canonical/${localDraftId}_snap.${inspected.fileExtension}';
+    final snap = CanonicalEvidenceSnapshot(
+      localDraftId: localDraftId,
+      filePath: path,
+      mediaType: inspected.mediaType,
+      fileExtension: inspected.fileExtension,
+      byteLength: inspected.byteLength,
+      sha256Checksum: inspected.sha256Checksum,
+      frozenAt: DateTime.utc(2026, 11, 14, 12, 0),
+    );
+    _snapshots[path] = snap;
+    _bytes[path] = Uint8List.fromList(inspected.bytes);
+    return snap;
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  }) async {
+    if (!draft.hasVerifiedEvidenceSnapshot) {
+      throw const CanonicalEvidenceValidationException(
+        CanonicalEvidenceValidationCode.invalidSha256Format,
+        'Missing canonical snapshot metadata on draft.',
+      );
+    }
+    final path = draft.localCompressedPhotoPath!;
+    final raw = _bytes[path];
+    if (raw == null) {
+      throw StateError('Missing canonical snapshot bytes at $path');
+    }
+    final verified = verifyCanonicalEvidenceBytes(
+      bytes: raw,
+      expectedSha256: draft.sha256Checksum!,
+    );
+    final snap =
+        _snapshots[path] ??
+        CanonicalEvidenceSnapshot(
+          localDraftId: draft.localDraftId,
+          filePath: path,
+          mediaType: verified.mediaType,
+          fileExtension: verified.fileExtension,
+          byteLength: verified.byteLength,
+          sha256Checksum: verified.sha256Checksum,
+          frozenAt: DateTime.utc(2026, 11, 14, 12, 0),
+        );
+    return VerifiedCanonicalEvidence(snapshot: snap, bytes: verified.bytes);
+  }
+}
+
+final class _ScriptedAssessmentRepository extends FakeAssessmentRepository {
+  _ScriptedAssessmentRepository({super.activeActorIdProvider});
+
+  int createDraftCallCount = 0;
+  int registerEvidenceCallCount = 0;
+  int submitAssessmentCallCount = 0;
+  int listEvidenceCallCount = 0;
+  final List<String> recordedCreateCommandIds = [];
+  final List<String> recordedSubmitCommandIds = [];
+  final List<int> recordedExpectedVersions = [];
+
+  Object? nextCreateError;
+  Object? nextRegisterError;
+  Object? nextSubmitError;
+
+  Future<void> Function()? onBeforeSubmit;
+  Future<void> Function()? onBeforeCreate;
+  Future<void> Function()? onBeforeRegister;
+
+  @override
+  Future<Assessment> createDraft({
+    required String commandId,
+    required FamilyId familyId,
+    required ChildId childId,
+    required SubjectKey subjectKey,
+    required String subject,
+    required String title,
+    required AssessmentType type,
+    required AssessmentDifficulty difficulty,
+    required AssessmentScore score,
+    DateTime? occurredAt,
+    EntryContext entryContext = EntryContext.adult,
+  }) async {
+    createDraftCallCount++;
+    recordedCreateCommandIds.add(commandId);
+    if (onBeforeCreate != null) {
+      await onBeforeCreate!();
+    }
+    final err = nextCreateError;
+    if (err != null) {
+      nextCreateError = null;
+      throw err;
+    }
+    return super.createDraft(
+      commandId: commandId,
+      familyId: familyId,
+      childId: childId,
+      subjectKey: subjectKey,
+      subject: subject,
+      title: title,
+      type: type,
+      difficulty: difficulty,
+      score: score,
+      occurredAt: occurredAt,
+      entryContext: entryContext,
+    );
+  }
+
+  @override
+  Future<AssessmentEvidence> registerEvidence({
+    required AssessmentId assessmentId,
+    required String storagePath,
+    required String mediaType,
+    required int fileSizeBytes,
+  }) async {
+    registerEvidenceCallCount++;
+    if (onBeforeRegister != null) {
+      await onBeforeRegister!();
+    }
+    final err = nextRegisterError;
+    if (err != null) {
+      nextRegisterError = null;
+      throw err;
+    }
+    return super.registerEvidence(
+      assessmentId: assessmentId,
+      storagePath: storagePath,
+      mediaType: mediaType,
+      fileSizeBytes: fileSizeBytes,
+    );
+  }
+
+  @override
+  Future<Assessment> submitAssessment({
+    required AssessmentId assessmentId,
+    required int expectedVersion,
+    required String commandId,
+  }) async {
+    submitAssessmentCallCount++;
+    recordedSubmitCommandIds.add(commandId);
+    recordedExpectedVersions.add(expectedVersion);
+    if (onBeforeSubmit != null) {
+      await onBeforeSubmit!();
+    }
+    final err = nextSubmitError;
+    if (err != null) {
+      nextSubmitError = null;
+      throw err;
+    }
+    return super.submitAssessment(
+      assessmentId: assessmentId,
+      expectedVersion: expectedVersion,
+      commandId: commandId,
+    );
+  }
+
+  @override
+  Future<List<AssessmentEvidence>> listEvidenceForAssessment(
+    AssessmentId assessmentId,
+  ) {
+    listEvidenceCallCount++;
+    return super.listEvidenceForAssessment(assessmentId);
+  }
+}
+
+void main() {
+  final validJpegBytes = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3]);
+  final differingJpegBytes = Uint8List.fromList([
+    0xFF,
+    0xD8,
+    0xFF,
+    0xE0,
+    9,
+    9,
+    9,
+    9,
+  ]);
+  final baseNow = DateTime.utc(2026, 11, 14, 12, 0, 0);
+  final familyId = FamilyId('fam-wp3-1');
+  final childId = ChildId('ch-wp3-1');
+
+  late FakeAuthSessionPort authPort;
+  late _ScriptedAssessmentRepository repo;
+  late FakeAssessmentEvidenceStorage storage;
+  late FakeRecoveryAuthorizationPort authzPort;
+  late TestLocalDraftStore draftStore;
+  late _InMemoryCanonicalSnapshotStore snapshotStore;
+  late TestClock clock;
+
+  AssessmentSubmissionOrchestrator buildOrchestrator({
+    int maxRetryCount = 5,
+    JitterSource jitterSource = const DeterministicJitterSource(0.0),
+  }) {
+    return AssessmentSubmissionOrchestrator(
+      repository: repo,
+      storage: storage,
+      authSessionPort: authPort,
+      localDraftStore: draftStore,
+      recoveryAuthorizationPort: authzPort,
+      canonicalSnapshotStore: snapshotStore,
+      clock: clock,
+      jitterSource: jitterSource,
+      maxRetryCount: maxRetryCount,
+    );
+  }
+
+  Future<LocalAssessmentDraft> seedCanonicalDraft({
+    required String localDraftId,
+    String createCommandId = 'cmd-create-1',
+    String submitCommandId = 'cmd-submit-1',
+    String? evidenceId = 'ev-wp3-1',
+    String actorUserId = 'actor-a',
+    bool withEvidence = true,
+  }) async {
+    CanonicalEvidenceSnapshot? snap;
+    if (withEvidence) {
+      snap = await snapshotStore.saveCanonicalEvidenceSnapshot(
+        localDraftId: localDraftId,
+        bytes: validJpegBytes,
+      );
+    }
+    final draft = LocalAssessmentDraft(
+      localDraftId: localDraftId,
+      familyId: familyId.value,
+      childId: childId.value,
+      actorUserId: actorUserId,
+      createCommandId: createCommandId,
+      submitCommandId: submitCommandId,
+      evidenceId: withEvidence ? evidenceId : null,
+      subjectKey: SubjectKey.math,
+      subject: 'Math',
+      title: 'WP3 Quiz',
+      assessmentType: 'quiz',
+      difficulty: 'normal',
+      rawScore: 9.0,
+      maxScore: 10.0,
+      localCompressedPhotoPath: snap?.filePath,
+      sha256Checksum: snap?.sha256Checksum,
+      occurredAt: baseNow,
+      updatedAt: baseNow,
+      dispatchState: CommandDispatchState.neverDispatched,
+      entryContext: EntryContext.sharedChild,
+    );
+    final res = await draftStore.registerOrUpdateDraftIfUnchanged(
+      expected: null,
+      desired: draft,
+      now: baseNow,
+    );
+    expect(res.isSuccess, isTrue);
+    return res.draft!;
+  }
+
+  Future<AssessmentSubmissionOutcome> runExecute({
+    required AssessmentSubmissionOrchestrator orchestrator,
+    required String localDraftId,
+    String createCommandId = 'cmd-create-1',
+    String submitCommandId = 'cmd-submit-1',
+    String? evidenceId = 'ev-wp3-1',
+    List<int>? evidenceBytes,
+    String? evidenceMediaType,
+    bool withEvidence = true,
+    CommandExecutionTrigger trigger = CommandExecutionTrigger.foreground,
+  }) {
+    return orchestrator.execute(
+      familyId: familyId,
+      childId: childId,
+      createCommandId: createCommandId,
+      submitCommandId: submitCommandId,
+      subjectKey: SubjectKey.math,
+      subject: 'Math',
+      title: 'WP3 Quiz',
+      type: AssessmentType.quiz,
+      difficulty: AssessmentDifficulty.normal,
+      score: AssessmentScore(rawScore: 9, maxScore: 10),
+      occurredAt: baseNow,
+      entryContext: EntryContext.sharedChild,
+      evidenceBytes: evidenceBytes,
+      evidenceMediaType: evidenceMediaType,
+      evidenceId: withEvidence && evidenceId != null
+          ? EvidenceId(evidenceId)
+          : null,
+      localDraftId: localDraftId,
+      trigger: trigger,
+    );
+  }
+
+  setUp(() {
+    clock = TestClock(baseNow);
+    authPort = FakeAuthSessionPort(
+      activeUserId: 'actor-a',
+      sessionGeneration: 'gen-actor-a-1',
+      clock: clock,
+      role: 'parent',
+    );
+    repo = _ScriptedAssessmentRepository(
+      activeActorIdProvider: () => authPort.currentContext?.userId,
+    );
+    storage = FakeAssessmentEvidenceStorage(authSessionPort: authPort);
+    authzPort = FakeRecoveryAuthorizationPort();
+    draftStore = TestLocalDraftStore();
+    snapshotStore = _InMemoryCanonicalSnapshotStore();
+  });
+
+  group('WP3 AssessmentSubmissionOrchestrator B1-11..B1-25', () {
+    test('B1-11: Lost upload ACK encountering 409 with matching remote bytes reconciles and completes once', () async {
+      const draftId = 'draft-b1-11-match';
+      await seedCanonicalDraft(localDraftId: draftId);
+      final orchestrator = buildOrchestrator();
+
+      // Simulate upload ACK drop: remote storage already has matching bytes from prior attempt.
+      final path =
+          '${familyId.value}/${childId.value}/fake-assessment-1/ev-wp3-1.jpg';
+      storage.storage[path] = List<int>.from(validJpegBytes);
+
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      expect(outcome, isA<AssessmentSubmissionConfirmed>());
+      final confirmed = outcome as AssessmentSubmissionConfirmed;
+      expect(confirmed.assessment.status, AssessmentStatus.pendingReview);
+      expect(
+        confirmed.draft?.dispatchState,
+        CommandDispatchState.confirmedCommitted,
+      );
+      expect(confirmed.draft?.serverEvidenceId, isNotNull);
+      expect(storage.reconcileCallCount, greaterThanOrEqualTo(1));
+      expect(storage.deleteCallCount, equals(0));
+      expect(repo.registerEvidenceCallCount, equals(1));
+    });
+
+    test('B1-12: HTTP 409 with differing remote bytes quarantines with LW4B1:STORAGE_CONTENT_CONFLICT and retains remote bytes (I04)', () async {
+      const draftId = 'draft-b1-12-conflict';
+      await seedCanonicalDraft(localDraftId: draftId);
+      final orchestrator = buildOrchestrator();
+
+      final path =
+          '${familyId.value}/${childId.value}/fake-assessment-1/ev-wp3-1.jpg';
+      storage.storage[path] = List<int>.from(differingJpegBytes);
+
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      expect(outcome, isA<AssessmentSubmissionQuarantined>());
+      final q = outcome as AssessmentSubmissionQuarantined;
+      expect(q.recoveryCode, equals(DraftRecoveryCode.storageContentConflict));
+      expect(storage.deleteCallCount, equals(0));
+      expect(storage.storage[path], equals(differingJpegBytes));
+      expect(repo.registerEvidenceCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(persisted?.recoveryCode, DraftRecoveryCode.storageContentConflict);
+      expect(persisted?.leaseToken, isNull);
+    });
+
+    test('B1-12b: HTTP 409 followed by download failure schedules bounded retry and never deletes remote bytes (I04)', () async {
+      const draftId = 'draft-b1-12-dl-fail';
+      await seedCanonicalDraft(localDraftId: draftId);
+      final orchestrator = buildOrchestrator();
+
+      final path =
+          '${familyId.value}/${childId.value}/fake-assessment-1/ev-wp3-1.jpg';
+      storage.storage[path] = List<int>.from(validJpegBytes);
+      storage.throwOnDownload = TimeoutException('Storage download stalled');
+
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      expect(outcome, isA<AssessmentSubmissionRetryScheduled>());
+      final retry = outcome as AssessmentSubmissionRetryScheduled;
+      expect(retry.retryCount, equals(1));
+      expect(storage.deleteCallCount, equals(0));
+      expect(storage.storage[path], equals(validJpegBytes));
+      expect(repo.submitAssessmentCallCount, equals(0));
+
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(persisted?.recoveryCode, DraftRecoveryCode.retryScheduled);
+      expect(persisted?.nextAttemptAt, equals(retry.nextAttemptAt));
+    });
+
+    test('B1-13: Lost registration ACK + LW109 resolves existing serverEvidenceId (!= evidenceId) and skips duplicate upload on resume', () async {
+      const draftId = 'draft-b1-13-lw109-resolved';
+      await seedCanonicalDraft(
+        localDraftId: draftId,
+        evidenceId: 'local-ev-uuid-1',
+      );
+      final orchestrator = buildOrchestrator();
+
+      // Simulate prior attempt succeeded uploading & registering DB evidence row,
+      // assessment stayed draft or transitioned, and next registration attempt hits LW109.
+      final path =
+          '${familyId.value}/${childId.value}/fake-assessment-1/local-ev-uuid-1.jpg';
+      await repo.createDraft(
+        commandId: 'cmd-create-1',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'WP3 Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+      final registered = await repo.registerEvidence(
+        assessmentId: AssessmentId('fake-assessment-1'),
+        storagePath: path,
+        mediaType: 'image/jpeg',
+        fileSizeBytes: validJpegBytes.length,
+      );
+      expect(registered.id.value, isNot(equals('local-ev-uuid-1')));
+      storage.storage[path] = List<int>.from(validJpegBytes);
+
+      // Reset counters for orchestrator run under lost-ACK simulation
+      repo.registerEvidenceCallCount = 0;
+      repo.nextRegisterError = const BackendRpcException(
+        message: 'Assessment must be draft to register evidence',
+        code: 'LW109',
+      );
+
+      final firstOutcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        evidenceId: 'local-ev-uuid-1',
+      );
+
+      // Wait — if preCheck was false on first dispatch, it uploaded/checked and hit LW109,
+      // reconciled registered row via listEvidenceForAssessment, and completed submission!
+      expect(firstOutcome, isA<AssessmentSubmissionConfirmed>());
+      final confirmed = firstOutcome as AssessmentSubmissionConfirmed;
+      expect(confirmed.serverEvidence?.id, equals(registered.id));
+      expect(confirmed.draft?.serverEvidenceId, equals(registered.id.value));
+      expect(confirmed.draft?.evidenceId, equals('local-ev-uuid-1'));
+      expect(
+        confirmed.draft?.serverEvidenceId,
+        isNot(equals(confirmed.draft?.evidenceId)),
+      );
+      expect(storage.deleteCallCount, equals(0));
+
+      // Now verify resume scenario when possiblyDispatched with serverAssessmentId already persisted,
+      // serverEvidenceId still null, and DB row already exists: preCheck avoids re-upload (uploadCallCount == 0).
+      const draftId2 = 'draft-b1-13-precheck';
+      await seedCanonicalDraft(
+        localDraftId: draftId2,
+        createCommandId: 'cmd-create-2',
+        submitCommandId: 'cmd-submit-2',
+        evidenceId: 'local-ev-uuid-2',
+      );
+      final a2 = await repo.createDraft(
+        commandId: 'cmd-create-2',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'WP3 Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+      final path2 =
+          '${familyId.value}/${childId.value}/${a2.id.value}/local-ev-uuid-2.jpg';
+      storage.storage[path2] = List<int>.from(validJpegBytes);
+      final reg2 = await repo.registerEvidence(
+        assessmentId: a2.id,
+        storagePath: path2,
+        mediaType: 'image/jpeg',
+        fileSizeBytes: validJpegBytes.length,
+      );
+
+      final lease2 = (await draftStore.acquireDraftClaim(
+        localDraftId: draftId2,
+        actorUserId: 'actor-a',
+        familyId: familyId.value,
+        childId: childId.value,
+        leaseDuration: const Duration(minutes: 2),
+        now: baseNow,
+      )).draft!.leaseToken!;
+      await draftStore.markDraftStageAndDispatch(
+        localDraftId: draftId2,
+        leaseToken: lease2,
+        authenticatedActorId: 'actor-a',
+        targetStage: DraftSubmissionStatus.uploadingEvidence,
+        now: baseNow,
+      );
+      await draftStore.persistServerAssessmentId(
+        localDraftId: draftId2,
+        leaseToken: lease2,
+        authenticatedActorId: 'actor-a',
+        serverAssessmentId: a2.id.value,
+        now: baseNow,
+      );
+      await draftStore.releaseDraftClaim(
+        localDraftId: draftId2,
+        leaseToken: lease2,
+        authenticatedActorId: 'actor-a',
+        now: baseNow,
+      );
+
+      storage.uploadCallCount = 0;
+      repo.registerEvidenceCallCount = 0;
+
+      final resumeOutcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId2,
+        createCommandId: 'cmd-create-2',
+        submitCommandId: 'cmd-submit-2',
+        evidenceId: 'local-ev-uuid-2',
+      );
+
+      expect(resumeOutcome, isA<AssessmentSubmissionConfirmed>());
+      expect(storage.uploadCallCount, equals(0));
+      expect(repo.registerEvidenceCallCount, equals(0));
+      expect(
+        (resumeOutcome as AssessmentSubmissionConfirmed)
+            .draft
+            ?.serverEvidenceId,
+        equals(reg2.id.value),
+      );
+    });
+
+    test('B1-14: Unresolved LW109 on non-draft assessment quarantines with REGISTRATION_UNRESOLVED_REMOTE_RETAINED and preserves remote bytes (I04)', () async {
+      const draftId = 'draft-b1-14-unresolved';
+      await seedCanonicalDraft(localDraftId: draftId);
+      final orchestrator = buildOrchestrator();
+
+      final a = await repo.createDraft(
+        commandId: 'cmd-create-1',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'WP3 Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+      await repo.submitAssessment(
+        assessmentId: a.id,
+        expectedVersion: 1,
+        commandId: 'cmd-other-submit',
+      );
+
+      final path =
+          '${familyId.value}/${childId.value}/${a.id.value}/ev-wp3-1.jpg';
+      repo.nextRegisterError = const BackendRpcException(
+        message: 'Assessment already pending_review',
+        code: 'LW109',
+      );
+
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      expect(outcome, isA<AssessmentSubmissionQuarantined>());
+      final q = outcome as AssessmentSubmissionQuarantined;
+      expect(
+        q.recoveryCode,
+        equals(DraftRecoveryCode.registrationUnresolvedRemoteRetained),
+      );
+      expect(storage.deleteCallCount, equals(0));
+      expect(storage.storage[path], equals(validJpegBytes));
+      expect(repo.submitAssessmentCallCount, equals(1)); // Only pre-seeded call
+
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(
+        persisted?.recoveryCode,
+        equals(DraftRecoveryCode.registrationUnresolvedRemoteRetained),
+      );
+    });
+
+    test('Remote draft content/actor mismatch and version > 1 quarantine without calling submitAssessment', () async {
+      // Case 1: Content mismatch returned by remote createDraft replay
+      const mismatchId = 'draft-remote-mismatch';
+      await seedCanonicalDraft(localDraftId: mismatchId, withEvidence: false);
+      await repo.createDraft(
+        commandId: 'cmd-create-1',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'Tampered Server Title',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+
+      final orchestrator = buildOrchestrator();
+      final mismatchOutcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: mismatchId,
+        withEvidence: false,
+      );
+      expect(mismatchOutcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (mismatchOutcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.versionConflict),
+      );
+      expect(repo.submitAssessmentCallCount, equals(0));
+
+      // Case 2: Version > 1 in draft status during resume -> UNRECONSTRUCTABLE_EXPECTED_VERSION
+      const v2Id = 'draft-remote-v2';
+      await seedCanonicalDraft(
+        localDraftId: v2Id,
+        createCommandId: 'cmd-create-v2',
+        submitCommandId: 'cmd-submit-v2',
+        withEvidence: false,
+      );
+      final a2 = await repo.createDraft(
+        commandId: 'cmd-create-v2',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'WP3 Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+      await repo.updateDraft(
+        assessmentId: a2.id,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'WP3 Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        expectedVersion: 1,
+      );
+      final lease = (await draftStore.acquireDraftClaim(
+        localDraftId: v2Id,
+        actorUserId: 'actor-a',
+        familyId: familyId.value,
+        childId: childId.value,
+        leaseDuration: const Duration(minutes: 2),
+        now: baseNow,
+      )).draft!.leaseToken!;
+      await draftStore.markDraftStageAndDispatch(
+        localDraftId: v2Id,
+        leaseToken: lease,
+        authenticatedActorId: 'actor-a',
+        targetStage: DraftSubmissionStatus.submittingAssessment,
+        now: baseNow,
+      );
+      await draftStore.persistServerAssessmentId(
+        localDraftId: v2Id,
+        leaseToken: lease,
+        authenticatedActorId: 'actor-a',
+        serverAssessmentId: a2.id.value,
+        now: baseNow,
+      );
+      await draftStore.releaseDraftClaim(
+        localDraftId: v2Id,
+        leaseToken: lease,
+        authenticatedActorId: 'actor-a',
+        now: baseNow,
+      );
+
+      final v2Outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: v2Id,
+        createCommandId: 'cmd-create-v2',
+        submitCommandId: 'cmd-submit-v2',
+        withEvidence: false,
+      );
+      expect(v2Outcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (v2Outcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.unreconstructableExpectedVersion),
+      );
+      expect(repo.submitAssessmentCallCount, equals(0));
+    });
+
+    test('submitAssessment always passes expectedVersion: 1 and quarantines on LW101 / LW107', () async {
+      // LW101
+      const d101 = 'draft-lw101';
+      await seedCanonicalDraft(localDraftId: d101, withEvidence: false);
+      repo.nextSubmitError = const BackendRpcException(
+        message: 'Version conflict LW101',
+        code: 'LW101',
+      );
+      final orchestrator = buildOrchestrator();
+      final res101 = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: d101,
+        withEvidence: false,
+      );
+      expect(res101, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (res101 as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.versionConflict),
+      );
+      expect(repo.recordedExpectedVersions, equals([1]));
+
+      // LW107
+      const d107 = 'draft-lw107';
+      await seedCanonicalDraft(
+        localDraftId: d107,
+        createCommandId: 'cmd-c-107',
+        submitCommandId: 'cmd-s-107',
+        withEvidence: false,
+      );
+      repo.nextSubmitError = const BackendRpcException(
+        message: 'Ambiguous idempotency state LW107',
+        code: 'LW107',
+      );
+      final res107 = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: d107,
+        createCommandId: 'cmd-c-107',
+        submitCommandId: 'cmd-s-107',
+        withEvidence: false,
+      );
+      expect(res107, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (res107 as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.ambiguousSubmitOutcome),
+      );
+    });
+
+    test('42501 handling: pre-dispatch revoked -> terminal policy denial; childConfirmedArchived or post-dispatch -> AMBIGUOUS_42501_OUTCOME; unverified -> retry cap then quarantine', () async {
+      // 1. Pre-dispatch confirmedRevoked -> terminalPolicyDenial
+      const dRevoked = 'draft-42501-revoked';
+      await seedCanonicalDraft(localDraftId: dRevoked, withEvidence: false);
+      authzPort.setDefaultAdultResult(
+        const AdultTargetAuthorizationResult.confirmedRevoked(),
+      );
+      final orchestrator = buildOrchestrator(maxRetryCount: 2);
+      final rRevoked = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: dRevoked,
+        withEvidence: false,
+      );
+      expect(rRevoked, isA<AssessmentSubmissionPolicyDenied>());
+      expect(
+        (rRevoked as AssessmentSubmissionPolicyDenied).recoveryCode,
+        equals(DraftRecoveryCode.terminalPolicyDenial),
+      );
+      expect(repo.createDraftCallCount, equals(0));
+      expect(
+        (await draftStore.getLocalDraft(dRevoked))?.recoveryCode,
+        equals(DraftRecoveryCode.terminalPolicyDenial),
+      );
+
+      // 2. Child confirmed archived -> ambiguous42501Outcome
+      const dArchived = 'draft-42501-archived';
+      await seedCanonicalDraft(
+        localDraftId: dArchived,
+        createCommandId: 'cmd-c-arch',
+        submitCommandId: 'cmd-s-arch',
+        withEvidence: false,
+      );
+      var verifyCountArch = 0;
+      authzPort.onVerifyAssessmentTarget = (_, _, _) async {
+        verifyCountArch++;
+        if (verifyCountArch == 1) {
+          return const AdultTargetAuthorizationResult.authorized(
+            verifiedRole: VerifiedAdultRole.parent,
+          );
+        }
+        return const AdultTargetAuthorizationResult.definitelyDenied(
+          reason: AdultTargetVerificationReason.childConfirmedArchived,
+        );
+      };
+      repo.nextCreateError = const BackendRpcException(
+        message: 'Permission denied 42501',
+        code: '42501',
+      );
+      final rArchived = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: dArchived,
+        createCommandId: 'cmd-c-arch',
+        submitCommandId: 'cmd-s-arch',
+        withEvidence: false,
+      );
+      expect(rArchived, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (rArchived as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.ambiguous42501Outcome),
+      );
+
+      // 3. Unverified -> bounded retries until maxRetryCount then AMBIGUOUS_42501_OUTCOME
+      authzPort.onVerifyAssessmentTarget = null;
+      const dUnverified = 'draft-42501-unverified';
+      await seedCanonicalDraft(
+        localDraftId: dUnverified,
+        createCommandId: 'cmd-c-unv',
+        submitCommandId: 'cmd-s-unv',
+        withEvidence: false,
+      );
+      var calls = 0;
+      authzPort.onVerifyAssessmentTarget = (_, _, _) async {
+        calls++;
+        if (calls == 1) {
+          return const AdultTargetAuthorizationResult.authorized(
+            verifiedRole: VerifiedAdultRole.parent,
+          );
+        }
+        return const AdultTargetAuthorizationResult.unverified(
+          reason: AdultTargetVerificationReason.transientVerificationFailure,
+        );
+      };
+      repo.nextCreateError = const BackendRpcException(
+        message: 'Permission denied',
+        code: '42501',
+      );
+      final retry1 = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: dUnverified,
+        createCommandId: 'cmd-c-unv',
+        submitCommandId: 'cmd-s-unv',
+        withEvidence: false,
+      );
+      expect(retry1, isA<AssessmentSubmissionRetryScheduled>());
+      expect((retry1 as AssessmentSubmissionRetryScheduled).retryCount, 1);
+
+      clock.advance(const Duration(minutes: 10));
+      calls = 0;
+      repo.nextCreateError = const BackendRpcException(
+        message: 'Permission denied',
+        code: '42501',
+      );
+      final retry2 = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: dUnverified,
+        createCommandId: 'cmd-c-unv',
+        submitCommandId: 'cmd-s-unv',
+        withEvidence: false,
+      );
+      expect(retry2, isA<AssessmentSubmissionRetryScheduled>());
+      expect((retry2 as AssessmentSubmissionRetryScheduled).retryCount, 2);
+
+      // Next failure exceeds maxRetryCount (2) -> quarantines cleanly
+      clock.advance(const Duration(minutes: 10));
+      calls = 0;
+      repo.nextCreateError = const BackendRpcException(
+        message: 'Permission denied',
+        code: '42501',
+      );
+      final capQuarantine = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: dUnverified,
+        createCommandId: 'cmd-c-unv',
+        submitCommandId: 'cmd-s-unv',
+        withEvidence: false,
+      );
+      expect(capQuarantine, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (capQuarantine as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.ambiguous42501Outcome),
+      );
+    });
+
+    test('Persisted backoff nextAttemptAt respects Clock & DeterministicJitterSource and is bypassed by foregroundRetry', () async {
+      const draftId = 'draft-backoff-1';
+      await seedCanonicalDraft(localDraftId: draftId, withEvidence: false);
+      repo.nextSubmitError = const BackendRpcException(
+        message: 'Upstream 503 temporary outage',
+        code: '503',
+      );
+      final orchestrator = buildOrchestrator(
+        jitterSource: const DeterministicJitterSource(0.5),
+      );
+
+      final first = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+      );
+      expect(first, isA<AssessmentSubmissionRetryScheduled>());
+      final scheduled = first as AssessmentSubmissionRetryScheduled;
+      expect(
+        scheduled.nextAttemptAt,
+        equals(baseNow.add(const Duration(seconds: 1))),
+      );
+
+      // Before nextAttemptAt under normal trigger -> returns retry scheduled with 0 RPC calls.
+      final beforeCreateCount = repo.createDraftCallCount;
+      final blocked = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+        trigger: CommandExecutionTrigger.foreground,
+      );
+      expect(blocked, isA<AssessmentSubmissionRetryScheduled>());
+      expect(repo.createDraftCallCount, equals(beforeCreateCount));
+
+      // Explicit foregroundRetry before nextAttemptAt bypasses backoff and completes.
+      final bypassed = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+        trigger: CommandExecutionTrigger.foregroundRetry,
+      );
+      expect(bypassed, isA<AssessmentSubmissionConfirmed>());
+    });
+
+    test('Actor switch A -> B pauses with WAITING_ORIGINAL_ACTOR; A resumes; session generation invalidation pauses without quarantine', () async {
+      const draftId = 'draft-actor-switch';
+      await seedCanonicalDraft(
+        localDraftId: draftId,
+        actorUserId: 'actor-a',
+        withEvidence: false,
+      );
+      final orchestrator = buildOrchestrator();
+
+      // Switch to actor B -> paused cleanly with LW4B1:WAITING_ORIGINAL_ACTOR
+      authPort.setSession(
+        userId: 'actor-b',
+        sessionGeneration: 'gen-actor-b-1',
+        role: 'parent',
+      );
+      final actorBOutcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+      );
+      expect(actorBOutcome, isA<AssessmentSubmissionPausedActorMismatch>());
+      expect(repo.createDraftCallCount, equals(0));
+      expect(
+        (await draftStore.getLocalDraft(draftId))?.recoveryCode,
+        equals(DraftRecoveryCode.waitingOriginalActor),
+      );
+
+      // Switch back to actor A -> simulate session generation rotation mid-upload (pre-register)
+      const genDraftId = 'draft-gen-switch';
+      await seedCanonicalDraft(
+        localDraftId: genDraftId,
+        actorUserId: 'actor-a',
+        createCommandId: 'cmd-c-gen',
+        submitCommandId: 'cmd-s-gen',
+        evidenceId: 'ev-gen-1',
+        withEvidence: true,
+      );
+      authPort.setSession(
+        userId: 'actor-a',
+        sessionGeneration: 'gen-actor-a-10',
+        role: 'parent',
+      );
+      storage.onAfterUpload = () {
+        authPort.setSession(
+          userId: 'actor-a',
+          sessionGeneration: 'gen-actor-a-11',
+          role: 'parent',
+        );
+      };
+      final pausedGen = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: genDraftId,
+        createCommandId: 'cmd-c-gen',
+        submitCommandId: 'cmd-s-gen',
+        evidenceId: 'ev-gen-1',
+      );
+      expect(pausedGen, isA<AssessmentSubmissionPausedSessionInvalid>());
+      final rowAfterPause = await draftStore.getLocalDraft(genDraftId);
+      expect(rowAfterPause?.isReadOnlyQuarantined, isFalse);
+      expect(rowAfterPause?.leaseToken, isNull);
+
+      // Actor A resumes original switched draft and completes
+      storage.onAfterUpload = null;
+      final resumedA = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+      );
+      expect(resumedA, isA<AssessmentSubmissionConfirmed>());
+    });
+
+    test('R32-07: Secret values (JWT, Bearer token, signed URL token, Storage path) are redacted from outcomes and persisted errors', () async {
+      const draftId = 'draft-r32-07-redaction';
+      await seedCanonicalDraft(localDraftId: draftId, withEvidence: false);
+      const secretJwt =
+          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjMifQ.secretSigXYZ';
+      const secretBearer = 'Bearer super_secret_bearer_token_999';
+      const secretUrl =
+          'https://proj.supabase.co/storage/v1/object/sign/assessment-evidence/fam-wp3-1/ch-wp3-1/a-1/ev-1.jpg?token=secretQueryTok42';
+
+      repo.nextSubmitError = const BackendRpcException(
+        message: 'RPC failed: $secretBearer $secretJwt $secretUrl',
+        code: 'LW107',
+      );
+
+      final orchestrator = buildOrchestrator();
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+      );
+
+      expect(outcome, isA<AssessmentSubmissionQuarantined>());
+      final q = outcome as AssessmentSubmissionQuarantined;
+      for (final secret in const [
+        'secretSigXYZ',
+        'super_secret_bearer_token_999',
+        'secretQueryTok42',
+        'assessment-evidence/fam-wp3-1',
+      ]) {
+        expect(q.message, isNot(contains(secret)));
+        expect(q.draft?.lastErrorMessage ?? '', isNot(contains(secret)));
+      }
+    });
+  });
+}

@@ -738,6 +738,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     if (activeChild == null) return;
 
     final store = ref.read(localDraftStoreProvider);
+    final authPort = ref.read(authSessionPortProvider);
+    final authzPort = ref.read(recoveryAuthorizationPortProvider);
     final existingFromStore = await store.getLocalDraft(_localDraftId);
     final prior = existingFromStore ?? widget.initialDraft;
 
@@ -772,44 +774,82 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       return;
     }
 
-    final String? resolvedCreateCommandId;
-    final String? resolvedSubmitCommandId;
-    final String? resolvedActorUserId;
-    final String? resolvedActorRole;
-    final CommandDispatchState resolvedDispatchState;
-
-    if (isLegacy) {
-      // For unknown_legacy drafts, preserve all existing command IDs, actor identity,
-      // and dispatchState exactly as stored. Preserve NULL as NULL.
-      // Never generate replacement command IDs or backfill actorUserId from the current user during ordinary local editing.
-      resolvedCreateCommandId = prior?.createCommandId;
-      resolvedSubmitCommandId = prior?.submitCommandId;
-      resolvedActorUserId = prior?.actorUserId;
-      resolvedActorRole = prior?.actorRole;
-      resolvedDispatchState = CommandDispatchState.unknownLegacy;
-    } else {
-      // Fresh v5 drafts generate and preserve stable command IDs for genuinely new operations.
-      _createCommandId ??= prior?.createCommandId ?? generateUuid();
-      _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
-      resolvedCreateCommandId = _createCommandId;
-      resolvedSubmitCommandId = _submitCommandId;
-      if (prior != null) {
-        // Never adopt or backfill actorUserId onto an existing draft row (R33-01).
-        resolvedActorUserId = prior.actorUserId;
-      } else {
-        var freshActorId = ref.read(currentUserIdProvider);
-        if (freshActorId == null) {
-          try {
-            freshActorId =
-                (await ref.read(authSessionPortProvider).validateForMutation())
-                    ?.userId;
-          } catch (_) {}
-        }
-        resolvedActorUserId = freshActorId;
+    late final ValidatedActorContext validatedActor;
+    try {
+      validatedActor = await assertValidStorageAuthSession(
+        authSessionPort: authPort,
+        storagePath: 'assessment-draft/$_localDraftId',
+        stage: 'assessment local save',
+      );
+      if (!validatedActor.isValidAt(DateTime.now().toUtc())) {
+        throw EvidenceStorageAuthException(
+          const AuthFailureOutcome(
+            storagePath: '',
+            reason: 'Session expired before saving draft.',
+          ),
+        );
       }
-      resolvedActorRole = prior?.actorRole;
-      resolvedDispatchState = _resolveSafeDispatchState(prior);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = _mapFriendlyError(e);
+        });
+      }
+      return;
     }
+    if (!mounted) return;
+
+    if (prior != null) {
+      if (prior.actorUserId == null || prior.actorUserId!.trim().isEmpty) {
+        setState(() {
+          _authoritativeDraft = prior;
+          _isQuarantined = true;
+          _errorMessage = _payloadLockedEditRejectedMessage;
+        });
+        return;
+      }
+      if (prior.actorUserId != validatedActor.userId) {
+        setState(() {
+          _errorMessage = 'Your session is no longer valid. Only the original draft author can modify this draft.';
+        });
+        return;
+      }
+      if (prior.familyId != activeChild.familyId.value ||
+          prior.childId != activeChild.id.value) {
+        setState(() {
+          _errorMessage =
+              'Active child selection does not match the original draft scope.';
+        });
+        return;
+      }
+    }
+
+    final authzResult = await authzPort.verifyAssessmentTarget(
+      context: validatedActor,
+      familyId: activeChild.familyId.value,
+      childId: activeChild.id.value,
+    );
+    if (!mounted) return;
+    final isAllowedTargetForLocalSave =
+        authzResult.status == TargetAuthorizationStatus.authorized ||
+        (authzResult.status == TargetAuthorizationStatus.unverified &&
+            authzResult.reason ==
+                AdultTargetVerificationReason.transientVerificationFailure);
+    if (!isAllowedTargetForLocalSave) {
+      setState(() {
+        _errorMessage = 'You do not have permission to save drafts for this family or child.';
+      });
+      return;
+    }
+
+    // Fresh v5 drafts generate and preserve stable command IDs for genuinely new operations.
+    _createCommandId ??= prior?.createCommandId ?? generateUuid();
+    _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
+    final resolvedCreateCommandId = _createCommandId;
+    final resolvedSubmitCommandId = _submitCommandId;
+    final resolvedActorUserId = prior?.actorUserId ?? validatedActor.userId;
+    final resolvedActorRole = prior?.actorRole ?? validatedActor.role;
+    final resolvedDispatchState = _resolveSafeDispatchState(prior);
 
     final resolvedEvidenceId = _evidenceRemoved
         ? null
@@ -825,6 +865,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       final verifiedBytes = _selectedEvidence!.localPath != null
           ? await fileStore.readEvidenceBytes(_selectedEvidence!.localPath!)
           : null;
+      if (!mounted) return;
       if (verifiedBytes == null) {
         setState(() {
           _errorMessage = 'Cannot save draft: the selected photo could not be verified in local storage. Please re-select a photo or remove it.';
@@ -869,6 +910,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final normalizedOccurredAt = normalizeAssessmentOccurredAt(_occurredAt);
     final resolvedEntryContext =
         prior?.entryContext ?? EntryContext.sharedChild;
+    final nowUtc = DateTime.now().toUtc();
 
     final draft = LocalAssessmentDraft(
       localDraftId: _localDraftId,
@@ -887,7 +929,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       maxScore: max,
       localPhotoPath: resolvedPhotoPath,
       occurredAt: normalizedOccurredAt,
-      updatedAt: DateTime.now().toUtc(),
+      updatedAt: nowUtc,
       entryContext: resolvedEntryContext,
       serverEvidenceId: prior?.serverEvidenceId,
       sha256Checksum: prior?.sha256Checksum,
@@ -901,7 +943,34 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     );
 
     try {
-      await store.saveLocalDraft(draft);
+      await assertValidStorageAuthSession(
+        authSessionPort: authPort,
+        storagePath: 'assessment-draft/$_localDraftId',
+        context: validatedActor,
+        expectedSessionGeneration: validatedActor.sessionGeneration,
+        stage: 'assessment local save commit',
+      );
+      final saveCas = await store.registerOrUpdateDraftIfUnchanged(
+        expected: existingFromStore,
+        desired: draft,
+        now: nowUtc,
+      );
+      if (!saveCas.isSuccess) {
+        if (saveCas.draft != null && mounted) {
+          setState(() {
+            _authoritativeDraft = saveCas.draft;
+          });
+        }
+        throw DraftSubmissionCasException(
+          stage: DraftCasFailureStage.registerPreDispatchDraft,
+          localDraftId: _localDraftId,
+          casStatus: saveCas.status,
+          serverAssessmentId: resolvedServerAssessmentId,
+          message:
+              'Could not save draft changes because local storage state changed (${saveCas.status.name}).',
+        );
+      }
+      _authoritativeDraft = saveCas.draft ?? draft;
 
       // Phase 6 Slice 4B-0 (R26-3-02):
       // Conservative evidence retention: when replacing a photo on a draft,
@@ -916,9 +985,15 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = e is DraftWriteConflictException
-              ? 'Cannot save changes: this draft is locked or requires recovery reconciliation.'
-              : 'Could not save draft locally. Please check storage space and try again.';
+          if (e is EvidenceStorageException ||
+              e is DraftSubmissionCasException ||
+              e is CanonicalEvidenceValidationException) {
+            _errorMessage = _mapFriendlyError(e);
+          } else if (e is DraftWriteConflictException) {
+            _errorMessage = 'Cannot save changes: this draft is locked or requires recovery reconciliation.';
+          } else {
+            _errorMessage = 'Could not save draft locally. Please check storage space and try again.';
+          }
         });
       }
     }
@@ -1056,6 +1131,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       final storage = ref.read(assessmentEvidenceStorageProvider);
       final fileStore = ref.read(localEvidenceFileStoreProvider);
       final authPort = ref.read(authSessionPortProvider);
+      final authzPort = ref.read(recoveryAuthorizationPortProvider);
+      final config = ref.read(appConfigProvider);
 
       // R31-08: Authoritative live session validation before staging/dispatch.
       final validatedActor = await assertValidStorageAuthSession(
@@ -1300,13 +1377,24 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         localDraftStore: store,
         canonicalSnapshotStore: fileStore,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
+        jitterSource: config.canUseLocalDemoRepositories
+            ? const DeterministicJitterSource(0.0)
+            : const RandomJitterSource(),
       );
+
+      final trigger =
+          (isDispatchedRetry ||
+              (prior?.hasWaitingOriginalActorMarker ?? false) ||
+              prior?.recoveryCode == DraftRecoveryCode.retryScheduled)
+          ? CommandExecutionTrigger.foregroundRetry
+          : CommandExecutionTrigger.foreground;
 
       final evidenceIdObj = dispatchEvidenceIdStr != null
           ? EvidenceId(dispatchEvidenceIdStr)
           : null;
 
-      await submitUseCase(
+      final outcome = await submitUseCase.execute(
         createCommandId: isDispatchedRetry
             ? (prior.createCommandId ?? _createCommandId!)
             : _createCommandId!,
@@ -1329,20 +1417,14 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         localDraftId: _localDraftId,
         context: validatedActor,
         expectedSessionGeneration: validatedActor.sessionGeneration,
+        trigger: trigger,
       );
 
       // B03: Do NOT delete physical evidence solely because submission returned.
       // Local evidence bytes are preserved on disk for durability and future reconciliation.
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Assessment submitted for review!'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        context.pop(true);
-      }
+      if (!mounted) return;
+      _applySubmissionOutcome(outcome);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -1354,6 +1436,79 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       if (mounted) {
         setState(() => _isSubmitting = false);
       }
+    }
+  }
+
+  void _applySubmissionOutcome(AssessmentSubmissionOutcome outcome) {
+    switch (outcome) {
+      case AssessmentSubmissionConfirmed():
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Assessment submitted for review!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        context.pop(true);
+      case AssessmentSubmissionPausedActorMismatch(:final draft):
+        setState(() {
+          _authoritativeDraft = draft ?? _authoritativeDraft;
+          _errorMessage = 'Your session is no longer valid. Original draft author session is required to continue.';
+        });
+      case AssessmentSubmissionPausedSessionInvalid(:final draft):
+        setState(() {
+          _authoritativeDraft = draft ?? _authoritativeDraft;
+          _errorMessage = 'Your session is no longer valid. Please sign in again to continue.';
+        });
+      case AssessmentSubmissionRetryScheduled(:final draft, :final cause):
+        setState(() {
+          _authoritativeDraft = draft ?? _authoritativeDraft;
+          _errorMessage = cause != null ? _mapFriendlyError(cause) : 'Could not connect to the server. Your work is saved on this device. Please try again when online.';
+        });
+      case AssessmentSubmissionQuarantined(
+        :final draft,
+        :final recoveryCode,
+        :final cause,
+      ):
+        setState(() {
+          _authoritativeDraft = draft ?? _authoritativeDraft;
+          _isQuarantined =
+              (draft?.isReadOnlyQuarantined ?? false) || _isQuarantined;
+          final useSpecificRecoveryCopy =
+              DraftRecoveryCode.quarantineCodes.contains(recoveryCode) &&
+              recoveryCode != DraftRecoveryCode.quarantinedUnknownOutcome;
+          _errorMessage = useSpecificRecoveryCopy || cause == null
+              ? _mapRecoveryCodeFriendlyError(recoveryCode)
+              : _mapFriendlyError(cause);
+        });
+      case AssessmentSubmissionPolicyDenied(:final draft):
+        setState(() {
+          _authoritativeDraft = draft ?? _authoritativeDraft;
+          _isQuarantined =
+              (draft?.isReadOnlyQuarantined ?? false) || _isQuarantined;
+          _errorMessage = 'You do not have permission to submit assessments for this family.';
+        });
+      case AssessmentSubmissionLeaseConflict(:final draft, :final cause):
+        setState(() {
+          _authoritativeDraft = draft ?? _authoritativeDraft;
+          _errorMessage = cause != null ? _mapFriendlyError(cause) : 'Could not safely update your local draft state before syncing. Your draft and photo remain preserved on this device.';
+        });
+    }
+  }
+
+  String _mapRecoveryCodeFriendlyError(String recoveryCode) {
+    switch (recoveryCode) {
+      case DraftRecoveryCode.storageContentConflict:
+      case DraftRecoveryCode.evidenceIdMismatch:
+        return 'Attached photo could not be reconciled safely with remote storage. Your draft is saved on this device.';
+      case DraftRecoveryCode.registrationUnresolvedRemoteRetained:
+      case DraftRecoveryCode.ambiguousSubmitOutcome:
+      case DraftRecoveryCode.ambiguous42501Outcome:
+      case DraftRecoveryCode.unreconstructableExpectedVersion:
+        return 'Submission status requires manual verification. Your draft and photo remain safely preserved on this device.';
+      case DraftRecoveryCode.versionConflict:
+        return 'This assessment was updated elsewhere. Please refresh.';
+      default:
+        return 'Cannot submit a quarantined draft. Recovery reconciliation is required.';
     }
   }
 
@@ -1388,11 +1543,37 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     if (error is EvidenceStorageAuthException) {
       return 'Your session is no longer valid. Please sign in again to continue.';
     }
-    if (error is EvidenceStorageConflictException) {
+    if (error is EvidenceStorageConflictException ||
+        error is EvidenceIdMismatchException) {
       return 'Attached photo could not be reconciled safely with remote storage. Your draft is saved on this device.';
     }
-    if (error is EvidenceStorageUnknownOutcomeException) {
+    if (error is EvidenceStorageUnknownOutcomeException ||
+        error is EvidenceRegistrationUnresolvedRemoteRetainedException) {
       return 'Could not verify photo upload status. Your draft is saved on this device. Please try again.';
+    }
+    if (error is AssessmentPolicyDeniedException) {
+      return 'You do not have permission to submit assessments for this family.';
+    }
+    if (error is AssessmentQuarantinedException) {
+      return _mapRecoveryCodeFriendlyError(error.recoveryCode);
+    }
+    if (error is AssessmentRetryScheduledException) {
+      return error.cause != null
+          ? _mapFriendlyError(error.cause!)
+          : 'Could not connect to the server. Your work is saved on this device. Please try again when online.';
+    }
+    if (error is BackendRpcException) {
+      final code = error.code?.toUpperCase();
+      if (code == '42501') {
+        return 'You do not have permission to submit assessments for this family.';
+      }
+      if (code == 'LW101') {
+        return 'This assessment was updated elsewhere. Please refresh.';
+      }
+      if (code == 'LW107') {
+        return 'Submission status requires manual verification. Your draft and photo remain safely preserved on this device.';
+      }
+      return 'Failed to submit assessment. Please check your connection and try again.';
     }
     if (error is InvalidAssessmentException) {
       final msg = error.message.toLowerCase();

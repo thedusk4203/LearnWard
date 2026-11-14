@@ -3,11 +3,44 @@ import 'package:learnward_domain/learnward_domain.dart';
 import 'package:supabase/supabase.dart';
 
 /// Supabase implementation of [AssessmentRepository] enforcing server-authoritative
-/// workflow transitions via trusted SECURITY DEFINER RPCs.
+/// workflow transitions via trusted SECURITY DEFINER RPCs and sanitized error mapping.
 final class SupabaseAssessmentRepository implements AssessmentRepository {
   SupabaseAssessmentRepository(this._client);
 
   final SupabaseClient _client;
+
+  static String? _extractPostgrestCode(PostgrestException error) {
+    final raw = error.code?.trim();
+    if (raw != null && raw.isNotEmpty && raw != 'P0001') {
+      return raw;
+    }
+    final embedded = RegExp(r'\b(LW\d{3}|42501)\b').firstMatch(error.message);
+    if (embedded != null) {
+      return embedded.group(1);
+    }
+    return raw != null && raw.isNotEmpty ? raw : null;
+  }
+
+  Future<T> _runGuarded<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } on BackendRpcException {
+      rethrow;
+    } on InvalidAssessmentException {
+      rethrow;
+    } on PostgrestException catch (e) {
+      throw BackendRpcException(
+        message: sanitizeStorageError(e.message),
+        code: _extractPostgrestCode(e),
+      );
+    } on AuthException catch (e) {
+      final status = e.statusCode?.trim();
+      throw BackendRpcException(
+        message: sanitizeStorageError(e.message),
+        code: status != null && status.isNotEmpty ? status : '401',
+      );
+    }
+  }
 
   @override
   Future<Assessment> createDraft({
@@ -22,7 +55,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     required AssessmentScore score,
     DateTime? occurredAt,
     EntryContext entryContext = EntryContext.adult,
-  }) async {
+  }) => _runGuarded(() async {
     final response = await _client.rpc<Map<String, dynamic>>(
       'create_assessment_draft',
       params: {
@@ -43,7 +76,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     );
 
     return _mapAssessment(response);
-  }
+  });
 
   @override
   Future<Assessment> updateDraft({
@@ -56,7 +89,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     required AssessmentScore score,
     DateTime? occurredAt,
     required int expectedVersion,
-  }) async {
+  }) => _runGuarded(() async {
     final response = await _client.rpc<Map<String, dynamic>>(
       'update_assessment_draft',
       params: {
@@ -74,14 +107,14 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     );
 
     return _mapAssessment(response);
-  }
+  });
 
   @override
   Future<Assessment> submitAssessment({
     required AssessmentId assessmentId,
     required int expectedVersion,
     required String commandId,
-  }) async {
+  }) => _runGuarded(() async {
     final response = await _client.rpc<Map<String, dynamic>>(
       'submit_assessment',
       params: {
@@ -92,7 +125,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     );
 
     return _mapAssessment(response);
-  }
+  });
 
   @override
   Future<Assessment> verifyAssessment({
@@ -100,7 +133,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     required int expectedVersion,
     required String commandId,
     String? notes,
-  }) async {
+  }) => _runGuarded(() async {
     final response = await _client.rpc<Map<String, dynamic>>(
       'verify_assessment',
       params: {
@@ -112,7 +145,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     );
 
     return _mapAssessment(response);
-  }
+  });
 
   @override
   Future<Assessment> rejectAssessment({
@@ -120,7 +153,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     required int expectedVersion,
     required String commandId,
     required String reason,
-  }) async {
+  }) => _runGuarded(() async {
     final response = await _client.rpc<Map<String, dynamic>>(
       'reject_assessment',
       params: {
@@ -132,10 +165,10 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     );
 
     return _mapAssessment(response);
-  }
+  });
 
   @override
-  Future<Assessment?> getAssessment(AssessmentId id) async {
+  Future<Assessment?> getAssessment(AssessmentId id) => _runGuarded(() async {
     final response = await _client
         .from('assessments')
         .select()
@@ -144,13 +177,13 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
 
     if (response == null) return null;
     return _mapAssessment(Map<String, dynamic>.from(response));
-  }
+  });
 
   @override
   Future<List<Assessment>> listAssessmentsByFamily(
     FamilyId familyId, {
     AssessmentStatus? status,
-  }) async {
+  }) => _runGuarded(() async {
     var query = _client
         .from('assessments')
         .select()
@@ -164,13 +197,13 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     return list
         .map((row) => _mapAssessment(Map<String, dynamic>.from(row as Map)))
         .toList();
-  }
+  });
 
   @override
   Future<List<Assessment>> listAssessmentsByChild(
     ChildId childId, {
     AssessmentStatus? status,
-  }) async {
+  }) => _runGuarded(() async {
     var query = _client
         .from('assessments')
         .select()
@@ -184,12 +217,12 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     return list
         .map((row) => _mapAssessment(Map<String, dynamic>.from(row as Map)))
         .toList();
-  }
+  });
 
   @override
   Future<List<VerifiedLearningEvent>> listVerifiedLearningEvents(
     ChildId childId,
-  ) async {
+  ) => _runGuarded(() async {
     final response = await _client
         .from('verified_learning_events')
         .select()
@@ -203,7 +236,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
               _mapVerifiedLearningEvent(Map<String, dynamic>.from(row as Map)),
         )
         .toList();
-  }
+  });
 
   @override
   Future<AssessmentEvidence> registerEvidence({
@@ -211,7 +244,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     required String storagePath,
     required String mediaType,
     required int fileSizeBytes,
-  }) async {
+  }) => _runGuarded(() async {
     final response = await _client.rpc<Map<String, dynamic>>(
       'register_assessment_evidence',
       params: {
@@ -223,20 +256,21 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     );
 
     return _mapEvidence(response);
-  }
+  });
 
   @override
-  Future<void> removeDraftEvidence(EvidenceId evidenceId) async {
-    await _client.rpc<void>(
-      'remove_draft_assessment_evidence',
-      params: {'p_evidence_id': evidenceId.value},
-    );
-  }
+  Future<void> removeDraftEvidence(EvidenceId evidenceId) =>
+      _runGuarded(() async {
+        await _client.rpc<void>(
+          'remove_draft_assessment_evidence',
+          params: {'p_evidence_id': evidenceId.value},
+        );
+      });
 
   @override
   Future<List<AssessmentEvidence>> listEvidenceForAssessment(
     AssessmentId assessmentId,
-  ) async {
+  ) => _runGuarded(() async {
     final response = await _client
         .from('assessment_evidence')
         .select()
@@ -247,7 +281,7 @@ final class SupabaseAssessmentRepository implements AssessmentRepository {
     return list
         .map((row) => _mapEvidence(Map<String, dynamic>.from(row as Map)))
         .toList();
-  }
+  });
 
   static Assessment _mapAssessment(Map<String, dynamic> row) {
     final rawScore = (row['raw_score'] as num).toDouble();

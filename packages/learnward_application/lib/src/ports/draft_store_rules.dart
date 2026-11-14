@@ -551,8 +551,14 @@ DraftCasResult evaluateDraftRegistrationCas({
       desired.familyId != existing.familyId ||
       desired.childId != existing.childId ||
       desired.actorUserId != existing.actorUserId ||
-      desired.createCommandId != existing.createCommandId ||
-      desired.submitCommandId != existing.submitCommandId ||
+      _mutatedExistingImmutableText(
+        existing.createCommandId,
+        desired.createCommandId,
+      ) ||
+      _mutatedExistingImmutableText(
+        existing.submitCommandId,
+        desired.submitCommandId,
+      ) ||
       desired.serverAssessmentId != existing.serverAssessmentId ||
       desired.serverEvidenceId != existing.serverEvidenceId) {
     return DraftCasResult(
@@ -659,6 +665,7 @@ DraftCasResult? _checkDraftClaimPreconditions({
   required DateTime effectiveNow,
   required bool expectingExpiredLease,
   String? overrideLeaseToken,
+  bool ignoreRetryBackoff = false,
 }) {
   if (existing == null) {
     return DraftCasResult(
@@ -734,7 +741,8 @@ DraftCasResult? _checkDraftClaimPreconditions({
           : 'Draft $localDraftId holds an expired lease; use resumeDraftClaimAfterExpiry.',
     );
   }
-  if ((existing.submissionStatus == DraftSubmissionStatus.failedRetryable ||
+  if (!ignoreRetryBackoff &&
+      (existing.submissionStatus == DraftSubmissionStatus.failedRetryable ||
           existing.recoveryCode == DraftRecoveryCode.retryScheduled) &&
       existing.nextAttemptAt != null &&
       existing.nextAttemptAt!.isAfter(effectiveNow)) {
@@ -758,6 +766,7 @@ DraftCasResult diagnoseDraftClaimFailure({
   required DateTime effectiveNow,
   required bool expectingExpiredLease,
   String? existingLeaseToken,
+  bool ignoreRetryBackoff = false,
 }) {
   return _checkDraftClaimPreconditions(
         existing: existing,
@@ -768,6 +777,7 @@ DraftCasResult diagnoseDraftClaimFailure({
         effectiveNow: effectiveNow,
         expectingExpiredLease: expectingExpiredLease,
         overrideLeaseToken: existingLeaseToken,
+        ignoreRetryBackoff: ignoreRetryBackoff,
       ) ??
       DraftCasResult(
         status: DraftCasStatus.casConflict,
@@ -788,6 +798,7 @@ DraftCasResult evaluateDraftClaim({
   required bool expectingExpiredLease,
   DateTime? now,
   String? overrideLeaseToken,
+  bool ignoreRetryBackoff = false,
 }) {
   if (!_hasText(actorUserId) ||
       !_hasText(familyId) ||
@@ -817,6 +828,7 @@ DraftCasResult evaluateDraftClaim({
     effectiveNow: effectiveNow,
     expectingExpiredLease: expectingExpiredLease,
     overrideLeaseToken: overrideLeaseToken,
+    ignoreRetryBackoff: ignoreRetryBackoff,
   );
   if (failure != null) {
     return failure;

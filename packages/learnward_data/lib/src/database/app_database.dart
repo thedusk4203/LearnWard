@@ -844,6 +844,7 @@ class AppDatabase extends _$AppDatabase
     required bool expectingExpiredLease,
     DateTime? now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) async {
     if (actorUserId.isEmpty ||
         familyId.isEmpty ||
@@ -883,8 +884,17 @@ class AppDatabase extends _$AppDatabase
         Variable<DateTime>(effectiveNow),
         Variable<String>(newToken),
       ],
-      Variable<DateTime>(effectiveNow),
+      if (!ignoreRetryBackoff) Variable<DateTime>(effectiveNow),
     ];
+
+    final backoffSql = ignoreRetryBackoff
+        ? ''
+        : '''
+        AND (
+          (submission_status != 'failed_retryable' AND (last_error_message IS NULL OR last_error_message NOT LIKE 'LW4B1:RETRY_SCHEDULED%'))
+          OR next_attempt_at IS NULL
+          OR next_attempt_at <= ?
+        )''';
 
     return _execFencedDraftUpdate(
       localDraftId: localDraftId,
@@ -906,11 +916,7 @@ class AppDatabase extends _$AppDatabase
         AND $_draftLeaseShapeConsistentSql
         AND $_draftVerifiedEvidenceOrUnphotoedInFlightSql
         AND $_draftNotQuarantinedMarkerSql
-        AND (
-          (submission_status != 'failed_retryable' AND (last_error_message IS NULL OR last_error_message NOT LIKE 'LW4B1:RETRY_SCHEDULED%'))
-          OR next_attempt_at IS NULL
-          OR next_attempt_at <= ?
-        );
+$backoffSql;
       ''',
       variables: variables,
       diagnoseZeroRows: (current) => diagnoseDraftClaimFailure(
@@ -922,6 +928,7 @@ class AppDatabase extends _$AppDatabase
         effectiveNow: effectiveNow,
         expectingExpiredLease: expectingExpiredLease,
         existingLeaseToken: overrideLeaseToken,
+        ignoreRetryBackoff: ignoreRetryBackoff,
       ),
     );
   }
@@ -935,6 +942,7 @@ class AppDatabase extends _$AppDatabase
     required Duration leaseDuration,
     DateTime? now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) => _claimOrResumeDraftLease(
     localDraftId: localDraftId,
     actorUserId: actorUserId,
@@ -944,6 +952,7 @@ class AppDatabase extends _$AppDatabase
     expectingExpiredLease: false,
     now: now,
     overrideLeaseToken: overrideLeaseToken,
+    ignoreRetryBackoff: ignoreRetryBackoff,
   );
 
   @override
@@ -955,6 +964,7 @@ class AppDatabase extends _$AppDatabase
     required Duration leaseDuration,
     required DateTime now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) => _claimOrResumeDraftLease(
     localDraftId: localDraftId,
     actorUserId: actorUserId,
@@ -964,6 +974,7 @@ class AppDatabase extends _$AppDatabase
     expectingExpiredLease: true,
     now: now,
     overrideLeaseToken: overrideLeaseToken,
+    ignoreRetryBackoff: ignoreRetryBackoff,
   );
 
   @override

@@ -1,6 +1,18 @@
 /// Command lifecycle, dispatch provenance, and recovery state enums for Phase 6 offline resilience.
 library;
 
+/// Caller trigger context controlling retry-backoff bypass and lease reclamation.
+enum CommandExecutionTrigger {
+  /// Invoked by foreground user action (e.g. tapping "Spin Wheel", "Get Reward", or "Submit Assessment").
+  foreground,
+
+  /// Invoked by foreground user tapping explicit retry on an unresolved pending command/draft.
+  foregroundRetry,
+
+  /// Invoked by the background/app-active outbox recovery dispatcher.
+  recovery,
+}
+
 /// Durable dispatch provenance state for offline command journals.
 ///
 /// Governs whether a command may be replayed, is in-flight, or was migrated
@@ -110,6 +122,14 @@ abstract final class DraftRecoveryCode {
   static const String localMetadataTampered = 'LW4B1:LOCAL_METADATA_TAMPERED';
   static const String ambiguousDuplicateRow = 'LW4B1:AMBIGUOUS_DUPLICATE_ROW';
   static const String malformedLeaseMetadata = 'LW4B1:MALFORMED_LEASE_METADATA';
+  static const String evidenceIdMismatch = 'LW4B1:EVIDENCE_ID_MISMATCH';
+  static const String registrationUnresolvedRemoteRetained =
+      'LW4B1:REGISTRATION_UNRESOLVED_REMOTE_RETAINED';
+  static const String versionConflict = 'LW4B1:VERSION_CONFLICT';
+  static const String unreconstructableExpectedVersion =
+      'LW4B1:UNRECONSTRUCTABLE_EXPECTED_VERSION';
+  static const String ambiguousSubmitOutcome = 'LW4B1:AMBIGUOUS_SUBMIT_OUTCOME';
+  static const String ambiguous42501Outcome = 'LW4B1:AMBIGUOUS_42501_OUTCOME';
   static const String authContextExpiredOrMismatched =
       'LW4B1:AUTH_CONTEXT_EXPIRED_OR_MISMATCHED';
   static const String terminalPolicyDenial = 'LW4B1:TERMINAL_POLICY_DENIAL';
@@ -128,6 +148,12 @@ abstract final class DraftRecoveryCode {
     localMetadataTampered,
     ambiguousDuplicateRow,
     malformedLeaseMetadata,
+    evidenceIdMismatch,
+    registrationUnresolvedRemoteRetained,
+    versionConflict,
+    unreconstructableExpectedVersion,
+    ambiguousSubmitOutcome,
+    ambiguous42501Outcome,
     quarantinedUnknownOutcome,
   };
 

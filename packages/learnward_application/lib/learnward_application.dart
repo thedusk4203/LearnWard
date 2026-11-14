@@ -20,6 +20,7 @@ export 'src/ports/pending_reward_command_store.dart';
 export 'src/ports/recovery_authorization_port.dart';
 export 'src/ports/reward_repository.dart';
 export 'src/ports/wheel_repository.dart';
+export 'src/services/assessment_submission_orchestrator.dart';
 export 'src/services/jitter_source.dart';
 export 'src/services/outbox_recovery_dispatcher.dart';
 export 'src/services/recovery_coordinator.dart';

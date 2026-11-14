@@ -50,6 +50,8 @@ class _PresetFamilyNotifier extends ActiveFamilyNotifier {
 }
 
 final class _SpyAssessmentRepository extends FakeAssessmentRepository {
+  _SpyAssessmentRepository({super.activeActorIdProvider});
+
   int createDraftCalls = 0;
   int registerEvidenceCalls = 0;
   int submitAssessmentCalls = 0;
@@ -202,6 +204,7 @@ final class _InterceptableSqliteDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     DateTime? now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) async {
     final override = await onAcquireDraftClaimOverride?.call(localDraftId);
     if (override != null) return override;
@@ -213,6 +216,7 @@ final class _InterceptableSqliteDraftStore implements LocalDraftStore {
       leaseDuration: leaseDuration,
       now: now,
       overrideLeaseToken: overrideLeaseToken,
+      ignoreRetryBackoff: ignoreRetryBackoff,
     );
   }
 
@@ -225,6 +229,7 @@ final class _InterceptableSqliteDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     required DateTime now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) => inner.resumeDraftClaimAfterExpiry(
     localDraftId: localDraftId,
     actorUserId: actorUserId,
@@ -233,6 +238,7 @@ final class _InterceptableSqliteDraftStore implements LocalDraftStore {
     leaseDuration: leaseDuration,
     now: now,
     overrideLeaseToken: overrideLeaseToken,
+    ignoreRetryBackoff: ignoreRetryBackoff,
   );
 
   @override
@@ -487,10 +493,12 @@ void main() {
       dbFile = File('${tempDir.path}/wp2_matrix.sqlite');
       appDatabase = AppDatabase(NativeDatabase(dbFile));
       fileStore = DefaultLocalEvidenceFileStore(baseDirectory: tempDir);
-      repo = _SpyAssessmentRepository();
       authPort = FakeAuthSessionPort(
         activeUserId: 'parent-actor-1',
         sessionGeneration: 'gen-matrix-1',
+      );
+      repo = _SpyAssessmentRepository(
+        activeActorIdProvider: () => authPort.currentContext?.userId,
       );
       storage = FakeAssessmentEvidenceStorage(authSessionPort: authPort);
       fakeFamilyRepo = FakeFamilyRepository();
@@ -670,6 +678,7 @@ void main() {
           repository: repo,
           storage: storage,
           authSessionPort: authPort,
+          recoveryAuthorizationPort: FakeRecoveryAuthorizationPort(),
           localDraftStore: spyConn1,
           canonicalSnapshotStore: fileStore,
         );
@@ -826,6 +835,7 @@ void main() {
           repository: repo,
           storage: storage,
           authSessionPort: authPort,
+          recoveryAuthorizationPort: FakeRecoveryAuthorizationPort(),
           localDraftStore: spyConn1,
           canonicalSnapshotStore: fileStore,
         );
@@ -1715,6 +1725,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: FakeRecoveryAuthorizationPort(),
         localDraftStore: workerAStore,
         canonicalSnapshotStore: fileStore,
         clock: workerAClock,
@@ -1773,6 +1784,7 @@ void main() {
         type: AssessmentType.quiz,
         difficulty: AssessmentDifficulty.normal,
         score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseTime,
       );
       await conn2.persistServerAssessmentId(
         localDraftId: draftId,

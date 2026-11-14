@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:learnward_domain/learnward_domain.dart';
 
+import '../ports/assessment_evidence_storage.dart';
 import '../ports/pending_reward_command_store.dart';
 
 /// Prescribed disposition action for classified recovery errors.
@@ -175,9 +176,10 @@ final class RecoveryErrorClassifier {
   }
 
   static String _sanitizeMessage(String raw) {
-    if (raw.length > 200) {
-      return '${raw.substring(0, 197)}...';
+    final cleaned = sanitizeStorageError(raw);
+    if (cleaned.length > 200) {
+      return '${cleaned.substring(0, 197)}...';
     }
-    return raw;
+    return cleaned;
   }
 }

@@ -170,12 +170,25 @@ final class UnknownOutcome extends EvidenceStorageReconciliationResult {
 
 /// Authenticated session check failed before Storage interaction.
 final class AuthFailureOutcome extends EvidenceStorageReconciliationResult {
-  const AuthFailureOutcome({required super.storagePath, required String reason})
-    : _rawReason = reason;
+  const AuthFailureOutcome({
+    required super.storagePath,
+    required String reason,
+    this.actorSwitched = false,
+    String? activeUserId,
+    this.isLocalSessionInvalid = false,
+    this.isServerHttpAuthRejection = false,
+  }) : _rawReason = reason,
+       _rawActiveUserId = activeUserId;
 
   final String _rawReason;
+  final bool actorSwitched;
+  final String? _rawActiveUserId;
+  final bool isLocalSessionInvalid;
+  final bool isServerHttpAuthRejection;
 
   String get reason => sanitizeStorageError(_rawReason);
+
+  String? get activeUserId => _rawActiveUserId;
 
   @override
   EvidenceStorageReconciliationOutcome get outcome =>
@@ -331,6 +344,18 @@ Future<ValidatedActorContext> assertValidStorageAuthSession({
       AuthFailureOutcome(
         storagePath: storagePath,
         reason: 'Unauthenticated or expired session during $stage.',
+        isLocalSessionInvalid: true,
+      ),
+    );
+  }
+  if (context != null && freshContext.userId != context.userId) {
+    throw EvidenceStorageAuthException(
+      AuthFailureOutcome(
+        storagePath: storagePath,
+        reason:
+            'Actor switch detected: active session does not match original actor ($stage).',
+        actorSwitched: true,
+        activeUserId: freshContext.userId,
       ),
     );
   }
@@ -341,15 +366,7 @@ Future<ValidatedActorContext> assertValidStorageAuthSession({
         storagePath: storagePath,
         reason:
             'Session generation changed across asynchronous boundary ($stage).',
-      ),
-    );
-  }
-  if (context != null && freshContext.userId != context.userId) {
-    throw EvidenceStorageAuthException(
-      AuthFailureOutcome(
-        storagePath: storagePath,
-        reason:
-            'Actor switch detected: active session does not match original actor ($stage).',
+        isLocalSessionInvalid: true,
       ),
     );
   }

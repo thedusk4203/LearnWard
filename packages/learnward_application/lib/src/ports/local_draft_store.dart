@@ -167,7 +167,9 @@ final class LocalAssessmentDraft {
     final code = recoveryCode;
     if (code == DraftRecoveryCode.storageContentConflict ||
         code == DraftRecoveryCode.localMetadataTampered ||
-        code == DraftRecoveryCode.ambiguousDuplicateRow) {
+        code == DraftRecoveryCode.ambiguousDuplicateRow ||
+        code == DraftRecoveryCode.evidenceIdMismatch ||
+        code == DraftRecoveryCode.versionConflict) {
       return DraftRecoveryDisposition.quarantinedConflict;
     }
     if (code == DraftRecoveryCode.localSnapshotMissing) {
@@ -179,7 +181,11 @@ final class LocalAssessmentDraft {
     if (code == DraftRecoveryCode.unknownWireStatus ||
         code == DraftRecoveryCode.quarantinedUnknownOutcome ||
         code == DraftRecoveryCode.malformedLeaseMetadata ||
-        code == DraftRecoveryCode.unboundActorProvenance) {
+        code == DraftRecoveryCode.unboundActorProvenance ||
+        code == DraftRecoveryCode.registrationUnresolvedRemoteRetained ||
+        code == DraftRecoveryCode.unreconstructableExpectedVersion ||
+        code == DraftRecoveryCode.ambiguousSubmitOutcome ||
+        code == DraftRecoveryCode.ambiguous42501Outcome) {
       return DraftRecoveryDisposition.quarantinedUnknownOutcome;
     }
     if (code == DraftRecoveryCode.legacyUnknown ||
@@ -635,6 +641,7 @@ abstract interface class LocalDraftStore {
     required Duration leaseDuration,
     DateTime? now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   });
 
   /// Atomically reclaims a draft whose existing lease has expired and rotates
@@ -647,6 +654,7 @@ abstract interface class LocalDraftStore {
     required Duration leaseDuration,
     required DateTime now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   });
 
   /// Lease-fenced stage transition marking the draft `possiblyDispatched`

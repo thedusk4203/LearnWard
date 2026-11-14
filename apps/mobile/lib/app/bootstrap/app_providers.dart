@@ -172,7 +172,9 @@ final assessmentRepositoryProvider = Provider<AssessmentRepository>((ref) {
     return SupabaseAssessmentRepository(client);
   }
   if (config.canUseLocalDemoRepositories) {
-    return InMemoryAssessmentRepository();
+    return InMemoryAssessmentRepository(
+      activeActorIdProvider: () => ref.read(currentUserIdProvider),
+    );
   }
   throw MissingSupabaseConfigurationException(config.environment);
 });
