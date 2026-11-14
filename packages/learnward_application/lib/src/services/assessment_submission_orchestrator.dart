@@ -502,19 +502,15 @@ final class AssessmentSubmissionOrchestrator {
     required String stageLabel,
     required RemoteAssessmentStage authStage,
   }) async {
-    final listAuth = await assertValidStorageAuthSession(
-      authSessionPort: authSessionPort,
+    final listAuth = await _authorizeRemoteStage(
       storagePath: storagePath,
       context: context,
       expectedSessionGeneration:
           expectedSessionGeneration ?? context?.sessionGeneration,
-      stage: '$stageLabel list',
-    );
-    await _verifyTargetOrThrow(
-      context: listAuth,
+      stageLabel: '$stageLabel list',
       familyId: familyId,
       childId: childId,
-      stage: authStage,
+      authStage: authStage,
     );
 
     final rows = await repository.listEvidenceForAssessment(assessmentId);
@@ -579,20 +575,16 @@ final class AssessmentSubmissionOrchestrator {
       );
     }
 
-    // Revalidate live session + target authorization immediately before Storage download/reconcile.
-    final storageAuth = await assertValidStorageAuthSession(
-      authSessionPort: authSessionPort,
+    // Revalidate live session -> target authorization -> live session immediately before Storage reconcile.
+    final storageAuth = await _authorizeRemoteStage(
       storagePath: storagePath,
       context: context ?? listAuth,
       expectedSessionGeneration:
           expectedSessionGeneration ?? listAuth.sessionGeneration,
-      stage: '$stageLabel storage reconcile',
-    );
-    await _verifyTargetOrThrow(
-      context: storageAuth,
+      stageLabel: '$stageLabel storage reconcile',
       familyId: familyId,
       childId: childId,
-      stage: authStage,
+      authStage: authStage,
     );
 
     final outcome = await storage.reconcileEvidence(
@@ -644,21 +636,17 @@ final class AssessmentSubmissionOrchestrator {
 
     EvidenceStorageReconciliationResult? reconciliation;
 
-    final initialActor = await assertValidStorageAuthSession(
-      authSessionPort: authSessionPort,
+    final initialActor = await _authorizeRemoteStage(
       storagePath: storagePath,
       context: context,
       expectedSessionGeneration:
           expectedSessionGeneration ?? context?.sessionGeneration,
-      stage: preCheckServerEvidenceList
+      stageLabel: preCheckServerEvidenceList
           ? 'evidence registration pre-check'
           : 'evidence upload',
-    );
-    await _verifyTargetOrThrow(
-      context: initialActor,
       familyId: familyId,
       childId: childId,
-      stage: RemoteAssessmentStage.uploadAndRegisterEvidence,
+      authStage: RemoteAssessmentStage.uploadAndRegisterEvidence,
     );
     var effectiveContext = context ?? initialActor;
     var effectiveGen =
@@ -685,19 +673,15 @@ final class AssessmentSubmissionOrchestrator {
         );
       }
 
-      // Revalidate live session + target authorization after async pre-check before upload.
-      final uploadActor = await assertValidStorageAuthSession(
-        authSessionPort: authSessionPort,
+      // Revalidate live session -> target authorization -> live session after async pre-check before upload.
+      final uploadActor = await _authorizeRemoteStage(
         storagePath: storagePath,
         context: context ?? initialActor,
         expectedSessionGeneration: effectiveGen,
-        stage: 'evidence upload',
-      );
-      await _verifyTargetOrThrow(
-        context: uploadActor,
+        stageLabel: 'evidence upload',
         familyId: familyId,
         childId: childId,
-        stage: RemoteAssessmentStage.uploadAndRegisterEvidence,
+        authStage: RemoteAssessmentStage.uploadAndRegisterEvidence,
       );
       effectiveContext = context ?? uploadActor;
       effectiveGen = expectedSessionGeneration ?? uploadActor.sessionGeneration;
@@ -715,19 +699,15 @@ final class AssessmentSubmissionOrchestrator {
       expectedSessionGeneration: effectiveGen,
     );
 
-    // Revalidate live session & target authorization before DB registration.
-    final validatedActor = await assertValidStorageAuthSession(
-      authSessionPort: authSessionPort,
+    // Revalidate live session -> target authorization -> live session before DB registration.
+    final validatedActor = await _authorizeRemoteStage(
       storagePath: storagePath,
       context: effectiveContext,
       expectedSessionGeneration: effectiveGen,
-      stage: 'evidence registration',
-    );
-    await _verifyTargetOrThrow(
-      context: validatedActor,
+      stageLabel: 'evidence registration',
       familyId: familyId,
       childId: childId,
-      stage: RemoteAssessmentStage.uploadAndRegisterEvidence,
+      authStage: RemoteAssessmentStage.uploadAndRegisterEvidence,
     );
 
     try {
@@ -752,19 +732,15 @@ final class AssessmentSubmissionOrchestrator {
 
       // LW109: Assessment left `draft` (or duplicate constraint hit) — reconcile
       // existing DB evidence rows + Storage bytes without deleting remote bytes (I04).
-      final reconActor = await assertValidStorageAuthSession(
-        authSessionPort: authSessionPort,
+      final reconActor = await _authorizeRemoteStage(
         storagePath: storagePath,
         context: context ?? validatedActor,
         expectedSessionGeneration:
             expectedSessionGeneration ?? validatedActor.sessionGeneration,
-        stage: 'LW109 evidence reconciliation',
-      );
-      await _verifyTargetOrThrow(
-        context: reconActor,
+        stageLabel: 'LW109 evidence reconciliation',
         familyId: familyId,
         childId: childId,
-        stage: RemoteAssessmentStage.uploadAndRegisterEvidence,
+        authStage: RemoteAssessmentStage.uploadAndRegisterEvidence,
       );
       final remoteAssessment = await repository.getAssessment(assessmentId);
       if (remoteAssessment == null) {
@@ -1411,21 +1387,17 @@ final class AssessmentSubmissionOrchestrator {
               recoveryAuthorizationPort != null ||
               context != null;
           final createAuth = needsPreCreateRevalidation
-              ? await assertValidStorageAuthSession(
-                  authSessionPort: authSessionPort,
+              ? await _authorizeRemoteStage(
                   storagePath:
                       'assessment-draft/${localDraftId ?? createCommandId}',
                   context: initialContext,
                   expectedSessionGeneration: expectedGen,
-                  stage: 'create assessment draft',
+                  stageLabel: 'create assessment draft',
+                  familyId: familyId,
+                  childId: childId,
+                  authStage: RemoteAssessmentStage.preDispatch,
                 )
               : initialContext;
-          await _verifyTargetOrThrow(
-            context: createAuth,
-            familyId: familyId,
-            childId: childId,
-            stage: RemoteAssessmentStage.preDispatch,
-          );
 
           currentRemoteStage = RemoteAssessmentStage.createDraft;
           remoteRpcAttempted = true;
@@ -1527,18 +1499,14 @@ final class AssessmentSubmissionOrchestrator {
         } else {
           // Resuming with existing serverAssessmentId: fetch & verify server row first.
           currentRemoteStage = RemoteAssessmentStage.reconcileDraft;
-          final reconcileAuth = await assertValidStorageAuthSession(
-            authSessionPort: authSessionPort,
+          final reconcileAuth = await _authorizeRemoteStage(
             storagePath: 'assessment-draft/${localDraftId ?? createCommandId}',
             context: initialContext,
             expectedSessionGeneration: expectedGen,
-            stage: 'reconcile assessment draft',
-          );
-          await _verifyTargetOrThrow(
-            context: reconcileAuth,
+            stageLabel: 'reconcile assessment draft',
             familyId: familyId,
             childId: childId,
-            stage: RemoteAssessmentStage.reconcileDraft,
+            authStage: RemoteAssessmentStage.reconcileDraft,
           );
 
           remoteRpcAttempted = true;
@@ -1781,20 +1749,16 @@ final class AssessmentSubmissionOrchestrator {
           }
         }
 
-        // 8. Stage C: Revalidate live session + target authorization, then submit (expectedVersion: 1).
+        // 8. Stage C: Revalidate live session -> target authorization -> live session, then submit (expectedVersion: 1).
         currentRemoteStage = RemoteAssessmentStage.submitAssessment;
-        final submitAuth = await assertValidStorageAuthSession(
-          authSessionPort: authSessionPort,
+        final submitAuth = await _authorizeRemoteStage(
           storagePath: 'assessment-draft/${localDraftId ?? createCommandId}',
           context: initialContext,
           expectedSessionGeneration: expectedGen,
-          stage: 'submit assessment',
-        );
-        await _verifyTargetOrThrow(
-          context: submitAuth,
+          stageLabel: 'submit assessment',
           familyId: familyId,
           childId: childId,
-          stage: RemoteAssessmentStage.submitAssessment,
+          authStage: RemoteAssessmentStage.submitAssessment,
         );
 
         remoteRpcAttempted = true;
@@ -2202,6 +2166,51 @@ final class AssessmentSubmissionOrchestrator {
       );
     }
     return null;
+  }
+
+  /// Atomically fences a remote stage by:
+  /// 1. Validating the live session matches [context] and [expectedSessionGeneration].
+  /// 2. Performing authoritative target verification via [RecoveryAuthorizationPort].
+  /// 3. Revalidating the live session against the SAME original actor and generation
+  ///    immediately after target verification returns (`R34-06`).
+  Future<ValidatedActorContext> _authorizeRemoteStage({
+    required String storagePath,
+    required ValidatedActorContext? context,
+    required String? expectedSessionGeneration,
+    required String stageLabel,
+    required FamilyId familyId,
+    required ChildId childId,
+    required RemoteAssessmentStage authStage,
+  }) async {
+    final preActor = await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: storagePath,
+      context: context,
+      expectedSessionGeneration:
+          expectedSessionGeneration ?? context?.sessionGeneration,
+      stage: stageLabel,
+    );
+    if (recoveryAuthorizationPort == null) {
+      return preActor;
+    }
+    final anchorContext = context ?? preActor;
+    final anchorGeneration =
+        expectedSessionGeneration ?? preActor.sessionGeneration;
+
+    await _verifyTargetOrThrow(
+      context: preActor,
+      familyId: familyId,
+      childId: childId,
+      stage: authStage,
+    );
+
+    return assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: storagePath,
+      context: anchorContext,
+      expectedSessionGeneration: anchorGeneration,
+      stage: '$stageLabel post-verification recheck',
+    );
   }
 
   Future<void> _verifyTargetOrThrow({

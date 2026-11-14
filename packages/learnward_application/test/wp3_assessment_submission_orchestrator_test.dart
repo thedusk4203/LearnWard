@@ -1541,5 +1541,354 @@ void main() {
       expect(storage.uploadCallCount, equals(0));
       expect(repo.registerEvidenceCallCount, equals(0));
     });
+
+    test('R34-06: Actor A -> B while target verification for createDraft is pending pauses without calling createDraft and preserves journal/IDs/evidence', () async {
+      const draftId = 'draft-r34-06-actor-create';
+      final seeded = await seedCanonicalDraft(localDraftId: draftId);
+
+      // Pause on the second verifyAssessmentTarget call (immediately before createDraft, after pre-dispatch mark).
+      var verifyCalls = 0;
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      authzPort.onVerifyAssessmentTarget = (_, _, _) async {
+        verifyCalls++;
+        if (verifyCalls == 2) {
+          entered.complete();
+          await release.future;
+        }
+        return const AdultTargetAuthorizationResult.authorized(
+          verifiedRole: VerifiedAdultRole.parent,
+        );
+      };
+
+      final orchestrator = buildOrchestrator();
+      final futureOutcome = runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      await entered.future;
+      authPort.setSession(
+        userId: 'actor-b',
+        sessionGeneration: 'gen-actor-b-1',
+        role: 'parent',
+      );
+      release.complete();
+
+      final outcome = await futureOutcome;
+      expect(outcome, isA<AssessmentSubmissionPausedActorMismatch>());
+      expect(repo.createDraftCallCount, equals(0));
+      expect(storage.uploadCallCount, equals(0));
+      expect(repo.registerEvidenceCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(persisted?.actorUserId, equals('actor-a'));
+      expect(
+        persisted?.recoveryCode,
+        equals(DraftRecoveryCode.waitingOriginalActor),
+      );
+      expect(persisted?.createCommandId, equals(seeded.createCommandId));
+      expect(persisted?.submitCommandId, equals(seeded.submitCommandId));
+      expect(persisted?.evidenceId, equals(seeded.evidenceId));
+      expect(
+        persisted?.localCompressedPhotoPath,
+        equals(seeded.localCompressedPhotoPath),
+      );
+      expect(persisted?.sha256Checksum, equals(seeded.sha256Checksum));
+      expect(persisted?.leaseToken, isNull);
+    });
+
+    test('R34-06: Session generation rotation while target verification for submitAssessment is pending halts before submitAssessment and preserves dispatched IDs', () async {
+      const draftId = 'draft-r34-06-gen-submit';
+      final seeded = await seedCanonicalDraft(localDraftId: draftId);
+
+      // Call order for evidence-bearing draft: 1 preDispatch, 2 createDraft, 3 upload, 4 register, 5 submitAssessment.
+      var verifyCalls = 0;
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      authzPort.onVerifyAssessmentTarget = (_, _, _) async {
+        verifyCalls++;
+        if (verifyCalls == 5) {
+          entered.complete();
+          await release.future;
+        }
+        return const AdultTargetAuthorizationResult.authorized(
+          verifiedRole: VerifiedAdultRole.parent,
+        );
+      };
+
+      final orchestrator = buildOrchestrator();
+      final futureOutcome = runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      await entered.future;
+      authPort.setSession(
+        userId: 'actor-a',
+        sessionGeneration: 'gen-actor-a-rotated',
+        role: 'parent',
+      );
+      release.complete();
+
+      final outcome = await futureOutcome;
+      expect(outcome, isA<AssessmentSubmissionPausedSessionInvalid>());
+      expect(repo.createDraftCallCount, equals(1));
+      expect(storage.uploadCallCount, equals(1));
+      expect(repo.registerEvidenceCallCount, equals(1));
+      expect(repo.submitAssessmentCallCount, equals(0));
+
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(persisted?.actorUserId, equals('actor-a'));
+      expect(
+        persisted?.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+      );
+      expect(persisted?.serverAssessmentId, isNotNull);
+      expect(persisted?.serverEvidenceId, isNotNull);
+      expect(persisted?.createCommandId, equals(seeded.createCommandId));
+      expect(persisted?.submitCommandId, equals(seeded.submitCommandId));
+      expect(persisted?.evidenceId, equals(seeded.evidenceId));
+      expect(persisted?.leaseToken, isNull);
+    });
+
+    test('R34-06: Sign-out while target verification is pending fails closed with zero downstream RPCs', () async {
+      const draftId = 'draft-r34-06-signout';
+      await seedCanonicalDraft(localDraftId: draftId, withEvidence: false);
+
+      var verifyCalls = 0;
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      authzPort.onVerifyAssessmentTarget = (_, _, _) async {
+        verifyCalls++;
+        if (verifyCalls == 2) {
+          entered.complete();
+          await release.future;
+        }
+        return const AdultTargetAuthorizationResult.authorized(
+          verifiedRole: VerifiedAdultRole.parent,
+        );
+      };
+
+      final orchestrator = buildOrchestrator();
+      final futureOutcome = runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+      );
+
+      await entered.future;
+      authPort.signOut();
+      release.complete();
+
+      final outcome = await futureOutcome;
+      expect(outcome, isA<AssessmentSubmissionPausedSessionInvalid>());
+      expect(repo.createDraftCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(persisted?.actorUserId, equals('actor-a'));
+      expect(persisted?.leaseToken, isNull);
+    });
+
+    test('R34-06: Two authorized parents in the same family cannot cross from parent A verification to parent B live session before RPC', () async {
+      const draftId = 'draft-r34-06-two-parents';
+      await seedCanonicalDraft(
+        localDraftId: draftId,
+        actorUserId: 'parent-a',
+        withEvidence: false,
+      );
+      authPort.setSession(
+        userId: 'parent-a',
+        sessionGeneration: 'gen-pa-1',
+        role: 'parent',
+      );
+
+      var verifyCalls = 0;
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      // Both parent-a and parent-b are authorized adults for the same family/child.
+      authzPort.onVerifyAssessmentTarget = (_, _, _) async {
+        verifyCalls++;
+        if (verifyCalls == 2) {
+          entered.complete();
+          await release.future;
+        }
+        return const AdultTargetAuthorizationResult.authorized(
+          verifiedRole: VerifiedAdultRole.parent,
+        );
+      };
+
+      final orchestrator = buildOrchestrator();
+      final futureOutcome = runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+      );
+
+      await entered.future;
+      // Switch live session to equally-authorized co-parent B while A verification is pending.
+      authPort.setSession(
+        userId: 'parent-b',
+        sessionGeneration: 'gen-pb-1',
+        role: 'parent',
+      );
+      release.complete();
+
+      final outcome = await futureOutcome;
+      expect(outcome, isA<AssessmentSubmissionPausedActorMismatch>());
+      expect(repo.createDraftCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(persisted?.actorUserId, equals('parent-a'));
+      expect(
+        persisted?.recoveryCode,
+        equals(DraftRecoveryCode.waitingOriginalActor),
+      );
+      expect(persisted?.leaseToken, isNull);
+    });
+
+    test('R34-06: Session change during evidence registration and private reconciliation verification halts before registerEvidence and reconcileEvidence', () async {
+      // Case A: Session generation rotates during target verification before registerEvidence
+      const regDraftId = 'draft-r34-06-reg-verify';
+      await seedCanonicalDraft(localDraftId: regDraftId);
+
+      var verifyCalls = 0;
+      final enteredReg = Completer<void>();
+      final releaseReg = Completer<void>();
+      authzPort.onVerifyAssessmentTarget = (_, _, _) async {
+        verifyCalls++;
+        if (verifyCalls == 4) {
+          enteredReg.complete();
+          await releaseReg.future;
+        }
+        return const AdultTargetAuthorizationResult.authorized(
+          verifiedRole: VerifiedAdultRole.parent,
+        );
+      };
+
+      final orchestrator = buildOrchestrator();
+      final regFuture = runExecute(
+        orchestrator: orchestrator,
+        localDraftId: regDraftId,
+      );
+      await enteredReg.future;
+      authPort.setSession(
+        userId: 'actor-a',
+        sessionGeneration: 'gen-actor-a-rotated-reg',
+        role: 'parent',
+      );
+      releaseReg.complete();
+
+      final regOutcome = await regFuture;
+      expect(regOutcome, isA<AssessmentSubmissionPausedSessionInvalid>());
+      expect(storage.uploadCallCount, equals(1));
+      expect(repo.registerEvidenceCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+      expect(storage.deleteCallCount, equals(0));
+
+      // Case B: Actor switch during target verification before private storage.reconcileEvidence
+      authzPort.onVerifyAssessmentTarget = null;
+      storage.reconcileCallCount = 0;
+      repo.submitAssessmentCallCount = 0;
+      authPort.setSession(
+        userId: 'actor-a',
+        sessionGeneration: 'gen-actor-a-1',
+        role: 'parent',
+      );
+      const reconDraftId = 'draft-r34-06-recon-verify';
+      final existingAssessment = await repo.createDraft(
+        commandId: 'cmd-c-r3406-recon',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'WP3 Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+      final reconPath =
+          '${familyId.value}/${childId.value}/${existingAssessment.id.value}/ev-r3406-recon.jpg';
+      storage.storage[reconPath] = List<int>.from(validJpegBytes);
+      final regEv = await repo.registerEvidence(
+        assessmentId: existingAssessment.id,
+        storagePath: reconPath,
+        mediaType: 'image/jpeg',
+        fileSizeBytes: validJpegBytes.length,
+      );
+      await seedCanonicalDraft(
+        localDraftId: reconDraftId,
+        createCommandId: 'cmd-c-r3406-recon',
+        submitCommandId: 'cmd-s-r3406-recon',
+        evidenceId: 'ev-r3406-recon',
+        dispatchState: CommandDispatchState.possiblyDispatched,
+        submissionStatus: DraftSubmissionStatus.uploadingEvidence,
+        serverAssessmentId: existingAssessment.id.value,
+        serverEvidenceId: regEv.id.value,
+      );
+
+      // Call order on resume with persisted IDs: 1 preDispatch, 2 getAssessment, 3 listEvidence, 4 storage.reconcileEvidence.
+      var reconVerifyCalls = 0;
+      final enteredRecon = Completer<void>();
+      final releaseRecon = Completer<void>();
+      authzPort.onVerifyAssessmentTarget = (_, _, _) async {
+        reconVerifyCalls++;
+        if (reconVerifyCalls == 4) {
+          enteredRecon.complete();
+          await releaseRecon.future;
+        }
+        return const AdultTargetAuthorizationResult.authorized(
+          verifiedRole: VerifiedAdultRole.parent,
+        );
+      };
+
+      final reconFuture = runExecute(
+        orchestrator: orchestrator,
+        localDraftId: reconDraftId,
+        createCommandId: 'cmd-c-r3406-recon',
+        submitCommandId: 'cmd-s-r3406-recon',
+        evidenceId: 'ev-r3406-recon',
+      );
+      await enteredRecon.future;
+      authPort.setSession(
+        userId: 'actor-b',
+        sessionGeneration: 'gen-actor-b-recon',
+        role: 'parent',
+      );
+      releaseRecon.complete();
+
+      final reconOutcome = await reconFuture;
+      expect(reconOutcome, isA<AssessmentSubmissionPausedActorMismatch>());
+      expect(storage.reconcileCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+    });
+
+    test('R34-06: Unchanged live session across async verification barriers proceeds to AssessmentSubmissionConfirmed', () async {
+      const draftId = 'draft-r34-06-unchanged-ok';
+      await seedCanonicalDraft(localDraftId: draftId);
+
+      authzPort.onVerifyAssessmentTarget = (_, _, _) async {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        return const AdultTargetAuthorizationResult.authorized(
+          verifiedRole: VerifiedAdultRole.parent,
+        );
+      };
+
+      final orchestrator = buildOrchestrator();
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      expect(outcome, isA<AssessmentSubmissionConfirmed>());
+      expect(repo.createDraftCallCount, equals(1));
+      expect(storage.uploadCallCount, equals(1));
+      expect(repo.registerEvidenceCallCount, equals(1));
+      expect(repo.submitAssessmentCallCount, equals(1));
+    });
   });
 }
