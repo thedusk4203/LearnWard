@@ -213,7 +213,8 @@ final class LocalAssessmentDraft {
         code == DraftRecoveryCode.retryScheduled) {
       return DraftRecoveryDisposition.retryScheduled;
     }
-    if (submissionStatus == DraftSubmissionStatus.uploadingEvidence ||
+    if (hasActiveLease(now: now) ||
+        submissionStatus == DraftSubmissionStatus.uploadingEvidence ||
         submissionStatus == DraftSubmissionStatus.submittingAssessment ||
         dispatchState == CommandDispatchState.possiblyDispatched) {
       return hasActiveLease(now: now)
