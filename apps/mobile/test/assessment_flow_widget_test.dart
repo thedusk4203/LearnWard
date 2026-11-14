@@ -239,10 +239,12 @@ void main() {
   setUp(() {
     fakeFamilyRepo = FakeFamilyRepository();
     fakeChildRepo = FakeChildProfileRepository();
-    fakeAssessmentRepo = FakeAssessmentRepository();
     fakeAuth = FakeAuthSessionPort(
       activeUserId: 'local-parent-user',
       sessionGeneration: 'demo-generation-1',
+    );
+    fakeAssessmentRepo = FakeAssessmentRepository(
+      activeActorIdProvider: () => fakeAuth.currentContext?.userId,
     );
     fakeStorage = FakeAssessmentEvidenceStorage(authSessionPort: fakeAuth);
     fakeMetadataStore = InMemoryLocalMetadataStore();
@@ -755,7 +757,9 @@ void main() {
   testWidgets(
     'AddAssessment: generates distinct create/submit command IDs and reuses them on retry',
     (tester) async {
-      final trackingRepo = _TrackingAssessmentRepository();
+      final trackingRepo = _TrackingAssessmentRepository(
+        activeActorIdProvider: () => fakeAuth.currentContext?.userId,
+      );
 
       await tester.pumpWidget(
         ProviderScope(
@@ -826,9 +830,9 @@ void main() {
       await tester.tap(find.byKey(const Key('submit_assessment_button')));
       await tester.pumpAndSettle();
 
-      // INVARIANT: retry reuses the exact same create and submit command IDs
-      expect(trackingRepo.recordedCreateCommandIds.length, equals(2));
-      expect(trackingRepo.recordedCreateCommandIds[1], equals(firstCreateCmd));
+      // INVARIANT: retry skips already-persisted createDraft step and reuses
+      // the exact same create/submit command IDs
+      expect(trackingRepo.recordedCreateCommandIds, equals([firstCreateCmd]));
       expect(trackingRepo.recordedSubmitCommandIds.length, equals(2));
       expect(trackingRepo.recordedSubmitCommandIds[1], equals(firstSubmitCmd));
 
@@ -838,6 +842,8 @@ void main() {
         testChild.id,
       );
       expect(remainingDrafts.length, equals(1));
+      expect(remainingDrafts.first.createCommandId, equals(firstCreateCmd));
+      expect(remainingDrafts.first.submitCommandId, equals(firstSubmitCmd));
       expect(
         remainingDrafts.first.dispatchState,
         equals(CommandDispatchState.confirmedCommitted),
@@ -1193,7 +1199,9 @@ void main() {
       );
       expect(migratedDraft.canAutoSubmit, isFalse);
 
-      final trackingRepo = _TrackingAssessmentRepository();
+      final trackingRepo = _TrackingAssessmentRepository(
+        activeActorIdProvider: () => fakeAuth.currentContext?.userId,
+      );
       fakeEvidenceFileStore
           .files['/data/user/0/com.learnward/cache/photo_offline.jpg'] = [
         1,
@@ -1332,6 +1340,7 @@ void main() {
 }
 
 final class _TrackingAssessmentRepository extends FakeAssessmentRepository {
+  _TrackingAssessmentRepository({super.activeActorIdProvider});
   final List<String> recordedCreateCommandIds = [];
   final List<String> recordedSubmitCommandIds = [];
   bool failSubmit = false;

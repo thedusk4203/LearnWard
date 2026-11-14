@@ -330,7 +330,9 @@ void main() {
                 FakeChildProfileRepository(),
               ),
               assessmentRepositoryProvider.overrideWithValue(
-                FakeAssessmentRepository(),
+                FakeAssessmentRepository(
+                  activeActorIdProvider: () => fakeAuth.currentContext?.userId,
+                ),
               ),
               assessmentEvidenceStorageProvider.overrideWithValue(fakeStorage),
               authSessionPortProvider.overrideWithValue(fakeAuth),

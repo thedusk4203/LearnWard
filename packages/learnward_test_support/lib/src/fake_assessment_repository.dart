@@ -2,6 +2,9 @@ import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 
 base class FakeAssessmentRepository implements AssessmentRepository {
+  FakeAssessmentRepository({this.activeActorIdProvider});
+
+  final String? Function()? activeActorIdProvider;
   final Map<String, Assessment> assessments = {};
   final Map<String, String> commandToAssessmentId = {};
   final Map<String, AssessmentEvidence> evidence = {};
@@ -46,7 +49,7 @@ base class FakeAssessmentRepository implements AssessmentRepository {
       status: AssessmentStatus.draft,
       occurredAt: occurredAt ?? now,
       version: 1,
-      createdByUserId: 'fake-user-id',
+      createdByUserId: activeActorIdProvider?.call() ?? 'fake-user-id',
       createdAt: now,
       updatedAt: now,
     );

@@ -128,6 +128,146 @@ final class SupabaseRecoveryAuthorizationAdapter
     }
   }
 
+  Future<({AdultTargetAuthorizationResult? denial, VerifiedAdultRole? role})>
+  _verifyAdultFamilyScope({
+    required ValidatedActorContext context,
+    required String familyId,
+  }) async {
+    // 1. Reject paired-child device grants (`child_device_grants_select` allows reading own row).
+    final grantResponse = await _client
+        .from('child_device_grants')
+        .select('status, revoked_at')
+        .eq('family_id', familyId)
+        .eq('auth_user_id', context.userId)
+        .maybeSingle()
+        .timeout(const Duration(seconds: 5));
+
+    if (grantResponse != null) {
+      final grantStatus = grantResponse['status'] as String?;
+      final revokedAt = grantResponse['revoked_at'];
+      if (grantStatus == 'revoked' && revokedAt != null) {
+        return (
+          denial: const AdultTargetAuthorizationResult.confirmedRevoked(),
+          role: null,
+        );
+      }
+      return (
+        denial: const AdultTargetAuthorizationResult.definitelyDenied(
+          reason: AdultTargetVerificationReason.pairedChildSessionDenied,
+        ),
+        role: null,
+      );
+    }
+
+    // 2. Positively verify active adult membership and derive authoritative role (`owner` or `parent`).
+    final memberResponse = await _client
+        .from('family_memberships')
+        .select('status, role')
+        .eq('family_id', familyId)
+        .eq('auth_user_id', context.userId)
+        .maybeSingle()
+        .timeout(const Duration(seconds: 5));
+
+    if (memberResponse == null) {
+      return (
+        denial: const AdultTargetAuthorizationResult.unverified(
+          reason: AdultTargetVerificationReason.missingOrUnverifiedMembership,
+        ),
+        role: null,
+      );
+    }
+
+    final memberStatus = memberResponse['status'] as String?;
+    final verifiedRole = VerifiedAdultRole.tryFromWire(
+      memberResponse['role'] as String?,
+    );
+
+    if (memberStatus == 'revoked' ||
+        memberStatus != 'active' ||
+        verifiedRole == null) {
+      return (
+        denial: const AdultTargetAuthorizationResult.definitelyDenied(
+          reason:
+              AdultTargetVerificationReason.adultMembershipRevokedOrNonAdult,
+        ),
+        role: null,
+      );
+    }
+
+    // If session metadata carries a non-null role claim, it must match the verified DB role.
+    if (context.role != null && context.role != verifiedRole.wireValue) {
+      return (
+        denial: const AdultTargetAuthorizationResult.definitelyDenied(
+          reason: AdultTargetVerificationReason.inconsistentRoleClaim,
+        ),
+        role: null,
+      );
+    }
+
+    return (denial: null, role: verifiedRole);
+  }
+
+  @override
+  Future<AdultTargetAuthorizationResult> verifyAssessmentTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+  }) async {
+    if (familyId.trim().isEmpty || childId.trim().isEmpty) {
+      return const AdultTargetAuthorizationResult.definitelyDenied(
+        reason: AdultTargetVerificationReason.invalidTargetInput,
+      );
+    }
+    if (context.role == 'child') {
+      return const AdultTargetAuthorizationResult.definitelyDenied(
+        reason: AdultTargetVerificationReason.pairedChildSessionDenied,
+      );
+    }
+
+    try {
+      final scope = await _verifyAdultFamilyScope(
+        context: context,
+        familyId: familyId,
+      );
+      if (scope.denial != null) return scope.denial!;
+      final verifiedRole = scope.role!;
+
+      final childResponse = await _client
+          .from('child_profiles')
+          .select('status')
+          .eq('id', childId)
+          .eq('family_id', familyId)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 5));
+
+      if (childResponse != null) {
+        final childStatus = childResponse['status'] as String?;
+        if (childStatus == 'archived') {
+          return const AdultTargetAuthorizationResult.definitelyDenied(
+            reason: AdultTargetVerificationReason.childConfirmedArchived,
+          );
+        }
+        if (childStatus == 'active') {
+          return AdultTargetAuthorizationResult.authorized(
+            verifiedRole: verifiedRole,
+          );
+        }
+      }
+
+      return const AdultTargetAuthorizationResult.unverified(
+        reason: AdultTargetVerificationReason.rlsFilteredOrMissingTargetRow,
+      );
+    } on TimeoutException {
+      return const AdultTargetAuthorizationResult.unverified(
+        reason: AdultTargetVerificationReason.transientVerificationFailure,
+      );
+    } catch (_) {
+      return const AdultTargetAuthorizationResult.unverified(
+        reason: AdultTargetVerificationReason.transientVerificationFailure,
+      );
+    }
+  }
+
   @override
   Future<AdultTargetAuthorizationResult> verifyAdultRedemptionTarget({
     required ValidatedActorContext context,
@@ -156,61 +296,12 @@ final class SupabaseRecoveryAuthorizationAdapter
     }
 
     try {
-      // 1. Reject paired-child device grants (`child_device_grants_select` allows reading own row).
-      final grantResponse = await _client
-          .from('child_device_grants')
-          .select('status, revoked_at')
-          .eq('family_id', familyId)
-          .eq('auth_user_id', context.userId)
-          .maybeSingle()
-          .timeout(const Duration(seconds: 5));
-
-      if (grantResponse != null) {
-        final grantStatus = grantResponse['status'] as String?;
-        final revokedAt = grantResponse['revoked_at'];
-        if (grantStatus == 'revoked' && revokedAt != null) {
-          return const AdultTargetAuthorizationResult.confirmedRevoked();
-        }
-        return const AdultTargetAuthorizationResult.definitelyDenied(
-          reason: AdultTargetVerificationReason.pairedChildSessionDenied,
-        );
-      }
-
-      // 2. Positively verify active adult membership and derive authoritative role (`owner` or `parent`).
-      final memberResponse = await _client
-          .from('family_memberships')
-          .select('status, role')
-          .eq('family_id', familyId)
-          .eq('auth_user_id', context.userId)
-          .maybeSingle()
-          .timeout(const Duration(seconds: 5));
-
-      if (memberResponse == null) {
-        return const AdultTargetAuthorizationResult.unverified(
-          reason: AdultTargetVerificationReason.missingOrUnverifiedMembership,
-        );
-      }
-
-      final memberStatus = memberResponse['status'] as String?;
-      final verifiedRole = VerifiedAdultRole.tryFromWire(
-        memberResponse['role'] as String?,
+      final scope = await _verifyAdultFamilyScope(
+        context: context,
+        familyId: familyId,
       );
-
-      if (memberStatus == 'revoked' ||
-          memberStatus != 'active' ||
-          verifiedRole == null) {
-        return const AdultTargetAuthorizationResult.definitelyDenied(
-          reason:
-              AdultTargetVerificationReason.adultMembershipRevokedOrNonAdult,
-        );
-      }
-
-      // If session metadata carries a non-null role claim, it must match the verified DB role.
-      if (context.role != null && context.role != verifiedRole.wireValue) {
-        return const AdultTargetAuthorizationResult.definitelyDenied(
-          reason: AdultTargetVerificationReason.inconsistentRoleClaim,
-        );
-      }
+      if (scope.denial != null) return scope.denial!;
+      final verifiedRole = scope.role!;
 
       // 3. Verify target redemption belongs to (familyId, childId).
       final redemptionResponse = await _client

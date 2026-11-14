@@ -9,6 +9,7 @@ final class FakeRecoveryAuthorizationPort implements RecoveryAuthorizationPort {
         TargetAuthorizationStatus.authorized,
     VerifiedAdultRole defaultAdultRole = VerifiedAdultRole.parent,
     AdultTargetAuthorizationResult? defaultAdultResult,
+    this.onVerifyAssessmentTarget,
   }) : _defaultStatus = defaultStatus,
        _defaultAdultRole = defaultAdultRole,
        _defaultAdultResult = defaultAdultResult;
@@ -16,6 +17,12 @@ final class FakeRecoveryAuthorizationPort implements RecoveryAuthorizationPort {
   TargetAuthorizationStatus _defaultStatus;
   VerifiedAdultRole _defaultAdultRole;
   AdultTargetAuthorizationResult? _defaultAdultResult;
+  Future<AdultTargetAuthorizationResult> Function(
+    ValidatedActorContext context,
+    String familyId,
+    String childId,
+  )?
+  onVerifyAssessmentTarget;
   final Map<String, TargetAuthorizationStatus> _overrides = {};
   final Map<String, AdultTargetAuthorizationResult> _adultOverrides = {};
   final List<String> callLog = [];
@@ -61,6 +68,33 @@ final class FakeRecoveryAuthorizationPort implements RecoveryAuthorizationPort {
     return _overrides[key] ?? _defaultStatus;
   }
 
+  AdultTargetAuthorizationResult _evaluateAdultStatus(
+    ValidatedActorContext context,
+    TargetAuthorizationStatus status,
+  ) {
+    if (context.role == 'child') {
+      return const AdultTargetAuthorizationResult.definitelyDenied(
+        reason: AdultTargetVerificationReason.pairedChildSessionDenied,
+      );
+    }
+    if (status == TargetAuthorizationStatus.authorized) {
+      return AdultTargetAuthorizationResult.authorized(
+        verifiedRole: _defaultAdultRole,
+      );
+    }
+    if (status == TargetAuthorizationStatus.definitelyDenied) {
+      return const AdultTargetAuthorizationResult.definitelyDenied(
+        reason: AdultTargetVerificationReason.adultMembershipRevokedOrNonAdult,
+      );
+    }
+    if (status == TargetAuthorizationStatus.confirmedRevoked) {
+      return const AdultTargetAuthorizationResult.confirmedRevoked();
+    }
+    return const AdultTargetAuthorizationResult.unverified(
+      reason: AdultTargetVerificationReason.rlsFilteredOrMissingTargetRow,
+    );
+  }
+
   @override
   Future<AdultTargetAuthorizationResult> verifyAdultRedemptionTarget({
     required ValidatedActorContext context,
@@ -79,26 +113,31 @@ final class FakeRecoveryAuthorizationPort implements RecoveryAuthorizationPort {
     if (_defaultAdultResult != null) {
       return _defaultAdultResult!;
     }
-    if (context.role == 'child') {
+    return _evaluateAdultStatus(context, _defaultStatus);
+  }
+
+  @override
+  Future<AdultTargetAuthorizationResult> verifyAssessmentTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+  }) async {
+    callLog.add('verifyAssessmentTarget:$familyId:$childId');
+    if (familyId.trim().isEmpty || childId.trim().isEmpty) {
       return const AdultTargetAuthorizationResult.definitelyDenied(
-        reason: AdultTargetVerificationReason.pairedChildSessionDenied,
+        reason: AdultTargetVerificationReason.invalidTargetInput,
       );
     }
-    if (_defaultStatus == TargetAuthorizationStatus.authorized) {
-      return AdultTargetAuthorizationResult.authorized(
-        verifiedRole: _defaultAdultRole,
-      );
+    if (onVerifyAssessmentTarget != null) {
+      return onVerifyAssessmentTarget!(context, familyId, childId);
     }
-    if (_defaultStatus == TargetAuthorizationStatus.definitelyDenied) {
-      return const AdultTargetAuthorizationResult.definitelyDenied(
-        reason: AdultTargetVerificationReason.adultMembershipRevokedOrNonAdult,
-      );
+    final key = '$familyId:$childId';
+    if (_adultOverrides.containsKey(key)) {
+      return _adultOverrides[key]!;
     }
-    if (_defaultStatus == TargetAuthorizationStatus.confirmedRevoked) {
-      return const AdultTargetAuthorizationResult.confirmedRevoked();
+    if (_defaultAdultResult != null) {
+      return _defaultAdultResult!;
     }
-    return const AdultTargetAuthorizationResult.unverified(
-      reason: AdultTargetVerificationReason.rlsFilteredOrMissingTargetRow,
-    );
+    return _evaluateAdultStatus(context, _overrides[key] ?? _defaultStatus);
   }
 }

@@ -15,17 +15,7 @@ import '../ports/wheel_repository.dart';
 import 'jitter_source.dart';
 import 'recovery_error_classifier.dart';
 
-/// Trigger source initiating a command execution attempt.
-enum CommandExecutionTrigger {
-  /// Invoked by foreground user action (e.g. tapping "Spin Wheel" or "Get Reward").
-  foreground,
-
-  /// Invoked by foreground user tapping explicit retry on an unresolved pending command.
-  foregroundRetry,
-
-  /// Invoked by the background/app-active outbox recovery dispatcher.
-  recovery,
-}
+export '../ports/command_lifecycle_states.dart' show CommandExecutionTrigger;
 
 /// Abstract result representing the outcome of a coordinator execution attempt.
 sealed class CommandExecutionResult {
@@ -204,16 +194,11 @@ final class RecoveryCoordinator {
       PendingRewardCommand.maxConsecutiveUnverifiedTargetMisses;
 
   Duration _calculateBackoff(int n, {double minFloorSeconds = 1.0}) {
-    final capSeconds = min(60.0, 2.0 * pow(2.0, n - 1));
-    final jitterUniform = _jitterSource.sampleUniform();
-    var waitSeconds = jitterUniform * capSeconds;
-
-    if (_jitterSource is! DeterministicJitterSource &&
-        waitSeconds < minFloorSeconds) {
-      waitSeconds = minFloorSeconds;
-    }
-
-    return Duration(milliseconds: (waitSeconds * 1000).toInt());
+    return calculateJitteredBackoff(
+      n,
+      jitterSource: _jitterSource,
+      minFloorSeconds: minFloorSeconds,
+    );
   }
 
   /// Executes a single reward command through the shared, locked recovery pipeline.

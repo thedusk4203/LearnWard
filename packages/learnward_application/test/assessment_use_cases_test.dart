@@ -95,16 +95,20 @@ final class FailingDeleteStorage implements AssessmentEvidenceStorage {
 void main() {
   late FakeAssessmentRepository repository;
   late FakeAuthSessionPort fakeAuth;
+  late FakeRecoveryAuthorizationPort authzPort;
   late FakeAssessmentEvidenceStorage storage;
 
   final familyId = FamilyId('fam-1');
   final childId = ChildId('child-1');
 
   setUp(() {
-    repository = FakeAssessmentRepository();
     fakeAuth = FakeAuthSessionPort(
       activeUserId: 'user-parent-1',
       sessionGeneration: 'gen-1',
+    );
+    authzPort = FakeRecoveryAuthorizationPort();
+    repository = FakeAssessmentRepository(
+      activeActorIdProvider: () => fakeAuth.currentContext?.userId,
     );
     storage = FakeAssessmentEvidenceStorage(authSessionPort: fakeAuth);
   });
@@ -216,10 +220,11 @@ void main() {
       score: AssessmentScore(rawScore: 10, maxScore: 10),
     );
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final evidence = await uploadUseCase(
@@ -253,10 +258,11 @@ void main() {
       score: AssessmentScore(rawScore: 10, maxScore: 10),
     );
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     // Oversize
@@ -301,10 +307,11 @@ void main() {
       score: AssessmentScore(rawScore: 10, maxScore: 10),
     );
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: failingRepo,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final evidenceId = EvidenceId('550e8400-e29b-41d4-a716-446655440003');
@@ -334,10 +341,11 @@ void main() {
       activeUserId: 'user-parent-1',
       sessionGeneration: 'gen-1',
     );
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final draft = await CreateAssessmentDraft(repository)(
@@ -391,10 +399,11 @@ void main() {
       activeUserId: 'user-parent-1',
       sessionGeneration: 'gen-1',
     );
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final draft = await CreateAssessmentDraft(repository)(
@@ -441,10 +450,11 @@ void main() {
       activeUserId: 'user-attacker',
       sessionGeneration: 'gen-attacker',
     );
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final draft = await CreateAssessmentDraft(repository)(
@@ -502,10 +512,11 @@ void main() {
     // Pre-seed storage with identical bytes (simulating prior acknowledged upload)
     storage.storage[path] = List<int>.from(bytes);
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final result = await uploadUseCase(
@@ -542,10 +553,11 @@ void main() {
     storage.storage[path] = [1, 2, 3, 4, 5];
     final localBytes = [1, 2, 3, 4, 99]; // Same length, different SHA-256
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -586,10 +598,11 @@ void main() {
     storage.storage[path] = [1, 2, 3];
     final localBytes = [1, 2, 3, 4, 5]; // 5 bytes
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -627,10 +640,11 @@ void main() {
     storage.storage[path] = [1, 2, 3];
     storage.throwOnDownload = StateError('Simulated 403 RLS hidden error');
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -793,6 +807,7 @@ void main() {
       storage: storage,
       localDraftStore: draftStore,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     final result = await submitWorkflow(
@@ -853,6 +868,7 @@ void main() {
       storage: storage,
       localDraftStore: draftStore,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -910,6 +926,7 @@ void main() {
       storage: storage,
       localDraftStore: draftStore,
       authSessionPort: fakeAuth,
+      recoveryAuthorizationPort: authzPort,
     );
 
     await expectLater(
@@ -971,6 +988,7 @@ void main() {
         storage: storage,
         localDraftStore: draftStore,
         authSessionPort: fakeAuth,
+        recoveryAuthorizationPort: authzPort,
       );
 
       await expectLater(
@@ -1096,10 +1114,11 @@ void main() {
         score: AssessmentScore(rawScore: 5, maxScore: 10),
       );
 
-      final uploadUseCase = UploadAssessmentEvidence(
+      final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
         repository: repository,
         storage: storage,
         authSessionPort: fakeAuth,
+        recoveryAuthorizationPort: authzPort,
       );
 
       await expectLater(
@@ -1162,7 +1181,9 @@ void main() {
       required void Function(FakeAuthSessionPort auth) mutateSession,
     }) async {
       final draftStore = InMemoryLocalDraftStore();
-      final recordingRepo = _RecordingAssessmentRepository();
+      final recordingRepo = _RecordingAssessmentRepository(
+        activeActorIdProvider: () => fakeAuth.currentContext?.userId,
+      );
       const localId = 'draft-r32-09-barrier';
       const createCommandId = 'cmd-r32-09-create';
       const submitCommandId = 'cmd-r32-09-submit';
@@ -1214,6 +1235,7 @@ void main() {
         storage: storage,
         localDraftStore: draftStore,
         authSessionPort: fakeAuth,
+        recoveryAuthorizationPort: authzPort,
       );
 
       final submissionExpectation = expectLater(
@@ -1320,6 +1342,8 @@ void main() {
 }
 
 final class _RecordingAssessmentRepository extends FakeAssessmentRepository {
+  _RecordingAssessmentRepository({super.activeActorIdProvider});
+
   int createDraftCallCount = 0;
   int registerEvidenceCallCount = 0;
   int submitAssessmentCallCount = 0;

@@ -203,6 +203,7 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     DateTime? now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) async {
     final override = await onAcquireDraftClaimOverride?.call(localDraftId);
     if (override != null) return override;
@@ -218,6 +219,7 @@ final class TestLocalDraftStore implements LocalDraftStore {
         expectingExpiredLease: false,
         now: now,
         overrideLeaseToken: overrideLeaseToken,
+        ignoreRetryBackoff: ignoreRetryBackoff,
       ),
     );
   }
@@ -231,6 +233,7 @@ final class TestLocalDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     required DateTime now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) async => _applyCas(
     localDraftId,
     (current) => evaluateDraftClaim(
@@ -243,6 +246,7 @@ final class TestLocalDraftStore implements LocalDraftStore {
       expectingExpiredLease: true,
       now: now,
       overrideLeaseToken: overrideLeaseToken,
+      ignoreRetryBackoff: ignoreRetryBackoff,
     ),
   );
 

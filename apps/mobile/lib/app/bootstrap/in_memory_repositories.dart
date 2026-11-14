@@ -229,6 +229,7 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     DateTime? now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) async => applyInMemoryDraftCas(
     _drafts,
     localDraftId,
@@ -242,6 +243,7 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
       expectingExpiredLease: false,
       now: now,
       overrideLeaseToken: overrideLeaseToken,
+      ignoreRetryBackoff: ignoreRetryBackoff,
     ),
   );
 
@@ -254,6 +256,7 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     required DateTime now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) async => applyInMemoryDraftCas(
     _drafts,
     localDraftId,
@@ -267,6 +270,7 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
       expectingExpiredLease: true,
       now: now,
       overrideLeaseToken: overrideLeaseToken,
+      ignoreRetryBackoff: ignoreRetryBackoff,
     ),
   );
 
@@ -1067,6 +1071,9 @@ final class InMemoryPendingRewardCommandStore
 
 /// Lightweight in-memory fallback for [AssessmentRepository] in local demo mode.
 final class InMemoryAssessmentRepository implements AssessmentRepository {
+  InMemoryAssessmentRepository({this.activeActorIdProvider});
+
+  final String? Function()? activeActorIdProvider;
   final Map<String, Assessment> _assessments = {};
   final Map<String, AssessmentEvidence> _evidence = {};
   final List<VerifiedLearningEvent> _verifiedEvents = [];
@@ -1109,7 +1116,7 @@ final class InMemoryAssessmentRepository implements AssessmentRepository {
       status: AssessmentStatus.draft,
       occurredAt: occurredAt ?? now,
       version: 1,
-      createdByUserId: 'local-user',
+      createdByUserId: activeActorIdProvider?.call() ?? 'local-user',
       createdAt: now,
       updatedAt: now,
     );
@@ -2822,14 +2829,9 @@ final class InMemoryRecoveryAuthorizationPort
     return defaultStatus;
   }
 
-  @override
-  Future<AdultTargetAuthorizationResult> verifyAdultRedemptionTarget({
-    required ValidatedActorContext context,
-    required String familyId,
-    required String childId,
-    required String redemptionId,
-    required RewardCommandOperation operation,
-  }) async {
+  Future<AdultTargetAuthorizationResult> _evaluateAdultContext(
+    ValidatedActorContext context,
+  ) async {
     if (context.role == 'child') {
       return const AdultTargetAuthorizationResult.definitelyDenied(
         reason: AdultTargetVerificationReason.pairedChildSessionDenied,
@@ -2853,4 +2855,27 @@ final class InMemoryRecoveryAuthorizationPort
       reason: AdultTargetVerificationReason.rlsFilteredOrMissingTargetRow,
     );
   }
+
+  @override
+  Future<AdultTargetAuthorizationResult> verifyAssessmentTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+  }) async {
+    if (familyId.trim().isEmpty || childId.trim().isEmpty) {
+      return const AdultTargetAuthorizationResult.definitelyDenied(
+        reason: AdultTargetVerificationReason.invalidTargetInput,
+      );
+    }
+    return _evaluateAdultContext(context);
+  }
+
+  @override
+  Future<AdultTargetAuthorizationResult> verifyAdultRedemptionTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+    required String redemptionId,
+    required RewardCommandOperation operation,
+  }) => _evaluateAdultContext(context);
 }

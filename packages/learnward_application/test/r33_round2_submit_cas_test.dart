@@ -7,6 +7,8 @@ import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:test/test.dart';
 
 final class _RecordingRepo extends FakeAssessmentRepository {
+  _RecordingRepo({super.activeActorIdProvider});
+
   int createDraftCallCount = 0;
   int registerEvidenceCallCount = 0;
   int submitAssessmentCallCount = 0;
@@ -215,13 +217,17 @@ void main() {
 
   late _RecordingRepo repo;
   late FakeAuthSessionPort authPort;
+  late FakeRecoveryAuthorizationPort authzPort;
   late FakeAssessmentEvidenceStorage storage;
   late TestLocalDraftStore draftStore;
   late _InMemoryCanonicalSnapshotStore snapshotStore;
 
   setUp(() {
-    repo = _RecordingRepo();
     authPort = FakeAuthSessionPort(activeUserId: actorUserId);
+    authzPort = FakeRecoveryAuthorizationPort();
+    repo = _RecordingRepo(
+      activeActorIdProvider: () => authPort.currentContext?.userId,
+    );
     storage = FakeAssessmentEvidenceStorage(authSessionPort: authPort);
     draftStore = TestLocalDraftStore();
     snapshotStore = _InMemoryCanonicalSnapshotStore();
@@ -248,6 +254,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
       );
 
@@ -308,6 +315,7 @@ void main() {
           repository: repo,
           storage: storage,
           authSessionPort: authPort,
+          recoveryAuthorizationPort: authzPort,
           localDraftStore: draftStore,
           canonicalSnapshotStore: snapshotStore,
         );
@@ -365,6 +373,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -426,6 +435,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -497,6 +507,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -565,6 +576,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -628,6 +640,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         onLeaseReleaseFailure: ({required localDraftId, status, error}) {
           observedReleaseStatus = status;
@@ -662,6 +675,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
       );
 
@@ -760,6 +774,7 @@ void main() {
           repository: repo,
           storage: storage,
           authSessionPort: authPort,
+          recoveryAuthorizationPort: authzPort,
           localDraftStore: draftStore,
           canonicalSnapshotStore: snapshotStore,
         );
@@ -812,6 +827,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -935,6 +951,7 @@ void main() {
           repository: repo,
           storage: storage,
           authSessionPort: authPort,
+          recoveryAuthorizationPort: authzPort,
           localDraftStore: draftStore,
           canonicalSnapshotStore: snapshotStore,
         );
@@ -1030,6 +1047,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -1182,6 +1200,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -1218,6 +1237,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
       );
 
@@ -1301,6 +1321,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -1401,6 +1422,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -1467,6 +1489,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -1539,6 +1562,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -1613,6 +1637,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -1677,6 +1702,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -1743,6 +1769,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
         canonicalSnapshotStore: snapshotStore,
       );
@@ -1806,6 +1833,7 @@ void main() {
         repository: repo,
         storage: storage,
         authSessionPort: authPort,
+        recoveryAuthorizationPort: authzPort,
         localDraftStore: draftStore,
       );
 

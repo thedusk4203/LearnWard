@@ -24,3 +24,30 @@ final class DeterministicJitterSource implements JitterSource {
   @override
   double sampleUniform() => fraction.clamp(0.0, 1.0);
 }
+
+/// Computes bounded exponential backoff with full jitter for 1-based retry [attempt].
+///
+/// Shared between recovery and assessment submission retry scheduling so
+/// injected [JitterSource] instances produce deterministic `nextAttemptAt`
+/// timestamps.
+Duration calculateJitteredBackoff(
+  int attempt, {
+  required JitterSource jitterSource,
+  double baseSeconds = 2.0,
+  double capSeconds = 60.0,
+  double minFloorSeconds = 1.0,
+}) {
+  final effectiveAttempt = attempt < 1 ? 1 : attempt;
+  final boundedCap = min(
+    capSeconds,
+    baseSeconds * pow(2.0, effectiveAttempt - 1),
+  );
+  var waitSeconds = jitterSource.sampleUniform() * boundedCap;
+
+  if (jitterSource is! DeterministicJitterSource &&
+      waitSeconds < minFloorSeconds) {
+    waitSeconds = minFloorSeconds;
+  }
+
+  return Duration(milliseconds: (waitSeconds * 1000).toInt());
+}

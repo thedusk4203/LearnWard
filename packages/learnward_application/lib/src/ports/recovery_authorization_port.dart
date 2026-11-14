@@ -140,4 +140,19 @@ abstract interface class RecoveryAuthorizationPort {
     required String redemptionId,
     required RewardCommandOperation operation,
   });
+
+  /// Verifies that [context] currently belongs to an active adult/parent
+  /// guardian account for [familyId] and that [childId] belongs to that
+  /// family before dispatching or retrying an assessment draft/evidence/submit
+  /// action.
+  ///
+  /// Defaults to `unverified` unless overridden so test stubs implementing
+  /// [RecoveryAuthorizationPort] fail closed until wired. Wait — concrete
+  /// production/test adapters MUST implement this explicitly; keeping it
+  /// abstract guarantees compile-time coverage of all adapters.
+  Future<AdultTargetAuthorizationResult> verifyAssessmentTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+  });
 }

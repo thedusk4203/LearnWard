@@ -83,11 +83,16 @@ class FailingLocalDraftStore implements LocalDraftStore {
     required LocalAssessmentDraft? expected,
     required LocalAssessmentDraft desired,
     DateTime? now,
-  }) => inner.registerOrUpdateDraftIfUnchanged(
-    expected: expected,
-    desired: desired,
-    now: now,
-  );
+  }) async {
+    if (shouldFailSave) {
+      throw StateError('Simulated disk I/O failure during draft save');
+    }
+    return inner.registerOrUpdateDraftIfUnchanged(
+      expected: expected,
+      desired: desired,
+      now: now,
+    );
+  }
 
   @override
   Future<DraftCasResult> acquireDraftClaim({
@@ -98,6 +103,7 @@ class FailingLocalDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     DateTime? now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) => inner.acquireDraftClaim(
     localDraftId: localDraftId,
     actorUserId: actorUserId,
@@ -106,6 +112,7 @@ class FailingLocalDraftStore implements LocalDraftStore {
     leaseDuration: leaseDuration,
     now: now,
     overrideLeaseToken: overrideLeaseToken,
+    ignoreRetryBackoff: ignoreRetryBackoff,
   );
 
   @override
@@ -117,6 +124,7 @@ class FailingLocalDraftStore implements LocalDraftStore {
     required Duration leaseDuration,
     required DateTime now,
     String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
   }) => inner.resumeDraftClaimAfterExpiry(
     localDraftId: localDraftId,
     actorUserId: actorUserId,
@@ -125,6 +133,7 @@ class FailingLocalDraftStore implements LocalDraftStore {
     leaseDuration: leaseDuration,
     now: now,
     overrideLeaseToken: overrideLeaseToken,
+    ignoreRetryBackoff: ignoreRetryBackoff,
   );
 
   @override
@@ -272,6 +281,8 @@ class FailingLocalDraftStore implements LocalDraftStore {
 }
 
 final class FailingSubmitAssessmentRepository extends FakeAssessmentRepository {
+  FailingSubmitAssessmentRepository({super.activeActorIdProvider});
+
   bool shouldFailSubmit = false;
 
   @override
@@ -526,10 +537,12 @@ void main() {
 
       fakeFamilyRepo = FakeFamilyRepository();
       fakeChildRepo = FakeChildProfileRepository();
-      fakeAssessmentRepo = FailingSubmitAssessmentRepository();
       fakeAuth = FakeAuthSessionPort(
         activeUserId: 'local-parent-user',
         sessionGeneration: 'demo-generation-1',
+      );
+      fakeAssessmentRepo = FailingSubmitAssessmentRepository(
+        activeActorIdProvider: () => fakeAuth.currentContext?.userId,
       );
       fakeStorage = FakeAssessmentEvidenceStorage(authSessionPort: fakeAuth);
       fakeGrowthRepo = InMemoryGrowthRepository();

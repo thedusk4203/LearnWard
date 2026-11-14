@@ -252,6 +252,264 @@ void main() {
     });
   });
 
+  group('SupabaseRecoveryAuthorizationAdapter.verifyAssessmentTarget (WP3)', () {
+    late _MockPostgrestHttpClient mockHttp;
+    late SupabaseClient client;
+    late SupabaseRecoveryAuthorizationAdapter adapter;
+
+    final parentContext = ValidatedActorContext(
+      userId: 'usr-parent-1',
+      sessionGeneration: 'gen-parent-1',
+      observedAt: DateTime.utc(2026, 11, 14, 12, 0, 0),
+      role: 'parent',
+    );
+
+    setUp(() {
+      mockHttp = _MockPostgrestHttpClient();
+      client = SupabaseClient(
+        'https://test.supabase.co',
+        'test-anon-key',
+        httpClient: mockHttp,
+      );
+      adapter = SupabaseRecoveryAuthorizationAdapter(client);
+    });
+
+    test('authorized active parent and active child returns authorized with VerifiedAdultRole.parent', () async {
+      mockHttp.grantRow = null;
+      mockHttp.membershipRow = {
+        'family_id': 'fam-1',
+        'auth_user_id': 'usr-parent-1',
+        'status': 'active',
+        'role': 'parent',
+      };
+      mockHttp.childProfileRow = {
+        'id': 'ch-1',
+        'family_id': 'fam-1',
+        'status': 'active',
+      };
+
+      final res = await adapter.verifyAssessmentTarget(
+        context: parentContext,
+        familyId: 'fam-1',
+        childId: 'ch-1',
+      );
+
+      expect(res.status, TargetAuthorizationStatus.authorized);
+      expect(res.verifiedRole, VerifiedAdultRole.parent);
+      expect(
+        res.reason,
+        AdultTargetVerificationReason.authorizedActiveAdultAndChild,
+      );
+    });
+
+    test(
+      'revoked child grant with revoked_at returns confirmedRevoked',
+      () async {
+        mockHttp.grantRow = {
+          'family_id': 'fam-1',
+          'child_id': 'ch-1',
+          'auth_user_id': 'usr-parent-1',
+          'status': 'revoked',
+          'revoked_at': '2026-11-14T11:00:00Z',
+        };
+
+        final res = await adapter.verifyAssessmentTarget(
+          context: parentContext,
+          familyId: 'fam-1',
+          childId: 'ch-1',
+        );
+
+        expect(res.status, TargetAuthorizationStatus.confirmedRevoked);
+        expect(res.verifiedRole, isNull);
+      },
+    );
+
+    test(
+      'archived child profile returns definitelyDenied(childConfirmedArchived)',
+      () async {
+        mockHttp.grantRow = null;
+        mockHttp.membershipRow = {
+          'family_id': 'fam-1',
+          'auth_user_id': 'usr-parent-1',
+          'status': 'active',
+          'role': 'parent',
+        };
+        mockHttp.childProfileRow = {
+          'id': 'ch-1',
+          'family_id': 'fam-1',
+          'status': 'archived',
+        };
+
+        final res = await adapter.verifyAssessmentTarget(
+          context: parentContext,
+          familyId: 'fam-1',
+          childId: 'ch-1',
+        );
+
+        expect(res.status, TargetAuthorizationStatus.definitelyDenied);
+        expect(
+          res.reason,
+          AdultTargetVerificationReason.childConfirmedArchived,
+        );
+      },
+    );
+
+    test('revoked or non-adult family membership returns definitelyDenied(adultMembershipRevokedOrNonAdult)', () async {
+      mockHttp.grantRow = null;
+      mockHttp.membershipRow = {
+        'family_id': 'fam-1',
+        'auth_user_id': 'usr-parent-1',
+        'status': 'revoked',
+        'role': 'parent',
+      };
+
+      final resRevoked = await adapter.verifyAssessmentTarget(
+        context: parentContext,
+        familyId: 'fam-1',
+        childId: 'ch-1',
+      );
+      expect(resRevoked.status, TargetAuthorizationStatus.definitelyDenied);
+      expect(
+        resRevoked.reason,
+        AdultTargetVerificationReason.adultMembershipRevokedOrNonAdult,
+      );
+
+      mockHttp.membershipRow = {
+        'family_id': 'fam-1',
+        'auth_user_id': 'usr-parent-1',
+        'status': 'active',
+        'role': 'child',
+      };
+      final resNonAdult = await adapter.verifyAssessmentTarget(
+        context: parentContext,
+        familyId: 'fam-1',
+        childId: 'ch-1',
+      );
+      expect(resNonAdult.status, TargetAuthorizationStatus.definitelyDenied);
+      expect(
+        resNonAdult.reason,
+        AdultTargetVerificationReason.adultMembershipRevokedOrNonAdult,
+      );
+    });
+
+    test('paired child session (context.role == child or active grant) returns definitelyDenied(pairedChildSessionDenied)', () async {
+      final childCtx = ValidatedActorContext(
+        userId: 'usr-child-1',
+        sessionGeneration: 'gen-child-1',
+        observedAt: DateTime.utc(2026, 11, 14, 12, 0, 0),
+        role: 'child',
+      );
+      final resRole = await adapter.verifyAssessmentTarget(
+        context: childCtx,
+        familyId: 'fam-1',
+        childId: 'ch-1',
+      );
+      expect(resRole.status, TargetAuthorizationStatus.definitelyDenied);
+      expect(
+        resRole.reason,
+        AdultTargetVerificationReason.pairedChildSessionDenied,
+      );
+
+      mockHttp.grantRow = {
+        'family_id': 'fam-1',
+        'child_id': 'ch-1',
+        'auth_user_id': 'usr-parent-1',
+        'status': 'active',
+        'revoked_at': null,
+      };
+      final resGrant = await adapter.verifyAssessmentTarget(
+        context: parentContext,
+        familyId: 'fam-1',
+        childId: 'ch-1',
+      );
+      expect(resGrant.status, TargetAuthorizationStatus.definitelyDenied);
+      expect(
+        resGrant.reason,
+        AdultTargetVerificationReason.pairedChildSessionDenied,
+      );
+    });
+
+    test(
+      'inconsistent role claim returns definitelyDenied(inconsistentRoleClaim)',
+      () async {
+        mockHttp.grantRow = null;
+        mockHttp.membershipRow = {
+          'family_id': 'fam-1',
+          'auth_user_id': 'usr-parent-1',
+          'status': 'active',
+          'role': 'parent',
+        };
+        final claimedOwnerCtx = ValidatedActorContext(
+          userId: 'usr-parent-1',
+          sessionGeneration: 'gen-parent-1',
+          observedAt: DateTime.utc(2026, 11, 14, 12, 0, 0),
+          role: 'owner',
+        );
+
+        final res = await adapter.verifyAssessmentTarget(
+          context: claimedOwnerCtx,
+          familyId: 'fam-1',
+          childId: 'ch-1',
+        );
+        expect(res.status, TargetAuthorizationStatus.definitelyDenied);
+        expect(res.reason, AdultTargetVerificationReason.inconsistentRoleClaim);
+      },
+    );
+
+    test('missing membership, missing child row, and transport failures fail closed as unverified', () async {
+      mockHttp.grantRow = null;
+      mockHttp.membershipRow = null;
+      mockHttp.childProfileRow = null;
+
+      final missingMember = await adapter.verifyAssessmentTarget(
+        context: parentContext,
+        familyId: 'fam-1',
+        childId: 'ch-1',
+      );
+      expect(missingMember.status, TargetAuthorizationStatus.unverified);
+      expect(
+        missingMember.reason,
+        AdultTargetVerificationReason.missingOrUnverifiedMembership,
+      );
+
+      mockHttp.membershipRow = {
+        'family_id': 'fam-1',
+        'auth_user_id': 'usr-parent-1',
+        'status': 'active',
+        'role': 'owner',
+      };
+      mockHttp.childProfileRow = null;
+      final ownerContext = ValidatedActorContext(
+        userId: 'usr-parent-1',
+        sessionGeneration: 'gen-parent-1',
+        observedAt: DateTime.utc(2026, 11, 14, 12, 0, 0),
+        role: 'owner',
+      );
+      final missingChild = await adapter.verifyAssessmentTarget(
+        context: ownerContext,
+        familyId: 'fam-1',
+        childId: 'ch-1',
+      );
+      expect(missingChild.status, TargetAuthorizationStatus.unverified);
+      expect(
+        missingChild.reason,
+        AdultTargetVerificationReason.rlsFilteredOrMissingTargetRow,
+      );
+
+      mockHttp.simulateNetworkError = true;
+      final networkFail = await adapter.verifyAssessmentTarget(
+        context: ownerContext,
+        familyId: 'fam-1',
+        childId: 'ch-1',
+      );
+      expect(networkFail.status, TargetAuthorizationStatus.unverified);
+      expect(
+        networkFail.reason,
+        AdultTargetVerificationReason.transientVerificationFailure,
+      );
+    });
+  });
+
   group('SupabaseAuthSessionAdapter Stream Error Fail-Closed Contract (R24-2-01, R24-3-07, A21, M04)', () {
     test(
       'validateForMutation returns null when client has no session',
