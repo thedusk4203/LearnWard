@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:learnward_test_support/learnward_test_support.dart';
@@ -5,9 +7,12 @@ import 'package:test/test.dart';
 
 final class InMemoryLocalDraftStore implements LocalDraftStore {
   final Map<String, LocalAssessmentDraft> drafts = {};
+  Future<void> Function(LocalAssessmentDraft draft)? onSaveLocalDraft;
+  int deleteLocalDraftCallCount = 0;
 
   @override
   Future<void> saveLocalDraft(LocalAssessmentDraft draft) async {
+    await onSaveLocalDraft?.call(draft);
     drafts[draft.localDraftId] = draft;
   }
 
@@ -23,6 +28,7 @@ final class InMemoryLocalDraftStore implements LocalDraftStore {
 
   @override
   Future<void> deleteLocalDraft(String localDraftId) async {
+    deleteLocalDraftCallCount++;
     drafts.remove(localDraftId);
   }
 
@@ -1213,6 +1219,231 @@ void main() {
       expect(repository.assessments.length, equals(1));
     });
   });
+
+  group('R32-09: Session Revalidation Across Async saveLocalDraft Before createDraft', () {
+    Future<void> verifyRejectedAcrossSaveBarrier({
+      required String scenarioLabel,
+      required void Function(FakeAuthSessionPort auth) mutateSession,
+    }) async {
+      final draftStore = InMemoryLocalDraftStore();
+      final recordingRepo = _RecordingAssessmentRepository();
+      const localId = 'draft-r32-09-barrier';
+      const createCommandId = 'cmd-r32-09-create';
+      const submitCommandId = 'cmd-r32-09-submit';
+      const evidenceUuid = '550e8400-e29b-41d4-a716-446655440901';
+      const localPhotoPath = '/tmp/r32-09-evidence.jpg';
+      const actorUserId = 'user-parent-1';
+
+      await draftStore.saveLocalDraft(
+        LocalAssessmentDraft(
+          localDraftId: localId,
+          familyId: familyId.value,
+          childId: childId.value,
+          createCommandId: createCommandId,
+          submitCommandId: submitCommandId,
+          evidenceId: evidenceUuid,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Barrier Scenario: $scenarioLabel',
+          assessmentType: 'quiz',
+          difficulty: 'normal',
+          rawScore: 9.0,
+          maxScore: 10.0,
+          localPhotoPath: localPhotoPath,
+          actorUserId: actorUserId,
+          occurredAt: DateTime.utc(2026, 11, 1),
+          updatedAt: DateTime.utc(2026, 11, 1),
+          dispatchState: CommandDispatchState.neverDispatched,
+        ),
+      );
+
+      final enteredSave = Completer<void>();
+      final releaseSave = Completer<void>();
+      var armBarrier = true;
+      draftStore.onSaveLocalDraft = (_) async {
+        if (armBarrier) {
+          armBarrier = false;
+          enteredSave.complete();
+          await releaseSave.future;
+        }
+      };
+
+      final evidenceBytes = <int>[10, 20, 30, 40];
+      final expectedEvidenceBytes = List<int>.from(evidenceBytes);
+
+      final submitWorkflow = SubmitAssessmentDraft(
+        repository: recordingRepo,
+        storage: storage,
+        localDraftStore: draftStore,
+        authSessionPort: fakeAuth,
+      );
+
+      final submissionExpectation = expectLater(
+        submitWorkflow(
+          createCommandId: createCommandId,
+          submitCommandId: submitCommandId,
+          familyId: familyId,
+          childId: childId,
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Barrier Scenario: $scenarioLabel',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 9, maxScore: 10),
+          evidenceBytes: evidenceBytes,
+          evidenceMediaType: 'image/jpeg',
+          evidenceId: EvidenceId(evidenceUuid),
+          localDraftId: localId,
+        ),
+        throwsA(isA<EvidenceStorageAuthException>()),
+      );
+
+      await enteredSave.future;
+      mutateSession(fakeAuth);
+      releaseSave.complete();
+      await submissionExpectation;
+
+      // Preflight check + post-save/pre-createDraft revalidation ran; never proceeded further
+      expect(fakeAuth.validateCallCount, equals(2));
+
+      // Zero network mutations or destructive deletes executed
+      expect(recordingRepo.createDraftCallCount, equals(0));
+      expect(recordingRepo.registerEvidenceCallCount, equals(0));
+      expect(recordingRepo.submitAssessmentCallCount, equals(0));
+      expect(recordingRepo.assessments, isEmpty);
+      expect(storage.uploadCallCount, equals(0));
+      expect(storage.downloadCallCount, equals(0));
+      expect(storage.reconcileCallCount, equals(0));
+      expect(storage.deleteCallCount, equals(0));
+      expect(draftStore.deleteLocalDraftCallCount, equals(0));
+
+      // Local journal, original IDs, and evidence bytes remain preserved
+      final draftAfter = await draftStore.getLocalDraft(localId);
+      expect(draftAfter, isNotNull);
+      expect(draftAfter!.localDraftId, equals(localId));
+      expect(draftAfter.createCommandId, equals(createCommandId));
+      expect(draftAfter.submitCommandId, equals(submitCommandId));
+      expect(draftAfter.evidenceId, equals(evidenceUuid));
+      expect(draftAfter.localPhotoPath, equals(localPhotoPath));
+      expect(draftAfter.actorUserId, equals(actorUserId));
+      expect(evidenceBytes, equals(expectedEvidenceBytes));
+    }
+
+    test('rejects actor switch occurring while localDraftStore.saveLocalDraft is pending before createDraft', () async {
+      await verifyRejectedAcrossSaveBarrier(
+        scenarioLabel: 'actor-switch',
+        mutateSession: (auth) => auth.switchActor('user-parent-2'),
+      );
+    });
+
+    test('rejects actor switch with unchanged sessionGeneration while localDraftStore.saveLocalDraft is pending', () async {
+      await verifyRejectedAcrossSaveBarrier(
+        scenarioLabel: 'actor-switch-same-generation',
+        mutateSession: (auth) => auth.setContext(
+          ValidatedActorContext(
+            userId: 'user-parent-2',
+            sessionGeneration: 'gen-1',
+            observedAt: DateTime.now().toUtc(),
+          ),
+        ),
+      );
+    });
+
+    test('rejects sign-out occurring while localDraftStore.saveLocalDraft is pending before createDraft', () async {
+      await verifyRejectedAcrossSaveBarrier(
+        scenarioLabel: 'sign-out',
+        mutateSession: (auth) => auth.signOut(),
+      );
+    });
+
+    test('rejects session generation rotation occurring while localDraftStore.saveLocalDraft is pending', () async {
+      await verifyRejectedAcrossSaveBarrier(
+        scenarioLabel: 'session-generation-rotation',
+        mutateSession: (auth) => auth.setSessionGeneration('gen-rotated'),
+      );
+    });
+
+    test('rejects expired session observed across pending localDraftStore.saveLocalDraft write', () async {
+      await verifyRejectedAcrossSaveBarrier(
+        scenarioLabel: 'expired-session',
+        mutateSession: (auth) => auth.setContext(
+          ValidatedActorContext(
+            userId: 'user-parent-1',
+            sessionGeneration: 'gen-1',
+            observedAt: DateTime.now().toUtc().subtract(
+              const Duration(minutes: 6),
+            ),
+          ),
+        ),
+      );
+    });
+  });
+}
+
+final class _RecordingAssessmentRepository extends FakeAssessmentRepository {
+  int createDraftCallCount = 0;
+  int registerEvidenceCallCount = 0;
+  int submitAssessmentCallCount = 0;
+
+  @override
+  Future<Assessment> createDraft({
+    required String commandId,
+    required FamilyId familyId,
+    required ChildId childId,
+    required SubjectKey subjectKey,
+    required String subject,
+    required String title,
+    required AssessmentType type,
+    required AssessmentDifficulty difficulty,
+    required AssessmentScore score,
+    DateTime? occurredAt,
+    EntryContext entryContext = EntryContext.adult,
+  }) async {
+    createDraftCallCount++;
+    return super.createDraft(
+      commandId: commandId,
+      familyId: familyId,
+      childId: childId,
+      subjectKey: subjectKey,
+      subject: subject,
+      title: title,
+      type: type,
+      difficulty: difficulty,
+      score: score,
+      occurredAt: occurredAt,
+      entryContext: entryContext,
+    );
+  }
+
+  @override
+  Future<AssessmentEvidence> registerEvidence({
+    required AssessmentId assessmentId,
+    required String storagePath,
+    required String mediaType,
+    required int fileSizeBytes,
+  }) async {
+    registerEvidenceCallCount++;
+    return super.registerEvidence(
+      assessmentId: assessmentId,
+      storagePath: storagePath,
+      mediaType: mediaType,
+      fileSizeBytes: fileSizeBytes,
+    );
+  }
+
+  @override
+  Future<Assessment> submitAssessment({
+    required AssessmentId assessmentId,
+    required int expectedVersion,
+    required String commandId,
+  }) async {
+    submitAssessmentCallCount++;
+    return super.submitAssessment(
+      assessmentId: assessmentId,
+      expectedVersion: expectedVersion,
+      commandId: commandId,
+    );
+  }
 }
 
 final class _FailingCreateAssessmentRepository

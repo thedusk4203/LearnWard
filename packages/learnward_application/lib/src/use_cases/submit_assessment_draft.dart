@@ -10,7 +10,7 @@ import 'upload_assessment_evidence.dart';
 /// Application use case coordinating the complete assessment submission workflow:
 /// 1. Verify active authenticated session via [AuthSessionPort] (R32-06)
 /// 2. Validate any attached evidence payload before remote mutation (R32-08)
-/// 3. Create or ensure server draft (idempotent via createCommandId)
+/// 3. Record local dispatch state (when a local draft exists), revalidate session before `createDraft` (R32-09), and create or ensure server draft (idempotent via createCommandId)
 /// 4. Upload and register evidence (preserving remote bytes on failure per I04)
 /// 5. Revalidate session before submitting assessment for review (idempotent via submitCommandId)
 /// 6. Delete local offline draft upon success
@@ -93,6 +93,15 @@ final class SubmitAssessmentDraft {
           submissionStatus: DraftSubmissionStatus.submittingAssessment,
           dispatchState: CommandDispatchState.possiblyDispatched,
         ),
+      );
+
+      // Revalidate session across async local draft write before remote RPC (R32-09)
+      await assertValidStorageAuthSession(
+        authSessionPort: authSessionPort,
+        storagePath: '',
+        context: initialContext,
+        expectedSessionGeneration: initialContext.sessionGeneration,
+        stage: 'assessment draft creation',
       );
     }
 
