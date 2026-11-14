@@ -84,6 +84,7 @@ final class _ScriptedAssessmentRepository extends FakeAssessmentRepository {
   Future<void> Function()? onBeforeSubmit;
   Future<void> Function()? onBeforeCreate;
   Future<void> Function()? onBeforeRegister;
+  Future<void> Function()? onAfterListEvidence;
 
   @override
   Future<Assessment> createDraft({
@@ -175,9 +176,13 @@ final class _ScriptedAssessmentRepository extends FakeAssessmentRepository {
   @override
   Future<List<AssessmentEvidence>> listEvidenceForAssessment(
     AssessmentId assessmentId,
-  ) {
+  ) async {
     listEvidenceCallCount++;
-    return super.listEvidenceForAssessment(assessmentId);
+    final res = await super.listEvidenceForAssessment(assessmentId);
+    if (onAfterListEvidence != null) {
+      await onAfterListEvidence!();
+    }
+    return res;
   }
 }
 
@@ -229,6 +234,10 @@ void main() {
     String? evidenceId = 'ev-wp3-1',
     String actorUserId = 'actor-a',
     bool withEvidence = true,
+    CommandDispatchState dispatchState = CommandDispatchState.neverDispatched,
+    DraftSubmissionStatus submissionStatus = DraftSubmissionStatus.draft,
+    String? serverAssessmentId,
+    String? serverEvidenceId,
   }) async {
     CanonicalEvidenceSnapshot? snap;
     if (withEvidence) {
@@ -237,7 +246,7 @@ void main() {
         bytes: validJpegBytes,
       );
     }
-    final draft = LocalAssessmentDraft(
+    final initialDraft = LocalAssessmentDraft(
       localDraftId: localDraftId,
       familyId: familyId.value,
       childId: childId.value,
@@ -259,12 +268,62 @@ void main() {
       dispatchState: CommandDispatchState.neverDispatched,
       entryContext: EntryContext.sharedChild,
     );
-    final res = await draftStore.registerOrUpdateDraftIfUnchanged(
+    var res = await draftStore.registerOrUpdateDraftIfUnchanged(
       expected: null,
-      desired: draft,
+      desired: initialDraft,
       now: baseNow,
     );
     expect(res.isSuccess, isTrue);
+    if (dispatchState == CommandDispatchState.possiblyDispatched) {
+      final claim = await draftStore.acquireDraftClaim(
+        localDraftId: localDraftId,
+        familyId: familyId.value,
+        childId: childId.value,
+        actorUserId: actorUserId,
+        now: baseNow,
+        leaseDuration: const Duration(minutes: 2),
+      );
+      expect(claim.isSuccess, isTrue);
+      final leaseToken = claim.draft!.leaseToken!;
+      res = await draftStore.markDraftStageAndDispatch(
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: actorUserId,
+        targetStage: submissionStatus,
+        now: baseNow,
+      );
+      expect(res.isSuccess, isTrue);
+      if (serverAssessmentId != null) {
+        res = await draftStore.persistServerAssessmentId(
+          localDraftId: localDraftId,
+          leaseToken: leaseToken,
+          authenticatedActorId: actorUserId,
+          serverAssessmentId: serverAssessmentId,
+          now: baseNow,
+        );
+        expect(res.isSuccess, isTrue);
+      }
+      if (serverEvidenceId != null && snap != null && evidenceId != null) {
+        res = await draftStore.persistServerEvidenceId(
+          localDraftId: localDraftId,
+          leaseToken: leaseToken,
+          authenticatedActorId: actorUserId,
+          serverEvidenceId: serverEvidenceId,
+          expectedEvidenceId: evidenceId,
+          expectedSha256Checksum: snap.sha256Checksum,
+          now: baseNow,
+        );
+        expect(res.isSuccess, isTrue);
+      }
+      final rel = await draftStore.releaseDraftClaim(
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: actorUserId,
+        now: baseNow,
+      );
+      expect(rel.isSuccess, isTrue);
+      return rel.draft!;
+    }
     return res.draft!;
   }
 
@@ -545,7 +604,7 @@ void main() {
       );
     });
 
-    test('B1-14: Unresolved LW109 on non-draft assessment quarantines with REGISTRATION_UNRESOLVED_REMOTE_RETAINED and preserves remote bytes (I04)', () async {
+    test('B1-14: Unresolved non-draft assessment reconciles read-only, quarantines with REGISTRATION_UNRESOLVED_REMOTE_RETAINED, and preserves remote bytes (I04, R34-03)', () async {
       const draftId = 'draft-b1-14-unresolved';
       await seedCanonicalDraft(localDraftId: draftId);
       final orchestrator = buildOrchestrator();
@@ -571,10 +630,9 @@ void main() {
 
       final path =
           '${familyId.value}/${childId.value}/${a.id.value}/ev-wp3-1.jpg';
-      repo.nextRegisterError = const BackendRpcException(
-        message: 'Assessment already pending_review',
-        code: 'LW109',
-      );
+      // Simulate orphaned pre-existing Storage bytes from an earlier interrupted run;
+      // R34-03 forbids calling uploadEvidence or registerEvidence when already non-draft.
+      storage.storage[path] = List<int>.from(validJpegBytes);
 
       final outcome = await runExecute(
         orchestrator: orchestrator,
@@ -587,6 +645,8 @@ void main() {
         q.recoveryCode,
         equals(DraftRecoveryCode.registrationUnresolvedRemoteRetained),
       );
+      expect(storage.uploadCallCount, equals(0));
+      expect(repo.registerEvidenceCallCount, equals(0));
       expect(storage.deleteCallCount, equals(0));
       expect(storage.storage[path], equals(validJpegBytes));
       expect(repo.submitAssessmentCallCount, equals(1)); // Only pre-seeded call
@@ -1032,6 +1092,454 @@ void main() {
         expect(q.message, isNot(contains(secret)));
         expect(q.draft?.lastErrorMessage ?? '', isNot(contains(secret)));
       }
+    });
+  });
+
+  group('R34 Review Hardening: Revalidation, Non-Draft Read-Only Evidence & Dispatch Boundary', () {
+    test('R34-01: Barrier around markDraftStageAndDispatch revoking target authorization halts before createDraft/upload/register/submit and preserves journal/IDs/evidence', () async {
+      const draftId = 'draft-r34-01-barrier';
+      final seeded = await seedCanonicalDraft(localDraftId: draftId);
+      final orchestrator = buildOrchestrator();
+
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      draftStore.onMarkDraftStageAndDispatch = (id, res) async {
+        if (id == draftId && !entered.isCompleted) {
+          entered.complete();
+          await release.future;
+        }
+      };
+
+      final futureOutcome = runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      await entered.future;
+      authzPort.setTargetStatus(
+        familyId: familyId.value,
+        childId: childId.value,
+        status: TargetAuthorizationStatus.confirmedRevoked,
+      );
+      release.complete();
+
+      final outcome = await futureOutcome;
+      expect(outcome, isA<AssessmentSubmissionPolicyDenied>());
+      expect(repo.createDraftCallCount, equals(0));
+      expect(storage.uploadCallCount, equals(0));
+      expect(repo.registerEvidenceCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(
+        persisted?.recoveryCode,
+        equals(DraftRecoveryCode.terminalPolicyDenial),
+      );
+      expect(persisted?.createCommandId, equals(seeded.createCommandId));
+      expect(persisted?.submitCommandId, equals(seeded.submitCommandId));
+      expect(persisted?.evidenceId, equals(seeded.evidenceId));
+      expect(
+        persisted?.localCompressedPhotoPath,
+        equals(seeded.localCompressedPhotoPath),
+      );
+      expect(persisted?.sha256Checksum, equals(seeded.sha256Checksum));
+      expect(persisted?.leaseToken, isNull);
+    });
+
+    test('R34-01: Mid-flight target revocation across pre-check list, upload, and register halts before next remote stage without deleting bytes', () async {
+      // Case A: Revoke after listEvidenceForAssessment pre-check -> zero upload/register/submit
+      const preCheckId = 'draft-r34-01-precheck-revoke';
+      final createdPreCheck = await repo.createDraft(
+        commandId: 'cmd-create-1',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'WP3 Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+      await seedCanonicalDraft(
+        localDraftId: preCheckId,
+        dispatchState: CommandDispatchState.possiblyDispatched,
+        submissionStatus: DraftSubmissionStatus.uploadingEvidence,
+        serverAssessmentId: createdPreCheck.id.value,
+      );
+
+      repo.onAfterListEvidence = () async {
+        authzPort.setTargetStatus(
+          familyId: familyId.value,
+          childId: childId.value,
+          status: TargetAuthorizationStatus.confirmedRevoked,
+        );
+      };
+
+      final orchestrator = buildOrchestrator();
+      final preCheckOutcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: preCheckId,
+      );
+      expect(preCheckOutcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (preCheckOutcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.ambiguous42501Outcome),
+      );
+      expect(repo.listEvidenceCallCount, equals(1));
+      expect(storage.uploadCallCount, equals(0));
+      expect(repo.registerEvidenceCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+
+      // Case B: Revoke after upload -> zero register/submit, bytes retained (I04)
+      repo.onAfterListEvidence = null;
+      authzPort.setTargetStatus(
+        familyId: familyId.value,
+        childId: childId.value,
+        status: TargetAuthorizationStatus.authorized,
+      );
+      const midUploadId = 'draft-r34-01-mid-upload';
+      await seedCanonicalDraft(
+        localDraftId: midUploadId,
+        createCommandId: 'cmd-c-mid-u',
+        submitCommandId: 'cmd-s-mid-u',
+        evidenceId: 'ev-mid-u',
+      );
+      storage.onAfterUpload = () {
+        authzPort.setTargetStatus(
+          familyId: familyId.value,
+          childId: childId.value,
+          status: TargetAuthorizationStatus.confirmedRevoked,
+        );
+      };
+
+      final midUploadOutcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: midUploadId,
+        createCommandId: 'cmd-c-mid-u',
+        submitCommandId: 'cmd-s-mid-u',
+        evidenceId: 'ev-mid-u',
+      );
+      expect(midUploadOutcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (midUploadOutcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.ambiguous42501Outcome),
+      );
+      expect(storage.uploadCallCount, equals(1));
+      expect(repo.registerEvidenceCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+      expect(storage.deleteCallCount, equals(0));
+
+      // Case C: Revoke after registerEvidence -> zero submitAssessment
+      storage.onAfterUpload = null;
+      authzPort.setTargetStatus(
+        familyId: familyId.value,
+        childId: childId.value,
+        status: TargetAuthorizationStatus.authorized,
+      );
+      const midRegId = 'draft-r34-01-mid-reg';
+      await seedCanonicalDraft(
+        localDraftId: midRegId,
+        createCommandId: 'cmd-c-mid-r',
+        submitCommandId: 'cmd-s-mid-r',
+        evidenceId: 'ev-mid-r',
+      );
+      repo.onBeforeRegister = () async {
+        repo.onBeforeRegister = null;
+        authzPort.setTargetStatus(
+          familyId: familyId.value,
+          childId: childId.value,
+          status: TargetAuthorizationStatus.confirmedRevoked,
+        );
+      };
+      final midRegOutcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: midRegId,
+        createCommandId: 'cmd-c-mid-r',
+        submitCommandId: 'cmd-s-mid-r',
+        evidenceId: 'ev-mid-r',
+      );
+      expect(midRegOutcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (midRegOutcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.ambiguous42501Outcome),
+      );
+      expect(repo.registerEvidenceCallCount, equals(1));
+      expect(repo.submitAssessmentCallCount, equals(0));
+    });
+
+    test('R34-01: Private evidence reconciliation respects target authorization before accessing Storage bytes', () async {
+      const draftId = 'draft-r34-01-recon-authz';
+      final assessment = await repo.createDraft(
+        commandId: 'cmd-create-1',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'WP3 Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+      final path =
+          '${familyId.value}/${childId.value}/${assessment.id.value}/ev-wp3-1.jpg';
+      storage.storage[path] = List<int>.from(validJpegBytes);
+      final regEv = await repo.registerEvidence(
+        assessmentId: assessment.id,
+        storagePath: path,
+        mediaType: 'image/jpeg',
+        fileSizeBytes: validJpegBytes.length,
+      );
+      await seedCanonicalDraft(
+        localDraftId: draftId,
+        dispatchState: CommandDispatchState.possiblyDispatched,
+        submissionStatus: DraftSubmissionStatus.uploadingEvidence,
+        serverAssessmentId: assessment.id.value,
+        serverEvidenceId: regEv.id.value,
+      );
+
+      repo.onAfterListEvidence = () async {
+        authzPort.setTargetStatus(
+          familyId: familyId.value,
+          childId: childId.value,
+          status: TargetAuthorizationStatus.confirmedRevoked,
+        );
+      };
+
+      final orchestrator = buildOrchestrator();
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      expect(outcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (outcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.ambiguous42501Outcome),
+      );
+      expect(storage.reconcileCallCount, equals(0));
+      expect(repo.submitAssessmentCallCount, equals(0));
+    });
+
+    test('R34-03: Non-draft assessment (pendingReview/verified/rejected) reconciles read-only with zero upload or registerEvidence calls', () async {
+      const draftId = 'draft-r34-03-nondraft-verified';
+      await seedCanonicalDraft(localDraftId: draftId);
+      final assessment = await repo.createDraft(
+        commandId: 'cmd-create-1',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Math',
+        title: 'WP3 Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9, maxScore: 10),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+      final path =
+          '${familyId.value}/${childId.value}/${assessment.id.value}/ev-wp3-1.jpg';
+      storage.storage[path] = List<int>.from(validJpegBytes);
+      final regEv = await repo.registerEvidence(
+        assessmentId: assessment.id,
+        storagePath: path,
+        mediaType: 'image/jpeg',
+        fileSizeBytes: validJpegBytes.length,
+      );
+      await repo.submitAssessment(
+        assessmentId: assessment.id,
+        expectedVersion: 1,
+        commandId: 'cmd-submit-1',
+      );
+      // Even verify the assessment so remote status is `verified` (non-draft).
+      await repo.verifyAssessment(
+        assessmentId: assessment.id,
+        expectedVersion: 2,
+        commandId: 'cmd-verify-1',
+      );
+
+      repo.registerEvidenceCallCount = 0;
+      repo.submitAssessmentCallCount = 0;
+
+      final orchestrator = buildOrchestrator();
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      expect(outcome, isA<AssessmentSubmissionConfirmed>());
+      expect(storage.uploadCallCount, equals(0));
+      expect(repo.registerEvidenceCallCount, equals(0));
+      expect(storage.reconcileCallCount, equals(1));
+      expect(storage.deleteCallCount, equals(0));
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(persisted?.serverEvidenceId, equals(regEv.id.value));
+      expect(
+        persisted?.dispatchState,
+        equals(CommandDispatchState.confirmedCommitted),
+      );
+    });
+
+    test('R34-04 (1): Denial positively established before first remote call produces terminalPolicyDenial with zero RPCs', () async {
+      const draftId = 'draft-r34-04-pre-call-deny';
+      await seedCanonicalDraft(localDraftId: draftId, withEvidence: false);
+      authzPort.setTargetStatus(
+        familyId: familyId.value,
+        childId: childId.value,
+        status: TargetAuthorizationStatus.definitelyDenied,
+      );
+
+      final orchestrator = buildOrchestrator();
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+      );
+
+      expect(outcome, isA<AssessmentSubmissionPolicyDenied>());
+      expect(
+        (outcome as AssessmentSubmissionPolicyDenied).recoveryCode,
+        equals(DraftRecoveryCode.terminalPolicyDenial),
+      );
+      expect(repo.createDraftCallCount, equals(0));
+    });
+
+    test('R34-04 (2): 42501 returned AFTER createDraft was invoked on first dispatch classifies as ambiguous42501Outcome (never terminalPolicyDenial)', () async {
+      const draftId = 'draft-r34-04-first-create-42501';
+      final seeded = await seedCanonicalDraft(localDraftId: draftId);
+
+      repo.onBeforeCreate = () async {
+        // Authorization revokes / RLS triggers 42501 during/after createDraft RPC.
+        authzPort.setTargetStatus(
+          familyId: familyId.value,
+          childId: childId.value,
+          status: TargetAuthorizationStatus.confirmedRevoked,
+        );
+        throw const BackendRpcException(
+          message: 'new row violates row-level security policy',
+          code: '42501',
+        );
+      };
+
+      final orchestrator = buildOrchestrator();
+      final outcome = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+
+      expect(repo.createDraftCallCount, equals(1));
+      expect(outcome, isNot(isA<AssessmentSubmissionPolicyDenied>()));
+      expect(outcome, isA<AssessmentSubmissionQuarantined>());
+      final q = outcome as AssessmentSubmissionQuarantined;
+      expect(q.recoveryCode, equals(DraftRecoveryCode.ambiguous42501Outcome));
+
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(
+        persisted?.recoveryCode,
+        equals(DraftRecoveryCode.ambiguous42501Outcome),
+      );
+      expect(persisted?.createCommandId, equals(seeded.createCommandId));
+      expect(persisted?.submitCommandId, equals(seeded.submitCommandId));
+      expect(persisted?.evidenceId, equals(seeded.evidenceId));
+    });
+
+    test('R34-04 (3): Lost createDraft response followed by revoked authorization preserves ambiguous42501Outcome', () async {
+      const draftId = 'draft-r34-04-lost-create-then-revoked';
+      await seedCanonicalDraft(localDraftId: draftId, withEvidence: false);
+      repo.nextCreateError = const BackendRpcException(
+        message: 'SocketException: connection closed before response',
+        code: '503',
+      );
+
+      final orchestrator = buildOrchestrator();
+      final attempt1 = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+      );
+      expect(attempt1, isA<AssessmentSubmissionRetryScheduled>());
+
+      authzPort.setTargetStatus(
+        familyId: familyId.value,
+        childId: childId.value,
+        status: TargetAuthorizationStatus.confirmedRevoked,
+      );
+      final attempt2 = await runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+        withEvidence: false,
+        trigger: CommandExecutionTrigger.foregroundRetry,
+      );
+      expect(attempt2, isNot(isA<AssessmentSubmissionPolicyDenied>()));
+      expect(attempt2, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (attempt2 as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.ambiguous42501Outcome),
+      );
+      expect(repo.createDraftCallCount, equals(1));
+    });
+
+    test('R34-04 (4): Actor or session change between markDraftStageAndDispatch and createDraft pauses safely without corrupting journal', () async {
+      const draftId = 'draft-r34-04-actor-switch-after-stage';
+      final seeded = await seedCanonicalDraft(localDraftId: draftId);
+      final orchestrator = buildOrchestrator();
+
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      draftStore.onMarkDraftStageAndDispatch = (id, res) async {
+        if (id == draftId && !entered.isCompleted) {
+          entered.complete();
+          await release.future;
+        }
+      };
+
+      final futureOutcome = runExecute(
+        orchestrator: orchestrator,
+        localDraftId: draftId,
+      );
+      await entered.future;
+      authPort.setSession(
+        userId: 'actor-b',
+        sessionGeneration: 'gen-actor-b-1',
+        role: 'parent',
+      );
+      release.complete();
+
+      final outcome = await futureOutcome;
+      expect(outcome, isA<AssessmentSubmissionPausedActorMismatch>());
+      expect(repo.createDraftCallCount, equals(0));
+
+      final persisted = await draftStore.getLocalDraft(draftId);
+      expect(
+        persisted?.recoveryCode,
+        equals(DraftRecoveryCode.waitingOriginalActor),
+      );
+      expect(persisted?.actorUserId, equals('actor-a'));
+      expect(persisted?.createCommandId, equals(seeded.createCommandId));
+      expect(persisted?.submitCommandId, equals(seeded.submitCommandId));
+      expect(persisted?.evidenceId, equals(seeded.evidenceId));
+      expect(persisted?.sha256Checksum, equals(seeded.sha256Checksum));
+      expect(persisted?.leaseToken, isNull);
+    });
+
+    test('R34-05: Production AssessmentSubmissionOrchestrator rejects direct unjournaled reconcileAndRegisterEvidence calls', () async {
+      final orchestrator = buildOrchestrator();
+      await expectLater(
+        () => orchestrator.reconcileAndRegisterEvidence(
+          familyId: familyId,
+          childId: childId,
+          assessmentId: AssessmentId('a-direct-1'),
+          evidenceId: EvidenceId('e-direct-1'),
+          bytes: validJpegBytes,
+          mediaType: 'image/jpeg',
+        ),
+        throwsStateError,
+      );
+      expect(storage.uploadCallCount, equals(0));
+      expect(repo.registerEvidenceCallCount, equals(0));
     });
   });
 }

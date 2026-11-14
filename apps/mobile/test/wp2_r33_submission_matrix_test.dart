@@ -681,6 +681,7 @@ void main() {
           recoveryAuthorizationPort: FakeRecoveryAuthorizationPort(),
           localDraftStore: spyConn1,
           canonicalSnapshotStore: fileStore,
+          clock: TestClock(baseTime.add(const Duration(minutes: 6))),
         );
 
         await expectLater(
@@ -838,6 +839,7 @@ void main() {
           recoveryAuthorizationPort: FakeRecoveryAuthorizationPort(),
           localDraftStore: spyConn1,
           canonicalSnapshotStore: fileStore,
+          clock: TestClock(baseTime.add(const Duration(minutes: 1))),
         );
 
         await expectLater(

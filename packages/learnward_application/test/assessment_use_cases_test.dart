@@ -220,7 +220,7 @@ void main() {
       score: AssessmentScore(rawScore: 10, maxScore: 10),
     );
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -258,7 +258,7 @@ void main() {
       score: AssessmentScore(rawScore: 10, maxScore: 10),
     );
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -307,7 +307,7 @@ void main() {
       score: AssessmentScore(rawScore: 10, maxScore: 10),
     );
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: failingRepo,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -341,7 +341,7 @@ void main() {
       activeUserId: 'user-parent-1',
       sessionGeneration: 'gen-1',
     );
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -399,7 +399,7 @@ void main() {
       activeUserId: 'user-parent-1',
       sessionGeneration: 'gen-1',
     );
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -450,7 +450,7 @@ void main() {
       activeUserId: 'user-attacker',
       sessionGeneration: 'gen-attacker',
     );
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -512,7 +512,7 @@ void main() {
     // Pre-seed storage with identical bytes (simulating prior acknowledged upload)
     storage.storage[path] = List<int>.from(bytes);
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -553,7 +553,7 @@ void main() {
     storage.storage[path] = [1, 2, 3, 4, 5];
     final localBytes = [1, 2, 3, 4, 99]; // Same length, different SHA-256
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -598,7 +598,7 @@ void main() {
     storage.storage[path] = [1, 2, 3];
     final localBytes = [1, 2, 3, 4, 5]; // 5 bytes
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -640,7 +640,7 @@ void main() {
     storage.storage[path] = [1, 2, 3];
     storage.throwOnDownload = StateError('Simulated 403 RLS hidden error');
 
-    final uploadUseCase = UploadAssessmentEvidence(
+    final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
       repository: repository,
       storage: storage,
       authSessionPort: fakeAuth,
@@ -1114,7 +1114,7 @@ void main() {
         score: AssessmentScore(rawScore: 5, maxScore: 10),
       );
 
-      final uploadUseCase = UploadAssessmentEvidence(
+      final uploadUseCase = UploadAssessmentEvidence.unjournaledForTesting(
         repository: repository,
         storage: storage,
         authSessionPort: fakeAuth,

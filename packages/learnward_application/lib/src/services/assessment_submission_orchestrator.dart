@@ -438,9 +438,9 @@ final class AssessmentSubmissionOrchestrator {
 
   /// Reconciles or uploads + registers canonical evidence bytes for [assessmentId].
   ///
-  /// Shared between standalone [UploadAssessmentEvidence] calls and the staged
-  /// [execute] workflow so HTTP 409, lost ACK, `LW109`, and server-generated ID
-  /// reconciliation follow identical security and byte-integrity rules.
+  /// Restricted to `.unjournaledForTesting` orchestrator instances (e.g.
+  /// isolated unit tests via [UploadAssessmentEvidence.unjournaledForTesting]);
+  /// production callers must execute the durable staged workflow via [execute].
   Future<
     ({
       AssessmentEvidence evidence,
@@ -448,6 +448,179 @@ final class AssessmentSubmissionOrchestrator {
     })
   >
   reconcileAndRegisterEvidence({
+    required FamilyId familyId,
+    required ChildId childId,
+    required AssessmentId assessmentId,
+    required EvidenceId evidenceId,
+    required List<int> bytes,
+    required String mediaType,
+    String? persistedServerEvidenceId,
+    bool preCheckServerEvidenceList = false,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+    String? expectedActorUserId,
+  }) {
+    if (!_allowUnjournaledForTesting) {
+      throw StateError(
+        'Direct unjournaled reconcileAndRegisterEvidence is restricted to testing; use AssessmentSubmissionOrchestrator.execute() / SubmitAssessmentDraft.',
+      );
+    }
+    return _reconcileOrUploadAndRegisterEvidence(
+      familyId: familyId,
+      childId: childId,
+      assessmentId: assessmentId,
+      evidenceId: evidenceId,
+      bytes: bytes,
+      mediaType: mediaType,
+      persistedServerEvidenceId: persistedServerEvidenceId,
+      preCheckServerEvidenceList: preCheckServerEvidenceList,
+      context: context,
+      expectedSessionGeneration: expectedSessionGeneration,
+      expectedActorUserId: expectedActorUserId,
+    );
+  }
+
+  /// Read-only verification of a persisted/registered DB evidence row and its
+  /// remote Storage object bytes (SHA-256) without performing any uploads,
+  /// registrations, or deletions.
+  Future<
+    ({
+      AssessmentEvidence evidence,
+      EvidenceStorageReconciliationResult reconciliation,
+    })?
+  >
+  _verifyRegisteredEvidenceRowAndBytes({
+    required FamilyId familyId,
+    required ChildId childId,
+    required AssessmentId assessmentId,
+    required List<int> bytes,
+    required String storagePath,
+    required String normalizedMediaType,
+    String? persistedServerEvidenceId,
+    ValidatedActorContext? context,
+    String? expectedSessionGeneration,
+    required String stageLabel,
+    required RemoteAssessmentStage authStage,
+  }) async {
+    final listAuth = await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: storagePath,
+      context: context,
+      expectedSessionGeneration:
+          expectedSessionGeneration ?? context?.sessionGeneration,
+      stage: '$stageLabel list',
+    );
+    await _verifyTargetOrThrow(
+      context: listAuth,
+      familyId: familyId,
+      childId: childId,
+      stage: authStage,
+    );
+
+    final rows = await repository.listEvidenceForAssessment(assessmentId);
+
+    if (persistedServerEvidenceId != null &&
+        persistedServerEvidenceId.isNotEmpty) {
+      for (final row in rows) {
+        if (row.id.value == persistedServerEvidenceId &&
+            (row.familyId != familyId ||
+                row.assessmentId != assessmentId ||
+                row.storagePath != storagePath)) {
+          throw const EvidenceIdMismatchException(
+            message: 'Persisted serverEvidenceId conflicts with server evidence record scope or storagePath.',
+          );
+        }
+      }
+    }
+
+    final matches = rows
+        .where(
+          (row) =>
+              row.familyId == familyId &&
+              row.assessmentId == assessmentId &&
+              row.storagePath == storagePath,
+        )
+        .toList(growable: false);
+    if (matches.length > 1) {
+      throw const EvidenceIdMismatchException(
+        message: 'Ambiguous duplicate registered evidence records detected for target assessment.',
+      );
+    }
+    if (matches.isEmpty) {
+      if (persistedServerEvidenceId != null &&
+          persistedServerEvidenceId.isNotEmpty &&
+          rows.isNotEmpty) {
+        throw const EvidenceIdMismatchException(
+          message: 'Server evidence records do not match persisted serverEvidenceId or canonical storagePath.',
+        );
+      }
+      return null;
+    }
+
+    final matched = matches.single;
+    if (persistedServerEvidenceId != null &&
+        persistedServerEvidenceId.isNotEmpty &&
+        matched.id.value != persistedServerEvidenceId) {
+      throw const EvidenceIdMismatchException(
+        message: 'Server evidence record ID conflicts with persisted local serverEvidenceId.',
+      );
+    }
+    if (matched.mediaType.trim().toLowerCase() != normalizedMediaType ||
+        matched.fileSizeBytes != bytes.length) {
+      throw EvidenceStorageConflictException(
+        ContentConflictOutcome(
+          storagePath: storagePath,
+          localSha256: computeSha256Hex(bytes),
+          remoteSha256: '',
+          localByteCount: bytes.length,
+          remoteByteCount: matched.fileSizeBytes,
+          reason: 'Registered evidence metadata conflicts with canonical local bytes.',
+        ),
+      );
+    }
+
+    // Revalidate live session + target authorization immediately before Storage download/reconcile.
+    final storageAuth = await assertValidStorageAuthSession(
+      authSessionPort: authSessionPort,
+      storagePath: storagePath,
+      context: context ?? listAuth,
+      expectedSessionGeneration:
+          expectedSessionGeneration ?? listAuth.sessionGeneration,
+      stage: '$stageLabel storage reconcile',
+    );
+    await _verifyTargetOrThrow(
+      context: storageAuth,
+      familyId: familyId,
+      childId: childId,
+      stage: authStage,
+    );
+
+    final outcome = await storage.reconcileEvidence(
+      storagePath: storagePath,
+      localBytes: bytes,
+      context: storageAuth,
+      expectedSessionGeneration:
+          expectedSessionGeneration ?? storageAuth.sessionGeneration,
+    );
+    switch (outcome) {
+      case MatchingBytesOutcome():
+        return (evidence: matched, reconciliation: outcome);
+      case ContentConflictOutcome(:final reason):
+        throw EvidenceStorageConflictException(outcome, reason);
+      case UnknownOutcome(:final reason):
+        throw EvidenceStorageUnknownOutcomeException(outcome, reason);
+      case AuthFailureOutcome(:final reason):
+        throw EvidenceStorageAuthException(outcome, reason);
+    }
+  }
+
+  Future<
+    ({
+      AssessmentEvidence evidence,
+      EvidenceStorageReconciliationResult? reconciliation,
+    })
+  >
+  _reconcileOrUploadAndRegisterEvidence({
     required FamilyId familyId,
     required ChildId childId,
     required AssessmentId assessmentId,
@@ -471,68 +644,6 @@ final class AssessmentSubmissionOrchestrator {
 
     EvidenceStorageReconciliationResult? reconciliation;
 
-    Future<AssessmentEvidence?> tryReconcileRegisteredRow({
-      required ValidatedActorContext actorContext,
-      required String expectedGen,
-    }) async {
-      final rows = await repository.listEvidenceForAssessment(assessmentId);
-      final matches = rows
-          .where(
-            (row) =>
-                row.familyId == familyId &&
-                row.assessmentId == assessmentId &&
-                row.storagePath == storagePath,
-          )
-          .toList(growable: false);
-      if (matches.length > 1) {
-        throw const EvidenceIdMismatchException(
-          message: 'Ambiguous duplicate registered evidence records detected for target assessment.',
-        );
-      }
-      if (matches.isEmpty) {
-        return null;
-      }
-      final matched = matches.single;
-      if (persistedServerEvidenceId != null &&
-          persistedServerEvidenceId.isNotEmpty &&
-          matched.id.value != persistedServerEvidenceId) {
-        throw const EvidenceIdMismatchException(
-          message: 'Server evidence record ID conflicts with persisted local serverEvidenceId.',
-        );
-      }
-      if (matched.mediaType.trim().toLowerCase() != normalizedMediaType ||
-          matched.fileSizeBytes != bytes.length) {
-        throw EvidenceStorageConflictException(
-          ContentConflictOutcome(
-            storagePath: storagePath,
-            localSha256: computeSha256Hex(bytes),
-            remoteSha256: '',
-            localByteCount: bytes.length,
-            remoteByteCount: matched.fileSizeBytes,
-            reason: 'Registered evidence metadata conflicts with canonical local bytes.',
-          ),
-        );
-      }
-
-      final outcome = await storage.reconcileEvidence(
-        storagePath: storagePath,
-        localBytes: bytes,
-        context: actorContext,
-        expectedSessionGeneration: expectedGen,
-      );
-      reconciliation = outcome;
-      switch (outcome) {
-        case MatchingBytesOutcome():
-          return matched;
-        case ContentConflictOutcome(:final reason):
-          throw EvidenceStorageConflictException(outcome, reason);
-        case UnknownOutcome(:final reason):
-          throw EvidenceStorageUnknownOutcomeException(outcome, reason);
-        case AuthFailureOutcome(:final reason):
-          throw EvidenceStorageAuthException(outcome, reason);
-      }
-    }
-
     final initialActor = await assertValidStorageAuthSession(
       authSessionPort: authSessionPort,
       storagePath: storagePath,
@@ -549,18 +660,47 @@ final class AssessmentSubmissionOrchestrator {
       childId: childId,
       stage: RemoteAssessmentStage.uploadAndRegisterEvidence,
     );
-    final effectiveContext = context ?? initialActor;
-    final effectiveGen =
+    var effectiveContext = context ?? initialActor;
+    var effectiveGen =
         expectedSessionGeneration ?? initialActor.sessionGeneration;
 
     if (preCheckServerEvidenceList) {
-      final preMatched = await tryReconcileRegisteredRow(
-        actorContext: initialActor,
-        expectedGen: effectiveGen,
+      final preMatched = await _verifyRegisteredEvidenceRowAndBytes(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: assessmentId,
+        bytes: bytes,
+        storagePath: storagePath,
+        normalizedMediaType: normalizedMediaType,
+        persistedServerEvidenceId: persistedServerEvidenceId,
+        context: effectiveContext,
+        expectedSessionGeneration: effectiveGen,
+        stageLabel: 'pre-check evidence reconciliation',
+        authStage: RemoteAssessmentStage.uploadAndRegisterEvidence,
       );
       if (preMatched != null) {
-        return (evidence: preMatched, reconciliation: reconciliation);
+        return (
+          evidence: preMatched.evidence,
+          reconciliation: preMatched.reconciliation,
+        );
       }
+
+      // Revalidate live session + target authorization after async pre-check before upload.
+      final uploadActor = await assertValidStorageAuthSession(
+        authSessionPort: authSessionPort,
+        storagePath: storagePath,
+        context: context ?? initialActor,
+        expectedSessionGeneration: effectiveGen,
+        stage: 'evidence upload',
+      );
+      await _verifyTargetOrThrow(
+        context: uploadActor,
+        familyId: familyId,
+        childId: childId,
+        stage: RemoteAssessmentStage.uploadAndRegisterEvidence,
+      );
+      effectiveContext = context ?? uploadActor;
+      effectiveGen = expectedSessionGeneration ?? uploadActor.sessionGeneration;
     }
 
     // Upload bytes (upsert = false, Storage 409 reconciles bytes via SHA-256).
@@ -620,9 +760,15 @@ final class AssessmentSubmissionOrchestrator {
             expectedSessionGeneration ?? validatedActor.sessionGeneration,
         stage: 'LW109 evidence reconciliation',
       );
+      await _verifyTargetOrThrow(
+        context: reconActor,
+        familyId: familyId,
+        childId: childId,
+        stage: RemoteAssessmentStage.uploadAndRegisterEvidence,
+      );
       final remoteAssessment = await repository.getAssessment(assessmentId);
       if (remoteAssessment == null) {
-        throw _MissingRemoteAssessmentSignal(
+        throw const _MissingRemoteAssessmentSignal(
           'Unable to verify assessment while reconciling LW109 evidence registration.',
         );
       }
@@ -635,12 +781,25 @@ final class AssessmentSubmissionOrchestrator {
         );
       }
 
-      final reconciled = await tryReconcileRegisteredRow(
-        actorContext: reconActor,
-        expectedGen: expectedSessionGeneration ?? reconActor.sessionGeneration,
+      final reconciled = await _verifyRegisteredEvidenceRowAndBytes(
+        familyId: familyId,
+        childId: childId,
+        assessmentId: assessmentId,
+        bytes: bytes,
+        storagePath: storagePath,
+        normalizedMediaType: normalizedMediaType,
+        persistedServerEvidenceId: persistedServerEvidenceId,
+        context: reconActor,
+        expectedSessionGeneration:
+            expectedSessionGeneration ?? reconActor.sessionGeneration,
+        stageLabel: 'LW109 evidence reconciliation',
+        authStage: RemoteAssessmentStage.uploadAndRegisterEvidence,
       );
       if (reconciled != null) {
-        return (evidence: reconciled, reconciliation: reconciliation);
+        return (
+          evidence: reconciled.evidence,
+          reconciliation: reconciled.reconciliation,
+        );
       }
 
       // Assessment is already non-draft and no matching registered row exists.
@@ -1010,8 +1169,12 @@ final class AssessmentSubmissionOrchestrator {
     final hasResolvedEvidence = resolvedBytes != null;
     String? activeLeaseToken;
     var completedLocally = false;
-    var wasAlreadyPossiblyDispatched =
+    var wasPossiblyDispatchedOnEntry =
         existingLocal?.dispatchState == CommandDispatchState.possiblyDispatched;
+    var remoteRpcAttempted =
+        wasPossiblyDispatchedOnEntry ||
+        (existingLocal?.serverAssessmentId?.isNotEmpty ?? false) ||
+        (existingLocal?.serverEvidenceId?.isNotEmpty ?? false);
     String? knownServerAssessmentId = existingLocal?.serverAssessmentId;
     String? knownServerEvidenceId = existingLocal?.serverEvidenceId;
     Object? primaryError;
@@ -1090,11 +1253,16 @@ final class AssessmentSubmissionOrchestrator {
           final claimedDraft = claimResult.draft!;
           currentClaimedDraft = claimedDraft;
           activeLeaseToken = claimedDraft.leaseToken!;
-          wasAlreadyPossiblyDispatched =
+          wasPossiblyDispatchedOnEntry =
               claimedDraft.dispatchState ==
               CommandDispatchState.possiblyDispatched;
           knownServerAssessmentId = claimedDraft.serverAssessmentId;
           knownServerEvidenceId = claimedDraft.serverEvidenceId;
+          if (wasPossiblyDispatchedOnEntry ||
+              (knownServerAssessmentId?.isNotEmpty ?? false) ||
+              (knownServerEvidenceId?.isNotEmpty ?? false)) {
+            remoteRpcAttempted = true;
+          }
 
           // Quarantine corrupted/missing canonical snapshot on possiblyDispatched recovery.
           if (missingDispatchedSnapshot ||
@@ -1237,7 +1405,7 @@ final class AssessmentSubmissionOrchestrator {
         final Assessment remoteAssessment;
         if (knownServerAssessmentId == null ||
             knownServerAssessmentId.isEmpty) {
-          currentRemoteStage = RemoteAssessmentStage.createDraft;
+          currentRemoteStage = RemoteAssessmentStage.preDispatch;
           final needsPreCreateRevalidation =
               localDraftStore != null ||
               recoveryAuthorizationPort != null ||
@@ -1252,7 +1420,15 @@ final class AssessmentSubmissionOrchestrator {
                   stage: 'create assessment draft',
                 )
               : initialContext;
+          await _verifyTargetOrThrow(
+            context: createAuth,
+            familyId: familyId,
+            childId: childId,
+            stage: RemoteAssessmentStage.preDispatch,
+          );
 
+          currentRemoteStage = RemoteAssessmentStage.createDraft;
+          remoteRpcAttempted = true;
           remoteAssessment = await repository.createDraft(
             commandId: createCommandId,
             familyId: familyId,
@@ -1365,6 +1541,7 @@ final class AssessmentSubmissionOrchestrator {
             stage: RemoteAssessmentStage.reconcileDraft,
           );
 
+          remoteRpcAttempted = true;
           final fetched = await repository.getAssessment(
             AssessmentId(knownServerAssessmentId),
           );
@@ -1459,10 +1636,51 @@ final class AssessmentSubmissionOrchestrator {
 
         // 7. Stage B: Reconcile or upload + register evidence and persist serverEvidenceId.
         if (hasResolvedEvidence) {
-          if (knownServerEvidenceId == null || knownServerEvidenceId.isEmpty) {
+          final hasPersistedEvidenceId =
+              knownServerEvidenceId != null && knownServerEvidenceId.isNotEmpty;
+          final isNonDraftRemote =
+              remoteAssessment.status != AssessmentStatus.draft;
+          if (hasPersistedEvidenceId || isNonDraftRemote) {
             currentRemoteStage =
                 RemoteAssessmentStage.uploadAndRegisterEvidence;
-            final evResult = await reconcileAndRegisterEvidence(
+            remoteRpcAttempted = true;
+            final ext = validateEvidenceUploadPayload(
+              bytes: resolvedBytes,
+              mediaType: resolvedMediaType!,
+            );
+            final expectedStoragePath =
+                '${familyId.value}/${childId.value}/${remoteAssessment.id.value}/${resolvedEvidenceId!.value}.$ext';
+            final verified = await _verifyRegisteredEvidenceRowAndBytes(
+              familyId: familyId,
+              childId: childId,
+              assessmentId: remoteAssessment.id,
+              bytes: resolvedBytes,
+              storagePath: expectedStoragePath,
+              normalizedMediaType: resolvedMediaType.trim().toLowerCase(),
+              persistedServerEvidenceId: knownServerEvidenceId,
+              context: initialContext,
+              expectedSessionGeneration: expectedGen,
+              stageLabel: isNonDraftRemote
+                  ? 'non-draft read-only evidence verification'
+                  : 'persisted evidence verification',
+              authStage: RemoteAssessmentStage.uploadAndRegisterEvidence,
+            );
+            if (verified == null) {
+              throw EvidenceRegistrationUnresolvedRemoteRetainedException(
+                storagePath: expectedStoragePath,
+                message: isNonDraftRemote
+                    ? 'Assessment is non-draft and no matching registered evidence record exists; retaining remote bytes without upload/register.'
+                    : 'Registered server evidence record could not be verified on server (missing or RLS-filtered).',
+              );
+            }
+            latestServerEvidence = verified.evidence;
+            latestReconciliation = verified.reconciliation;
+            knownServerEvidenceId = verified.evidence.id.value;
+          } else {
+            currentRemoteStage =
+                RemoteAssessmentStage.uploadAndRegisterEvidence;
+            remoteRpcAttempted = true;
+            final evResult = await _reconcileOrUploadAndRegisterEvidence(
               familyId: familyId,
               childId: childId,
               assessmentId: remoteAssessment.id,
@@ -1470,7 +1688,7 @@ final class AssessmentSubmissionOrchestrator {
               bytes: resolvedBytes,
               mediaType: resolvedMediaType!,
               persistedServerEvidenceId: knownServerEvidenceId,
-              preCheckServerEvidenceList: wasAlreadyPossiblyDispatched,
+              preCheckServerEvidenceList: wasPossiblyDispatchedOnEntry,
               context: initialContext,
               expectedSessionGeneration: expectedGen,
               expectedActorUserId:
@@ -1479,46 +1697,47 @@ final class AssessmentSubmissionOrchestrator {
             latestServerEvidence = evResult.evidence;
             latestReconciliation = evResult.reconciliation;
             knownServerEvidenceId = evResult.evidence.id.value;
+          }
 
-            if (localDraftId != null &&
-                localDraftStore != null &&
-                activeLeaseToken != null) {
-              final DraftCasResult persistEvidenceResult;
-              try {
-                persistEvidenceResult = await localDraftStore!
-                    .persistServerEvidenceId(
-                      localDraftId: localDraftId,
-                      leaseToken: activeLeaseToken,
-                      authenticatedActorId: initialContext.userId,
-                      serverEvidenceId: knownServerEvidenceId,
-                      expectedEvidenceId: resolvedEvidenceId.value,
-                      expectedSha256Checksum: resolvedSha256!,
-                      now: clock.now().toUtc(),
-                    );
-              } catch (e) {
-                throw DraftSubmissionCasException(
-                  stage: DraftCasFailureStage.persistServerEvidenceId,
-                  localDraftId: localDraftId,
-                  serverAssessmentId: remoteAssessment.id.value,
-                  serverEvidenceId: knownServerEvidenceId,
-                  message: 'Failed to persist serverEvidenceId due to a local storage error.',
-                  cause: e,
-                );
-              }
-              if (!persistEvidenceResult.isSuccess ||
-                  persistEvidenceResult.draft == null) {
-                throw DraftSubmissionCasException(
-                  stage: DraftCasFailureStage.persistServerEvidenceId,
-                  localDraftId: localDraftId,
-                  casStatus: persistEvidenceResult.status,
-                  serverAssessmentId: remoteAssessment.id.value,
-                  serverEvidenceId: knownServerEvidenceId,
-                  message:
-                      'Failed to persist serverEvidenceId (${persistEvidenceResult.status.name}).',
-                );
-              }
-              currentClaimedDraft = persistEvidenceResult.draft!;
+          if (!hasPersistedEvidenceId &&
+              localDraftId != null &&
+              localDraftStore != null &&
+              activeLeaseToken != null) {
+            final DraftCasResult persistEvidenceResult;
+            try {
+              persistEvidenceResult = await localDraftStore!
+                  .persistServerEvidenceId(
+                    localDraftId: localDraftId,
+                    leaseToken: activeLeaseToken,
+                    authenticatedActorId: initialContext.userId,
+                    serverEvidenceId: knownServerEvidenceId,
+                    expectedEvidenceId: resolvedEvidenceId.value,
+                    expectedSha256Checksum: resolvedSha256!,
+                    now: clock.now().toUtc(),
+                  );
+            } catch (e) {
+              throw DraftSubmissionCasException(
+                stage: DraftCasFailureStage.persistServerEvidenceId,
+                localDraftId: localDraftId,
+                serverAssessmentId: remoteAssessment.id.value,
+                serverEvidenceId: knownServerEvidenceId,
+                message: 'Failed to persist serverEvidenceId due to a local storage error.',
+                cause: e,
+              );
             }
+            if (!persistEvidenceResult.isSuccess ||
+                persistEvidenceResult.draft == null) {
+              throw DraftSubmissionCasException(
+                stage: DraftCasFailureStage.persistServerEvidenceId,
+                localDraftId: localDraftId,
+                casStatus: persistEvidenceResult.status,
+                serverAssessmentId: remoteAssessment.id.value,
+                serverEvidenceId: knownServerEvidenceId,
+                message:
+                    'Failed to persist serverEvidenceId (${persistEvidenceResult.status.name}).',
+              );
+            }
+            currentClaimedDraft = persistEvidenceResult.draft!;
           }
 
           if (localDraftId != null &&
@@ -1578,6 +1797,7 @@ final class AssessmentSubmissionOrchestrator {
           stage: RemoteAssessmentStage.submitAssessment,
         );
 
+        remoteRpcAttempted = true;
         final submitted = await repository.submitAssessment(
           assessmentId: remoteAssessment.id,
           commandId: submitCommandId,
@@ -1706,7 +1926,8 @@ final class AssessmentSubmissionOrchestrator {
             actorContext: initialContext,
             claimedDraft: currentClaimedDraft,
             leaseToken: activeLeaseToken,
-            wasAlreadyPossiblyDispatched: wasAlreadyPossiblyDispatched,
+            wasAlreadyPossiblyDispatched:
+                wasPossiblyDispatchedOnEntry || remoteRpcAttempted,
             serverAssessmentId: knownServerAssessmentId,
             releaseActiveLease: () async {
               if (activeLeaseToken == null) return;
@@ -2364,7 +2585,7 @@ final class AssessmentSubmissionOrchestrator {
       case TargetAuthorizationStatus.definitelyDenied:
         final isConfirmedPreSubmitNegative =
             !wasAlreadyPossiblyDispatched &&
-            stage == RemoteAssessmentStage.createDraft &&
+            stage == RemoteAssessmentStage.preDispatch &&
             serverAssessmentId == null &&
             authz.reason !=
                 AdultTargetVerificationReason.childConfirmedArchived;

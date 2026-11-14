@@ -711,6 +711,295 @@ void main() {
       expect(repo.registerEvidenceCalls, equals(0));
       expect(storage.uploadCallCount, equals(0));
     });
+
+    test('R34-02: File-backed SQLite restart verifies persisted serverEvidenceId across match, missing/RLS row, wrong ID, path/MIME/length mismatch, SHA-256 tamper, and 403/404 storage errors before submitAssessment', () async {
+      // Helper runs Stage A+B to crash before submitAssessment, reopens AppDatabase from disk,
+      // lets caller mutate remote server/storage state, then runs post-restart orchestrator.
+      Future<
+        ({
+          AssessmentSubmissionOutcome outcome,
+          _ConcurrentlyBarrieredRepository repo,
+          FakeAssessmentEvidenceStorage storage,
+          AppDatabase reopened,
+        })
+      >
+      runRestartScenario({
+        required String scenarioKey,
+        required void Function(
+          _ConcurrentlyBarrieredRepository repo,
+          FakeAssessmentEvidenceStorage storage,
+          AssessmentId assessmentId,
+          AssessmentEvidence registered,
+          String canonicalStoragePath,
+        )
+        mutateRemoteAfterRestart,
+      }) async {
+        final draftId = 'sqlite-r34-02-$scenarioKey';
+        final localDbFile = File('${tempDir.path}/$draftId.sqlite');
+        final initialDb = AppDatabase(NativeDatabase(localDbFile));
+        await seedDraftOnConn(
+          initialDb,
+          localDraftId: draftId,
+          withEvidence: true,
+        );
+
+        final authPort = FakeAuthSessionPort(
+          activeUserId: 'parent-1',
+          sessionGeneration: 'gen-1',
+          role: 'parent',
+        );
+        final repo = _ConcurrentlyBarrieredRepository(
+          activeActorIdProvider: () => 'parent-1',
+        );
+        final storage = FakeAssessmentEvidenceStorage(
+          authSessionPort: authPort,
+        );
+        final authzPort = FakeRecoveryAuthorizationPort();
+        final crashRepo = _FailingAfterStageBRepo(
+          delegate: repo,
+          activeActorIdProvider: () => 'parent-1',
+        );
+
+        final preCrash = AssessmentSubmissionOrchestrator(
+          repository: crashRepo,
+          storage: storage,
+          authSessionPort: authPort,
+          localDraftStore: initialDb,
+          recoveryAuthorizationPort: authzPort,
+          canonicalSnapshotStore: snapshotStore,
+          clock: TestClock(baseTime),
+        );
+
+        await expectLater(
+          () => preCrash.execute(
+            familyId: familyId,
+            childId: childId,
+            createCommandId: 'cmd-c-$draftId',
+            submitCommandId: 'cmd-s-$draftId',
+            evidenceId: EvidenceId('ev-$draftId'),
+            subjectKey: SubjectKey.math,
+            subject: 'Math',
+            title: 'Concurrent Quiz',
+            type: AssessmentType.quiz,
+            difficulty: AssessmentDifficulty.normal,
+            score: AssessmentScore(rawScore: 9, maxScore: 10),
+            occurredAt: baseTime,
+            entryContext: EntryContext.sharedChild,
+            localDraftId: draftId,
+          ),
+          throwsStateError,
+        );
+
+        await initialDb.close();
+        final reopened = AppDatabase(NativeDatabase(localDbFile));
+        addTearDown(() async => reopened.close());
+
+        final persisted = await reopened.getLocalDraft(draftId);
+        expect(persisted?.serverAssessmentId, isNotNull);
+        expect(persisted?.serverEvidenceId, isNotNull);
+
+        final assessmentId = AssessmentId(persisted!.serverAssessmentId!);
+        final registered = (await repo.listEvidenceForAssessment(assessmentId))
+            .single;
+        final path =
+            '${familyId.value}/${childId.value}/${assessmentId.value}/ev-$draftId.jpg';
+
+        repo.createDraftCalls = 0;
+        repo.registerEvidenceCalls = 0;
+        repo.submitAssessmentCalls = 0;
+        storage.uploadCallCount = 0;
+        storage.reconcileCallCount = 0;
+
+        mutateRemoteAfterRestart(repo, storage, assessmentId, registered, path);
+
+        final postRestart = AssessmentSubmissionOrchestrator(
+          repository: repo,
+          storage: storage,
+          authSessionPort: authPort,
+          localDraftStore: reopened,
+          recoveryAuthorizationPort: authzPort,
+          canonicalSnapshotStore: snapshotStore,
+          clock: TestClock(baseTime.add(const Duration(seconds: 30))),
+        );
+
+        final outcome = await postRestart.execute(
+          familyId: familyId,
+          childId: childId,
+          createCommandId: 'cmd-c-$draftId',
+          submitCommandId: 'cmd-s-$draftId',
+          evidenceId: EvidenceId('ev-$draftId'),
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Concurrent Quiz',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 9, maxScore: 10),
+          occurredAt: baseTime,
+          entryContext: EntryContext.sharedChild,
+          localDraftId: draftId,
+        );
+
+        return (
+          outcome: outcome,
+          repo: repo,
+          storage: storage,
+          reopened: reopened,
+        );
+      }
+
+      // 1. Matching DB row + Storage bytes -> confirms
+      final matchRun = await runRestartScenario(
+        scenarioKey: 'match',
+        mutateRemoteAfterRestart: (_, _, _, _, _) {},
+      );
+      expect(matchRun.outcome, isA<AssessmentSubmissionConfirmed>());
+      expect(matchRun.repo.createDraftCalls, equals(0));
+      expect(matchRun.repo.registerEvidenceCalls, equals(0));
+      expect(matchRun.storage.uploadCallCount, equals(0));
+      expect(matchRun.storage.reconcileCallCount, equals(1));
+      expect(matchRun.repo.submitAssessmentCalls, equals(1));
+
+      // 2. Missing / RLS-filtered DB evidence row -> fails closed before submitAssessment
+      final missingRowRun = await runRestartScenario(
+        scenarioKey: 'missing-row',
+        mutateRemoteAfterRestart: (repo, _, _, registered, _) {
+          repo.evidence.remove(registered.id.value);
+        },
+      );
+      expect(missingRowRun.outcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (missingRowRun.outcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.registrationUnresolvedRemoteRetained),
+      );
+      expect(missingRowRun.repo.submitAssessmentCalls, equals(0));
+
+      // 3. Wrong serverEvidenceId -> fails closed as EVIDENCE_ID_MISMATCH before submitAssessment
+      final wrongIdRun = await runRestartScenario(
+        scenarioKey: 'wrong-id',
+        mutateRemoteAfterRestart: (repo, _, _, registered, _) {
+          repo.evidence.remove(registered.id.value);
+          repo.evidence['ev-other-server'] = AssessmentEvidence(
+            id: EvidenceId('ev-other-server'),
+            familyId: registered.familyId,
+            assessmentId: registered.assessmentId,
+            storagePath: registered.storagePath,
+            mediaType: registered.mediaType,
+            fileSizeBytes: registered.fileSizeBytes,
+            uploadedByUserId: registered.uploadedByUserId,
+            createdAt: registered.createdAt,
+          );
+        },
+      );
+      expect(wrongIdRun.outcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (wrongIdRun.outcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.evidenceIdMismatch),
+      );
+      expect(wrongIdRun.repo.submitAssessmentCalls, equals(0));
+
+      // 4a. Wrong storagePath on matching DB row ID -> fails closed
+      final wrongPathRun = await runRestartScenario(
+        scenarioKey: 'wrong-path',
+        mutateRemoteAfterRestart: (repo, _, _, registered, _) {
+          repo.evidence[registered.id.value] = AssessmentEvidence(
+            id: registered.id,
+            familyId: registered.familyId,
+            assessmentId: registered.assessmentId,
+            storagePath:
+                '${registered.familyId.value}/${registered.assessmentId.value}/tampered.jpg',
+            mediaType: registered.mediaType,
+            fileSizeBytes: registered.fileSizeBytes,
+            uploadedByUserId: registered.uploadedByUserId,
+            createdAt: registered.createdAt,
+          );
+        },
+      );
+      expect(wrongPathRun.outcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (wrongPathRun.outcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.evidenceIdMismatch),
+      );
+      expect(wrongPathRun.repo.submitAssessmentCalls, equals(0));
+
+      // 4b. Wrong MIME type -> fails closed
+      final wrongMimeRun = await runRestartScenario(
+        scenarioKey: 'wrong-mime',
+        mutateRemoteAfterRestart: (repo, _, _, registered, _) {
+          repo.evidence[registered.id.value] = AssessmentEvidence(
+            id: registered.id,
+            familyId: registered.familyId,
+            assessmentId: registered.assessmentId,
+            storagePath: registered.storagePath,
+            mediaType: 'image/png',
+            fileSizeBytes: registered.fileSizeBytes,
+            uploadedByUserId: registered.uploadedByUserId,
+            createdAt: registered.createdAt,
+          );
+        },
+      );
+      expect(wrongMimeRun.outcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (wrongMimeRun.outcome as AssessmentSubmissionQuarantined).recoveryCode,
+        equals(DraftRecoveryCode.storageContentConflict),
+      );
+      expect(wrongMimeRun.repo.submitAssessmentCalls, equals(0));
+
+      // 4c. Wrong fileSizeBytes -> fails closed
+      final wrongLengthRun = await runRestartScenario(
+        scenarioKey: 'wrong-length',
+        mutateRemoteAfterRestart: (repo, _, _, registered, _) {
+          repo.evidence[registered.id.value] = AssessmentEvidence(
+            id: registered.id,
+            familyId: registered.familyId,
+            assessmentId: registered.assessmentId,
+            storagePath: registered.storagePath,
+            mediaType: registered.mediaType,
+            fileSizeBytes: registered.fileSizeBytes + 42,
+            uploadedByUserId: registered.uploadedByUserId,
+            createdAt: registered.createdAt,
+          );
+        },
+      );
+      expect(wrongLengthRun.outcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (wrongLengthRun.outcome as AssessmentSubmissionQuarantined)
+            .recoveryCode,
+        equals(DraftRecoveryCode.storageContentConflict),
+      );
+      expect(wrongLengthRun.repo.submitAssessmentCalls, equals(0));
+
+      // 5. Same byte size with differing SHA-256 bytes -> fails closed
+      final tamperedBytesRun = await runRestartScenario(
+        scenarioKey: 'same-size-sha-mismatch',
+        mutateRemoteAfterRestart: (_, storage, _, _, path) {
+          final altered = Uint8List.fromList(validJpegBytes);
+          altered[altered.length - 1] = altered.last ^ 0xFF;
+          storage.storage[path] = altered;
+        },
+      );
+      expect(tamperedBytesRun.outcome, isA<AssessmentSubmissionQuarantined>());
+      expect(
+        (tamperedBytesRun.outcome as AssessmentSubmissionQuarantined)
+            .recoveryCode,
+        equals(DraftRecoveryCode.storageContentConflict),
+      );
+      expect(tamperedBytesRun.repo.submitAssessmentCalls, equals(0));
+
+      // 6. HTTP 403/404 during Storage download/reconcile -> fails closed with zero submitAssessment
+      final download404Run = await runRestartScenario(
+        scenarioKey: 'storage-404',
+        mutateRemoteAfterRestart: (_, storage, _, _, path) {
+          storage.throwOnDownload = EvidenceStorageUnknownOutcomeException(
+            UnknownOutcome(
+              storagePath: path,
+              reason: 'Storage download failed with HTTP 404.',
+            ),
+          );
+        },
+      );
+      expect(download404Run.outcome, isA<AssessmentSubmissionRetryScheduled>());
+      expect(download404Run.repo.submitAssessmentCalls, equals(0));
+    });
   });
 }
 

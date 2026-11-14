@@ -6,9 +6,13 @@ import '../ports/auth_session_port.dart';
 import '../ports/recovery_authorization_port.dart';
 import '../services/assessment_submission_orchestrator.dart';
 
-/// Validates, uploads (without overwriting existing bytes), reconciles any
-/// conflicting 409/lost-ack state, and registers evidence metadata with the
-/// assessment repository via the shared WP3 evidence reconciliation engine.
+/// Test-only unjournaled adapter delegating to
+/// [AssessmentSubmissionOrchestrator.reconcileAndRegisterEvidence].
+///
+/// Production code MUST NOT bypass the durable assessment draft journal via
+/// standalone evidence uploads; use [SubmitAssessmentDraft] or
+/// [AssessmentSubmissionOrchestrator.execute] so canonical evidence snapshots,
+/// CAS leases, and crash recovery state remain consistent.
 ///
 /// Invariants & security guarantees:
 /// - Revalidates live session via [AuthSessionPort.validateForMutation] and
@@ -18,7 +22,8 @@ import '../services/assessment_submission_orchestrator.dart';
 /// - Handles `LW109` after non-draft transitions via `(assessmentId, familyId, storagePath)`
 ///   and byte SHA-256 reconciliation without deleting or overwriting remote bytes (`I03`, `I04`).
 final class UploadAssessmentEvidence {
-  const UploadAssessmentEvidence({
+  /// Explicit test-only unjournaled constructor enforcing target authorization.
+  const UploadAssessmentEvidence.unjournaledForTesting({
     required this.repository,
     required this.storage,
     required this.authSessionPort,
