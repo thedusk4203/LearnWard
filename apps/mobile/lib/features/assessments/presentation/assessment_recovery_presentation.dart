@@ -77,6 +77,64 @@ String formatRecoveryUtcTimestamp(DateTime timestamp) {
   return '$y-$m-$d $hh:$mm UTC';
 }
 
+/// Returns `true` when [targetAuthorization] represents an authoritative
+/// denial (`confirmedRevoked` or `definitelyDenied`).
+bool isTargetAuthorizationDenied(
+  AdultTargetAuthorizationResult? targetAuthorization,
+) {
+  final status = targetAuthorization?.status;
+  return status == TargetAuthorizationStatus.confirmedRevoked ||
+      status == TargetAuthorizationStatus.definitelyDenied;
+}
+
+/// Returns `true` when [targetAuthorization] positively proves access under a
+/// checked, valid session.
+bool isTargetPositivelyAuthorized({
+  required bool liveAuthChecked,
+  required bool sessionIsValid,
+  required AdultTargetAuthorizationResult? targetAuthorization,
+}) {
+  return liveAuthChecked &&
+      sessionIsValid &&
+      targetAuthorization?.status == TargetAuthorizationStatus.authorized;
+}
+
+/// Eligibility predicate for confirmed-result server reads (`getAssessment` /
+/// `listEvidenceForAssessment`). Fails closed whenever live auth is unchecked,
+/// invalid, missing target verification, `unverified`, or authoritatively denied.
+bool isConfirmedServerReviewEligible({
+  required LocalAssessmentDraft draft,
+  required bool liveAuthChecked,
+  required bool sessionIsValid,
+  required AdultTargetAuthorizationResult? targetAuthorization,
+}) {
+  return (draft.serverAssessmentId?.isNotEmpty ?? false) &&
+      isTargetPositivelyAuthorized(
+        liveAuthChecked: liveAuthChecked,
+        sessionIsValid: sessionIsValid,
+        targetAuthorization: targetAuthorization,
+      );
+}
+
+/// Eligibility predicate for explicit foreground retry/resume actions.
+/// Never infers authorization from unchecked (`!liveAuthChecked`), invalid,
+/// mismatched, or missing (`null`) target context, and always blocks
+/// authoritative denials (`confirmedRevoked` and `definitelyDenied`).
+/// Offline `unverified` permits explicit user-triggered foreground retry,
+/// which remains subject to WP3 fail-closed pre-dispatch target verification.
+bool isExplicitForegroundRetryEligible({
+  required bool liveAuthChecked,
+  required bool sessionIsValid,
+  required bool actorMatchesDraft,
+  required AdultTargetAuthorizationResult? targetAuthorization,
+}) {
+  return liveAuthChecked &&
+      sessionIsValid &&
+      actorMatchesDraft &&
+      targetAuthorization != null &&
+      !isTargetAuthorizationDenied(targetAuthorization);
+}
+
 /// Computes the typed recovery presentation and eligible foreground actions for [draft]
 /// from persisted WP3 journal metadata and authoritative live session/target verification.
 AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
@@ -109,21 +167,54 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
       draft.actorUserId!.isNotEmpty &&
       (!liveAuthChecked ||
           (sessionIsValid && liveActor.userId == draft.actorUserId));
-  final bool targetConfirmedDenied =
-      liveTargetAuthorization?.status ==
-      TargetAuthorizationStatus.confirmedRevoked;
+  final bool targetDenied = isTargetAuthorizationDenied(
+    liveTargetAuthorization,
+  );
+  final bool targetIsUnverified =
+      liveTargetAuthorization?.status == TargetAuthorizationStatus.unverified;
 
   switch (disposition) {
     case DraftRecoveryDisposition.confirmedSubmitted:
-      final canReview =
-          (draft.serverAssessmentId?.isNotEmpty ?? false) &&
-          (!liveAuthChecked || (sessionIsValid && !targetConfirmedDenied));
+      if (targetDenied) {
+        return AssessmentRecoveryPresentation(
+          disposition: disposition,
+          safeRecoveryCode: safeCode,
+          badgeLabel: 'Permission Denied',
+          title: 'Confirmed Record Access Denied',
+          explanation:
+              liveTargetAuthorization?.status ==
+                  TargetAuthorizationStatus.definitelyDenied
+              ? 'Target permissions for this family or child are denied, so confirmed server status cannot be inspected.'
+              : 'Target permissions for this family or child were revoked, so confirmed server status cannot be inspected.',
+          manualReviewNotice: 'Manual review required: local confirmation metadata remains preserved read-only on this device.',
+          actionKind: AssessmentRecoveryUiActionKind.manualReviewRequired,
+          severity: RecoveryBannerSeverity.error,
+          canEditDraft: false,
+          canRetryNow: false,
+          canResumeOriginalActor: false,
+          canReviewConfirmed: false,
+          canRefreshStatus: true,
+        );
+      }
+      final canReview = isConfirmedServerReviewEligible(
+        draft: draft,
+        liveAuthChecked: liveAuthChecked,
+        sessionIsValid: sessionIsValid,
+        targetAuthorization: liveTargetAuthorization,
+      );
+      final confirmedExplanation = canReview
+          ? 'This assessment submission has been confirmed on the server. Local draft metadata and evidence remain preserved on this device.'
+          : liveAuthChecked && !sessionIsValid
+          ? 'This assessment submission was confirmed locally. Sign in with an authorized account and refresh to inspect confirmed server status.'
+          : targetIsUnverified
+          ? 'This assessment submission was confirmed locally. Target permissions could not be verified offline; tap Refresh Status when connected to inspect server details.'
+          : 'This assessment submission was confirmed locally. Verifying permissions before enabling server inspection.';
       return AssessmentRecoveryPresentation(
         disposition: disposition,
         safeRecoveryCode: safeCode,
         badgeLabel: 'Confirmed',
         title: 'Submitted Assessment Confirmed',
-        explanation: 'This assessment submission has been confirmed on the server. Local draft metadata and evidence remain preserved on this device.',
+        explanation: confirmedExplanation,
         actionKind: AssessmentRecoveryUiActionKind.reviewConfirmedResult,
         severity: RecoveryBannerSeverity.success,
         canEditDraft: false,
@@ -252,19 +343,17 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
       );
 
     case DraftRecoveryDisposition.waitingOriginalActor:
-      final canResume =
-          liveAuthChecked &&
-          sessionIsValid &&
-          actorMatchesDraft &&
-          !targetConfirmedDenied &&
-          !draft.hasActiveLease(now: effectiveNow);
-      if (targetConfirmedDenied) {
+      if (targetDenied) {
         return AssessmentRecoveryPresentation(
           disposition: disposition,
           safeRecoveryCode: safeCode ?? DraftRecoveryCode.waitingOriginalActor,
           badgeLabel: 'Permission Denied',
-          title: 'Authorization Revoked',
-          explanation: 'Even under the original author account, target permissions for this family or child are currently revoked.',
+          title:
+              liveTargetAuthorization?.status ==
+                  TargetAuthorizationStatus.definitelyDenied
+              ? 'Authorization Denied'
+              : 'Authorization Revoked',
+          explanation: 'Even under the original author account, target permissions for this family or child are denied or revoked.',
           manualReviewNotice: 'Manual review required: draft metadata and evidence remain safely preserved.',
           actionKind: AssessmentRecoveryUiActionKind.manualReviewRequired,
           severity: RecoveryBannerSeverity.error,
@@ -275,17 +364,31 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
           canRefreshStatus: true,
         );
       }
+      final canResume =
+          isExplicitForegroundRetryEligible(
+            liveAuthChecked: liveAuthChecked,
+            sessionIsValid: sessionIsValid,
+            actorMatchesDraft: actorMatchesDraft,
+            targetAuthorization: liveTargetAuthorization,
+          ) &&
+          !draft.hasActiveLease(now: effectiveNow);
       return AssessmentRecoveryPresentation(
         disposition: disposition,
         safeRecoveryCode: safeCode ?? DraftRecoveryCode.waitingOriginalActor,
         badgeLabel: 'Sign-In Required',
         title: 'Waiting for Original Author',
         explanation: canResume
-            ? 'The original author session is active again. You may safely resume verification and submission without altering draft ownership.'
+            ? (targetIsUnverified
+                  ? 'The original author session is active again, while target permissions are currently unverified offline. Explicit Resume Submission remains subject to live server verification before dispatch.'
+                  : 'The original author session is active again. You may safely resume verification and submission without altering draft ownership.')
             : 'A different or signed-out account was active when sync checked this draft. Draft ownership is preserved and never reassigned.',
         signInGuidance: canResume
-            ? 'Original author verified. Tap Resume Submission below to continue.'
-            : 'Sign in as the original author account to resume this submission.',
+            ? (targetIsUnverified
+                  ? 'Original author active (target permissions unverified offline). Tap Resume Submission to re-verify when connected.'
+                  : 'Original author verified. Tap Resume Submission below to continue.')
+            : (liveAuthChecked && sessionIsValid && actorMatchesDraft
+                  ? 'Verifying target permissions before enabling resume. Tap Refresh Status if needed.'
+                  : 'Sign in as the original author account to resume this submission.'),
         actionKind: AssessmentRecoveryUiActionKind.signInAsOriginalActor,
         severity: RecoveryBannerSeverity.warning,
         canEditDraft: false,
@@ -314,13 +417,17 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
           canRefreshStatus: true,
         );
       }
-      if (targetConfirmedDenied) {
+      if (targetDenied) {
         return AssessmentRecoveryPresentation(
           disposition: disposition,
           safeRecoveryCode: safeCode ?? DraftRecoveryCode.retryScheduled,
           badgeLabel: 'Permission Denied',
           title: 'Retry Blocked by Permissions',
-          explanation: 'Family or child authorization for this draft was revoked before retry.',
+          explanation:
+              liveTargetAuthorization?.status ==
+                  TargetAuthorizationStatus.definitelyDenied
+              ? 'Family or child authorization for this draft was denied before retry.'
+              : 'Family or child authorization for this draft was revoked before retry.',
           manualReviewNotice: 'Manual review required: retry is disabled while preserving local files and command IDs.',
           scheduleDetail: _buildScheduleDetail(draft, effectiveNow),
           actionKind: AssessmentRecoveryUiActionKind.manualReviewRequired,
@@ -332,6 +439,12 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
           canRefreshStatus: true,
         );
       }
+      final retryEligible = isExplicitForegroundRetryEligible(
+        liveAuthChecked: liveAuthChecked,
+        sessionIsValid: sessionIsValid,
+        actorMatchesDraft: actorMatchesDraft,
+        targetAuthorization: liveTargetAuthorization,
+      );
       final hasFutureBackoff =
           draft.nextAttemptAt != null &&
           draft.nextAttemptAt!.isAfter(effectiveNow);
@@ -342,14 +455,16 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
         title: hasFutureBackoff
             ? 'Retry Scheduled After Connection Error'
             : 'Ready for Retry',
-        explanation: hasFutureBackoff
-            ? 'A temporary failure paused submission with persisted backoff. No automatic background dispatch is running; you can wait or tap Retry Now.'
-            : 'The scheduled backoff window has elapsed and this draft is eligible for authorized foreground retry.',
+        explanation: targetIsUnverified
+            ? 'A temporary failure paused submission and target permissions could not be verified offline. No background auto-retry is active; explicit Retry Now remains subject to WP3 server verification.'
+            : (hasFutureBackoff
+                  ? 'A temporary failure paused submission with persisted backoff. No background auto-retry is running; you can retry manually when connected.'
+                  : 'The scheduled retry window has elapsed and this draft is eligible for authorized foreground retry.'),
         scheduleDetail: _buildScheduleDetail(draft, effectiveNow),
         actionKind: AssessmentRecoveryUiActionKind.retryNow,
         severity: RecoveryBannerSeverity.warning,
         canEditDraft: false,
-        canRetryNow: true,
+        canRetryNow: retryEligible,
         canResumeOriginalActor: false,
         canReviewConfirmed: false,
         canRefreshStatus: true,
@@ -373,7 +488,7 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
           canRefreshStatus: true,
         );
       }
-      if (targetConfirmedDenied) {
+      if (targetDenied) {
         return AssessmentRecoveryPresentation(
           disposition: disposition,
           safeRecoveryCode: safeCode,
@@ -390,6 +505,12 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
           canRefreshStatus: true,
         );
       }
+      final pendingRetryEligible = isExplicitForegroundRetryEligible(
+        liveAuthChecked: liveAuthChecked,
+        sessionIsValid: sessionIsValid,
+        actorMatchesDraft: actorMatchesDraft,
+        targetAuthorization: liveTargetAuthorization,
+      );
       final hasExpiredLease = draft.hasExpiredLease(now: effectiveNow);
       return AssessmentRecoveryPresentation(
         disposition: disposition,
@@ -398,16 +519,18 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
         title: hasExpiredLease
             ? 'Previous Sync Interrupted'
             : 'Verification Pending',
-        explanation: hasExpiredLease
-            ? 'A prior sync lease expired before completion. Tap Retry Now to verify server state idempotently using the same command IDs.'
-            : 'Submission progress is uncertain after an interruption. Tap Retry Now to verify server state before continuing.',
+        explanation: targetIsUnverified
+            ? 'Submission progress is uncertain and target permissions could not be verified offline. Explicit Retry Now remains subject to live WP3 server verification before continuing.'
+            : (hasExpiredLease
+                  ? 'A prior sync lease expired before completion. Tap Retry Now to verify server state idempotently using the same command IDs.'
+                  : 'Submission progress is uncertain after an interruption. Tap Retry Now to verify server state before continuing.'),
         leaseDetail: hasExpiredLease
             ? 'Previous sync lease expired and can be safely reclaimed on retry.'
             : null,
         actionKind: AssessmentRecoveryUiActionKind.retryNow,
         severity: RecoveryBannerSeverity.warning,
         canEditDraft: false,
-        canRetryNow: true,
+        canRetryNow: pendingRetryEligible,
         canResumeOriginalActor: false,
         canReviewConfirmed: false,
         canRefreshStatus: true,
@@ -424,6 +547,23 @@ AssessmentRecoveryPresentation buildAssessmentRecoveryPresentation({
           signInGuidance: 'Sign in as the original author account to edit or submit this draft.',
           actionKind: AssessmentRecoveryUiActionKind.signInAsOriginalActor,
           severity: RecoveryBannerSeverity.warning,
+          canEditDraft: false,
+          canRetryNow: false,
+          canResumeOriginalActor: false,
+          canReviewConfirmed: false,
+          canRefreshStatus: true,
+        );
+      }
+      if (targetDenied) {
+        return AssessmentRecoveryPresentation(
+          disposition: disposition,
+          safeRecoveryCode: safeCode,
+          badgeLabel: 'Permission Denied',
+          title: 'Submission Blocked by Permissions',
+          explanation: 'Current family or child permissions do not allow modifying or submitting this draft.',
+          manualReviewNotice: 'Manual review required: local draft metadata and evidence remain preserved.',
+          actionKind: AssessmentRecoveryUiActionKind.manualReviewRequired,
+          severity: RecoveryBannerSeverity.error,
           canEditDraft: false,
           canRetryNow: false,
           canResumeOriginalActor: false,
@@ -571,7 +711,7 @@ String? _buildScheduleDetail(LocalAssessmentDraft draft, DateTime now) {
     final waitLabel = diff.inMinutes >= 1
         ? '${diff.inMinutes}m'
         : '${diff.inSeconds.clamp(1, 59)}s';
-    return 'Next automatic retry window: $formatted (in ~$waitLabel, attempt #${draft.retryCount}).';
+    return 'Scheduled retry eligibility: retry available after $formatted (in ~$waitLabel, attempt #${draft.retryCount}). You can retry manually when connected.';
   }
-  return 'Scheduled retry window reached ($formatted, attempt #${draft.retryCount}).';
+  return 'Scheduled retry eligibility reached ($formatted, attempt #${draft.retryCount}). You can retry manually when connected.';
 }

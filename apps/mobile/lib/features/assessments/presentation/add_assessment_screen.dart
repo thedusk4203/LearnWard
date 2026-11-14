@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -96,7 +98,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
   Assessment? _confirmedServerAssessment;
   List<AssessmentEvidence>? _confirmedServerEvidence;
   String? _confirmedServerStatusError;
+  String? _confirmedResultActorUserId;
+  String? _confirmedResultSessionGeneration;
+  String? _activeConfirmedReadSessionGeneration;
   int _authContextSyncGeneration = 0;
+  int _confirmedReadGeneration = 0;
+  StreamSubscription<String?>? _authGenerationSubscription;
 
   static const String _payloadLockedEditRejectedMessage =
       'Original submitted or quarantined assessment payload, IDs, and evidence are locked and preserved on this device and cannot be edited.';
@@ -132,8 +139,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     if (_hasActorMismatchOnKnownDraft) {
       return true;
     }
-    if (_liveTargetAuthorization?.status ==
-        TargetAuthorizationStatus.confirmedRevoked) {
+    if (isTargetAuthorizationDenied(_liveTargetAuthorization)) {
       return true;
     }
     return isDraftPayloadLocked(draft);
@@ -147,8 +153,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     if (draft == null) {
       return true;
     }
-    if (_liveTargetAuthorization?.status ==
-        TargetAuthorizationStatus.confirmedRevoked) {
+    if (isTargetAuthorizationDenied(_liveTargetAuthorization)) {
       return false;
     }
     return isDraftDirectRetryAllowed(
@@ -229,6 +234,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     _rawScoreController.addListener(_updateScorePreview);
     _maxScoreController.addListener(_updateScorePreview);
     _updateScorePreview();
+    _authGenerationSubscription = ref
+        .read(authSessionPortProvider)
+        .sessionGenerationStream
+        .listen(_handleAuthSessionGenerationEvent, onError: (_) {});
   }
 
   Future<void> _restoreCanonicalEvidenceSnapshot(
@@ -321,6 +330,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
 
   @override
   void dispose() {
+    _authGenerationSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _rawScoreController.dispose();
     _maxScoreController.dispose();
@@ -349,6 +359,84 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
   static const String _frozenEvidenceLockedRemoveMessage =
       'Evidence photo is already locked for this draft and cannot be removed or replaced. Start a new assessment draft to submit without this photo.';
 
+  void _handleAuthSessionGenerationEvent(String? generation) {
+    if (!mounted) {
+      return;
+    }
+    final liveChanged =
+        _liveAuthChecked && generation != _liveActor?.sessionGeneration;
+    final activeReadChanged =
+        _isLoadingConfirmedStatus &&
+        _activeConfirmedReadSessionGeneration != null &&
+        generation != _activeConfirmedReadSessionGeneration;
+    final confirmedCacheStale =
+        _confirmedResultSessionGeneration != null &&
+        generation != _confirmedResultSessionGeneration;
+    final confirmedPresent =
+        _confirmedServerAssessment != null || _confirmedServerEvidence != null;
+    if (!liveChanged &&
+        !activeReadChanged &&
+        !confirmedCacheStale &&
+        !confirmedPresent) {
+      return;
+    }
+    if (activeReadChanged) {
+      _confirmedReadGeneration++;
+    }
+    setState(() {
+      if (confirmedCacheStale ||
+          activeReadChanged ||
+          liveChanged ||
+          confirmedPresent) {
+        _confirmedServerAssessment = null;
+        _confirmedServerEvidence = null;
+        _confirmedResultActorUserId = null;
+        _confirmedResultSessionGeneration = null;
+        _confirmedServerStatusError = null;
+      }
+      if (liveChanged) {
+        _liveTargetAuthorization = null;
+        _liveAuthInvalid = true;
+      }
+    });
+  }
+
+  void _clearConfirmedServerCache({
+    bool bumpReadGeneration = false,
+    bool clearError = true,
+  }) {
+    if (bumpReadGeneration) {
+      _confirmedReadGeneration++;
+    }
+    _confirmedServerAssessment = null;
+    _confirmedServerEvidence = null;
+    _confirmedResultActorUserId = null;
+    _confirmedResultSessionGeneration = null;
+    if (clearError) {
+      _confirmedServerStatusError = null;
+    }
+  }
+
+  Future<ValidatedActorContext?> _validateMatchingLiveSession({
+    required AuthSessionPort authPort,
+    required DateTime nowUtc,
+    ValidatedActorContext? anchoredActor,
+    String? anchoredGeneration,
+  }) async {
+    final fresh = await authPort.validateForMutation();
+    if (fresh == null || !fresh.isValidAt(nowUtc)) {
+      return null;
+    }
+    if (anchoredActor != null && fresh.userId != anchoredActor.userId) {
+      return null;
+    }
+    if (anchoredGeneration != null &&
+        fresh.sessionGeneration != anchoredGeneration) {
+      return null;
+    }
+    return fresh;
+  }
+
   Future<LocalAssessmentDraft?> _syncAuthoritativeDraftFromStore({
     bool updateUiState = true,
     bool refreshAuthContext = false,
@@ -361,6 +449,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     if (!mounted) {
       return latest;
     }
+    if (refreshAuthContext && generation != _authContextSyncGeneration) {
+      return latest;
+    }
 
     ValidatedActorContext? verifiedActor = _liveActor;
     bool nextAuthChecked = _liveAuthChecked;
@@ -369,11 +460,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
         _liveTargetAuthorization;
 
     if (refreshAuthContext && latest != null) {
+      final authPort = ref.read(authSessionPortProvider);
       final nowUtc = ref.read(appClockProvider)().toUtc();
       try {
-        final actor = await ref
-            .read(authSessionPortProvider)
-            .validateForMutation();
+        final actor = await authPort.validateForMutation();
         if (!mounted || generation != _authContextSyncGeneration) {
           return latest;
         }
@@ -386,19 +476,23 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
               latest.actorUserId!.trim().isNotEmpty &&
               latest.actorUserId == actor.userId;
           final needsTargetCheck =
-              actorMatches &&
               !latest.isLegacyUnknown &&
               !latest.hasUnboundActor &&
               !latest.hasMalformedLease &&
               (latest.dispatchState ==
                       CommandDispatchState.confirmedCommitted ||
-                  latest.dispatchState ==
-                      CommandDispatchState.possiblyDispatched ||
-                  latest.submissionStatus != DraftSubmissionStatus.draft ||
-                  latest.hasRecoveryMarker);
+                  (actorMatches &&
+                      (latest.dispatchState ==
+                              CommandDispatchState.possiblyDispatched ||
+                          latest.submissionStatus !=
+                              DraftSubmissionStatus.draft ||
+                          latest.hasRecoveryMarker)));
           if (needsTargetCheck) {
+            final anchoredActor = actor;
+            final anchoredGeneration = actor.sessionGeneration;
+            AdultTargetAuthorizationResult candidateTargetAuth;
             try {
-              nextTargetAuthorization = await ref
+              candidateTargetAuth = await ref
                   .read(recoveryAuthorizationPortProvider)
                   .verifyAssessmentTarget(
                     context: actor,
@@ -406,11 +500,41 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
                     childId: latest.childId,
                   );
             } catch (_) {
-              nextTargetAuthorization =
+              candidateTargetAuth =
                   const AdultTargetAuthorizationResult.unverified(
                     reason: AdultTargetVerificationReason
                         .transientVerificationFailure,
                   );
+            }
+            if (!mounted || generation != _authContextSyncGeneration) {
+              return latest;
+            }
+            final postCheckActor = await _validateMatchingLiveSession(
+              authPort: authPort,
+              nowUtc: ref.read(appClockProvider)().toUtc(),
+              anchoredActor: anchoredActor,
+              anchoredGeneration: anchoredGeneration,
+            );
+            if (!mounted || generation != _authContextSyncGeneration) {
+              return latest;
+            }
+            if (postCheckActor == null) {
+              final freshAfterSwitch = await authPort.validateForMutation();
+              if (!mounted || generation != _authContextSyncGeneration) {
+                return latest;
+              }
+              final freshValid =
+                  freshAfterSwitch != null &&
+                  freshAfterSwitch.isValidAt(
+                    ref.read(appClockProvider)().toUtc(),
+                  );
+              verifiedActor = freshValid ? freshAfterSwitch : null;
+              nextAuthChecked = true;
+              nextAuthInvalid = !freshValid;
+              nextTargetAuthorization = null;
+            } else {
+              verifiedActor = postCheckActor;
+              nextTargetAuthorization = candidateTargetAuth;
             }
           } else {
             nextTargetAuthorization = null;
@@ -432,6 +556,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     if (!mounted) {
       return latest;
     }
+    if (refreshAuthContext && generation != _authContextSyncGeneration) {
+      return latest;
+    }
     if (latest != null) {
       if (latest.hasVerifiedEvidenceSnapshot) {
         _frozenEvidenceSha256 ??= latest.sha256Checksum;
@@ -442,12 +569,39 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
           latest.hasUnboundActor ||
           latest.isReadOnlyQuarantined ||
           latest.hasMalformedLease;
+      final sessionIdentityChanged =
+          refreshAuthContext &&
+          ((_liveActor != null &&
+                  (_liveActor?.userId != verifiedActor?.userId ||
+                      _liveActor?.sessionGeneration !=
+                          verifiedActor?.sessionGeneration ||
+                      nextAuthInvalid)) ||
+              (_confirmedResultActorUserId != null &&
+                  (_confirmedResultActorUserId != verifiedActor?.userId ||
+                      _confirmedResultSessionGeneration !=
+                          verifiedActor?.sessionGeneration ||
+                      nextAuthInvalid ||
+                      nextTargetAuthorization?.status !=
+                          TargetAuthorizationStatus.authorized)));
+      final confirmedShouldClear =
+          refreshAuthContext &&
+          (nextAuthInvalid ||
+              nextTargetAuthorization?.status !=
+                  TargetAuthorizationStatus.authorized ||
+              (_confirmedResultActorUserId != null &&
+                  _confirmedResultActorUserId != verifiedActor?.userId) ||
+              (_confirmedResultSessionGeneration != null &&
+                  _confirmedResultSessionGeneration !=
+                      verifiedActor?.sessionGeneration));
       final authChanged =
           refreshAuthContext &&
           (_liveActor != verifiedActor ||
               _liveAuthChecked != nextAuthChecked ||
               _liveAuthInvalid != nextAuthInvalid ||
-              _liveTargetAuthorization != nextTargetAuthorization);
+              _liveTargetAuthorization != nextTargetAuthorization ||
+              (confirmedShouldClear &&
+                  (_confirmedServerAssessment != null ||
+                      _confirmedServerEvidence != null)));
       if (updateUiState &&
           (_authoritativeDraft != latest ||
               (latestQuarantined && !_isQuarantined) ||
@@ -462,6 +616,11 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
             _liveAuthChecked = nextAuthChecked;
             _liveAuthInvalid = nextAuthInvalid;
             _liveTargetAuthorization = nextTargetAuthorization;
+            if (confirmedShouldClear) {
+              _clearConfirmedServerCache(
+                bumpReadGeneration: sessionIdentityChanged,
+              );
+            }
           }
         });
       } else {
@@ -474,6 +633,11 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
           _liveAuthChecked = nextAuthChecked;
           _liveAuthInvalid = nextAuthInvalid;
           _liveTargetAuthorization = nextTargetAuthorization;
+          if (confirmedShouldClear) {
+            _clearConfirmedServerCache(
+              bumpReadGeneration: sessionIdentityChanged,
+            );
+          }
         }
       }
     }
@@ -502,86 +666,208 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     if (_isLoadingConfirmedStatus) {
       return;
     }
-    final latest = await _syncAuthoritativeDraftFromStore(
-      refreshAuthContext: true,
-    );
-    final serverAssessmentId = latest?.serverAssessmentId;
-    if (latest == null ||
-        serverAssessmentId == null ||
-        serverAssessmentId.trim().isEmpty) {
-      if (mounted) {
-        setState(() {
-          _confirmedServerStatusError =
-              'Confirmed server assessment identifier is unavailable locally.';
-        });
-      }
-      return;
-    }
-
+    final readGeneration = ++_confirmedReadGeneration;
     setState(() {
       _isLoadingConfirmedStatus = true;
       _confirmedServerStatusError = null;
     });
 
     try {
+      final store = ref.read(localDraftStoreProvider);
+      final persisted = await store.getLocalDraft(_localDraftId);
+      final latest = persisted ?? widget.initialDraft;
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+      final serverAssessmentId = latest?.serverAssessmentId;
+      if (latest == null ||
+          latest.localDraftId != _localDraftId ||
+          latest.dispatchState != CommandDispatchState.confirmedCommitted ||
+          serverAssessmentId == null ||
+          serverAssessmentId.trim().isEmpty) {
+        setState(() {
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError =
+              'Confirmed server assessment identifier is unavailable locally.';
+        });
+        return;
+      }
+
       final authPort = ref.read(authSessionPortProvider);
       final authzPort = ref.read(recoveryAuthorizationPortProvider);
-      final nowUtc = ref.read(appClockProvider)().toUtc();
-      final validatedActor = await authPort.validateForMutation();
-      if (validatedActor == null || !validatedActor.isValidAt(nowUtc)) {
-        if (mounted) {
-          setState(() {
-            _confirmedServerStatusError = 'Your session is no longer valid. Sign in again to inspect confirmed server status.';
-          });
-        }
-        return;
-      }
-      final targetAuth = await authzPort.verifyAssessmentTarget(
-        context: validatedActor,
-        familyId: latest.familyId,
-        childId: latest.childId,
+      final anchoredActor = await _validateMatchingLiveSession(
+        authPort: authPort,
+        nowUtc: ref.read(appClockProvider)().toUtc(),
       );
-      if (targetAuth.status == TargetAuthorizationStatus.confirmedRevoked) {
-        if (mounted) {
-          setState(() {
-            _liveTargetAuthorization = targetAuth;
-            _confirmedServerStatusError = 'Target family or child authorization does not permit reading this server assessment.';
-          });
-        }
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
         return;
       }
-      if (targetAuth.status == TargetAuthorizationStatus.unverified) {
-        if (mounted) {
-          setState(() {
-            _liveTargetAuthorization = targetAuth;
-            _confirmedServerStatusError = 'Could not connect to verify confirmed status. Try again when online.';
-          });
-        }
+      if (anchoredActor == null) {
+        setState(() {
+          _liveActor = null;
+          _liveAuthChecked = true;
+          _liveAuthInvalid = true;
+          _liveTargetAuthorization = null;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Your session is no longer valid. Sign in again to inspect confirmed server status.';
+        });
+        return;
+      }
+      final anchoredGeneration = anchoredActor.sessionGeneration;
+      _activeConfirmedReadSessionGeneration = anchoredGeneration;
+
+      AdultTargetAuthorizationResult targetAuth;
+      try {
+        targetAuth = await authzPort.verifyAssessmentTarget(
+          context: anchoredActor,
+          familyId: latest.familyId,
+          childId: latest.childId,
+        );
+      } catch (_) {
+        targetAuth = const AdultTargetAuthorizationResult.unverified(
+          reason: AdultTargetVerificationReason.transientVerificationFailure,
+        );
+      }
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+
+      final postAuthzActor = await _validateMatchingLiveSession(
+        authPort: authPort,
+        nowUtc: ref.read(appClockProvider)().toUtc(),
+        anchoredActor: anchoredActor,
+        anchoredGeneration: anchoredGeneration,
+      );
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+      if (postAuthzActor == null) {
+        setState(() {
+          _liveTargetAuthorization = null;
+          _liveAuthInvalid = true;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Your active session changed while verifying permissions. Refresh and try again.';
+        });
+        return;
+      }
+
+      if (targetAuth.status != TargetAuthorizationStatus.authorized) {
+        setState(() {
+          _liveActor = postAuthzActor;
+          _liveAuthChecked = true;
+          _liveAuthInvalid = false;
+          _liveTargetAuthorization = targetAuth;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = isTargetAuthorizationDenied(targetAuth)
+              ? 'Target family or child authorization does not permit reading this server assessment.'
+              : 'Could not verify confirmed status permissions offline. Try again when connected.';
+        });
         return;
       }
 
       final repo = ref.read(assessmentRepositoryProvider);
       final assessmentId = AssessmentId(serverAssessmentId);
       final serverAssessment = await repo.getAssessment(assessmentId);
-      final serverEvidence = await repo.listEvidenceForAssessment(assessmentId);
-      if (!mounted) {
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
         return;
       }
+
+      final postAssessmentActor = await _validateMatchingLiveSession(
+        authPort: authPort,
+        nowUtc: ref.read(appClockProvider)().toUtc(),
+        anchoredActor: anchoredActor,
+        anchoredGeneration: anchoredGeneration,
+      );
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+      if (postAssessmentActor == null) {
+        setState(() {
+          _liveTargetAuthorization = null;
+          _liveAuthInvalid = true;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Your active session changed before reading server evidence. Refresh and try again.';
+        });
+        return;
+      }
+
+      if (serverAssessment == null) {
+        setState(() {
+          _liveActor = postAssessmentActor;
+          _liveAuthChecked = true;
+          _liveAuthInvalid = false;
+          _liveTargetAuthorization = targetAuth;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Server record was not found or is not currently accessible for your account.';
+        });
+        return;
+      }
+      if (serverAssessment.id.value != serverAssessmentId ||
+          serverAssessment.familyId.value != latest.familyId ||
+          serverAssessment.childId.value != latest.childId) {
+        setState(() {
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError =
+              'Server record scope did not match this draft family or child.';
+        });
+        return;
+      }
+
+      final serverEvidence = await repo.listEvidenceForAssessment(assessmentId);
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+
+      final prePublishActor = await _validateMatchingLiveSession(
+        authPort: authPort,
+        nowUtc: ref.read(appClockProvider)().toUtc(),
+        anchoredActor: anchoredActor,
+        anchoredGeneration: anchoredGeneration,
+      );
+      if (!mounted || readGeneration != _confirmedReadGeneration) {
+        return;
+      }
+      if (prePublishActor == null) {
+        setState(() {
+          _liveTargetAuthorization = null;
+          _liveAuthInvalid = true;
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError = 'Your active session changed before confirmed results could be displayed. Refresh and try again.';
+        });
+        return;
+      }
+      if (serverEvidence.any(
+        (evidence) => evidence.assessmentId.value != serverAssessmentId,
+      )) {
+        setState(() {
+          _clearConfirmedServerCache(clearError: false);
+          _confirmedServerStatusError =
+              'Server evidence scope did not match the confirmed assessment.';
+        });
+        return;
+      }
+
       setState(() {
+        _authoritativeDraft = latest;
+        _liveActor = prePublishActor;
+        _liveAuthChecked = true;
+        _liveAuthInvalid = false;
+        _liveTargetAuthorization = targetAuth;
+        _confirmedResultActorUserId = prePublishActor.userId;
+        _confirmedResultSessionGeneration = prePublishActor.sessionGeneration;
         _confirmedServerAssessment = serverAssessment;
         _confirmedServerEvidence = serverEvidence;
-        if (serverAssessment == null) {
-          _confirmedServerStatusError = 'Server record was not found or is not currently accessible for your account.';
-        }
+        _confirmedServerStatusError = null;
       });
     } catch (e) {
-      if (mounted) {
+      if (mounted && readGeneration == _confirmedReadGeneration) {
         setState(() {
           _confirmedServerStatusError = _mapFriendlyError(e);
         });
       }
     } finally {
-      if (mounted) {
+      if (mounted && readGeneration == _confirmedReadGeneration) {
+        _activeConfirmedReadSessionGeneration = null;
         setState(() {
           _isLoadingConfirmedStatus = false;
         });
@@ -1103,6 +1389,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
                 AdultTargetVerificationReason.transientVerificationFailure);
     if (!isAllowedTargetForLocalSave) {
       setState(() {
+        if (isTargetAuthorizationDenied(authzResult)) {
+          _liveTargetAuthorization = authzResult;
+        }
         _errorMessage = 'You do not have permission to save drafts for this family or child.';
       });
       return;
@@ -1332,6 +1621,16 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
           !prior.isLegacyUnknown &&
           !prior.hasUnboundActor &&
           prior.dispatchState != CommandDispatchState.confirmedCommitted;
+      if (prior != null &&
+          isTargetAuthorizationDenied(_liveTargetAuthorization)) {
+        if (mounted) {
+          setState(() {
+            _authoritativeDraft = prior;
+            _errorMessage = 'Target permissions for this family or child do not allow submitting this draft.';
+          });
+        }
+        return;
+      }
       if (prior != null &&
           !waitingActorResumeAllowed &&
           !isDraftDirectRetryAllowed(prior, now: nowUtc)) {
@@ -1950,9 +2249,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
         (draft?.hasWaitingOriginalActorMarker ?? false)) {
       return 'This draft belongs to the original author account. Its original submitted payload, IDs, and evidence are locked and cannot be altered or reassigned.';
     }
-    if (_liveTargetAuthorization?.status ==
-        TargetAuthorizationStatus.confirmedRevoked) {
-      return 'Permissions for this child or family were revoked. Its original submitted payload, IDs, and evidence are locked read-only on this device.';
+    if (isTargetAuthorizationDenied(_liveTargetAuthorization)) {
+      return 'Permissions for this child or family do not permit edits or submission. Its original submitted payload, IDs, and evidence are locked read-only on this device.';
     }
     if (draft != null &&
         !isDraftDirectRetryAllowed(

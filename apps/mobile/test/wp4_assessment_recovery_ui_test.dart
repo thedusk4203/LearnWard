@@ -144,9 +144,15 @@ final class _SpyAssessmentRepository extends FakeAssessmentRepository {
     );
   }
 
+  Future<void> Function()? onBeforeGetAssessment;
+  Future<void> Function()? onBeforeListEvidence;
+
   @override
   Future<Assessment?> getAssessment(AssessmentId id) async {
     getAssessmentCalls++;
+    if (onBeforeGetAssessment != null) {
+      await onBeforeGetAssessment!();
+    }
     return super.getAssessment(id);
   }
 
@@ -155,8 +161,67 @@ final class _SpyAssessmentRepository extends FakeAssessmentRepository {
     AssessmentId assessmentId,
   ) async {
     listEvidenceCalls++;
+    if (onBeforeListEvidence != null) {
+      await onBeforeListEvidence!();
+    }
     return super.listEvidenceForAssessment(assessmentId);
   }
+}
+
+final class _ScriptedRecoveryAuthzPort implements RecoveryAuthorizationPort {
+  _ScriptedRecoveryAuthzPort(this.inner);
+
+  final FakeRecoveryAuthorizationPort inner;
+  Future<AdultTargetAuthorizationResult> Function(
+    ValidatedActorContext context,
+    String familyId,
+    String childId,
+  )?
+  onVerifyAssessmentTarget;
+
+  @override
+  Future<AdultTargetAuthorizationResult> verifyAdultRedemptionTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+    required String redemptionId,
+    required RewardCommandOperation operation,
+  }) => inner.verifyAdultRedemptionTarget(
+    context: context,
+    familyId: familyId,
+    childId: childId,
+    redemptionId: redemptionId,
+    operation: operation,
+  );
+
+  @override
+  Future<AdultTargetAuthorizationResult> verifyAssessmentTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+  }) {
+    if (onVerifyAssessmentTarget != null) {
+      return onVerifyAssessmentTarget!(context, familyId, childId);
+    }
+    return inner.verifyAssessmentTarget(
+      context: context,
+      familyId: familyId,
+      childId: childId,
+    );
+  }
+
+  @override
+  Future<TargetAuthorizationStatus> verifyTarget({
+    required ValidatedActorContext context,
+    required String familyId,
+    required String childId,
+    required RewardCommandOperation operation,
+  }) => inner.verifyTarget(
+    context: context,
+    familyId: familyId,
+    childId: childId,
+    operation: operation,
+  );
 }
 
 final class _GatedEvidenceStorage implements AssessmentEvidenceStorage {
@@ -416,6 +481,10 @@ void main() {
           now: baseNow,
           liveActor: actorA,
           liveAuthChecked: true,
+          liveTargetAuthorization:
+              const AdultTargetAuthorizationResult.authorized(
+                verifiedRole: VerifiedAdultRole.parent,
+              ),
         );
         expect(
           retryScheduled.disposition,
@@ -427,8 +496,20 @@ void main() {
         );
         expect(retryScheduled.canRetryNow, isTrue);
         expect(retryScheduled.scheduleDetail, contains('attempt #2'));
+        expect(
+          retryScheduled.scheduleDetail!.toLowerCase(),
+          isNot(contains('automatic')),
+        );
+        expect(
+          retryScheduled.scheduleDetail!.toLowerCase(),
+          contains('retry available after'),
+        );
+        expect(
+          retryScheduled.scheduleDetail!.toLowerCase(),
+          contains('retry manually when connected'),
+        );
 
-        // 5. waitingOriginalActor: actor B cannot resume; actor A can resume; confirmedRevoked blocks
+        // 5. waitingOriginalActor: actor B cannot resume; actor A can resume; confirmedRevoked & definitelyDenied block
         final waitingDraft = _buildDraft(
           localDraftId: 'd-waiting',
           submissionStatus: DraftSubmissionStatus.failedRetryable,
@@ -479,6 +560,22 @@ void main() {
           AssessmentRecoveryUiActionKind.manualReviewRequired,
         );
 
+        final waitingDenied = buildAssessmentRecoveryPresentation(
+          draft: waitingDraft,
+          now: baseNow,
+          liveActor: actorA,
+          liveAuthChecked: true,
+          liveTargetAuthorization:
+              const AdultTargetAuthorizationResult.definitelyDenied(
+                reason: AdultTargetVerificationReason.childConfirmedArchived,
+              ),
+        );
+        expect(waitingDenied.canResumeOriginalActor, isFalse);
+        expect(
+          waitingDenied.actionKind,
+          AssessmentRecoveryUiActionKind.manualReviewRequired,
+        );
+
         // 6. verificationPending with expired lease
         final expiredPending = buildAssessmentRecoveryPresentation(
           draft: _buildDraft(
@@ -490,6 +587,10 @@ void main() {
           now: baseNow,
           liveActor: actorA,
           liveAuthChecked: true,
+          liveTargetAuthorization:
+              const AdultTargetAuthorizationResult.authorized(
+                verifiedRole: VerifiedAdultRole.parent,
+              ),
         );
         expect(
           expiredPending.disposition,
@@ -692,17 +793,22 @@ void main() {
           expect(p.manualReviewNotice, isNotNull);
         }
 
-        // 8. confirmedSubmitted
+        // 8. confirmedSubmitted (requires checked valid session + authorized target)
+        final confirmedDraft = _buildDraft(
+          localDraftId: 'd-confirmed',
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.draft,
+          serverAssessmentId: 'srv-1',
+        );
         final confirmed = buildAssessmentRecoveryPresentation(
-          draft: _buildDraft(
-            localDraftId: 'd-confirmed',
-            dispatchState: CommandDispatchState.confirmedCommitted,
-            submissionStatus: DraftSubmissionStatus.draft,
-            serverAssessmentId: 'srv-1',
-          ),
+          draft: confirmedDraft,
           now: baseNow,
           liveActor: actorA,
           liveAuthChecked: true,
+          liveTargetAuthorization:
+              const AdultTargetAuthorizationResult.authorized(
+                verifiedRole: VerifiedAdultRole.parent,
+              ),
         );
         expect(
           confirmed.disposition,
@@ -715,6 +821,38 @@ void main() {
         expect(confirmed.canReviewConfirmed, isTrue);
         expect(confirmed.canEditDraft, isFalse);
         expect(confirmed.canRetryNow, isFalse);
+
+        // Missing, unverified, definitelyDenied, and confirmedRevoked do NOT permit review
+        for (final nonAuthTarget in <AdultTargetAuthorizationResult?>[
+          null,
+          const AdultTargetAuthorizationResult.unverified(
+            reason: AdultTargetVerificationReason.transientVerificationFailure,
+          ),
+          const AdultTargetAuthorizationResult.definitelyDenied(
+            reason: AdultTargetVerificationReason.childConfirmedArchived,
+          ),
+          const AdultTargetAuthorizationResult.confirmedRevoked(),
+        ]) {
+          final blocked = buildAssessmentRecoveryPresentation(
+            draft: confirmedDraft,
+            now: baseNow,
+            liveActor: actorA,
+            liveAuthChecked: true,
+            liveTargetAuthorization: nonAuthTarget,
+          );
+          expect(blocked.canReviewConfirmed, isFalse);
+        }
+        final uncheckedConfirmed = buildAssessmentRecoveryPresentation(
+          draft: confirmedDraft,
+          now: baseNow,
+          liveActor: actorA,
+          liveAuthChecked: false,
+          liveTargetAuthorization:
+              const AdultTargetAuthorizationResult.authorized(
+                verifiedRole: VerifiedAdultRole.parent,
+              ),
+        );
+        expect(uncheckedConfirmed.canReviewConfirmed, isFalse);
       });
     },
   );
@@ -725,6 +863,7 @@ void main() {
     late DefaultLocalEvidenceFileStore fileStore;
     late FakeAuthSessionPort authPort;
     late FakeRecoveryAuthorizationPort authzPort;
+    late _ScriptedRecoveryAuthzPort scriptedAuthzPort;
     late _SpyAssessmentRepository repo;
     late _GatedEvidenceStorage storage;
 
@@ -738,6 +877,7 @@ void main() {
         sessionGeneration: 'gen-a1',
       );
       authzPort = FakeRecoveryAuthorizationPort();
+      scriptedAuthzPort = _ScriptedRecoveryAuthzPort(authzPort);
       repo = _SpyAssessmentRepository(
         activeActorIdProvider: () => authPort.currentContext?.userId,
       );
@@ -811,7 +951,9 @@ void main() {
           localDraftStoreProvider.overrideWithValue(db),
           localEvidenceFileStoreProvider.overrideWithValue(fileStore),
           authSessionPortProvider.overrideWithValue(authPort),
-          recoveryAuthorizationPortProvider.overrideWithValue(authzPort),
+          recoveryAuthorizationPortProvider.overrideWithValue(
+            scriptedAuthzPort,
+          ),
           assessmentRepositoryProvider.overrideWithValue(repo),
           assessmentEvidenceStorageProvider.overrideWithValue(storage),
         ],
@@ -932,7 +1074,9 @@ void main() {
               ),
               localEvidenceFileStoreProvider.overrideWithValue(fileStore),
               authSessionPortProvider.overrideWithValue(authPort),
-              recoveryAuthorizationPortProvider.overrideWithValue(authzPort),
+              recoveryAuthorizationPortProvider.overrideWithValue(
+                scriptedAuthzPort,
+              ),
             ],
             child: MaterialApp(home: Scaffold(body: const ChildModeScreen())),
           ),
@@ -1447,5 +1591,412 @@ void main() {
         DraftRecoveryDisposition.waitingOriginalActor,
       );
     });
+
+    testWidgets(
+      'R35-01: definitelyDenied blocks retry, resume, and confirmed server review with zero RPCs',
+      (tester) async {
+        authzPort.setTargetStatus(
+          familyId: 'fam-1',
+          childId: 'child-1',
+          status: TargetAuthorizationStatus.definitelyDenied,
+        );
+
+        // 1. retryScheduled -> Retry Blocked by Permissions, submit disabled, zero RPCs
+        final snapRetry = await writeCanonicalSnapshotFile('r35-denied-retry');
+        final retryDraft = _buildDraft(
+          localDraftId: 'r35-denied-retry',
+          submissionStatus: DraftSubmissionStatus.failedRetryable,
+          localPhotoPath: snapRetry,
+          localCompressedPhotoPath: snapRetry,
+          sha256Checksum: validSha,
+          evidenceId: 'ev-r35-retry',
+          lastErrorMessage: DraftRecoveryCode.format(
+            DraftRecoveryCode.retryScheduled,
+            'Transient error',
+          ),
+        );
+        await db.saveLocalDraft(retryDraft);
+        await pumpOpenAddAssessment(tester, initialDraft: retryDraft);
+
+        expect(find.text('Retry Blocked by Permissions'), findsOneWidget);
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('submit_assessment_button')),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(repo.createDraftCalls, 0);
+
+        // 2. waitingOriginalActor even as original actor -> resume button absent & submit disabled
+        final snapWait = await writeCanonicalSnapshotFile('r35-denied-wait');
+        final waitDraft = _buildDraft(
+          localDraftId: 'r35-denied-wait',
+          submissionStatus: DraftSubmissionStatus.failedRetryable,
+          localPhotoPath: snapWait,
+          localCompressedPhotoPath: snapWait,
+          sha256Checksum: validSha,
+          evidenceId: 'ev-r35-wait',
+          lastErrorMessage: DraftRecoveryCode.format(
+            DraftRecoveryCode.waitingOriginalActor,
+            'Waiting for author',
+          ),
+        );
+        await db.saveLocalDraft(waitDraft);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        await pumpOpenAddAssessment(tester, initialDraft: waitDraft);
+
+        expect(find.text('Authorization Denied'), findsOneWidget);
+        expect(
+          find.byKey(const Key('resume_original_actor_button')),
+          findsNothing,
+        );
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('submit_assessment_button')),
+              )
+              .onPressed,
+          isNull,
+        );
+
+        // 3. confirmedSubmitted -> Review Confirmed Result hidden, zero server reads
+        final confirmedDraft = _buildDraft(
+          localDraftId: 'r35-denied-confirmed',
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.draft,
+          serverAssessmentId: 'srv-r35-denied',
+        );
+        repo.assessments['srv-r35-denied'] = Assessment(
+          id: AssessmentId('srv-r35-denied'),
+          familyId: FamilyId('fam-1'),
+          childId: ChildId('child-1'),
+          subjectKey: SubjectKey.math,
+          subject: 'Mathematics',
+          title: 'Confirmed Quiz',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 8, maxScore: 10),
+          entryContext: EntryContext.sharedChild,
+          status: AssessmentStatus.verified,
+          occurredAt: baseNow,
+          version: 2,
+          createdByUserId: 'parent-a',
+          createdAt: baseNow,
+          updatedAt: baseNow,
+        );
+        await db.saveLocalDraft(confirmedDraft);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        await pumpOpenAddAssessment(tester, initialDraft: confirmedDraft);
+
+        expect(find.text('Confirmed Record Access Denied'), findsOneWidget);
+        expect(
+          find.byKey(const Key('review_confirmed_result_button')),
+          findsNothing,
+        );
+        expect(repo.getAssessmentCalls, 0);
+        expect(repo.listEvidenceCalls, 0);
+      },
+    );
+
+    testWidgets(
+      'R35-02: Session fence halts confirmed reads on actor switch, generation rotation, sign-out, and denial across async barriers',
+      (tester) async {
+        final serverAssessment = Assessment(
+          id: AssessmentId('srv-r35-02-1'),
+          familyId: FamilyId('fam-1'),
+          childId: ChildId('child-1'),
+          subjectKey: SubjectKey.math,
+          subject: 'Mathematics',
+          title: 'Confirmed Fenced Quiz',
+          type: AssessmentType.quiz,
+          difficulty: AssessmentDifficulty.normal,
+          score: AssessmentScore(rawScore: 10, maxScore: 10),
+          entryContext: EntryContext.sharedChild,
+          status: AssessmentStatus.verified,
+          occurredAt: baseNow,
+          version: 2,
+          createdByUserId: 'parent-a',
+          createdAt: baseNow,
+          updatedAt: baseNow,
+        );
+        repo.assessments['srv-r35-02-1'] = serverAssessment;
+        final confirmedDraft = _buildDraft(
+          localDraftId: 'draft-r35-02-1',
+          title: 'Confirmed Fenced Quiz',
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.draft,
+          serverAssessmentId: 'srv-r35-02-1',
+        );
+        await db.saveLocalDraft(confirmedDraft);
+
+        Future<void> resetToAuthorizedScreen() async {
+          scriptedAuthzPort.onVerifyAssessmentTarget = null;
+          repo.onBeforeGetAssessment = null;
+          repo.onBeforeListEvidence = null;
+          repo.getAssessmentCalls = 0;
+          repo.listEvidenceCalls = 0;
+          authzPort.setTargetStatus(
+            familyId: 'fam-1',
+            childId: 'child-1',
+            status: TargetAuthorizationStatus.authorized,
+          );
+          authPort.setSession(
+            userId: 'parent-a',
+            role: 'parent',
+            sessionGeneration: 'gen-a-init',
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pumpAndSettle();
+          await pumpOpenAddAssessment(tester, initialDraft: confirmedDraft);
+          expect(
+            find.byKey(const Key('review_confirmed_result_button')),
+            findsOneWidget,
+          );
+        }
+
+        // Case 1: Actor A -> B while verifyAssessmentTarget is pending -> zero server reads
+        await resetToAuthorizedScreen();
+        final verifyEntered1 = Completer<void>();
+        final verifyRelease1 = Completer<void>();
+        scriptedAuthzPort.onVerifyAssessmentTarget = (ctx, fId, cId) async {
+          if (!verifyEntered1.isCompleted) {
+            verifyEntered1.complete();
+          }
+          await verifyRelease1.future;
+          return const AdultTargetAuthorizationResult.authorized(
+            verifiedRole: VerifiedAdultRole.parent,
+          );
+        };
+        await tester.tap(
+          find.byKey(const Key('review_confirmed_result_button')),
+        );
+        await verifyEntered1.future;
+        authPort.setSession(
+          userId: 'parent-b',
+          role: 'parent',
+          sessionGeneration: 'gen-b-switch',
+        );
+        verifyRelease1.complete();
+        await tester.pumpAndSettle();
+        expect(repo.getAssessmentCalls, 0);
+        expect(repo.listEvidenceCalls, 0);
+        expect(find.text('Status: verified'), findsNothing);
+
+        // Case 2: Session generation rotation during verification -> zero server reads
+        await resetToAuthorizedScreen();
+        final verifyEntered2 = Completer<void>();
+        final verifyRelease2 = Completer<void>();
+        scriptedAuthzPort.onVerifyAssessmentTarget = (ctx, fId, cId) async {
+          if (!verifyEntered2.isCompleted) {
+            verifyEntered2.complete();
+          }
+          await verifyRelease2.future;
+          return const AdultTargetAuthorizationResult.authorized(
+            verifiedRole: VerifiedAdultRole.parent,
+          );
+        };
+        await tester.tap(
+          find.byKey(const Key('review_confirmed_result_button')),
+        );
+        await verifyEntered2.future;
+        authPort.setSessionGeneration('gen-a-rotated');
+        verifyRelease2.complete();
+        await tester.pumpAndSettle();
+        expect(repo.getAssessmentCalls, 0);
+        expect(repo.listEvidenceCalls, 0);
+        expect(find.text('Status: verified'), findsNothing);
+
+        // Case 3: Sign-out during verification -> zero server reads
+        await resetToAuthorizedScreen();
+        final verifyEntered3 = Completer<void>();
+        final verifyRelease3 = Completer<void>();
+        scriptedAuthzPort.onVerifyAssessmentTarget = (ctx, fId, cId) async {
+          if (!verifyEntered3.isCompleted) {
+            verifyEntered3.complete();
+          }
+          await verifyRelease3.future;
+          return const AdultTargetAuthorizationResult.authorized(
+            verifiedRole: VerifiedAdultRole.parent,
+          );
+        };
+        await tester.tap(
+          find.byKey(const Key('review_confirmed_result_button')),
+        );
+        await verifyEntered3.future;
+        authPort.signOut();
+        verifyRelease3.complete();
+        await tester.pumpAndSettle();
+        expect(repo.getAssessmentCalls, 0);
+        expect(repo.listEvidenceCalls, 0);
+        expect(find.text('Status: verified'), findsNothing);
+
+        // Case 4: Session switch after getAssessment returns and before listEvidence -> no listEvidence, no mixed presentation
+        await resetToAuthorizedScreen();
+        final getEntered = Completer<void>();
+        final getRelease = Completer<void>();
+        repo.onBeforeGetAssessment = () async {
+          if (!getEntered.isCompleted) {
+            getEntered.complete();
+          }
+          await getRelease.future;
+          authPort.setSessionGeneration('gen-after-get');
+        };
+        await tester.tap(
+          find.byKey(const Key('review_confirmed_result_button')),
+        );
+        await getEntered.future;
+        getRelease.complete();
+        await tester.pumpAndSettle();
+        expect(repo.getAssessmentCalls, 1);
+        expect(repo.listEvidenceCalls, 0);
+        expect(find.text('Status: verified'), findsNothing);
+
+        // Case 5: Session switch while listEvidenceForAssessment is pending (before publication) -> stale result not shown
+        await resetToAuthorizedScreen();
+        final listEntered = Completer<void>();
+        final listRelease = Completer<void>();
+        repo.onBeforeListEvidence = () async {
+          if (!listEntered.isCompleted) {
+            listEntered.complete();
+          }
+          await listRelease.future;
+        };
+        await tester.tap(
+          find.byKey(const Key('review_confirmed_result_button')),
+        );
+        await listEntered.future;
+        authPort.setSession(
+          userId: 'parent-b',
+          role: 'parent',
+          sessionGeneration: 'gen-b-before-publish',
+        );
+        listRelease.complete();
+        await tester.pumpAndSettle();
+        expect(repo.getAssessmentCalls, 1);
+        expect(repo.listEvidenceCalls, 1);
+        expect(find.text('Status: verified'), findsNothing);
+
+        // Case 6: Authorization returns definitelyDenied or unverified on tap -> zero reads
+        await resetToAuthorizedScreen();
+        scriptedAuthzPort.onVerifyAssessmentTarget = (ctx, fId, cId) async =>
+            const AdultTargetAuthorizationResult.definitelyDenied(
+              reason: AdultTargetVerificationReason.childConfirmedArchived,
+            );
+        await tester.tap(
+          find.byKey(const Key('review_confirmed_result_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(repo.getAssessmentCalls, 0);
+        expect(repo.listEvidenceCalls, 0);
+        expect(find.text('Confirmed Record Access Denied'), findsOneWidget);
+        expect(find.text('Status: verified'), findsNothing);
+
+        // Case 7: Unchanged authorized session succeeds -> then actor switch clears cached result
+        await resetToAuthorizedScreen();
+        await tester.tap(
+          find.byKey(const Key('review_confirmed_result_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(repo.getAssessmentCalls, 1);
+        expect(repo.listEvidenceCalls, 1);
+        expect(find.text('Status: verified'), findsOneWidget);
+
+        authPort.setSession(
+          userId: 'parent-b',
+          role: 'parent',
+          sessionGeneration: 'gen-b-clear-cache',
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Status: verified'), findsNothing);
+        expect(
+          find.byKey(const Key('confirmed_server_status_card')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'R35-02: Repeated Refresh Status requests prevent slower older request from overwriting newer auth state',
+      (tester) async {
+        final confirmedDraft = _buildDraft(
+          localDraftId: 'draft-r35-02-overlap',
+          title: 'Confirmed Overlap Quiz',
+          dispatchState: CommandDispatchState.confirmedCommitted,
+          submissionStatus: DraftSubmissionStatus.draft,
+          serverAssessmentId: 'srv-overlap',
+        );
+        await db.saveLocalDraft(confirmedDraft);
+
+        await pumpOpenAddAssessment(tester, initialDraft: confirmedDraft);
+        expect(
+          find.byKey(const Key('review_confirmed_result_button')),
+          findsOneWidget,
+        );
+
+        var verifyCall = 0;
+        final slowAuthEntered = Completer<void>();
+        final slowAuthRelease = Completer<void>();
+        final fastDenyEntered = Completer<void>();
+        final fastDenyRelease = Completer<void>();
+
+        scriptedAuthzPort.onVerifyAssessmentTarget = (ctx, fId, cId) async {
+          verifyCall++;
+          if (verifyCall == 1) {
+            if (!slowAuthEntered.isCompleted) {
+              slowAuthEntered.complete();
+            }
+            await slowAuthRelease.future;
+            return const AdultTargetAuthorizationResult.authorized(
+              verifiedRole: VerifiedAdultRole.parent,
+            );
+          }
+          if (!fastDenyEntered.isCompleted) {
+            fastDenyEntered.complete();
+          }
+          await fastDenyRelease.future;
+          return const AdultTargetAuthorizationResult.definitelyDenied(
+            reason: AdultTargetVerificationReason.childConfirmedArchived,
+          );
+        };
+
+        // Start 1st (slower) Refresh Status returning `authorized`
+        await tester.tap(
+          find.byKey(const Key('refresh_recovery_status_button')),
+        );
+        await tester.pump();
+        await slowAuthEntered.future;
+
+        // Start 2nd (newer) lifecycle resume returning `definitelyDenied`
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.pump();
+        await fastDenyEntered.future;
+        fastDenyRelease.complete();
+        await tester.pump();
+
+        expect(find.text('Confirmed Record Access Denied'), findsOneWidget);
+        expect(
+          find.byKey(const Key('review_confirmed_result_button')),
+          findsNothing,
+        );
+
+        // Now complete slower 1st request; newer definitelyDenied state must remain intact
+        slowAuthRelease.complete();
+        await tester.pumpAndSettle();
+
+        expect(find.text('Confirmed Record Access Denied'), findsOneWidget);
+        expect(
+          find.byKey(const Key('review_confirmed_result_button')),
+          findsNothing,
+        );
+        expect(repo.getAssessmentCalls, 0);
+        expect(repo.listEvidenceCalls, 0);
+      },
+    );
   });
 }
