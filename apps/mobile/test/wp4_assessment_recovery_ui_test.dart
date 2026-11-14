@@ -168,6 +168,27 @@ final class _SpyAssessmentRepository extends FakeAssessmentRepository {
   }
 }
 
+final class _ScriptedAuthSessionPort implements AuthSessionPort {
+  _ScriptedAuthSessionPort(this.inner);
+
+  final FakeAuthSessionPort inner;
+  Future<ValidatedActorContext?> Function()? onValidate;
+
+  @override
+  String? get currentSessionGeneration => inner.currentSessionGeneration;
+
+  @override
+  Stream<String?> get sessionGenerationStream => inner.sessionGenerationStream;
+
+  @override
+  Future<ValidatedActorContext?> validateForMutation() {
+    if (onValidate != null) {
+      return onValidate!();
+    }
+    return inner.validateForMutation();
+  }
+}
+
 final class _ScriptedRecoveryAuthzPort implements RecoveryAuthorizationPort {
   _ScriptedRecoveryAuthzPort(this.inner);
 
@@ -905,6 +926,7 @@ void main() {
       LocalAssessmentDraft? initialDraft,
       String cachedUserId = 'parent-a',
       DateTime Function()? clock,
+      AuthSessionPort? customAuthPort,
     }) {
       final router = GoRouter(
         initialLocation: '/',
@@ -950,7 +972,7 @@ void main() {
           currentUserIdProvider.overrideWithValue(cachedUserId),
           localDraftStoreProvider.overrideWithValue(db),
           localEvidenceFileStoreProvider.overrideWithValue(fileStore),
-          authSessionPortProvider.overrideWithValue(authPort),
+          authSessionPortProvider.overrideWithValue(customAuthPort ?? authPort),
           recoveryAuthorizationPortProvider.overrideWithValue(
             scriptedAuthzPort,
           ),
@@ -966,12 +988,14 @@ void main() {
       LocalAssessmentDraft? initialDraft,
       String cachedUserId = 'parent-a',
       DateTime Function()? clock,
+      AuthSessionPort? customAuthPort,
     }) async {
       await tester.pumpWidget(
         buildAddAssessmentApp(
           initialDraft: initialDraft,
           cachedUserId: cachedUserId,
           clock: clock,
+          customAuthPort: customAuthPort,
         ),
       );
       await tester.pumpAndSettle();
@@ -1996,6 +2020,473 @@ void main() {
         );
         expect(repo.getAssessmentCalls, 0);
         expect(repo.listEvidenceCalls, 0);
+      },
+    );
+
+    testWidgets(
+      'R35-04: retryScheduled and verificationPending disable submit_assessment_button when live auth is unchecked or target authz is null and enable on authorization',
+      (tester) async {
+        final actorA = ValidatedActorContext(
+          userId: 'parent-a',
+          sessionGeneration: 'gen-a1',
+          observedAt: baseNow,
+          role: 'parent',
+        );
+        // 1. retryScheduled (due) + unchecked live auth (Completer pending)
+        final snapRetry = await writeCanonicalSnapshotFile('r35-04-auth');
+        final retryDraft = _buildDraft(
+          localDraftId: 'r35-04-auth',
+          dispatchState: CommandDispatchState.possiblyDispatched,
+          submissionStatus: DraftSubmissionStatus.failedRetryable,
+          retryCount: 1,
+          nextAttemptAt: baseNow.subtract(const Duration(seconds: 5)),
+          localPhotoPath: snapRetry,
+          localCompressedPhotoPath: snapRetry,
+          sha256Checksum: validSha,
+          evidenceId: 'ev-r35-04-auth',
+          lastErrorMessage: DraftRecoveryCode.format(
+            DraftRecoveryCode.retryScheduled,
+            'network timeout',
+          ),
+        );
+        await db.saveLocalDraft(retryDraft);
+
+        final authEntered = Completer<void>();
+        final authRelease = Completer<ValidatedActorContext?>();
+        final scriptedAuth = _ScriptedAuthSessionPort(authPort)
+          ..onValidate = () {
+            if (!authEntered.isCompleted) {
+              authEntered.complete();
+            }
+            return authRelease.future;
+          };
+
+        await pumpOpenAddAssessment(
+          tester,
+          initialDraft: retryDraft,
+          customAuthPort: scriptedAuth,
+        );
+        await authEntered.future;
+
+        final uncheckedPresentation = buildAssessmentRecoveryPresentation(
+          draft: retryDraft,
+          now: baseNow,
+          liveActor: null,
+          liveAuthChecked: false,
+          liveAuthInvalid: false,
+          liveTargetAuthorization: null,
+        );
+        final uncheckedBtn = tester.widget<FilledButton>(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        expect(uncheckedPresentation.canRetryNow, isFalse);
+        expect(uncheckedBtn.onPressed, isNull);
+        expect(repo.createDraftCalls, 0);
+        expect(repo.submitAssessmentCalls, 0);
+
+        // Release valid original actor -> target authorized -> button enables
+        authRelease.complete(actorA);
+        await tester.pumpAndSettle();
+
+        final authorizedPresentation = buildAssessmentRecoveryPresentation(
+          draft: retryDraft,
+          now: baseNow,
+          liveActor: actorA,
+          liveAuthChecked: true,
+          liveAuthInvalid: false,
+          liveTargetAuthorization:
+              const AdultTargetAuthorizationResult.authorized(
+                verifiedRole: VerifiedAdultRole.parent,
+              ),
+        );
+        final authorizedBtn = tester.widget<FilledButton>(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        expect(authorizedPresentation.canRetryNow, isTrue);
+        expect(authorizedBtn.onPressed, isNotNull);
+
+        // 2. verificationPending + null target authorization (Completer pending)
+        final snapVer = await writeCanonicalSnapshotFile('r35-04-target');
+        final verDraft = _buildDraft(
+          localDraftId: 'r35-04-target',
+          dispatchState: CommandDispatchState.possiblyDispatched,
+          submissionStatus: DraftSubmissionStatus.draft,
+          localPhotoPath: snapVer,
+          localCompressedPhotoPath: snapVer,
+          sha256Checksum: validSha,
+          evidenceId: 'ev-r35-04-target',
+        );
+        await db.saveLocalDraft(verDraft);
+
+        final authzEntered = Completer<void>();
+        final authzRelease = Completer<AdultTargetAuthorizationResult>();
+        scriptedAuthzPort.onVerifyAssessmentTarget = (ctx, fId, cId) {
+          if (!authzEntered.isCompleted) {
+            authzEntered.complete();
+          }
+          return authzRelease.future;
+        };
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        await pumpOpenAddAssessment(tester, initialDraft: verDraft);
+        await authzEntered.future;
+
+        final nullAuthzPresentation = buildAssessmentRecoveryPresentation(
+          draft: verDraft,
+          now: baseNow,
+          liveActor: actorA,
+          liveAuthChecked: true,
+          liveAuthInvalid: false,
+          liveTargetAuthorization: null,
+        );
+        final nullAuthzBtn = tester.widget<FilledButton>(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        expect(nullAuthzPresentation.canRetryNow, isFalse);
+        expect(nullAuthzBtn.onPressed, isNull);
+        expect(repo.createDraftCalls, 0);
+        expect(repo.submitAssessmentCalls, 0);
+
+        // Releasing authorized enables verificationPending Retry Now and tapping submits cleanly
+        authzRelease.complete(
+          const AdultTargetAuthorizationResult.authorized(
+            verifiedRole: VerifiedAdultRole.parent,
+          ),
+        );
+        await tester.pumpAndSettle();
+        scriptedAuthzPort.onVerifyAssessmentTarget = null;
+
+        final readyBtn = tester.widget<FilledButton>(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        expect(readyBtn.onPressed, isNotNull);
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        expect(repo.createDraftCalls, 1);
+        expect(repo.submitAssessmentCalls, 1);
+      },
+    );
+
+    testWidgets(
+      'R35-04: wrong actor, expired session, signed-out session, definitelyDenied, and confirmedRevoked disable retry button with zero RPCs',
+      (tester) async {
+        final actorA = ValidatedActorContext(
+          userId: 'parent-a',
+          sessionGeneration: 'gen-a1',
+          observedAt: baseNow,
+          role: 'parent',
+        );
+        final snap = await writeCanonicalSnapshotFile('r35-04-gates');
+        final drafts = <(String label, LocalAssessmentDraft draft)>[
+          (
+            'retryScheduled',
+            _buildDraft(
+              localDraftId: 'r35-04-gate-retry',
+              dispatchState: CommandDispatchState.possiblyDispatched,
+              submissionStatus: DraftSubmissionStatus.failedRetryable,
+              retryCount: 1,
+              nextAttemptAt: baseNow.subtract(const Duration(seconds: 10)),
+              localPhotoPath: snap,
+              localCompressedPhotoPath: snap,
+              sha256Checksum: validSha,
+              evidenceId: 'ev-r35-04-gate-r',
+              lastErrorMessage: DraftRecoveryCode.format(
+                DraftRecoveryCode.retryScheduled,
+                'network timeout',
+              ),
+            ),
+          ),
+          (
+            'verificationPending',
+            _buildDraft(
+              localDraftId: 'r35-04-gate-ver',
+              dispatchState: CommandDispatchState.possiblyDispatched,
+              submissionStatus: DraftSubmissionStatus.draft,
+              localPhotoPath: snap,
+              localCompressedPhotoPath: snap,
+              sha256Checksum: validSha,
+              evidenceId: 'ev-r35-04-gate-v',
+            ),
+          ),
+        ];
+
+        for (final entry in drafts) {
+          final kind = entry.$1;
+          final draft = entry.$2;
+          await db.saveLocalDraft(draft);
+
+          // 3. Wrong actor
+          authPort.setContext(
+            ValidatedActorContext(
+              userId: 'parent-other',
+              sessionGeneration: 'gen-other',
+              observedAt: baseNow,
+              role: 'parent',
+            ),
+          );
+          authzPort.setTargetStatus(
+            familyId: family.id.value,
+            childId: child.id.value,
+            status: TargetAuthorizationStatus.authorized,
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pumpAndSettle();
+          await pumpOpenAddAssessment(
+            tester,
+            initialDraft: draft,
+            cachedUserId: 'parent-other',
+          );
+          var btn = tester.widget<FilledButton>(
+            find.byKey(const Key('submit_assessment_button')),
+          );
+          var pres = buildAssessmentRecoveryPresentation(
+            draft: draft,
+            now: baseNow,
+            liveActor: authPort.currentContext,
+            liveAuthChecked: true,
+            liveAuthInvalid: false,
+            liveTargetAuthorization:
+                const AdultTargetAuthorizationResult.authorized(
+                  verifiedRole: VerifiedAdultRole.parent,
+                ),
+          );
+          expect(pres.canRetryNow, isFalse, reason: '$kind wrong actor');
+          expect(btn.onPressed, isNull, reason: '$kind wrong actor');
+
+          // 4. Expired session
+          authPort.setContext(
+            ValidatedActorContext(
+              userId: 'parent-a',
+              sessionGeneration: 'gen-expired',
+              observedAt: baseNow.subtract(const Duration(minutes: 10)),
+              role: 'parent',
+            ),
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pumpAndSettle();
+          await pumpOpenAddAssessment(tester, initialDraft: draft);
+          btn = tester.widget<FilledButton>(
+            find.byKey(const Key('submit_assessment_button')),
+          );
+          pres = buildAssessmentRecoveryPresentation(
+            draft: draft,
+            now: baseNow,
+            liveActor: authPort.currentContext,
+            liveAuthChecked: true,
+            liveAuthInvalid: true,
+            liveTargetAuthorization: null,
+          );
+          expect(pres.canRetryNow, isFalse, reason: '$kind expired');
+          expect(btn.onPressed, isNull, reason: '$kind expired');
+
+          // 5. Signed-out session
+          authPort.signOut();
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pumpAndSettle();
+          await pumpOpenAddAssessment(tester, initialDraft: draft);
+          btn = tester.widget<FilledButton>(
+            find.byKey(const Key('submit_assessment_button')),
+          );
+          pres = buildAssessmentRecoveryPresentation(
+            draft: draft,
+            now: baseNow,
+            liveActor: null,
+            liveAuthChecked: true,
+            liveAuthInvalid: true,
+            liveTargetAuthorization: null,
+          );
+          expect(pres.canRetryNow, isFalse, reason: '$kind signed-out');
+          expect(btn.onPressed, isNull, reason: '$kind signed-out');
+
+          // 6. definitelyDenied target
+          authPort.setContext(actorA);
+          authzPort.setTargetStatus(
+            familyId: family.id.value,
+            childId: child.id.value,
+            status: TargetAuthorizationStatus.definitelyDenied,
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pumpAndSettle();
+          await pumpOpenAddAssessment(tester, initialDraft: draft);
+          btn = tester.widget<FilledButton>(
+            find.byKey(const Key('submit_assessment_button')),
+          );
+          pres = buildAssessmentRecoveryPresentation(
+            draft: draft,
+            now: baseNow,
+            liveActor: actorA,
+            liveAuthChecked: true,
+            liveAuthInvalid: false,
+            liveTargetAuthorization:
+                const AdultTargetAuthorizationResult.definitelyDenied(
+                  reason: AdultTargetVerificationReason.childConfirmedArchived,
+                ),
+          );
+          expect(pres.canRetryNow, isFalse, reason: '$kind definitelyDenied');
+          expect(btn.onPressed, isNull, reason: '$kind definitelyDenied');
+
+          // 7. confirmedRevoked target
+          authzPort.setTargetStatus(
+            familyId: family.id.value,
+            childId: child.id.value,
+            status: TargetAuthorizationStatus.confirmedRevoked,
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pumpAndSettle();
+          await pumpOpenAddAssessment(tester, initialDraft: draft);
+          btn = tester.widget<FilledButton>(
+            find.byKey(const Key('submit_assessment_button')),
+          );
+          pres = buildAssessmentRecoveryPresentation(
+            draft: draft,
+            now: baseNow,
+            liveActor: actorA,
+            liveAuthChecked: true,
+            liveAuthInvalid: false,
+            liveTargetAuthorization:
+                const AdultTargetAuthorizationResult.confirmedRevoked(),
+          );
+          expect(pres.canRetryNow, isFalse, reason: '$kind confirmedRevoked');
+          expect(btn.onPressed, isNull, reason: '$kind confirmedRevoked');
+        }
+
+        expect(repo.createDraftCalls, 0);
+        expect(storage.uploadCallCount, 0);
+        expect(repo.registerEvidenceCalls, 0);
+        expect(repo.submitAssessmentCalls, 0);
+      },
+    );
+
+    testWidgets(
+      'R35-04: transient unverified keeps foreground Retry Now enabled for original actor and still runs WP3 pre-dispatch checks; lease/quarantine stay disabled; editable neverDispatched remains submittable',
+      (tester) async {
+        // 8. Transient unverified on retryScheduled -> button enabled, runs WP3 verify before createDraft
+        final snapUnv = await writeCanonicalSnapshotFile('r35-04-unv');
+        final unvRetry = _buildDraft(
+          localDraftId: 'r35-04-unv',
+          dispatchState: CommandDispatchState.possiblyDispatched,
+          submissionStatus: DraftSubmissionStatus.failedRetryable,
+          retryCount: 1,
+          nextAttemptAt: baseNow.subtract(const Duration(seconds: 5)),
+          localPhotoPath: snapUnv,
+          localCompressedPhotoPath: snapUnv,
+          sha256Checksum: validSha,
+          evidenceId: 'ev-r35-04-unv',
+          lastErrorMessage: DraftRecoveryCode.format(
+            DraftRecoveryCode.retryScheduled,
+            'offline network',
+          ),
+        );
+        await db.saveLocalDraft(unvRetry);
+
+        var verifyCalls = 0;
+        scriptedAuthzPort.onVerifyAssessmentTarget = (ctx, fId, cId) async {
+          verifyCalls++;
+          return const AdultTargetAuthorizationResult.unverified(
+            reason: AdultTargetVerificationReason.transientVerificationFailure,
+          );
+        };
+
+        await pumpOpenAddAssessment(tester, initialDraft: unvRetry);
+        final unvBtn = tester.widget<FilledButton>(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        expect(unvBtn.onPressed, isNotNull);
+
+        final callsBeforeTap = verifyCalls;
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        expect(verifyCalls, greaterThan(callsBeforeTap));
+        expect(repo.createDraftCalls, 0);
+        expect(repo.submitAssessmentCalls, 0);
+        scriptedAuthzPort.onVerifyAssessmentTarget = null;
+
+        // 9. Active lease and quarantined draft keep submit_assessment_button disabled
+        final leasedDraft = _buildDraft(
+          localDraftId: 'r35-04-leased',
+          dispatchState: CommandDispatchState.possiblyDispatched,
+          submissionStatus: DraftSubmissionStatus.failedRetryable,
+          leaseToken: 'lease-active',
+          leaseExpiresAt: baseNow.add(const Duration(minutes: 5)),
+          lastErrorMessage: DraftRecoveryCode.format(
+            DraftRecoveryCode.retryScheduled,
+            'leased',
+          ),
+        );
+        await db.saveLocalDraft(leasedDraft);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        await pumpOpenAddAssessment(tester, initialDraft: leasedDraft);
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('submit_assessment_button')),
+              )
+              .onPressed,
+          isNull,
+        );
+
+        final quarantinedDraft = _buildDraft(
+          localDraftId: 'r35-04-quar',
+          dispatchState: CommandDispatchState.possiblyDispatched,
+          submissionStatus: DraftSubmissionStatus.terminalError,
+          lastErrorMessage: DraftRecoveryCode.format(
+            DraftRecoveryCode.ambiguousSubmitOutcome,
+            'quarantined',
+          ),
+        );
+        await db.saveLocalDraft(quarantinedDraft);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        await pumpOpenAddAssessment(tester, initialDraft: quarantinedDraft);
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('submit_assessment_button')),
+              )
+              .onPressed,
+          isNull,
+        );
+
+        // 10. Ordinary editable neverDispatched draft remains editable and submittable
+        authzPort.setTargetStatus(
+          familyId: family.id.value,
+          childId: child.id.value,
+          status: TargetAuthorizationStatus.authorized,
+        );
+        final editableDraft = _buildDraft(
+          localDraftId: 'r35-04-edit',
+          dispatchState: CommandDispatchState.neverDispatched,
+          submissionStatus: DraftSubmissionStatus.draft,
+        );
+        await db.saveLocalDraft(editableDraft);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        await pumpOpenAddAssessment(tester, initialDraft: editableDraft);
+
+        final editBtn = tester.widget<FilledButton>(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        expect(editBtn.onPressed, isNotNull);
+        expect(find.text('Submit for Review'), findsOneWidget);
+
+        await tester.ensureVisible(
+          find.byKey(const Key('submit_assessment_button')),
+        );
+        await tester.tap(find.byKey(const Key('submit_assessment_button')));
+        await tester.pumpAndSettle();
+
+        expect(repo.createDraftCalls, 1);
+        expect(repo.submitAssessmentCalls, 1);
       },
     );
   });

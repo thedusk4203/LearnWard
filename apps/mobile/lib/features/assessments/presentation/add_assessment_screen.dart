@@ -145,21 +145,51 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     return isDraftPayloadLocked(draft);
   }
 
-  bool get _isDirectRetryAllowed {
+  bool _resolveDirectRetryAllowed({
+    required LocalAssessmentDraft? knownDraft,
+    AssessmentRecoveryPresentation? presentation,
+    required DateTime nowUtc,
+  }) {
     if (_isQuarantined) {
       return false;
     }
-    final draft = _effectiveKnownDraft;
-    if (draft == null) {
+    if (knownDraft == null) {
       return true;
     }
     if (isTargetAuthorizationDenied(_liveTargetAuthorization)) {
       return false;
     }
-    return isDraftDirectRetryAllowed(
-      draft,
-      now: ref.read(appClockProvider)().toUtc(),
-    );
+    if (!isDraftDirectRetryAllowed(knownDraft, now: nowUtc)) {
+      return false;
+    }
+    final effectivePresentation =
+        presentation ??
+        buildAssessmentRecoveryPresentation(
+          draft: knownDraft,
+          now: nowUtc,
+          liveActor: _liveActor,
+          liveAuthChecked: _liveAuthChecked,
+          liveAuthInvalid: _liveAuthInvalid,
+          liveTargetAuthorization: _liveTargetAuthorization,
+        );
+    if (effectivePresentation.disposition ==
+            DraftRecoveryDisposition.retryScheduled ||
+        effectivePresentation.disposition ==
+            DraftRecoveryDisposition.verificationPending) {
+      final boundActor = knownDraft.actorUserId?.trim();
+      final liveActor = _liveActor;
+      return _liveAuthChecked &&
+          !_liveAuthInvalid &&
+          liveActor != null &&
+          liveActor.isValidAt(nowUtc) &&
+          boundActor != null &&
+          boundActor.isNotEmpty &&
+          boundActor == liveActor.userId &&
+          _liveTargetAuthorization != null &&
+          !isTargetAuthorizationDenied(_liveTargetAuthorization) &&
+          effectivePresentation.canRetryNow;
+    }
+    return true;
   }
 
   bool get _isEvidenceLocked =>
@@ -441,7 +471,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     bool updateUiState = true,
     bool refreshAuthContext = false,
   }) async {
-    final generation = refreshAuthContext ? ++_authContextSyncGeneration : null;
+    int? generation = refreshAuthContext ? ++_authContextSyncGeneration : null;
     final persisted = await ref
         .read(localDraftStoreProvider)
         .getLocalDraft(_localDraftId);
@@ -449,7 +479,19 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     if (!mounted) {
       return latest;
     }
-    if (refreshAuthContext && generation != _authContextSyncGeneration) {
+    final effectiveRefreshAuth =
+        refreshAuthContext ||
+        (latest != null &&
+            isDraftPayloadLocked(latest) &&
+            !latest.isLegacyUnknown &&
+            !latest.hasUnboundActor &&
+            !latest.isReadOnlyQuarantined &&
+            !latest.hasMalformedLease &&
+            (!_liveAuthChecked || _liveTargetAuthorization == null));
+    if (effectiveRefreshAuth && generation == null) {
+      generation = ++_authContextSyncGeneration;
+    }
+    if (effectiveRefreshAuth && generation != _authContextSyncGeneration) {
       return latest;
     }
 
@@ -459,7 +501,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     AdultTargetAuthorizationResult? nextTargetAuthorization =
         _liveTargetAuthorization;
 
-    if (refreshAuthContext && latest != null) {
+    if (effectiveRefreshAuth && latest != null) {
       final authPort = ref.read(authSessionPortProvider);
       final nowUtc = ref.read(appClockProvider)().toUtc();
       try {
@@ -556,7 +598,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     if (!mounted) {
       return latest;
     }
-    if (refreshAuthContext && generation != _authContextSyncGeneration) {
+    if (effectiveRefreshAuth && generation != _authContextSyncGeneration) {
       return latest;
     }
     if (latest != null) {
@@ -570,7 +612,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
           latest.isReadOnlyQuarantined ||
           latest.hasMalformedLease;
       final sessionIdentityChanged =
-          refreshAuthContext &&
+          effectiveRefreshAuth &&
           ((_liveActor != null &&
                   (_liveActor?.userId != verifiedActor?.userId ||
                       _liveActor?.sessionGeneration !=
@@ -584,7 +626,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
                       nextTargetAuthorization?.status !=
                           TargetAuthorizationStatus.authorized)));
       final confirmedShouldClear =
-          refreshAuthContext &&
+          effectiveRefreshAuth &&
           (nextAuthInvalid ||
               nextTargetAuthorization?.status !=
                   TargetAuthorizationStatus.authorized ||
@@ -594,7 +636,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
                   _confirmedResultSessionGeneration !=
                       verifiedActor?.sessionGeneration));
       final authChanged =
-          refreshAuthContext &&
+          effectiveRefreshAuth &&
           (_liveActor != verifiedActor ||
               _liveAuthChecked != nextAuthChecked ||
               _liveAuthInvalid != nextAuthInvalid ||
@@ -611,7 +653,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
           if (latestQuarantined) {
             _isQuarantined = true;
           }
-          if (refreshAuthContext) {
+          if (effectiveRefreshAuth) {
             _liveActor = verifiedActor;
             _liveAuthChecked = nextAuthChecked;
             _liveAuthInvalid = nextAuthInvalid;
@@ -628,7 +670,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
         if (latestQuarantined) {
           _isQuarantined = true;
         }
-        if (refreshAuthContext) {
+        if (effectiveRefreshAuth) {
           _liveActor = verifiedActor;
           _liveAuthChecked = nextAuthChecked;
           _liveAuthInvalid = nextAuthInvalid;
@@ -1655,6 +1697,17 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
           return;
         }
       }
+      if (prior != null &&
+          !waitingActorResumeAllowed &&
+          !_resolveDirectRetryAllowed(knownDraft: prior, nowUtc: nowUtc)) {
+        if (mounted) {
+          setState(() {
+            _authoritativeDraft = prior;
+            _errorMessage = 'Cannot submit this draft directly while recovery reconciliation, active lease processing, or actor/target verification is pending.';
+          });
+        }
+        return;
+      }
 
       final isDispatchedRetry =
           prior != null &&
@@ -2493,8 +2546,8 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final nowUtc = ref.read(appClockProvider)().toUtc();
     final payloadLocked = _isPayloadLocked;
-    final directRetryAllowed = _isDirectRetryAllowed;
     final knownDraft = _effectiveKnownDraft;
     final isLegacyQuarantined =
         (knownDraft?.isLegacyUnknown ?? false) ||
@@ -2502,13 +2555,18 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen>
     final recoveryPresentation = knownDraft != null
         ? buildAssessmentRecoveryPresentation(
             draft: knownDraft,
-            now: ref.read(appClockProvider)().toUtc(),
+            now: nowUtc,
             liveActor: _liveActor,
             liveAuthChecked: _liveAuthChecked,
             liveAuthInvalid: _liveAuthInvalid,
             liveTargetAuthorization: _liveTargetAuthorization,
           )
         : null;
+    final directRetryAllowed = _resolveDirectRetryAllowed(
+      knownDraft: knownDraft,
+      presentation: recoveryPresentation,
+      nowUtc: nowUtc,
+    );
 
     return Scaffold(
       appBar: AppBar(
