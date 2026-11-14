@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -76,6 +77,198 @@ class FailingLocalDraftStore implements LocalDraftStore {
   @override
   Future<int> countDraftReferencesToFile(String filePath) =>
       inner.countDraftReferencesToFile(filePath);
+
+  @override
+  Future<DraftCasResult> registerOrUpdateDraftIfUnchanged({
+    required LocalAssessmentDraft? expected,
+    required LocalAssessmentDraft desired,
+    DateTime? now,
+  }) => inner.registerOrUpdateDraftIfUnchanged(
+    expected: expected,
+    desired: desired,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> acquireDraftClaim({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    DateTime? now,
+    String? overrideLeaseToken,
+  }) => inner.acquireDraftClaim(
+    localDraftId: localDraftId,
+    actorUserId: actorUserId,
+    familyId: familyId,
+    childId: childId,
+    leaseDuration: leaseDuration,
+    now: now,
+    overrideLeaseToken: overrideLeaseToken,
+  );
+
+  @override
+  Future<DraftCasResult> resumeDraftClaimAfterExpiry({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    required DateTime now,
+    String? overrideLeaseToken,
+  }) => inner.resumeDraftClaimAfterExpiry(
+    localDraftId: localDraftId,
+    actorUserId: actorUserId,
+    familyId: familyId,
+    childId: childId,
+    leaseDuration: leaseDuration,
+    now: now,
+    overrideLeaseToken: overrideLeaseToken,
+  );
+
+  @override
+  Future<DraftCasResult> markDraftStageAndDispatch({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DraftSubmissionStatus targetStage,
+    required DateTime now,
+  }) => inner.markDraftStageAndDispatch(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    targetStage: targetStage,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> persistServerAssessmentId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+  }) => inner.persistServerAssessmentId(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    serverAssessmentId: serverAssessmentId,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> persistServerEvidenceId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverEvidenceId,
+    required String expectedEvidenceId,
+    required String expectedSha256Checksum,
+    required DateTime now,
+  }) => inner.persistServerEvidenceId(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    serverEvidenceId: serverEvidenceId,
+    expectedEvidenceId: expectedEvidenceId,
+    expectedSha256Checksum: expectedSha256Checksum,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> scheduleDraftRetry({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime nextAttemptAt,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) => inner.scheduleDraftRetry(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    nextAttemptAt: nextAttemptAt,
+    recoveryCode: recoveryCode,
+    errorMessage: errorMessage,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> quarantineDraftOutcome({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) => inner.quarantineDraftOutcome(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    recoveryCode: recoveryCode,
+    errorMessage: errorMessage,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> completeDraftSubmission({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+    String? serverEvidenceId,
+  }) => inner.completeDraftSubmission(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    serverAssessmentId: serverAssessmentId,
+    now: now,
+    serverEvidenceId: serverEvidenceId,
+  );
+
+  @override
+  Future<DraftCasResult> releaseDraftClaim({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) => inner.releaseDraftClaim(
+    localDraftId: localDraftId,
+    leaseToken: leaseToken,
+    authenticatedActorId: authenticatedActorId,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> pauseMismatchedActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    String? mismatchReason,
+    DateTime? now,
+  }) => inner.pauseMismatchedActorDraft(
+    localDraftId: localDraftId,
+    familyId: familyId,
+    authenticatedActorId: authenticatedActorId,
+    mismatchReason: mismatchReason,
+    now: now,
+  );
+
+  @override
+  Future<DraftCasResult> resumeOriginalActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) => inner.resumeOriginalActorDraft(
+    localDraftId: localDraftId,
+    familyId: familyId,
+    authenticatedActorId: authenticatedActorId,
+    now: now,
+  );
 }
 
 final class FailingSubmitAssessmentRepository extends FakeAssessmentRepository {
@@ -112,6 +305,7 @@ final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
   bool shouldFailLoad;
   bool shouldReturnNullLoad;
   Completer<List<int>?>? pendingLoadCompleter;
+  final Set<String> _savedCanonicalPaths = {};
 
   @override
   Future<String> saveEvidence({
@@ -185,6 +379,74 @@ final class FailingEvidenceFileStore implements LocalEvidenceFileStore {
         status: EvidenceFileDeletionStatus.preservedConservative,
         filePath: filePath,
       );
+
+  @override
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  }) async {
+    if (shouldFailSave) {
+      throw const EvidenceStorageException(
+        'Simulated canonical snapshot write failure (disk full / I/O error)',
+      );
+    }
+    final snap = await delegate!.saveCanonicalEvidenceSnapshot(
+      localDraftId: localDraftId,
+      bytes: bytes,
+    );
+    _savedCanonicalPaths.add(snap.filePath);
+    return snap;
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> verifyCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required String canonicalFilePath,
+    required String expectedSha256,
+    int? expectedByteLength,
+    String? expectedMediaType,
+    DateTime? frozenAt,
+  }) async {
+    if (shouldFailLoad) {
+      throw const EvidenceStorageException(
+        'Simulated I/O disk error verifying canonical snapshot',
+      );
+    }
+    if (shouldReturnNullLoad &&
+        !_savedCanonicalPaths.contains(canonicalFilePath)) {
+      throw const EvidenceStorageException(
+        'Simulated missing canonical snapshot',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    return delegate!.verifyCanonicalEvidenceSnapshot(
+      localDraftId: localDraftId,
+      canonicalFilePath: canonicalFilePath,
+      expectedSha256: expectedSha256,
+      expectedByteLength: expectedByteLength,
+      expectedMediaType: expectedMediaType,
+      frozenAt: frozenAt,
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  }) async {
+    if (shouldFailLoad) {
+      throw const EvidenceStorageException(
+        'Simulated I/O disk error reading canonical snapshot',
+      );
+    }
+    if (shouldReturnNullLoad &&
+        !_savedCanonicalPaths.contains(draft.localCompressedPhotoPath)) {
+      throw const EvidenceStorageException(
+        'Simulated missing canonical snapshot',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    return delegate!.readVerifiedCanonicalSnapshot(draft: draft);
+  }
 }
 
 void _ensureSqliteInitialized() {
@@ -314,6 +576,7 @@ void main() {
         updatedAt: now,
         dispatchState: dispatchState,
         submissionStatus: submissionStatus,
+        actorUserId: 'local-parent-user',
       );
     }
 
@@ -749,7 +1012,7 @@ void main() {
     testWidgets(
       'B03: Remote submission succeeds; local evidence bytes are preserved on disk',
       (tester) async {
-        final photoBytes = [1, 2, 3, 4, 5];
+        final photoBytes = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4, 5];
         final photoPath = await fileStore.saveEvidence(
           fileName: 'submit_preserve.jpg',
           bytes: photoBytes,
@@ -819,7 +1082,7 @@ void main() {
     testWidgets(
       'B03: Uncertain submission failure retains local evidence bytes and possiblyDispatched state',
       (tester) async {
-        final photoBytes = [11, 22, 33];
+        final photoBytes = [0xFF, 0xD8, 0xFF, 0xE0, 11, 22, 33];
         final photoPath = await fileStore.saveEvidence(
           fileName: 'failing_upload.jpg',
           bytes: photoBytes,
@@ -1236,12 +1499,17 @@ void main() {
           findsOneWidget,
         );
 
-        // While dialog is open, mutate draft in appDatabase to possiblyDispatched
-        final mutatedDraft = draft.copyWith(
-          dispatchState: CommandDispatchState.possiblyDispatched,
-          updatedAt: now.add(const Duration(seconds: 5)),
+        // While dialog is open, mutate draft directly in SQLite to possiblyDispatched
+        await (appDatabase.update(
+          appDatabase.localAssessmentDrafts,
+        )..where((t) => t.localDraftId.equals('d-stale-disp'))).write(
+          LocalAssessmentDraftsCompanion(
+            dispatchState: Value(
+              CommandDispatchState.possiblyDispatched.wireValue,
+            ),
+            updatedAt: Value(now.add(const Duration(seconds: 5))),
+          ),
         );
-        await appDatabase.saveLocalDraft(mutatedDraft);
 
         // Now tap "Delete" in dialog
         await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));
@@ -1382,13 +1650,15 @@ void main() {
           findsOneWidget,
         );
 
-        // Concurrently modify actorUserId and submitCommandId WITHOUT changing updatedAt
-        final updatedDraft = persistedInitial!.copyWith(
-          actorUserId: 'new-worker-id',
-          submitCommandId: 'new-submit-cmd',
-          updatedAt: persistedInitial.updatedAt,
+        // Concurrently modify actorUserId and submitCommandId directly in SQLite WITHOUT changing updatedAt
+        await (appDatabase.update(
+          appDatabase.localAssessmentDrafts,
+        )..where((t) => t.localDraftId.equals('d-stale-id-conflict'))).write(
+          const LocalAssessmentDraftsCompanion(
+            actorUserId: Value('new-worker-id'),
+            submitCommandId: Value('new-submit-cmd'),
+          ),
         );
-        await appDatabase.saveLocalDraft(updatedDraft);
 
         // Tap Delete in dialog
         await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));
@@ -1451,15 +1721,16 @@ void main() {
           findsOneWidget,
         );
 
-        // While dialog open, background worker claims lease
-        final leasedDraft = draft.copyWith(
-          leaseToken: 'worker-lease-token-abc',
-          leaseExpiresAt: DateTime.now().toUtc().add(
-            const Duration(minutes: 5),
-          ),
-          updatedAt: DateTime.now().toUtc(),
+        // While dialog open, background worker claims lease via CAS
+        final claim = await appDatabase.acquireDraftClaim(
+          localDraftId: 'd-stale-lease',
+          actorUserId: 'local-parent-user',
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          leaseDuration: const Duration(minutes: 5),
+          overrideLeaseToken: 'worker-lease-token-abc',
         );
-        await appDatabase.saveLocalDraft(leasedDraft);
+        expect(claim.isSuccess, isTrue);
 
         // Tap "Delete" in dialog
         await tester.tap(find.byKey(const Key('confirm_delete_draft_button')));
@@ -2517,7 +2788,7 @@ void main() {
         final picker = SimulatedEvidencePickerService(
           stubFile: const SelectedEvidenceFile(
             fileName: 'fresh_replacement.jpg',
-            bytes: [10, 20, 30, 40],
+            bytes: [0xFF, 0xD8, 0xFF, 0xE0, 10, 20, 30, 40],
             mediaType: 'image/jpeg',
           ),
         );

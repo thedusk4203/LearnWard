@@ -29,30 +29,124 @@ class _TestChildNotifier extends ActiveChildModeNotifier {
 }
 
 class _StubEvidenceFileStore implements LocalEvidenceFileStore {
+  static const List<int> _defaultJpegBytes = <int>[
+    0xFF,
+    0xD8,
+    0xFF,
+    0xE0,
+    1,
+    2,
+    3,
+  ];
+  final Map<String, List<int>> _files = {};
+
   @override
   Future<String> saveDurableEvidence({
     required String localDraftId,
     required List<int> bytes,
     required String mediaType,
-  }) async => '/mock/evidence/$localDraftId.jpg';
+  }) async {
+    final path = '/mock/evidence/$localDraftId.jpg';
+    _files[path] = List<int>.from(bytes);
+    return path;
+  }
 
   @override
   Future<String> saveEvidence({
     required String fileName,
     required List<int> bytes,
-  }) async => '/mock/evidence/$fileName';
+  }) async {
+    final path = '/mock/evidence/$fileName';
+    _files[path] = List<int>.from(bytes);
+    return path;
+  }
 
   @override
-  Future<List<int>?> readEvidenceBytes(String filePath) async => [1, 2, 3];
+  Future<List<int>?> readEvidenceBytes(String filePath) async =>
+      _files[filePath] ?? _defaultJpegBytes;
 
   @override
-  Future<List<int>?> loadEvidence(String filePath) async => [1, 2, 3];
+  Future<List<int>?> loadEvidence(String filePath) async =>
+      _files[filePath] ?? _defaultJpegBytes;
 
   @override
   Future<void> deleteDurableEvidence(String filePath) async {}
 
   @override
   Future<void> deleteEvidence(String filePath) async {}
+
+  @override
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  }) async {
+    final inspected = inspectAndValidateEvidenceBytes(bytes);
+    final path =
+        '/mock/evidence/${localDraftId}_canonical.${inspected.fileExtension}';
+    _files[path] = inspected.bytes;
+    return CanonicalEvidenceSnapshot(
+      localDraftId: localDraftId,
+      filePath: path,
+      mediaType: inspected.mediaType,
+      fileExtension: inspected.fileExtension,
+      byteLength: inspected.byteLength,
+      sha256Checksum: inspected.sha256Checksum,
+      frozenAt: DateTime.now().toUtc(),
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> verifyCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required String canonicalFilePath,
+    required String expectedSha256,
+    int? expectedByteLength,
+    String? expectedMediaType,
+    DateTime? frozenAt,
+  }) async {
+    final bytes = _files[canonicalFilePath];
+    if (bytes == null) {
+      throw const EvidenceStorageException(
+        'Stub canonical snapshot not configured.',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    final verified = verifyCanonicalEvidenceBytes(
+      bytes: bytes,
+      expectedSha256: expectedSha256,
+      expectedByteLength: expectedByteLength,
+      expectedMediaType: expectedMediaType,
+    );
+    return VerifiedCanonicalEvidence(
+      snapshot: CanonicalEvidenceSnapshot(
+        localDraftId: localDraftId,
+        filePath: canonicalFilePath,
+        mediaType: verified.mediaType,
+        fileExtension: verified.fileExtension,
+        byteLength: verified.byteLength,
+        sha256Checksum: verified.sha256Checksum,
+        frozenAt: frozenAt ?? DateTime.now().toUtc(),
+      ),
+      bytes: verified.bytes,
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  }) async {
+    if (!draft.hasVerifiedEvidenceSnapshot) {
+      throw const EvidenceStorageException(
+        'Stub canonical snapshot not configured.',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    return verifyCanonicalEvidenceSnapshot(
+      localDraftId: draft.localDraftId,
+      canonicalFilePath: draft.localCompressedPhotoPath!,
+      expectedSha256: draft.sha256Checksum!,
+    );
+  }
 
   @override
   Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
@@ -256,7 +350,7 @@ void main() {
                 SimulatedEvidencePickerService(
                   stubFile: const SelectedEvidenceFile(
                     fileName: 'quiz.jpg',
-                    bytes: [1, 2, 3, 4],
+                    bytes: [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4],
                     mediaType: 'image/jpeg',
                     localPath: '/tmp/quiz.jpg',
                   ),

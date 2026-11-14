@@ -59,6 +59,84 @@ class FakeLocalEvidenceFileStore implements LocalEvidenceFileStore {
       deleteDurableEvidence(filePath);
 
   @override
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  }) async {
+    final inspected = inspectAndValidateEvidenceBytes(bytes);
+    final path =
+        '/mock/evidence/${localDraftId}_canonical.${inspected.fileExtension}';
+    files[path] = inspected.bytes;
+    return CanonicalEvidenceSnapshot(
+      localDraftId: localDraftId,
+      filePath: path,
+      mediaType: inspected.mediaType,
+      fileExtension: inspected.fileExtension,
+      byteLength: inspected.byteLength,
+      sha256Checksum: inspected.sha256Checksum,
+      frozenAt: DateTime.now().toUtc(),
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> verifyCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required String canonicalFilePath,
+    required String expectedSha256,
+    int? expectedByteLength,
+    String? expectedMediaType,
+    DateTime? frozenAt,
+  }) async {
+    final raw = files[canonicalFilePath];
+    if (raw == null) {
+      throw EvidenceStorageException(
+        'Canonical evidence snapshot is missing.',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    final verified = verifyCanonicalEvidenceBytes(
+      bytes: raw,
+      expectedSha256: expectedSha256,
+      expectedByteLength: expectedByteLength,
+      expectedMediaType: expectedMediaType,
+    );
+    return VerifiedCanonicalEvidence(
+      snapshot: CanonicalEvidenceSnapshot(
+        localDraftId: localDraftId,
+        filePath: canonicalFilePath,
+        mediaType: verified.mediaType,
+        fileExtension: verified.fileExtension,
+        byteLength: verified.byteLength,
+        sha256Checksum: verified.sha256Checksum,
+        frozenAt: frozenAt ?? DateTime.now().toUtc(),
+      ),
+      bytes: verified.bytes,
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  }) async {
+    final canonicalPath = draft.localCompressedPhotoPath;
+    final expectedSha256 = draft.sha256Checksum;
+    if (canonicalPath == null ||
+        canonicalPath.isEmpty ||
+        expectedSha256 == null) {
+      throw const EvidenceStorageException(
+        'Draft has no frozen canonical evidence snapshot.',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    return verifyCanonicalEvidenceSnapshot(
+      localDraftId: draft.localDraftId,
+      canonicalFilePath: canonicalPath,
+      expectedSha256: expectedSha256,
+      frozenAt: draft.updatedAt,
+    );
+  }
+
+  @override
   Future<EvidenceFileDeletionResult> deleteEvidenceIfUnreferenced({
     required String filePath,
     required LocalDraftStore draftStore,
@@ -203,7 +281,7 @@ void main() {
               SimulatedEvidencePickerService(
                 stubFile: const SelectedEvidenceFile(
                   fileName: 'math_quiz.jpg',
-                  bytes: [1, 2, 3],
+                  bytes: [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3],
                   mediaType: 'image/jpeg',
                   localPath: '/tmp/math_quiz.jpg',
                 ),
@@ -437,6 +515,7 @@ void main() {
       difficulty: 'normal',
       rawScore: 9.0,
       maxScore: 10.0,
+      actorUserId: 'local-parent-user',
       occurredAt: now,
       updatedAt: now,
     );
@@ -486,9 +565,17 @@ void main() {
     await tester.tap(find.byKey(const Key('submit_assessment_button')));
     await tester.pumpAndSettle();
 
-    // Returns to Child Mode screen, local draft should be removed
+    // Returns to Child Mode screen, local draft is transitioned to confirmedCommitted and excluded from unsubmitted list
     expect(find.text('Hi, Lucas!'), findsOneWidget);
     expect(find.text('Unsubmitted Local Drafts (1)'), findsNothing);
+    final persistedAfterSubmit = await fakeDraftStore.getLocalDraft(
+      'draft-offline-123',
+    );
+    expect(persistedAfterSubmit, isNotNull);
+    expect(
+      persistedAfterSubmit!.dispatchState,
+      equals(CommandDispatchState.confirmedCommitted),
+    );
     expect(fakeAssessmentRepo.assessments.length, equals(1));
     expect(
       fakeAssessmentRepo.assessments.values.first.title,
@@ -745,11 +832,19 @@ void main() {
       expect(trackingRepo.recordedSubmitCommandIds.length, equals(2));
       expect(trackingRepo.recordedSubmitCommandIds[1], equals(firstSubmitCmd));
 
-      // Submission succeeded and draft was deleted
+      // Submission succeeded: draft transitioned to confirmed_committed tombstone (I14)
+      // and is excluded from unsubmitted drafts in Child Mode
       final remainingDrafts = await fakeDraftStore.listLocalDrafts(
         testChild.id,
       );
-      expect(remainingDrafts.isEmpty, isTrue);
+      expect(remainingDrafts.length, equals(1));
+      expect(
+        remainingDrafts.first.dispatchState,
+        equals(CommandDispatchState.confirmedCommitted),
+      );
+      expect(remainingDrafts.first.serverAssessmentId, isNotNull);
+      expect(remainingDrafts.first.leaseToken, isNull);
+      expect(find.text('Unsubmitted Local Drafts (1)'), findsNothing);
     },
   );
 
@@ -834,6 +929,7 @@ void main() {
         retryCount: 2,
         actorUserId: 'usr-legacy-actor',
       );
+      await fakeDraftStore.saveLocalDraft(legacyDraft);
 
       await tester.pumpWidget(
         ProviderScope(
@@ -885,9 +981,15 @@ void main() {
         reason: 'Submit button must be disabled for quarantined legacy drafts',
       );
 
-      // 3. Tap Save Local Draft and verify metadata is preserved
+      // 3. Save Local Draft is also locked (R33-09) and metadata remains preserved
       final saveButtonFinder = find.byKey(const Key('save_draft_button'));
       expect(saveButtonFinder, findsOneWidget);
+      final saveButton = tester.widget<OutlinedButton>(saveButtonFinder);
+      expect(
+        saveButton.enabled,
+        isFalse,
+        reason: 'Save button must be disabled for quarantined legacy drafts',
+      );
       await tester.ensureVisible(saveButtonFinder);
       await tester.tap(saveButtonFinder);
       await tester.pumpAndSettle();
@@ -907,7 +1009,7 @@ void main() {
   );
 
   testWidgets(
-    'Fresh draft timeout -> Save Local Draft preserves possibly_dispatched and exact command IDs',
+    'Fresh draft timeout -> Save Local Draft fails closed (R33-03) and preserves possibly_dispatched, content, and command IDs',
     (tester) async {
       final failingSubmitRepo = _FailingSubmitAssessmentRepository();
 
@@ -978,7 +1080,7 @@ void main() {
       await tester.tap(saveFinder);
       await tester.pumpAndSettle();
 
-      // 4. Verify draft in store NEVER regressed to never_dispatched and command IDs are preserved
+      // 4. Verify draft in store NEVER regressed to never_dispatched and original content/command IDs remain immutable
       final draftsAfterSave = await fakeDraftStore.listLocalDrafts(
         testChild.id,
       );
@@ -999,7 +1101,7 @@ void main() {
         equals(originalSubmitCmdId),
         reason: 'submitCommandId must be preserved',
       );
-      expect(draftAfterSave.title, equals('Fresh Quiz After Save'));
+      expect(draftAfterSave.title, equals('Fresh Quiz Before Drop'));
     },
   );
 
@@ -1191,7 +1293,7 @@ void main() {
           isFalse,
           reason: 'Legacy draft must remain non-submittable (quarantined)',
         );
-        expect(persisted.title, equals('Edited V4 Physics Lab Title'));
+        expect(persisted.title, equals('Original V4 Physics Lab Title'));
         expect(
           persisted.evidenceId,
           equals('ev-legacy-fixture-123'),

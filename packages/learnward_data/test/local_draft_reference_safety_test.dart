@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_data/learnward_data.dart';
@@ -54,6 +55,7 @@ void main() {
         updatedAt: DateTime.utc(2026, 11, 9, 10, 0),
         dispatchState: dispatchState,
         submissionStatus: submissionStatus,
+        actorUserId: 'usr-ref-actor-1',
       );
     }
 
@@ -256,7 +258,17 @@ void main() {
         submissionStatus: submissionStatus,
         leaseToken: leaseToken,
         leaseExpiresAt: leaseExpiresAt,
+        actorUserId: 'usr-ref-actor-1',
       );
+    }
+
+    Future<void> applyRawConn2Update(
+      String draftId,
+      LocalAssessmentDraftsCompanion companion,
+    ) async {
+      await (conn2.update(
+        conn2.localAssessmentDrafts,
+      )..where((t) => t.localDraftId.equals(draftId))).write(companion);
     }
 
     test('Draft mutated to possiblyDispatched on independent connection rejects deletion with blockedUnsafeState', () async {
@@ -270,12 +282,16 @@ void main() {
       );
       await conn1.saveLocalDraft(initialDraft);
 
-      // Connection 2 transitions draft to possiblyDispatched
-      final dispatched = initialDraft.copyWith(
-        dispatchState: CommandDispatchState.possiblyDispatched,
-        updatedAt: now.add(const Duration(seconds: 1)),
+      // Connection 2 transitions draft to possiblyDispatched directly in SQLite
+      await applyRawConn2Update(
+        'd-conn-disp',
+        LocalAssessmentDraftsCompanion(
+          dispatchState: Value(
+            CommandDispatchState.possiblyDispatched.wireValue,
+          ),
+          updatedAt: Value(now.add(const Duration(seconds: 1))),
+        ),
       );
-      await conn2.saveLocalDraft(dispatched);
 
       // Connection 1 attempts deleteDraftSafely with snapshot of initialDraft
       final outcome = await conn1.deleteDraftSafely(
@@ -306,13 +322,17 @@ void main() {
       );
       await conn1.saveLocalDraft(initialDraft);
 
-      // Connection 2 acquires an unexpired lease
-      final leased = initialDraft.copyWith(
-        leaseToken: 'worker-lease-token-99',
-        leaseExpiresAt: now.add(const Duration(minutes: 5)),
-        updatedAt: now.add(const Duration(seconds: 1)),
+      // Connection 2 acquires an unexpired lease via CAS
+      final claimed = await conn2.acquireDraftClaim(
+        localDraftId: 'd-conn-lease',
+        actorUserId: 'usr-ref-actor-1',
+        familyId: familyId,
+        childId: childId.value,
+        leaseDuration: const Duration(minutes: 5),
+        now: now,
+        overrideLeaseToken: 'worker-lease-token-99',
       );
-      await conn2.saveLocalDraft(leased);
+      expect(claimed.isSuccess, isTrue);
 
       // Connection 1 attempts deleteDraftSafely
       final outcome = await conn1.deleteDraftSafely(
@@ -339,12 +359,14 @@ void main() {
         );
         await conn1.saveLocalDraft(initialDraft);
 
-        // Connection 2 marks it unknownLegacy
-        final legacy = initialDraft.copyWith(
-          dispatchState: CommandDispatchState.unknownLegacy,
-          updatedAt: now.add(const Duration(seconds: 1)),
+        // Connection 2 marks it unknownLegacy directly in SQLite
+        await applyRawConn2Update(
+          'd-conn-legacy',
+          LocalAssessmentDraftsCompanion(
+            dispatchState: Value(CommandDispatchState.unknownLegacy.wireValue),
+            updatedAt: Value(now.add(const Duration(seconds: 1))),
+          ),
         );
-        await conn2.saveLocalDraft(legacy);
 
         final outcome = await conn1.deleteDraftSafely(
           localDraftId: 'd-conn-legacy',
@@ -367,12 +389,16 @@ void main() {
       );
       await conn1.saveLocalDraft(initialDraft);
 
-      // Connection 2 transitions submissionStatus to submittingAssessment
-      final submitting = initialDraft.copyWith(
-        submissionStatus: DraftSubmissionStatus.submittingAssessment,
-        updatedAt: now.add(const Duration(seconds: 1)),
+      // Connection 2 transitions submissionStatus to submittingAssessment directly in SQLite
+      await applyRawConn2Update(
+        'd-conn-submitting',
+        LocalAssessmentDraftsCompanion(
+          submissionStatus: Value(
+            DraftSubmissionStatus.submittingAssessment.wireValue,
+          ),
+          updatedAt: Value(now.add(const Duration(seconds: 1))),
+        ),
       );
-      await conn2.saveLocalDraft(submitting);
 
       final outcome = await conn1.deleteDraftSafely(
         localDraftId: 'd-conn-submitting',
@@ -394,11 +420,15 @@ void main() {
       );
       await conn1.saveLocalDraft(initialDraft);
 
-      final uploading = initialDraft.copyWith(
-        submissionStatus: DraftSubmissionStatus.uploadingEvidence,
-        updatedAt: now.add(const Duration(seconds: 1)),
+      await applyRawConn2Update(
+        'd-conn-uploading',
+        LocalAssessmentDraftsCompanion(
+          submissionStatus: Value(
+            DraftSubmissionStatus.uploadingEvidence.wireValue,
+          ),
+          updatedAt: Value(now.add(const Duration(seconds: 1))),
+        ),
       );
-      await conn2.saveLocalDraft(uploading);
 
       final outcome = await conn1.deleteDraftSafely(
         localDraftId: 'd-conn-uploading',
@@ -420,11 +450,15 @@ void main() {
       );
       await conn1.saveLocalDraft(initialDraft);
 
-      final retryable = initialDraft.copyWith(
-        submissionStatus: DraftSubmissionStatus.failedRetryable,
-        updatedAt: now.add(const Duration(seconds: 1)),
+      await applyRawConn2Update(
+        'd-conn-retryable',
+        LocalAssessmentDraftsCompanion(
+          submissionStatus: Value(
+            DraftSubmissionStatus.failedRetryable.wireValue,
+          ),
+          updatedAt: Value(now.add(const Duration(seconds: 1))),
+        ),
       );
-      await conn2.saveLocalDraft(retryable);
 
       final outcome = await conn1.deleteDraftSafely(
         localDraftId: 'd-conn-retryable',
@@ -538,57 +572,73 @@ void main() {
     for (final fieldMutation in [
       (
         'actorUserId',
-        (LocalAssessmentDraft d) => d.copyWith(actorUserId: 'new-actor-999'),
+        (Directory _) => const LocalAssessmentDraftsCompanion(
+          actorUserId: Value('new-actor-999'),
+        ),
       ),
       (
         'actorRole',
-        (LocalAssessmentDraft d) => d.copyWith(actorRole: 'parent'),
+        (Directory _) =>
+            const LocalAssessmentDraftsCompanion(actorRole: Value('parent')),
       ),
       (
         'createCommandId',
-        (LocalAssessmentDraft d) =>
-            d.copyWith(createCommandId: 'cmd-create-diverged'),
+        (Directory _) => const LocalAssessmentDraftsCompanion(
+          createCommandId: Value('cmd-create-diverged'),
+        ),
       ),
       (
         'submitCommandId',
-        (LocalAssessmentDraft d) =>
-            d.copyWith(submitCommandId: 'cmd-submit-diverged'),
+        (Directory _) => const LocalAssessmentDraftsCompanion(
+          submitCommandId: Value('cmd-submit-diverged'),
+        ),
       ),
       (
         'evidenceId',
-        (LocalAssessmentDraft d) => d.copyWith(evidenceId: 'ev-id-diverged'),
+        (Directory _) => const LocalAssessmentDraftsCompanion(
+          evidenceId: Value('ev-id-diverged'),
+        ),
       ),
       (
         'serverAssessmentId',
-        (LocalAssessmentDraft d) =>
-            d.copyWith(serverAssessmentId: 'srv-assess-diverged'),
+        (Directory _) => const LocalAssessmentDraftsCompanion(
+          serverAssessmentId: Value('srv-assess-diverged'),
+        ),
       ),
       (
         'serverEvidenceId',
-        (LocalAssessmentDraft d) =>
-            d.copyWith(serverEvidenceId: 'srv-ev-diverged'),
+        (Directory _) => const LocalAssessmentDraftsCompanion(
+          serverEvidenceId: Value('srv-ev-diverged'),
+        ),
       ),
       (
         'localPhotoPath',
-        (LocalAssessmentDraft d) =>
-            d.copyWith(localPhotoPath: '${tempDir.path}/diverged_photo.jpg'),
+        (Directory dir) => LocalAssessmentDraftsCompanion(
+          localPhotoPath: Value('${dir.path}/diverged_photo.jpg'),
+        ),
       ),
       (
         'localCompressedPhotoPath',
-        (LocalAssessmentDraft d) => d.copyWith(
-          localCompressedPhotoPath: '${tempDir.path}/diverged_comp.jpg',
+        (Directory dir) => LocalAssessmentDraftsCompanion(
+          localCompressedPhotoPath: Value('${dir.path}/diverged_comp.jpg'),
         ),
       ),
       (
         'sha256Checksum',
-        (LocalAssessmentDraft d) =>
-            d.copyWith(sha256Checksum: 'abcdef1234567890'),
+        (Directory _) => const LocalAssessmentDraftsCompanion(
+          sha256Checksum: Value('abcdef1234567890'),
+        ),
       ),
       (
         'familyId',
-        (LocalAssessmentDraft d) => d.copyWith(familyId: 'fam-other'),
+        (Directory _) =>
+            const LocalAssessmentDraftsCompanion(familyId: Value('fam-other')),
       ),
-      ('childId', (LocalAssessmentDraft d) => d.copyWith(childId: 'c-other')),
+      (
+        'childId',
+        (Directory _) =>
+            const LocalAssessmentDraftsCompanion(childId: Value('c-other')),
+      ),
     ]) {
       test(
         'R26-3-01: Mutation to ${fieldMutation.$1} WITHOUT changing updatedAt rejects with concurrencyConflict',
@@ -604,13 +654,15 @@ void main() {
           final persisted = await conn1.getLocalDraft(
             'd-mutation-${fieldMutation.$1}',
           );
-          expect(persisted, isNotNull);
+          if (persisted == null) {
+            fail('Expected persisted draft d-mutation-${fieldMutation.$1}');
+          }
 
-          // Connection 2 modifies the target field WITHOUT bumping updatedAt
-          final mutated = fieldMutation
-              .$2(persisted!)
-              .copyWith(updatedAt: persisted.updatedAt);
-          await conn2.saveLocalDraft(mutated);
+          // Connection 2 modifies the target field directly in SQLite WITHOUT bumping updatedAt
+          await applyRawConn2Update(
+            'd-mutation-${fieldMutation.$1}',
+            fieldMutation.$2(tempDir),
+          );
 
           // Confirm in conn1 that updatedAt did NOT change
           final afterConn2 = await conn1.getLocalDraft(

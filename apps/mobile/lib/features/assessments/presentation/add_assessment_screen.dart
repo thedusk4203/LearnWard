@@ -7,6 +7,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../shared/utils/uuid_generator.dart';
+import '../services/local_evidence_file_store.dart';
 import 'evidence_picker_service.dart';
 
 /// Screen where a learner captures an academic result, attaches evidence,
@@ -66,14 +67,57 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       ExistingEvidenceRestorationStatus.none;
   int _restorationGeneration = 0;
   String? _unrestoredPhotoPath;
+  String? _frozenEvidenceSha256;
+  String? _frozenCanonicalPath;
   String? _errorMessage;
   double? _liveNormalizedScore;
+
+  LocalAssessmentDraft? _authoritativeDraft;
+  bool _staleLockedDraftRejection = false;
+  int _dropdownEpoch = 0;
+
+  static const String _payloadLockedEditRejectedMessage =
+      'Original submitted or quarantined assessment payload, IDs, and evidence are locked and preserved on this device and cannot be edited.';
+  static const String _staleScreenPayloadDivergedMessage =
+      'This draft is already locked in local storage; the original submitted payload is preserved. Edits made on this screen cannot be submitted—reopen the draft from Drafts to review or retry the original payload.';
+
+  LocalAssessmentDraft? get _effectiveKnownDraft =>
+      _authoritativeDraft ?? widget.initialDraft;
+
+  bool get _isPayloadLocked {
+    if (_isQuarantined) {
+      return true;
+    }
+    final draft = _effectiveKnownDraft;
+    if (draft == null) {
+      return false;
+    }
+    return isDraftPayloadLocked(draft);
+  }
+
+  bool get _isDirectRetryAllowed {
+    if (_isQuarantined) {
+      return false;
+    }
+    final draft = _effectiveKnownDraft;
+    if (draft == null) {
+      return true;
+    }
+    return isDraftDirectRetryAllowed(draft);
+  }
+
+  bool get _isEvidenceLocked =>
+      _isPayloadLocked ||
+      _frozenEvidenceSha256 != null ||
+      _frozenCanonicalPath != null ||
+      (_effectiveKnownDraft?.hasVerifiedEvidenceSnapshot ?? false);
 
   @override
   void initState() {
     super.initState();
     _evidenceRemoved = false;
     final draft = widget.initialDraft;
+    _authoritativeDraft = draft;
     if (draft != null) {
       _localDraftId = draft.localDraftId;
       _createCommandId = draft.createCommandId;
@@ -85,21 +129,31 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _subjectController = TextEditingController(text: draft.subject);
       _titleController = TextEditingController(text: draft.title);
       _rawScoreController = TextEditingController(
-        text: draft.rawScore > 0 ? draft.rawScore.toString() : '',
+        text: (draft.rawScore > 0 || isDraftPayloadLocked(draft))
+            ? draft.rawScore.toString()
+            : '',
       );
       _maxScoreController = TextEditingController(
         text: draft.maxScore.toString(),
       );
       _selectedType = AssessmentType.fromValue(draft.assessmentType);
       _selectedDifficulty = AssessmentDifficulty.fromValue(draft.difficulty);
-      _occurredAt = draft.occurredAt;
-      if (draft.localPhotoPath != null) {
+      _occurredAt = normalizeAssessmentOccurredAt(draft.occurredAt);
+      if (draft.hasVerifiedEvidenceSnapshot) {
+        _frozenEvidenceSha256 = draft.sha256Checksum;
+        _frozenCanonicalPath = draft.localCompressedPhotoPath;
+        _unrestoredPhotoPath =
+            draft.localPhotoPath ?? draft.localCompressedPhotoPath;
+        _restorationStatus = ExistingEvidenceRestorationStatus.loading;
+        _restoreCanonicalEvidenceSnapshot(draft);
+      } else if (draft.localPhotoPath != null) {
         _unrestoredPhotoPath = draft.localPhotoPath;
         _restorationStatus = ExistingEvidenceRestorationStatus.loading;
         _restoreEvidenceFile(draft.localPhotoPath!);
       } else {
         _restorationStatus = ExistingEvidenceRestorationStatus.none;
       }
+      _syncAuthoritativeDraftFromStore();
     } else {
       _localDraftId = generateUuid();
       _createCommandId = generateUuid();
@@ -116,13 +170,49 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _maxScoreController = TextEditingController(text: '10');
       _selectedType = AssessmentType.quiz;
       _selectedDifficulty = AssessmentDifficulty.normal;
-      _occurredAt = DateTime.now();
+      _occurredAt = normalizeAssessmentOccurredAt(DateTime.now());
       _restorationStatus = ExistingEvidenceRestorationStatus.none;
     }
 
     _rawScoreController.addListener(_updateScorePreview);
     _maxScoreController.addListener(_updateScorePreview);
     _updateScorePreview();
+  }
+
+  Future<void> _restoreCanonicalEvidenceSnapshot(
+    LocalAssessmentDraft draft,
+  ) async {
+    final generation = ++_restorationGeneration;
+    try {
+      final store = ref.read(localEvidenceFileStoreProvider);
+      final verified = await store.readVerifiedCanonicalSnapshot(draft: draft);
+      if (!mounted || generation != _restorationGeneration) return;
+
+      final sourcePath =
+          draft.localCompressedPhotoPath ?? draft.localPhotoPath ?? '';
+      final fileName = sourcePath.isNotEmpty
+          ? sourcePath.split(RegExp(r'[/\\]')).last
+          : 'evidence_${draft.localDraftId}.${verified.mediaType == 'image/png' ? 'png' : 'jpg'}';
+      setState(() {
+        _restorationStatus = ExistingEvidenceRestorationStatus.restored;
+        _unrestoredPhotoPath = null;
+        _selectedEvidence = SelectedEvidenceFile(
+          bytes: verified.bytes,
+          fileName: fileName,
+          mediaType: verified.mediaType,
+          localPath: draft.localPhotoPath ?? draft.localCompressedPhotoPath,
+        );
+      });
+    } catch (_) {
+      if (!mounted || generation != _restorationGeneration) return;
+      setState(() {
+        _restorationStatus =
+            ExistingEvidenceRestorationStatus.missingOrUnreadable;
+        _errorMessage =
+            'Existing evidence snapshot could not be verified on this device. '
+            'The draft cannot be submitted without valid evidence.';
+      });
+    }
   }
 
   Future<void> _restoreEvidenceFile(String path) async {
@@ -193,12 +283,280 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     }
   }
 
+  static const String _frozenEvidenceLockedReplaceMessage =
+      'Evidence photo is already locked for this draft and cannot be replaced or removed. Start a new assessment draft to attach a different photo.';
+
+  static const String _frozenEvidenceLockedRemoveMessage =
+      'Evidence photo is already locked for this draft and cannot be removed or replaced. Start a new assessment draft to submit without this photo.';
+
+  Future<LocalAssessmentDraft?> _syncAuthoritativeDraftFromStore({
+    bool updateUiState = true,
+  }) async {
+    final persisted = await ref
+        .read(localDraftStoreProvider)
+        .getLocalDraft(_localDraftId);
+    final latest = persisted ?? widget.initialDraft;
+    if (!mounted) {
+      return latest;
+    }
+    if (latest != null) {
+      if (latest.hasVerifiedEvidenceSnapshot) {
+        _frozenEvidenceSha256 ??= latest.sha256Checksum;
+        _frozenCanonicalPath ??= latest.localCompressedPhotoPath;
+      }
+      final latestQuarantined =
+          latest.isLegacyUnknown ||
+          latest.hasUnboundActor ||
+          latest.isReadOnlyQuarantined ||
+          latest.hasMalformedLease;
+      if (updateUiState &&
+          (_authoritativeDraft != latest ||
+              (latestQuarantined && !_isQuarantined))) {
+        setState(() {
+          _authoritativeDraft = latest;
+          if (latestQuarantined) {
+            _isQuarantined = true;
+          }
+        });
+      } else {
+        _authoritativeDraft = latest;
+        if (latestQuarantined) {
+          _isQuarantined = true;
+        }
+      }
+    }
+    return latest;
+  }
+
+  String? _findFormPayloadDivergence(LocalAssessmentDraft prior) {
+    if (_selectedSubjectKey != prior.subjectKey) {
+      return 'subjectKey';
+    }
+    final normalizedFormSubject = normalizeAssessmentSubject(
+      _subjectController.text,
+      fallbackSubjectKey: _selectedSubjectKey,
+    );
+    final normalizedPriorSubject = normalizeAssessmentSubject(
+      prior.subject,
+      fallbackSubjectKey: prior.subjectKey,
+    );
+    if (normalizedFormSubject != normalizedPriorSubject ||
+        _subjectController.text.trim() != prior.subject.trim()) {
+      return 'subject';
+    }
+    final normalizedFormTitle = normalizeAssessmentTitle(
+      _titleController.text,
+      fallbackTitle: 'Draft Assessment',
+    );
+    final normalizedPriorTitle = normalizeAssessmentTitle(
+      prior.title,
+      fallbackTitle: 'Draft Assessment',
+    );
+    if (normalizedFormTitle != normalizedPriorTitle ||
+        _titleController.text.trim() != prior.title.trim()) {
+      return 'title';
+    }
+    if (_selectedType.value != prior.assessmentType) {
+      return 'assessmentType';
+    }
+    if (_selectedDifficulty.value != prior.difficulty) {
+      return 'difficulty';
+    }
+    final parsedRaw = double.tryParse(_rawScoreController.text.trim());
+    final parsedMax = double.tryParse(_maxScoreController.text.trim());
+    if (parsedRaw == null || parsedRaw != prior.rawScore) {
+      return 'rawScore';
+    }
+    if (parsedMax == null || parsedMax != prior.maxScore) {
+      return 'maxScore';
+    }
+    if (normalizeAssessmentOccurredAt(_occurredAt) !=
+        normalizeAssessmentOccurredAt(prior.occurredAt)) {
+      return 'occurredAt';
+    }
+    if (widget.initialDraft != null &&
+        prior.entryContext != widget.initialDraft!.entryContext) {
+      return 'entryContext';
+    }
+    if (prior.createCommandId != null &&
+        _createCommandId != null &&
+        _createCommandId != prior.createCommandId) {
+      return 'createCommandId';
+    }
+    if (prior.submitCommandId != null &&
+        _submitCommandId != null &&
+        _submitCommandId != prior.submitCommandId) {
+      return 'submitCommandId';
+    }
+    final priorHasEvidence =
+        prior.hasVerifiedEvidenceSnapshot ||
+        (prior.evidenceId?.isNotEmpty ?? false) ||
+        (prior.localPhotoPath?.isNotEmpty ?? false);
+    if (_evidenceRemoved && priorHasEvidence) {
+      return 'evidence';
+    }
+    if (!priorHasEvidence &&
+        (_selectedEvidence != null || _evidenceId != null)) {
+      return 'evidence';
+    }
+    if (prior.hasVerifiedEvidenceSnapshot &&
+        _restorationStatus != ExistingEvidenceRestorationStatus.loading) {
+      final displayed = _selectedEvidence;
+      if (displayed == null ||
+          computeSha256Hex(displayed.bytes) != prior.sha256Checksum) {
+        return 'evidence';
+      }
+    }
+    if (prior.evidenceId != null &&
+        _evidenceId != null &&
+        _evidenceId != prior.evidenceId) {
+      return 'evidence';
+    }
+    return null;
+  }
+
+  Future<void> _handlePayloadTextEdited() async {
+    final latest = await _syncAuthoritativeDraftFromStore(updateUiState: false);
+    if (!mounted || latest == null) {
+      return;
+    }
+    if (isDraftPayloadLocked(latest)) {
+      final diverged = _findFormPayloadDivergence(latest) != null;
+      setState(() {
+        _authoritativeDraft = latest;
+        if (latest.isLegacyUnknown ||
+            latest.hasUnboundActor ||
+            latest.isReadOnlyQuarantined ||
+            latest.hasMalformedLease) {
+          _isQuarantined = true;
+        }
+        if (diverged) {
+          _staleLockedDraftRejection = true;
+        }
+        _errorMessage = diverged
+            ? _staleScreenPayloadDivergedMessage
+            : _payloadLockedEditRejectedMessage;
+      });
+    }
+  }
+
+  Future<bool> _rejectLockedDropdownAttempt({
+    required LocalAssessmentDraft? latest,
+    required bool changed,
+  }) async {
+    if (!mounted) {
+      return true;
+    }
+    if (latest != null && isDraftPayloadLocked(latest)) {
+      setState(() {
+        _authoritativeDraft = latest;
+        if (latest.isLegacyUnknown ||
+            latest.hasUnboundActor ||
+            latest.isReadOnlyQuarantined ||
+            latest.hasMalformedLease) {
+          _isQuarantined = true;
+        }
+        if (changed) {
+          _staleLockedDraftRejection = true;
+        }
+        _dropdownEpoch++;
+        _errorMessage = _staleScreenPayloadDivergedMessage;
+      });
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _onSubjectKeyChanged(SubjectKey? val) async {
+    if (val == null) return;
+    if (_isPayloadLocked) {
+      setState(() {
+        _dropdownEpoch++;
+        _errorMessage = _payloadLockedEditRejectedMessage;
+      });
+      return;
+    }
+    final latest = await _syncAuthoritativeDraftFromStore(updateUiState: false);
+    if (await _rejectLockedDropdownAttempt(
+      latest: latest,
+      changed: latest != null && val != latest.subjectKey,
+    )) {
+      return;
+    }
+    setState(() {
+      _selectedSubjectKey = val;
+      if (_subjectController.text.isEmpty ||
+          SubjectKey.values.any(
+            (s) => s.displayLabel == _subjectController.text,
+          )) {
+        _subjectController.text = val.displayLabel;
+      }
+    });
+  }
+
+  Future<void> _onAssessmentTypeChanged(AssessmentType? val) async {
+    if (val == null) return;
+    if (_isPayloadLocked) {
+      setState(() {
+        _dropdownEpoch++;
+        _errorMessage = _payloadLockedEditRejectedMessage;
+      });
+      return;
+    }
+    final latest = await _syncAuthoritativeDraftFromStore(updateUiState: false);
+    if (await _rejectLockedDropdownAttempt(
+      latest: latest,
+      changed: latest != null && val.value != latest.assessmentType,
+    )) {
+      return;
+    }
+    setState(() => _selectedType = val);
+  }
+
+  Future<void> _onDifficultyChanged(AssessmentDifficulty? val) async {
+    if (val == null) return;
+    if (_isPayloadLocked) {
+      setState(() {
+        _dropdownEpoch++;
+        _errorMessage = _payloadLockedEditRejectedMessage;
+      });
+      return;
+    }
+    final latest = await _syncAuthoritativeDraftFromStore(updateUiState: false);
+    if (await _rejectLockedDropdownAttempt(
+      latest: latest,
+      changed: latest != null && val.value != latest.difficulty,
+    )) {
+      return;
+    }
+    setState(() => _selectedDifficulty = val);
+  }
+
   Future<void> _pickEvidence() async {
+    final prePickDraft = await _syncAuthoritativeDraftFromStore();
+    if (!mounted) return;
+    if (_isQuarantined ||
+        (prePickDraft != null && isDraftPayloadLocked(prePickDraft))) {
+      setState(() {
+        _errorMessage = _payloadLockedEditRejectedMessage;
+      });
+      return;
+    }
+
     final picker = ref.read(evidencePickerServiceProvider);
     final file = await picker.pickEvidencePhoto();
     if (file == null) return;
 
+    if (file.bytes.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'The selected photo is empty. Please choose a valid JPEG or PNG photo.';
+      });
+      return;
+    }
+
     if (file.bytes.length > 10 * 1024 * 1024) {
+      if (!mounted) return;
       setState(() {
         _errorMessage =
             'The selected photo exceeds the 10 MB limit (${(file.bytes.length / (1024 * 1024)).toStringAsFixed(1)} MB). Please choose a smaller photo.';
@@ -207,8 +565,51 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     }
 
     if (file.mediaType != 'image/jpeg' && file.mediaType != 'image/png') {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Only JPEG and PNG photos are supported.';
+      });
+      return;
+    }
+
+    // R33-08 & R33-09: Reject replacement once payload is locked or canonical snapshot has been frozen.
+    // Preserve both the original canonical file and newly selected file on disk without deletion.
+    final latestDraft = await _syncAuthoritativeDraftFromStore();
+    if (!mounted) return;
+    if (_isQuarantined ||
+        (latestDraft != null && isDraftPayloadLocked(latestDraft))) {
+      setState(() {
+        _errorMessage = _staleScreenPayloadDivergedMessage;
+      });
+      return;
+    }
+    final frozenSha256 =
+        _frozenEvidenceSha256 ??
+        ((latestDraft?.hasVerifiedEvidenceSnapshot ?? false)
+            ? latestDraft?.sha256Checksum
+            : null);
+    final isDispatchedOrCommitted =
+        latestDraft != null &&
+        (latestDraft.dispatchState == CommandDispatchState.possiblyDispatched ||
+            latestDraft.dispatchState ==
+                CommandDispatchState.confirmedCommitted);
+    if (frozenSha256 != null || isDispatchedOrCommitted) {
+      final pickedSha256 = computeSha256Hex(file.bytes);
+      final currentBytes = _selectedEvidence?.bytes;
+      final matchesFrozenDigest =
+          frozenSha256 != null &&
+          pickedSha256 == frozenSha256 &&
+          (currentBytes == null || currentBytes.length == file.bytes.length);
+      if (!matchesFrozenDigest) {
+        if (!mounted) return;
+        setState(() {
+          _errorMessage = _frozenEvidenceLockedReplaceMessage;
+        });
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = null;
       });
       return;
     }
@@ -220,6 +621,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         bytes: file.bytes,
       );
       _restorationGeneration++;
+      if (!mounted) return;
       setState(() {
         _evidenceSaveFailed = false;
         _evidenceRemoved = false;
@@ -235,6 +637,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         _errorMessage = null;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         // R26-5-01: Evidence persistence failure must not be treated as success.
         // Do NOT silently accept an unsaved picked file as durable evidence.
@@ -246,6 +649,31 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   Future<void> _removeEvidence() async {
+    // R33-08 & R33-09: Once payload is locked or a canonical snapshot is frozen, removal
+    // must fail closed without clearing displayed evidence, rotating IDs, or deleting files.
+    final latestDraft = await _syncAuthoritativeDraftFromStore();
+    if (!mounted) return;
+    if (_isQuarantined ||
+        (latestDraft != null && isDraftPayloadLocked(latestDraft))) {
+      setState(() {
+        _errorMessage = _payloadLockedEditRejectedMessage;
+      });
+      return;
+    }
+    final isFrozenOrDispatched =
+        _frozenEvidenceSha256 != null ||
+        _frozenCanonicalPath != null ||
+        (latestDraft?.hasVerifiedEvidenceSnapshot ?? false) ||
+        latestDraft?.dispatchState == CommandDispatchState.possiblyDispatched ||
+        latestDraft?.dispatchState == CommandDispatchState.confirmedCommitted;
+    if (isFrozenOrDispatched) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = _frozenEvidenceLockedRemoveMessage;
+      });
+      return;
+    }
+
     // B01: Do NOT physically delete the file here!
     // Removing an image from the UI must not immediately unlink its physical file.
     // Keep original evidence available on disk until a new draft state is durably
@@ -313,13 +741,35 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     final existingFromStore = await store.getLocalDraft(_localDraftId);
     final prior = existingFromStore ?? widget.initialDraft;
 
+    if (prior != null && isDraftPayloadLocked(prior)) {
+      if (mounted) {
+        setState(() {
+          _authoritativeDraft = prior;
+          if (prior.isLegacyUnknown ||
+              prior.hasUnboundActor ||
+              prior.isReadOnlyQuarantined ||
+              prior.hasMalformedLease) {
+            _isQuarantined = true;
+          }
+          _errorMessage = _payloadLockedEditRejectedMessage;
+        });
+      }
+      return;
+    }
+
     final isLegacy =
         (prior?.isLegacyUnknown ?? false) ||
         _isQuarantined ||
         (widget.initialDraft?.isLegacyUnknown ?? false);
 
     if (isLegacy) {
-      _isQuarantined = true;
+      if (mounted) {
+        setState(() {
+          _isQuarantined = true;
+          _errorMessage = _payloadLockedEditRejectedMessage;
+        });
+      }
+      return;
     }
 
     final String? resolvedCreateCommandId;
@@ -343,8 +793,20 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
       resolvedCreateCommandId = _createCommandId;
       resolvedSubmitCommandId = _submitCommandId;
-      resolvedActorUserId =
-          prior?.actorUserId ?? ref.read(currentUserIdProvider);
+      if (prior != null) {
+        // Never adopt or backfill actorUserId onto an existing draft row (R33-01).
+        resolvedActorUserId = prior.actorUserId;
+      } else {
+        var freshActorId = ref.read(currentUserIdProvider);
+        if (freshActorId == null) {
+          try {
+            freshActorId =
+                (await ref.read(authSessionPortProvider).validateForMutation())
+                    ?.userId;
+          } catch (_) {}
+        }
+        resolvedActorUserId = freshActorId;
+      }
       resolvedActorRole = prior?.actorRole;
       resolvedDispatchState = _resolveSafeDispatchState(prior);
     }
@@ -371,8 +833,42 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       }
     }
 
+    final isLockedForSave =
+        _frozenEvidenceSha256 != null ||
+        _frozenCanonicalPath != null ||
+        (prior?.hasVerifiedEvidenceSnapshot ?? false) ||
+        prior?.dispatchState == CommandDispatchState.possiblyDispatched ||
+        prior?.dispatchState == CommandDispatchState.confirmedCommitted;
+    if (isLockedForSave) {
+      final frozenSha = _frozenEvidenceSha256 ?? prior?.sha256Checksum;
+      final selectedMismatch =
+          _evidenceRemoved ||
+          (frozenSha != null &&
+              _selectedEvidence != null &&
+              computeSha256Hex(_selectedEvidence!.bytes) != frozenSha);
+      if (selectedMismatch) {
+        setState(() {
+          _errorMessage = _evidenceRemoved
+              ? _frozenEvidenceLockedRemoveMessage
+              : _frozenEvidenceLockedReplaceMessage;
+        });
+        return;
+      }
+    }
+
     final raw = double.tryParse(_rawScoreController.text.trim()) ?? 0.0;
     final max = double.tryParse(_maxScoreController.text.trim()) ?? 10.0;
+    final normalizedSubject = normalizeAssessmentSubject(
+      _subjectController.text,
+      fallbackSubjectKey: _selectedSubjectKey,
+    );
+    final normalizedTitle = normalizeAssessmentTitle(
+      _titleController.text,
+      fallbackTitle: 'Draft Assessment',
+    );
+    final normalizedOccurredAt = normalizeAssessmentOccurredAt(_occurredAt);
+    final resolvedEntryContext =
+        prior?.entryContext ?? EntryContext.sharedChild;
 
     final draft = LocalAssessmentDraft(
       localDraftId: _localDraftId,
@@ -383,20 +879,16 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       evidenceId: resolvedEvidenceId,
       serverAssessmentId: resolvedServerAssessmentId,
       subjectKey: _selectedSubjectKey,
-      subject: _subjectController.text.trim().isEmpty
-          ? _selectedSubjectKey.displayLabel
-          : _subjectController.text.trim(),
-      title: _titleController.text.trim().isEmpty
-          ? 'Draft Assessment'
-          : _titleController.text.trim(),
+      subject: normalizedSubject,
+      title: normalizedTitle,
       assessmentType: _selectedType.value,
       difficulty: _selectedDifficulty.value,
       rawScore: raw,
       maxScore: max,
       localPhotoPath: resolvedPhotoPath,
-      occurredAt: _occurredAt,
+      occurredAt: normalizedOccurredAt,
       updatedAt: DateTime.now().toUtc(),
-      entryContext: EntryContext.sharedChild,
+      entryContext: resolvedEntryContext,
       serverEvidenceId: prior?.serverEvidenceId,
       sha256Checksum: prior?.sha256Checksum,
       localCompressedPhotoPath: prior?.localCompressedPhotoPath,
@@ -421,10 +913,12 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
           context,
         ).showSnackBar(const SnackBar(content: Text('Draft saved locally.')));
       }
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = 'Could not save draft locally. Please check storage space and try again.';
+          _errorMessage = e is DraftWriteConflictException
+              ? 'Cannot save changes: this draft is locked or requires recovery reconciliation.'
+              : 'Could not save draft locally. Please check storage space and try again.';
         });
       }
     }
@@ -433,15 +927,54 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   Future<void> _submitAssessment() async {
     final store = ref.read(localDraftStoreProvider);
     final existingFromStore = await store.getLocalDraft(_localDraftId);
-    final prior = existingFromStore ?? widget.initialDraft;
-
-    final isQuarantined = (prior?.isLegacyUnknown ?? false) || _isQuarantined;
-    if (isQuarantined) {
+    if (widget.initialDraft != null && existingFromStore == null) {
       setState(() {
-        _isQuarantined = true;
-        _errorMessage = 'Cannot submit a quarantined legacy draft. Recovery reconciliation is required.';
+        _errorMessage = 'Local draft record is missing from storage. Reopen drafts before submitting.';
       });
       return;
+    }
+    final prior = existingFromStore ?? widget.initialDraft;
+    if (prior != null && mounted) {
+      setState(() {
+        _authoritativeDraft = prior;
+        if (prior.hasVerifiedEvidenceSnapshot) {
+          _frozenEvidenceSha256 ??= prior.sha256Checksum;
+          _frozenCanonicalPath ??= prior.localCompressedPhotoPath;
+        }
+      });
+    }
+
+    final isQuarantined =
+        (prior?.isLegacyUnknown ?? false) ||
+        (prior?.hasUnboundActor ?? false) ||
+        (prior?.isReadOnlyQuarantined ?? false) ||
+        (prior?.hasMalformedLease ?? false) ||
+        _isQuarantined;
+    if (isQuarantined) {
+      setState(() {
+        _authoritativeDraft = prior;
+        _isQuarantined = true;
+        _errorMessage = 'Cannot submit a quarantined draft. Recovery reconciliation is required.';
+      });
+      return;
+    }
+    if (prior != null && !isDraftDirectRetryAllowed(prior)) {
+      setState(() {
+        _authoritativeDraft = prior;
+        _errorMessage = 'Cannot submit this draft directly while recovery reconciliation or active lease processing is pending.';
+      });
+      return;
+    }
+    if (prior != null && isDraftPayloadLocked(prior)) {
+      if (_staleLockedDraftRejection ||
+          _findFormPayloadDivergence(prior) != null) {
+        setState(() {
+          _authoritativeDraft = prior;
+          _staleLockedDraftRejection = true;
+          _errorMessage = _staleScreenPayloadDivergedMessage;
+        });
+        return;
+      }
     }
 
     // R26-6-01: Evidence restoration in progress or missing/unreadable must fail closed.
@@ -454,11 +987,44 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     if (_restorationStatus ==
         ExistingEvidenceRestorationStatus.missingOrUnreadable) {
       setState(() {
-        _errorMessage =
-            'Cannot submit assessment: existing evidence is missing or unreadable. '
-            'Please attach a replacement photo or explicitly remove the attachment.';
+        _errorMessage = _isEvidenceLocked
+            ? 'Cannot submit assessment: the locked evidence photo snapshot is missing or corrupted on disk and cannot be replaced.'
+            : 'Cannot submit assessment: existing evidence is missing or unreadable. '
+                  'Please attach a replacement photo or explicitly remove the attachment.';
       });
       return;
+    }
+    if (prior != null && isDraftPayloadLocked(prior)) {
+      if (_staleLockedDraftRejection ||
+          _findFormPayloadDivergence(prior) != null) {
+        setState(() {
+          _authoritativeDraft = prior;
+          _staleLockedDraftRejection = true;
+          _errorMessage = _staleScreenPayloadDivergedMessage;
+        });
+        return;
+      }
+    }
+
+    // R33-08: Fail closed in UI boundary if frozen snapshot was marked removed or diverged.
+    if ((prior?.hasVerifiedEvidenceSnapshot ?? false) ||
+        _frozenEvidenceSha256 != null) {
+      if (_evidenceRemoved) {
+        setState(() {
+          _errorMessage = _frozenEvidenceLockedRemoveMessage;
+        });
+        return;
+      }
+      final expectedSha = _frozenEvidenceSha256 ?? prior?.sha256Checksum;
+      final displayed = _selectedEvidence;
+      if (displayed != null &&
+          expectedSha != null &&
+          computeSha256Hex(displayed.bytes) != expectedSha) {
+        setState(() {
+          _errorMessage = _frozenEvidenceLockedReplaceMessage;
+        });
+        return;
+      }
     }
 
     // R26-5-01: Do not begin a remote submission involving a newly selected attachment whose durable persistence failed.
@@ -467,19 +1033,6 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         _errorMessage = 'Cannot submit assessment: the selected photo could not be saved locally. Please re-select a photo or remove it.';
       });
       return;
-    }
-
-    if (!_evidenceRemoved && _selectedEvidence != null) {
-      final fileStore = ref.read(localEvidenceFileStoreProvider);
-      final verifiedBytes = _selectedEvidence!.localPath != null
-          ? await fileStore.readEvidenceBytes(_selectedEvidence!.localPath!)
-          : null;
-      if (verifiedBytes == null) {
-        setState(() {
-          _errorMessage = 'Cannot submit assessment: the selected photo could not be verified in local storage. Please re-select a photo or remove it.';
-        });
-        return;
-      }
     }
 
     if (!_formKey.currentState!.validate()) return;
@@ -501,8 +1054,45 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     try {
       final repo = ref.read(assessmentRepositoryProvider);
       final storage = ref.read(assessmentEvidenceStorageProvider);
+      final fileStore = ref.read(localEvidenceFileStoreProvider);
+      final authPort = ref.read(authSessionPortProvider);
 
-      if (_selectedEvidence != null && _evidenceId == null) {
+      // R31-08: Authoritative live session validation before staging/dispatch.
+      final validatedActor = await assertValidStorageAuthSession(
+        authSessionPort: authPort,
+        storagePath: '',
+        stage: 'assessment UI preflight',
+      );
+      if (!validatedActor.isValidAt(DateTime.now().toUtc())) {
+        throw EvidenceStorageAuthException(
+          const AuthFailureOutcome(
+            storagePath: '',
+            reason: 'Session expired before assessment submission.',
+          ),
+        );
+      }
+      if (prior != null) {
+        if (prior.actorUserId == null ||
+            prior.actorUserId!.trim().isEmpty ||
+            prior.actorUserId != validatedActor.userId) {
+          throw EvidenceStorageAuthException(
+            const AuthFailureOutcome(
+              storagePath: '',
+              reason: 'Authenticated actor does not match the original local draft author.',
+            ),
+          );
+        }
+        if (prior.familyId != activeChild.familyId.value ||
+            prior.childId != activeChild.id.value) {
+          throw const InvalidAssessmentException(
+            'Active child selection does not match the original draft scope.',
+          );
+        }
+      }
+
+      if (!_evidenceRemoved &&
+          _selectedEvidence != null &&
+          _evidenceId == null) {
         _evidenceId = prior?.evidenceId ?? generateUuid();
       }
 
@@ -510,80 +1100,235 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
       _submitCommandId ??= prior?.submitCommandId ?? generateUuid();
       _serverAssessmentId ??= prior?.serverAssessmentId;
 
-      final resolvedPhotoPath = _evidenceRemoved
-          ? null
-          : (_selectedEvidence?.localPath ?? prior?.localPhotoPath);
-      final resolvedEvidenceId = _evidenceRemoved
-          ? null
-          : (_evidenceId ?? prior?.evidenceId);
+      final isDispatchedRetry =
+          prior != null &&
+          prior.dispatchState == CommandDispatchState.possiblyDispatched;
+      if (prior != null && isDraftPayloadLocked(prior)) {
+        final divergedField = _findFormPayloadDivergence(prior);
+        if (_staleLockedDraftRejection || divergedField != null) {
+          throw DraftSubmissionCasException(
+            stage: DraftCasFailureStage.registerPreDispatchDraft,
+            localDraftId: _localDraftId,
+            casStatus: DraftCasStatus.casConflict,
+            serverAssessmentId: prior.serverAssessmentId,
+            message:
+                'Displayed form payload diverges from locked local draft ($divergedField).',
+          );
+        }
+      }
 
-      // Persist local draft state before submitting so that any crash/drop
-      // during or before submit preserves the stable command and evidence IDs.
-      final localDraft = LocalAssessmentDraft(
-        localDraftId: _localDraftId,
-        familyId: activeChild.familyId.value,
-        childId: activeChild.id.value,
-        createCommandId: _createCommandId,
-        submitCommandId: _submitCommandId,
-        evidenceId: resolvedEvidenceId,
-        serverAssessmentId: _serverAssessmentId,
-        subjectKey: _selectedSubjectKey,
-        subject: _subjectController.text.trim().isEmpty
-            ? _selectedSubjectKey.displayLabel
-            : _subjectController.text.trim(),
-        title: _titleController.text.trim().isEmpty
-            ? 'Draft Assessment'
-            : _titleController.text.trim(),
-        assessmentType: _selectedType.value,
-        difficulty: _selectedDifficulty.value,
-        rawScore: raw,
-        maxScore: max,
-        localPhotoPath: resolvedPhotoPath,
-        occurredAt: _occurredAt,
-        updatedAt: DateTime.now().toUtc(),
-        entryContext: EntryContext.sharedChild,
-        serverEvidenceId: prior?.serverEvidenceId,
-        sha256Checksum: prior?.sha256Checksum,
-        localCompressedPhotoPath: prior?.localCompressedPhotoPath,
-        submissionStatus: DraftSubmissionStatus.submittingAssessment,
-        retryCount: prior?.retryCount ?? 0,
-        dispatchState: CommandDispatchState.possiblyDispatched,
-        lastErrorMessage: null,
-        actorUserId: prior?.actorUserId ?? ref.read(currentUserIdProvider),
-        actorRole: prior?.actorRole,
+      final normalizedSubject = normalizeAssessmentSubject(
+        _subjectController.text,
+        fallbackSubjectKey: _selectedSubjectKey,
       );
-      await store.saveLocalDraft(localDraft);
+      final normalizedTitle = normalizeAssessmentTitle(
+        _titleController.text,
+        fallbackTitle: 'Draft Assessment',
+      );
+      final normalizedOccurredAt = normalizeAssessmentOccurredAt(_occurredAt);
+      final resolvedEntryContext =
+          prior?.entryContext ?? EntryContext.sharedChild;
+
+      void assertDisplayedSelectionMatchesFrozen(
+        VerifiedCanonicalEvidence verified,
+        String? boundEvidenceId,
+      ) {
+        if (_evidenceRemoved) {
+          throw const CanonicalEvidenceValidationException(
+            CanonicalEvidenceValidationCode.sha256Mismatch,
+            'Locked evidence photo cannot be removed from this draft.',
+          );
+        }
+        final displayed = _selectedEvidence;
+        if (displayed == null ||
+            displayed.bytes.length != verified.bytes.length ||
+            computeSha256Hex(displayed.bytes) != verified.sha256Checksum ||
+            displayed.mediaType != verified.mediaType) {
+          throw const CanonicalEvidenceValidationException(
+            CanonicalEvidenceValidationCode.sha256Mismatch,
+            'Displayed evidence photo does not match this draft\'s locked canonical snapshot.',
+          );
+        }
+        if (boundEvidenceId != null &&
+            _evidenceId != null &&
+            _evidenceId != boundEvidenceId) {
+          throw DraftSubmissionCasException(
+            stage: DraftCasFailureStage.registerPreDispatchDraft,
+            localDraftId: _localDraftId,
+            casStatus: DraftCasStatus.casConflict,
+            message: 'Displayed evidenceId does not match the bound canonical draft evidenceId.',
+          );
+        }
+      }
+
+      List<int>? dispatchEvidenceBytes;
+      String? dispatchEvidenceMediaType;
+      String? dispatchEvidenceIdStr;
+
+      if (isDispatchedRetry) {
+        if (prior.hasVerifiedEvidenceSnapshot) {
+          final verified = await fileStore.readVerifiedCanonicalSnapshot(
+            draft: prior,
+          );
+          assertDisplayedSelectionMatchesFrozen(verified, prior.evidenceId);
+          dispatchEvidenceBytes = verified.bytes;
+          dispatchEvidenceMediaType = verified.mediaType;
+          dispatchEvidenceIdStr = prior.evidenceId;
+        } else if ((prior.evidenceId?.isNotEmpty ?? false) ||
+            (prior.localPhotoPath?.isNotEmpty ?? false)) {
+          throw MissingCanonicalEvidenceSnapshotException(
+            localDraftId: prior.localDraftId,
+            message: 'Cannot resume evidence draft without a verified canonical snapshot.',
+          );
+        }
+      } else {
+        final resolvedPhotoPath = _evidenceRemoved
+            ? null
+            : (_selectedEvidence?.localPath ?? prior?.localPhotoPath);
+        var resolvedEvidenceId = _evidenceRemoved
+            ? null
+            : (_evidenceId ?? prior?.evidenceId);
+        var resolvedCompressedPath = prior?.localCompressedPhotoPath;
+        var resolvedSha256 = prior?.sha256Checksum;
+
+        final hasAttachedEvidence =
+            !_evidenceRemoved &&
+            (_selectedEvidence != null ||
+                (resolvedPhotoPath?.isNotEmpty ?? false) ||
+                (prior?.hasVerifiedEvidenceSnapshot ?? false));
+
+        if (hasAttachedEvidence) {
+          if (prior != null && prior.hasVerifiedEvidenceSnapshot) {
+            final verified = await fileStore.readVerifiedCanonicalSnapshot(
+              draft: prior,
+            );
+            assertDisplayedSelectionMatchesFrozen(verified, prior.evidenceId);
+            dispatchEvidenceBytes = verified.bytes;
+            dispatchEvidenceMediaType = verified.mediaType;
+            dispatchEvidenceIdStr = prior.evidenceId;
+            resolvedEvidenceId = prior.evidenceId;
+            resolvedCompressedPath = prior.localCompressedPhotoPath;
+            resolvedSha256 = prior.sha256Checksum;
+          } else {
+            final diskBytes = resolvedPhotoPath != null
+                ? await fileStore.readEvidenceBytes(resolvedPhotoPath)
+                : null;
+            if (diskBytes == null || diskBytes.isEmpty) {
+              throw const InvalidAssessmentException(
+                'Cannot submit assessment: attached evidence bytes are missing or empty.',
+              );
+            }
+            resolvedEvidenceId ??= generateUuid();
+            _evidenceId = resolvedEvidenceId;
+            final snapshot = await fileStore.saveCanonicalEvidenceSnapshot(
+              localDraftId: _localDraftId,
+              bytes: diskBytes,
+            );
+            resolvedCompressedPath = snapshot.filePath;
+            resolvedSha256 = snapshot.sha256Checksum;
+            dispatchEvidenceBytes = diskBytes;
+            dispatchEvidenceMediaType = snapshot.mediaType;
+            dispatchEvidenceIdStr = resolvedEvidenceId;
+
+            // Revalidate session generation across canonical snapshot write.
+            await assertValidStorageAuthSession(
+              authSessionPort: authPort,
+              storagePath: '',
+              context: validatedActor,
+              expectedSessionGeneration: validatedActor.sessionGeneration,
+              stage: 'assessment canonical evidence staging',
+            );
+          }
+        }
+
+        final nowUtc = DateTime.now().toUtc();
+        final localDraft = LocalAssessmentDraft(
+          localDraftId: _localDraftId,
+          familyId: activeChild.familyId.value,
+          childId: activeChild.id.value,
+          createCommandId: _createCommandId,
+          submitCommandId: _submitCommandId,
+          evidenceId: resolvedEvidenceId,
+          serverAssessmentId: _serverAssessmentId,
+          subjectKey: _selectedSubjectKey,
+          subject: normalizedSubject,
+          title: normalizedTitle,
+          assessmentType: _selectedType.value,
+          difficulty: _selectedDifficulty.value,
+          rawScore: raw,
+          maxScore: max,
+          localPhotoPath: resolvedPhotoPath,
+          occurredAt: normalizedOccurredAt,
+          updatedAt: nowUtc,
+          entryContext: resolvedEntryContext,
+          serverEvidenceId: prior?.serverEvidenceId,
+          sha256Checksum: resolvedSha256,
+          localCompressedPhotoPath: resolvedCompressedPath,
+          submissionStatus:
+              prior?.submissionStatus ?? DraftSubmissionStatus.draft,
+          retryCount: prior?.retryCount ?? 0,
+          dispatchState: CommandDispatchState.neverDispatched,
+          lastErrorMessage: null,
+          actorUserId: prior?.actorUserId ?? validatedActor.userId,
+          actorRole: prior?.actorRole ?? validatedActor.role,
+        );
+
+        final regResult = await store.registerOrUpdateDraftIfUnchanged(
+          expected: existingFromStore,
+          desired: localDraft,
+          now: nowUtc,
+        );
+        if (!regResult.isSuccess) {
+          throw DraftSubmissionCasException(
+            stage: DraftCasFailureStage.registerPreDispatchDraft,
+            localDraftId: _localDraftId,
+            casStatus: regResult.status,
+            serverAssessmentId: _serverAssessmentId,
+            message:
+                'Failed to persist pre-dispatch local draft journal (${regResult.status.name}).',
+          );
+        }
+        if (resolvedSha256 != null && resolvedCompressedPath != null) {
+          _frozenEvidenceSha256 = resolvedSha256;
+          _frozenCanonicalPath = resolvedCompressedPath;
+        }
+      }
 
       final submitUseCase = SubmitAssessmentDraft(
         repository: repo,
         storage: storage,
         localDraftStore: store,
-        authSessionPort: ref.read(authSessionPortProvider),
+        canonicalSnapshotStore: fileStore,
+        authSessionPort: authPort,
       );
 
-      final evidenceIdObj = resolvedEvidenceId != null
-          ? EvidenceId(resolvedEvidenceId)
+      final evidenceIdObj = dispatchEvidenceIdStr != null
+          ? EvidenceId(dispatchEvidenceIdStr)
           : null;
 
       await submitUseCase(
-        createCommandId: _createCommandId!,
-        submitCommandId: _submitCommandId!,
+        createCommandId: isDispatchedRetry
+            ? (prior.createCommandId ?? _createCommandId!)
+            : _createCommandId!,
+        submitCommandId: isDispatchedRetry
+            ? (prior.submitCommandId ?? _submitCommandId!)
+            : _submitCommandId!,
         familyId: activeChild.familyId,
         childId: activeChild.id,
         subjectKey: _selectedSubjectKey,
-        subject: _subjectController.text.trim(),
-        title: _titleController.text.trim(),
+        subject: normalizedSubject,
+        title: normalizedTitle,
         type: _selectedType,
         difficulty: _selectedDifficulty,
         score: AssessmentScore(rawScore: raw, maxScore: max),
-        occurredAt: _occurredAt,
-        entryContext: EntryContext.sharedChild,
-        evidenceBytes: _evidenceRemoved ? null : _selectedEvidence?.bytes,
-        evidenceMediaType: _evidenceRemoved
-            ? null
-            : _selectedEvidence?.mediaType,
+        occurredAt: normalizedOccurredAt,
+        entryContext: resolvedEntryContext,
+        evidenceBytes: dispatchEvidenceBytes,
+        evidenceMediaType: dispatchEvidenceMediaType,
         evidenceId: evidenceIdObj,
         localDraftId: _localDraftId,
+        context: validatedActor,
+        expectedSessionGeneration: validatedActor.sessionGeneration,
       );
 
       // B03: Do NOT delete physical evidence solely because submission returned.
@@ -599,10 +1344,13 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
         context.pop(true);
       }
     } catch (e) {
-      setState(() {
-        _errorMessage = _mapFriendlyError(e);
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = _mapFriendlyError(e);
+        });
+      }
     } finally {
+      await _syncAuthoritativeDraftFromStore(updateUiState: false);
       if (mounted) {
         setState(() => _isSubmitting = false);
       }
@@ -610,6 +1358,33 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
   }
 
   String _mapFriendlyError(Object error) {
+    if (error is AssessmentReconciliationPendingException) {
+      return 'Assessment was submitted to the server, and this device preserved your draft and photo pending local sync confirmation.';
+    }
+    if (error is DraftSubmissionCasException) {
+      return 'Could not safely update your local draft state before syncing. Your draft and photo remain preserved on this device.';
+    }
+    if (error is MissingLocalDraftJournalException ||
+        error is MissingCanonicalEvidenceSnapshotException) {
+      return 'Could not verify your local draft journal or photo snapshot before submitting. Your data has not been submitted.';
+    }
+    if (error is CanonicalEvidenceValidationException) {
+      return switch (error.code) {
+        CanonicalEvidenceValidationCode.emptyBytes =>
+          'Attached photo cannot be empty. Please select another file.',
+        CanonicalEvidenceValidationCode.oversizedBytes =>
+          'Attached photo exceeds the allowed size limit (10 MiB).',
+        CanonicalEvidenceValidationCode.unsupportedMagicBytes =>
+          'Unsupported photo format. Please attach a JPEG or PNG image.',
+        CanonicalEvidenceValidationCode.sha256Mismatch ||
+        CanonicalEvidenceValidationCode.lengthMismatch ||
+        CanonicalEvidenceValidationCode.mediaTypeMismatch => 'The selected photo does not match this draft\'s locked evidence snapshot and cannot replace it. Start a new assessment draft to use a different photo.',
+        _ => 'Attached photo failed local integrity verification and cannot be submitted.',
+      };
+    }
+    if (error is EvidenceStorageException) {
+      return 'Could not read or save the attached photo safely on this device.';
+    }
     if (error is EvidenceStorageAuthException) {
       return 'Your session is no longer valid. Please sign in again to continue.';
     }
@@ -652,9 +1427,32 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
     return 'Failed to submit assessment. Please check your connection and try again.';
   }
 
+  String _buildPayloadLockedExplanation(LocalAssessmentDraft? draft) {
+    if (_isQuarantined ||
+        (draft?.isLegacyUnknown ?? false) ||
+        (draft?.hasUnboundActor ?? false) ||
+        (draft?.isReadOnlyQuarantined ?? false) ||
+        (draft?.hasMalformedLease ?? false)) {
+      return 'This draft is quarantined for data safety. Its original submitted payload, IDs, and evidence are locked read-only and preserved on this device.';
+    }
+    if (draft?.dispatchState == CommandDispatchState.confirmedCommitted) {
+      return 'This assessment has already been committed. Its original submitted payload, IDs, and evidence are locked and preserved on this device.';
+    }
+    if (draft != null && !isDraftDirectRetryAllowed(draft)) {
+      return 'Editing is locked for this draft while recovery reconciliation or active sync processing is pending. Its original submitted payload, IDs, and evidence remain preserved on this device.';
+    }
+    return 'This draft has already entered submission. Editing is locked so its original submitted payload, command IDs, score, and evidence remain preserved while retrying.';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final payloadLocked = _isPayloadLocked;
+    final directRetryAllowed = _isDirectRetryAllowed;
+    final knownDraft = _effectiveKnownDraft;
+    final isLegacyQuarantined =
+        (knownDraft?.isLegacyUnknown ?? false) ||
+        (widget.initialDraft?.isLegacyUnknown ?? false);
 
     return Scaffold(
       appBar: AppBar(
@@ -675,8 +1473,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (_isQuarantined ||
-                        (widget.initialDraft?.isLegacyUnknown ?? false)) ...[
+                    if (isLegacyQuarantined) ...[
                       Card(
                         key: const Key('legacy_draft_quarantine_banner'),
                         color: theme.colorScheme.tertiaryContainer,
@@ -692,11 +1489,39 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                               Expanded(
                                 child: Text(
                                   'This draft was preserved from an earlier app version with unverified sync state. '
-                                  'It has been quarantined for data safety and cannot be submitted directly. '
-                                  'You may review or edit its contents and save locally.',
+                                  'It has been quarantined for data safety: its original submitted payload, IDs, and evidence are preserved read-only, '
+                                  'and it cannot be edited or submitted directly.',
                                   style: TextStyle(
                                     color:
                                         theme.colorScheme.onTertiaryContainer,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                    ] else if (payloadLocked) ...[
+                      Card(
+                        key: const Key('payload_locked_banner'),
+                        color: theme.colorScheme.secondaryContainer,
+                        child: Padding(
+                          padding: const EdgeInsets.all(AppSpacing.md),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.lock_outline,
+                                color: theme.colorScheme.onSecondaryContainer,
+                              ),
+                              const SizedBox(width: AppSpacing.md),
+                              Expanded(
+                                child: Text(
+                                  _buildPayloadLockedExplanation(knownDraft),
+                                  style: TextStyle(
+                                    color:
+                                        theme.colorScheme.onSecondaryContainer,
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
@@ -742,41 +1567,36 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                       ),
                       const SizedBox(height: AppSpacing.md),
                     ],
-                    DropdownButtonFormField<SubjectKey>(
-                      key: const Key('assessment_subject_key_dropdown'),
-                      initialValue: _selectedSubjectKey,
-                      decoration: const InputDecoration(
-                        labelText: 'Academic Subject Area *',
-                        prefixIcon: Icon(Icons.category),
-                        border: OutlineInputBorder(),
+                    KeyedSubtree(
+                      key: ValueKey(
+                        'subject_key_dropdown_epoch_$_dropdownEpoch',
                       ),
-                      items: SubjectKey.values
-                          .map(
-                            (k) => DropdownMenuItem(
-                              value: k,
-                              child: Text(k.displayLabel),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          setState(() {
-                            _selectedSubjectKey = val;
-                            if (_subjectController.text.isEmpty ||
-                                SubjectKey.values.any(
-                                  (s) =>
-                                      s.displayLabel == _subjectController.text,
-                                )) {
-                              _subjectController.text = val.displayLabel;
-                            }
-                          });
-                        }
-                      },
+                      child: DropdownButtonFormField<SubjectKey>(
+                        key: const Key('assessment_subject_key_dropdown'),
+                        initialValue: _selectedSubjectKey,
+                        decoration: const InputDecoration(
+                          labelText: 'Academic Subject Area *',
+                          prefixIcon: Icon(Icons.category),
+                          border: OutlineInputBorder(),
+                        ),
+                        items: SubjectKey.values
+                            .map(
+                              (k) => DropdownMenuItem(
+                                value: k,
+                                child: Text(k.displayLabel),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: payloadLocked ? null : _onSubjectKeyChanged,
+                      ),
                     ),
                     const SizedBox(height: AppSpacing.md),
                     TextFormField(
                       key: const Key('assessment_subject_field'),
                       controller: _subjectController,
+                      enabled: !payloadLocked,
+                      readOnly: payloadLocked,
+                      onChanged: (_) => _handlePayloadTextEdited(),
                       decoration: const InputDecoration(
                         labelText: 'Subject Detail *',
                         hintText: 'e.g. Mathematics, Algebra I, Biology',
@@ -791,6 +1611,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                     TextFormField(
                       key: const Key('assessment_title_field'),
                       controller: _titleController,
+                      enabled: !payloadLocked,
+                      readOnly: payloadLocked,
+                      onChanged: (_) => _handlePayloadTextEdited(),
                       decoration: const InputDecoration(
                         labelText: 'Assessment Title *',
                         hintText: 'e.g. Fractions Chapter Quiz, Essay 1',
@@ -805,50 +1628,59 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                     Row(
                       children: [
                         Expanded(
-                          child: DropdownButtonFormField<AssessmentType>(
-                            key: const Key('assessment_type_dropdown'),
-                            initialValue: _selectedType,
-                            decoration: const InputDecoration(
-                              labelText: 'Type',
-                              border: OutlineInputBorder(),
+                          child: KeyedSubtree(
+                            key: ValueKey(
+                              'type_dropdown_epoch_$_dropdownEpoch',
                             ),
-                            items: AssessmentType.values
-                                .map(
-                                  (t) => DropdownMenuItem(
-                                    value: t,
-                                    child: Text(t.name.toUpperCase()),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (val) {
-                              if (val != null) {
-                                setState(() => _selectedType = val);
-                              }
-                            },
+                            child: DropdownButtonFormField<AssessmentType>(
+                              key: const Key('assessment_type_dropdown'),
+                              initialValue: _selectedType,
+                              decoration: const InputDecoration(
+                                labelText: 'Type',
+                                border: OutlineInputBorder(),
+                              ),
+                              items: AssessmentType.values
+                                  .map(
+                                    (t) => DropdownMenuItem(
+                                      value: t,
+                                      child: Text(t.name.toUpperCase()),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: payloadLocked
+                                  ? null
+                                  : _onAssessmentTypeChanged,
+                            ),
                           ),
                         ),
                         const SizedBox(width: AppSpacing.md),
                         Expanded(
-                          child: DropdownButtonFormField<AssessmentDifficulty>(
-                            key: const Key('assessment_difficulty_dropdown'),
-                            initialValue: _selectedDifficulty,
-                            decoration: const InputDecoration(
-                              labelText: 'Difficulty',
-                              border: OutlineInputBorder(),
+                          child: KeyedSubtree(
+                            key: ValueKey(
+                              'difficulty_dropdown_epoch_$_dropdownEpoch',
                             ),
-                            items: AssessmentDifficulty.values
-                                .map(
-                                  (d) => DropdownMenuItem(
-                                    value: d,
-                                    child: Text(d.name),
+                            child:
+                                DropdownButtonFormField<AssessmentDifficulty>(
+                                  key: const Key(
+                                    'assessment_difficulty_dropdown',
                                   ),
-                                )
-                                .toList(),
-                            onChanged: (val) {
-                              if (val != null) {
-                                setState(() => _selectedDifficulty = val);
-                              }
-                            },
+                                  initialValue: _selectedDifficulty,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Difficulty',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                  items: AssessmentDifficulty.values
+                                      .map(
+                                        (d) => DropdownMenuItem(
+                                          value: d,
+                                          child: Text(d.name),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: payloadLocked
+                                      ? null
+                                      : _onDifficultyChanged,
+                                ),
                           ),
                         ),
                       ],
@@ -860,6 +1692,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                           child: TextFormField(
                             key: const Key('assessment_raw_score_field'),
                             controller: _rawScoreController,
+                            enabled: !payloadLocked,
+                            readOnly: payloadLocked,
+                            onChanged: (_) => _handlePayloadTextEdited(),
                             keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
                             ),
@@ -896,6 +1731,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                           child: TextFormField(
                             key: const Key('assessment_max_score_field'),
                             controller: _maxScoreController,
+                            enabled: !payloadLocked,
+                            readOnly: payloadLocked,
+                            onChanged: (_) => _handlePayloadTextEdited(),
                             keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
                             ),
@@ -998,7 +1836,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                       size: 16,
                                     ),
                                     label: const Text('Change Photo'),
-                                    onPressed: _pickEvidence,
+                                    onPressed: (_isSubmitting || payloadLocked)
+                                        ? null
+                                        : _pickEvidence,
                                   ),
                                 ],
                               )
@@ -1040,8 +1880,11 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                     ),
                                     const SizedBox(height: AppSpacing.xs),
                                     Text(
-                                      'Path: ${_unrestoredPhotoPath ?? 'unknown'}\n'
-                                      'To protect against data loss, you cannot save or submit until you attach a replacement photo or explicitly remove this attachment.',
+                                      _isEvidenceLocked
+                                          ? 'Path: ${_unrestoredPhotoPath ?? 'unknown'}\n'
+                                                'This draft\'s locked evidence snapshot is missing or corrupted on disk and cannot be replaced or removed.'
+                                          : 'Path: ${_unrestoredPhotoPath ?? 'unknown'}\n'
+                                                'To protect against data loss, you cannot save or submit until you attach a replacement photo or explicitly remove this attachment.',
                                       style: TextStyle(
                                         fontSize: 12,
                                         color:
@@ -1064,7 +1907,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                           label: const Text(
                                             'Attach Replacement',
                                           ),
-                                          onPressed: _pickEvidence,
+                                          onPressed:
+                                              (_isSubmitting || payloadLocked)
+                                              ? null
+                                              : _pickEvidence,
                                         ),
                                         TextButton.icon(
                                           key: const Key(
@@ -1077,7 +1923,10 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                           label: const Text(
                                             'Remove Attachment',
                                           ),
-                                          onPressed: _removeEvidence,
+                                          onPressed:
+                                              (_isSubmitting || payloadLocked)
+                                              ? null
+                                              : _removeEvidence,
                                         ),
                                       ],
                                     ),
@@ -1085,32 +1934,62 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                 ),
                               )
                             else if (_selectedEvidence != null)
-                              Row(
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Icon(
-                                    Icons.check_circle,
-                                    color: Colors.green,
-                                    size: 18,
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.check_circle,
+                                        color: Colors.green,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: AppSpacing.xs),
+                                      Expanded(
+                                        child: Text(
+                                          '${_selectedEvidence!.fileName} (${(_selectedEvidence!.bytes.length / 1024).toStringAsFixed(1)} KB)',
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      IconButton(
+                                        key: const Key(
+                                          'change_evidence_button',
+                                        ),
+                                        tooltip: _isEvidenceLocked
+                                            ? 'Photo locked for this draft'
+                                            : 'Change Photo',
+                                        icon: const Icon(Icons.edit, size: 18),
+                                        onPressed:
+                                            (_isSubmitting || payloadLocked)
+                                            ? null
+                                            : _pickEvidence,
+                                      ),
+                                      IconButton(
+                                        key: const Key(
+                                          'remove_evidence_button',
+                                        ),
+                                        tooltip: _isEvidenceLocked
+                                            ? 'Photo locked for this draft'
+                                            : 'Remove Photo',
+                                        icon: const Icon(Icons.close, size: 18),
+                                        onPressed:
+                                            (_isSubmitting || payloadLocked)
+                                            ? null
+                                            : _removeEvidence,
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(width: AppSpacing.xs),
-                                  Expanded(
-                                    child: Text(
-                                      '${_selectedEvidence!.fileName} (${(_selectedEvidence!.bytes.length / 1024).toStringAsFixed(1)} KB)',
-                                      overflow: TextOverflow.ellipsis,
+                                  if (_isEvidenceLocked)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Text(
+                                        'Evidence photo locked for this draft. Start a new assessment draft to attach a different photo.',
+                                        key: const Key(
+                                          'frozen_evidence_locked_hint',
+                                        ),
+                                        style: theme.textTheme.bodySmall,
+                                      ),
                                     ),
-                                  ),
-                                  IconButton(
-                                    key: const Key('change_evidence_button'),
-                                    tooltip: 'Change Photo',
-                                    icon: const Icon(Icons.edit, size: 18),
-                                    onPressed: _pickEvidence,
-                                  ),
-                                  IconButton(
-                                    key: const Key('remove_evidence_button'),
-                                    tooltip: 'Remove Photo',
-                                    icon: const Icon(Icons.close, size: 18),
-                                    onPressed: _removeEvidence,
-                                  ),
                                 ],
                               )
                             else
@@ -1118,7 +1997,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                                 key: const Key('attach_evidence_button'),
                                 icon: const Icon(Icons.add_a_photo),
                                 label: const Text('Attach Photo'),
-                                onPressed: _pickEvidence,
+                                onPressed: (_isSubmitting || payloadLocked)
+                                    ? null
+                                    : _pickEvidence,
                               ),
                           ],
                         ),
@@ -1130,7 +2011,9 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                         Expanded(
                           child: OutlinedButton(
                             key: const Key('save_draft_button'),
-                            onPressed: _isSubmitting ? null : _saveLocalDraft,
+                            onPressed: (_isSubmitting || payloadLocked)
+                                ? null
+                                : _saveLocalDraft,
                             child: const Text('Save Local Draft'),
                           ),
                         ),
@@ -1138,11 +2021,7 @@ class _AddAssessmentScreenState extends ConsumerState<AddAssessmentScreen> {
                         Expanded(
                           child: FilledButton(
                             key: const Key('submit_assessment_button'),
-                            onPressed:
-                                (_isSubmitting ||
-                                    _isQuarantined ||
-                                    (widget.initialDraft?.isLegacyUnknown ??
-                                        false))
+                            onPressed: (_isSubmitting || !directRetryAllowed)
                                 ? null
                                 : _submitAssessment,
                             child: _isSubmitting

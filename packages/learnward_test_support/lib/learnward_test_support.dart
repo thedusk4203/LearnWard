@@ -17,3 +17,4 @@ export 'src/in_memory_local_metadata_store.dart';
 export 'src/in_memory_pending_reward_command_store.dart';
 export 'src/mock_server_reward_repository.dart';
 export 'src/test_clock.dart';
+export 'src/test_local_draft_store.dart';

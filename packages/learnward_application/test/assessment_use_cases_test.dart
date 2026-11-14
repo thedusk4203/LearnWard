@@ -5,93 +5,7 @@ import 'package:learnward_domain/learnward_domain.dart';
 import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:test/test.dart';
 
-final class InMemoryLocalDraftStore implements LocalDraftStore {
-  final Map<String, LocalAssessmentDraft> drafts = {};
-  Future<void> Function(LocalAssessmentDraft draft)? onSaveLocalDraft;
-  int deleteLocalDraftCallCount = 0;
-
-  @override
-  Future<void> saveLocalDraft(LocalAssessmentDraft draft) async {
-    await onSaveLocalDraft?.call(draft);
-    drafts[draft.localDraftId] = draft;
-  }
-
-  @override
-  Future<LocalAssessmentDraft?> getLocalDraft(String localDraftId) async {
-    return drafts[localDraftId];
-  }
-
-  @override
-  Future<List<LocalAssessmentDraft>> listLocalDrafts(ChildId childId) async {
-    return drafts.values.where((d) => d.childId == childId.value).toList();
-  }
-
-  @override
-  Future<void> deleteLocalDraft(String localDraftId) async {
-    deleteLocalDraftCallCount++;
-    drafts.remove(localDraftId);
-  }
-
-  @override
-  Future<DraftDeletionOutcome> deleteDraftSafely({
-    required String localDraftId,
-    required LocalAssessmentDraft expectedDraft,
-    DateTime? now,
-  }) async {
-    final current = drafts[localDraftId];
-    if (current == null) {
-      return DraftDeletionOutcome(
-        status: DraftDeletionStatus.notFound,
-        localDraftId: localDraftId,
-        reason: 'Draft not found in local store.',
-      );
-    }
-
-    if (current.isUnsafeToDelete(now: now)) {
-      return DraftDeletionOutcome(
-        status: DraftDeletionStatus.blockedUnsafeState,
-        localDraftId: localDraftId,
-        reason: current.deletionBlockedReason(now: now),
-        currentDraft: current,
-      );
-    }
-
-    if (current.hasConflictWith(expectedDraft)) {
-      return DraftDeletionOutcome(
-        status: DraftDeletionStatus.concurrencyConflict,
-        localDraftId: localDraftId,
-        reason: 'Draft was modified while deletion was being confirmed.',
-        currentDraft: current,
-      );
-    }
-
-    drafts.remove(localDraftId);
-    return DraftDeletionOutcome(
-      status: DraftDeletionStatus.deleted,
-      localDraftId: localDraftId,
-    );
-  }
-
-  @override
-  Future<bool> hasDraftReferenceToFile(String filePath) async {
-    return drafts.values.any(
-      (d) =>
-          d.localPhotoPath == filePath ||
-          d.localCompressedPhotoPath == filePath,
-    );
-  }
-
-  @override
-  Future<int> countDraftReferencesToFile(String filePath) async {
-    return drafts.values
-        .where(
-          (d) =>
-              d.localPhotoPath == filePath ||
-              d.localCompressedPhotoPath == filePath,
-        )
-        .length;
-  }
-}
+typedef InMemoryLocalDraftStore = TestLocalDraftStore;
 
 final class FailingRegisterAssessmentRepository
     extends FakeAssessmentRepository {
@@ -843,9 +757,11 @@ void main() {
     },
   );
 
-  test('SubmitAssessmentDraft coordinates distinct create/submit commands, evidence upload, and draft deletion', () async {
+  test('SubmitAssessmentDraft coordinates distinct create/submit commands, evidence upload, and confirmed_committed tombstone', () async {
     final draftStore = InMemoryLocalDraftStore();
     const localId = 'local-draft-42';
+    final evidenceBytes = <int>[0xFF, 0xD8, 0xFF, 0xE0, 9, 8, 7];
+    final validSha = computeSha256Hex(evidenceBytes);
     await draftStore.saveLocalDraft(
       LocalAssessmentDraft(
         localDraftId: localId,
@@ -861,6 +777,10 @@ void main() {
         difficulty: 'normal',
         rawScore: 9.0,
         maxScore: 10.0,
+        localPhotoPath: '/tmp/local-draft-42-raw.jpg',
+        localCompressedPhotoPath: '/tmp/local-draft-42-snap.jpg',
+        sha256Checksum: validSha,
+        actorUserId: 'user-parent-1',
         occurredAt: DateTime.utc(2026, 11, 1),
         updatedAt: DateTime.utc(2026, 11, 1),
       ),
@@ -886,7 +806,8 @@ void main() {
       type: AssessmentType.quiz,
       difficulty: AssessmentDifficulty.normal,
       score: AssessmentScore(rawScore: 9, maxScore: 10),
-      evidenceBytes: [9, 8, 7],
+      occurredAt: DateTime.utc(2026, 11, 1),
+      evidenceBytes: evidenceBytes,
       evidenceMediaType: 'image/jpeg',
       evidenceId: EvidenceId('550e8400-e29b-41d4-a716-446655440099'),
       localDraftId: localId,
@@ -894,10 +815,16 @@ void main() {
 
     expect(result.status, equals(AssessmentStatus.pendingReview));
     expect(result.subjectKey, equals(SubjectKey.english));
-    // Verify local draft was deleted after successful submission
-    expect(await draftStore.getLocalDraft(localId), isNull);
+    // Verify local draft transitioned to confirmedCommitted tombstone (I14; never deleteLocalDraft)
+    final tombstone = await draftStore.getLocalDraft(localId);
+    expect(tombstone, isNotNull);
+    expect(tombstone!.dispatchState, CommandDispatchState.confirmedCommitted);
+    expect(tombstone.serverAssessmentId, equals(result.id.value));
+    expect(tombstone.serverEvidenceId, isNotNull);
+    expect(tombstone.leaseToken, isNull);
+    expect(draftStore.deleteLocalDraftCallCount, equals(0));
     // Verify storage has evidence
-    expect(storage.storage.values.first, equals([9, 8, 7]));
+    expect(storage.storage.values.first, equals(evidenceBytes));
   });
 
   test('SubmitAssessmentDraft blocks quarantined legacy draft with StateError before network call', () async {
@@ -940,6 +867,7 @@ void main() {
         type: AssessmentType.quiz,
         difficulty: AssessmentDifficulty.normal,
         score: AssessmentScore(rawScore: 8, maxScore: 10),
+        occurredAt: DateTime.utc(2026, 11, 1),
         localDraftId: legacyDraftId,
       ),
       throwsA(isA<StateError>()),
@@ -959,6 +887,8 @@ void main() {
         localDraftId: testDraftId,
         familyId: familyId.value,
         childId: childId.value,
+        createCommandId: 'cmd-create-fail',
+        submitCommandId: 'cmd-submit-fail',
         subjectKey: SubjectKey.math,
         subject: 'Math',
         title: 'Failing Network Draft',
@@ -966,6 +896,7 @@ void main() {
         difficulty: 'normal',
         rawScore: 8.0,
         maxScore: 10.0,
+        actorUserId: 'user-parent-1',
         occurredAt: DateTime.utc(2026, 11, 1),
         updatedAt: DateTime.utc(2026, 11, 1),
         dispatchState: CommandDispatchState.neverDispatched,
@@ -993,6 +924,7 @@ void main() {
         type: AssessmentType.quiz,
         difficulty: AssessmentDifficulty.normal,
         score: AssessmentScore(rawScore: 8, maxScore: 10),
+        occurredAt: DateTime.utc(2026, 11, 1),
         localDraftId: testDraftId,
       ),
       throwsA(isA<Exception>()),
@@ -1017,6 +949,8 @@ void main() {
           localDraftId: localId,
           familyId: familyId.value,
           childId: childId.value,
+          createCommandId: 'cmd-unauth-create',
+          submitCommandId: 'cmd-unauth-submit',
           subjectKey: SubjectKey.math,
           subject: 'Math',
           title: 'Unauthenticated Draft',
@@ -1024,6 +958,7 @@ void main() {
           difficulty: 'normal',
           rawScore: 8.0,
           maxScore: 10.0,
+          actorUserId: 'user-parent-1',
           occurredAt: DateTime.utc(2026, 11, 1),
           updatedAt: DateTime.utc(2026, 11, 1),
           dispatchState: CommandDispatchState.neverDispatched,
@@ -1050,6 +985,7 @@ void main() {
           type: AssessmentType.quiz,
           difficulty: AssessmentDifficulty.normal,
           score: AssessmentScore(rawScore: 8, maxScore: 10),
+          occurredAt: DateTime.utc(2026, 11, 1),
           localDraftId: localId,
         ),
         throwsA(isA<EvidenceStorageAuthException>()),
@@ -1070,7 +1006,7 @@ void main() {
         }
       };
 
-      final submitWorkflow = SubmitAssessmentDraft(
+      final submitWorkflow = SubmitAssessmentDraft.unjournaledForTesting(
         repository: repository,
         storage: storage,
         authSessionPort: fakeAuth,
@@ -1191,7 +1127,7 @@ void main() {
       expect(registered.fileSizeBytes, equals(10 * 1024 * 1024));
 
       // SubmitAssessmentDraft rejects zero-length attached evidence BEFORE createDraft
-      final submitWorkflow = SubmitAssessmentDraft(
+      final submitWorkflow = SubmitAssessmentDraft.unjournaledForTesting(
         repository: repository,
         storage: storage,
         authSessionPort: fakeAuth,
@@ -1234,6 +1170,9 @@ void main() {
       const localPhotoPath = '/tmp/r32-09-evidence.jpg';
       const actorUserId = 'user-parent-1';
 
+      final evidenceBytes = <int>[0xFF, 0xD8, 0xFF, 0xE0, 10, 20, 30, 40];
+      final expectedEvidenceBytes = List<int>.from(evidenceBytes);
+      final validSha = computeSha256Hex(evidenceBytes);
       await draftStore.saveLocalDraft(
         LocalAssessmentDraft(
           localDraftId: localId,
@@ -1250,6 +1189,8 @@ void main() {
           rawScore: 9.0,
           maxScore: 10.0,
           localPhotoPath: localPhotoPath,
+          localCompressedPhotoPath: '/tmp/r32-09-snap.jpg',
+          sha256Checksum: validSha,
           actorUserId: actorUserId,
           occurredAt: DateTime.utc(2026, 11, 1),
           updatedAt: DateTime.utc(2026, 11, 1),
@@ -1260,16 +1201,13 @@ void main() {
       final enteredSave = Completer<void>();
       final releaseSave = Completer<void>();
       var armBarrier = true;
-      draftStore.onSaveLocalDraft = (_) async {
+      draftStore.onMarkDraftStageAndDispatch = (_, _) async {
         if (armBarrier) {
           armBarrier = false;
           enteredSave.complete();
           await releaseSave.future;
         }
       };
-
-      final evidenceBytes = <int>[10, 20, 30, 40];
-      final expectedEvidenceBytes = List<int>.from(evidenceBytes);
 
       final submitWorkflow = SubmitAssessmentDraft(
         repository: recordingRepo,
@@ -1290,6 +1228,7 @@ void main() {
           type: AssessmentType.quiz,
           difficulty: AssessmentDifficulty.normal,
           score: AssessmentScore(rawScore: 9, maxScore: 10),
+          occurredAt: DateTime.utc(2026, 11, 1),
           evidenceBytes: evidenceBytes,
           evidenceMediaType: 'image/jpeg',
           evidenceId: EvidenceId(evidenceUuid),

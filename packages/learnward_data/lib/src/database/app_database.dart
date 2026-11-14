@@ -357,42 +357,82 @@ class AppDatabase extends _$AppDatabase
     return entry?.value;
   }
 
+  LocalAssessmentDraftsCompanion _draftToCompanion(LocalAssessmentDraft draft) {
+    return LocalAssessmentDraftsCompanion.insert(
+      localDraftId: draft.localDraftId,
+      familyId: draft.familyId,
+      childId: draft.childId,
+      createCommandId: Value(draft.createCommandId),
+      submitCommandId: Value(draft.submitCommandId),
+      evidenceId: Value(draft.evidenceId),
+      serverAssessmentId: Value(draft.serverAssessmentId),
+      subjectKey: Value(draft.subjectKey.value),
+      subject: draft.subject,
+      title: draft.title,
+      assessmentType: draft.assessmentType,
+      difficulty: draft.difficulty,
+      rawScore: draft.rawScore,
+      maxScore: draft.maxScore,
+      localPhotoPath: Value(draft.localPhotoPath),
+      entryContext: Value(draft.entryContext.value),
+      occurredAt: draft.occurredAt.toUtc(),
+      updatedAt: draft.updatedAt.toUtc(),
+      serverEvidenceId: Value(draft.serverEvidenceId),
+      sha256Checksum: Value(draft.sha256Checksum),
+      localCompressedPhotoPath: Value(draft.localCompressedPhotoPath),
+      submissionStatus: Value(draft.submissionStatus.wireValue),
+      retryCount: Value(draft.retryCount),
+      dispatchState: Value(draft.dispatchState.wireValue),
+      lastErrorMessage: Value(draft.lastErrorMessage),
+      actorUserId: Value(draft.actorUserId),
+      actorRole: Value(draft.actorRole),
+      nextAttemptAt: Value(draft.nextAttemptAt?.toUtc()),
+      leaseToken: Value(draft.leaseToken),
+      leaseExpiresAt: Value(draft.leaseExpiresAt?.toUtc()),
+    );
+  }
+
+  Future<T> _withSqliteBusyRetry<T>(Future<T> Function() action) async {
+    for (var attempt = 0; attempt < 8; attempt++) {
+      try {
+        return await action();
+      } catch (e) {
+        final msg = e.toString().toLowerCase();
+        final isBusy =
+            msg.contains('database is locked') ||
+            msg.contains('database table is locked') ||
+            msg.contains('sqlite_busy');
+        if (isBusy && attempt < 7) {
+          await Future<void>.delayed(
+            Duration(milliseconds: 25 * (attempt + 1)),
+          );
+          continue;
+        }
+        rethrow;
+      }
+    }
+    throw StateError('Exceeded SQLite busy retry attempts.');
+  }
+
   @override
   Future<void> saveLocalDraft(LocalAssessmentDraft draft) {
-    return into(localAssessmentDrafts).insertOnConflictUpdate(
-      LocalAssessmentDraftsCompanion.insert(
-        localDraftId: draft.localDraftId,
-        familyId: draft.familyId,
-        childId: draft.childId,
-        createCommandId: Value(draft.createCommandId),
-        submitCommandId: Value(draft.submitCommandId),
-        evidenceId: Value(draft.evidenceId),
-        serverAssessmentId: Value(draft.serverAssessmentId),
-        subjectKey: Value(draft.subjectKey.value),
-        subject: draft.subject,
-        title: draft.title,
-        assessmentType: draft.assessmentType,
-        difficulty: draft.difficulty,
-        rawScore: draft.rawScore,
-        maxScore: draft.maxScore,
-        localPhotoPath: Value(draft.localPhotoPath),
-        entryContext: Value(draft.entryContext.value),
-        occurredAt: draft.occurredAt,
-        updatedAt: draft.updatedAt,
-        serverEvidenceId: Value(draft.serverEvidenceId),
-        sha256Checksum: Value(draft.sha256Checksum),
-        localCompressedPhotoPath: Value(draft.localCompressedPhotoPath),
-        submissionStatus: Value(draft.submissionStatus.wireValue),
-        retryCount: Value(draft.retryCount),
-        dispatchState: Value(draft.dispatchState.wireValue),
-        lastErrorMessage: Value(draft.lastErrorMessage),
-        actorUserId: Value(draft.actorUserId),
-        actorRole: Value(draft.actorRole),
-        nextAttemptAt: Value(draft.nextAttemptAt),
-        leaseToken: Value(draft.leaseToken),
-        leaseExpiresAt: Value(draft.leaseExpiresAt),
-      ),
-    );
+    return _withSqliteBusyRetry(() {
+      return transaction(() async {
+        final existingRow =
+            await (select(localAssessmentDrafts)..where(
+                  (entry) => entry.localDraftId.equals(draft.localDraftId),
+                ))
+                .getSingleOrNull();
+        final existing = existingRow == null
+            ? null
+            : _mapRowToDraft(existingRow);
+
+        validateLegacySaveLocalDraft(existing: existing, desired: draft);
+
+        await into(localAssessmentDrafts)
+            .insertOnConflictUpdate(_draftToCompanion(draft));
+      });
+    });
   }
 
   @override
@@ -416,10 +456,56 @@ class AppDatabase extends _$AppDatabase
   }
 
   @override
-  Future<void> deleteLocalDraft(String localDraftId) async {
-    final query = delete(localAssessmentDrafts)
-      ..where((entry) => entry.localDraftId.equals(localDraftId));
-    await query.go();
+  Future<void> deleteLocalDraft(String localDraftId) {
+    return _withSqliteBusyRetry(() {
+      return transaction(() async {
+        final existingRow =
+            await (select(localAssessmentDrafts)
+                  ..where((entry) => entry.localDraftId.equals(localDraftId)))
+                .getSingleOrNull();
+        if (existingRow == null) return;
+
+        final existing = _mapRowToDraft(existingRow);
+        validateRawLocalDraftDelete(existing);
+
+        final query = delete(localAssessmentDrafts)
+          ..where(
+            (entry) =>
+                entry.localDraftId.equals(localDraftId) &
+                entry.leaseToken.isNull() &
+                entry.leaseExpiresAt.isNull() &
+                entry.actorUserId.isNotNull() &
+                entry.actorUserId.equals('').not() &
+                entry.dispatchState.equals(
+                  CommandDispatchState.neverDispatched.wireValue,
+                ) &
+                entry.submissionStatus.equals(
+                  DraftSubmissionStatus.draft.wireValue,
+                ) &
+                (entry.serverAssessmentId.isNull() |
+                    entry.serverAssessmentId.equals('')) &
+                (entry.serverEvidenceId.isNull() |
+                    entry.serverEvidenceId.equals('')) &
+                (entry.localCompressedPhotoPath.isNull() |
+                    entry.localCompressedPhotoPath.equals('')) &
+                (entry.sha256Checksum.isNull() |
+                    entry.sha256Checksum.equals('')) &
+                (entry.lastErrorMessage.isNull() |
+                    entry.lastErrorMessage
+                        .like('${DraftRecoveryCode.prefix}%')
+                        .not()),
+          );
+        final deleted = await query.go();
+        if (deleted != 1) {
+          throw DraftWriteConflictException(
+            localDraftId: localDraftId,
+            code: 'concurrent_delete_fenced',
+            message:
+                'Failed to delete draft $localDraftId: row changed concurrently or became leased.',
+          );
+        }
+      });
+    });
   }
 
   @override
@@ -434,33 +520,23 @@ class AppDatabase extends _$AppDatabase
       final row = await query.getSingleOrNull();
 
       if (row == null) {
-        return DraftDeletionOutcome(
-          status: DraftDeletionStatus.notFound,
+        return evaluateDeleteDraftSafelyPreconditions(
           localDraftId: localDraftId,
-          reason: 'Draft not found in local store.',
-        );
+          current: null,
+          expectedDraft: expectedDraft,
+          now: now,
+        )!;
       }
-
       final current = _mapRowToDraft(row);
 
-      // 1. Revalidate latest persisted draft state against unsafe states
-      if (current.isUnsafeToDelete(now: now)) {
-        return DraftDeletionOutcome(
-          status: DraftDeletionStatus.blockedUnsafeState,
-          localDraftId: localDraftId,
-          reason: current.deletionBlockedReason(now: now),
-          currentDraft: current,
-        );
-      }
-
-      // 2. Reject or require a fresh decision if the draft changed concurrently
-      if (current.hasConflictWith(expectedDraft)) {
-        return DraftDeletionOutcome(
-          status: DraftDeletionStatus.concurrencyConflict,
-          localDraftId: localDraftId,
-          reason: 'Draft was modified while deletion was being confirmed.',
-          currentDraft: current,
-        );
+      final blockedOutcome = evaluateDeleteDraftSafelyPreconditions(
+        localDraftId: localDraftId,
+        current: current,
+        expectedDraft: expectedDraft,
+        now: now,
+      );
+      if (blockedOutcome != null) {
+        return blockedOutcome;
       }
 
       // 3. Complete persisted-state CAS delete predicate:
@@ -599,6 +675,17 @@ class AppDatabase extends _$AppDatabase
     return rows.length;
   }
 
+  static const String _draftValidWireStatusSql =
+      "submission_status IN ('draft', 'uploading_evidence', 'submitting_assessment', 'failed_retryable')";
+  static const String _draftLeaseShapeConsistentSql =
+      '((lease_token IS NULL AND lease_expires_at IS NULL) OR (lease_token IS NOT NULL AND lease_expires_at IS NOT NULL))';
+  static const String _draftVerifiedEvidenceOrUnphotoedInFlightSql =
+      "(dispatch_state != 'possibly_dispatched' OR ((local_compressed_photo_path IS NOT NULL AND length(local_compressed_photo_path) > 0 AND sha256_checksum IS NOT NULL AND length(sha256_checksum) = 64 AND sha256_checksum NOT GLOB '*[^0-9a-f]*') OR ((local_photo_path IS NULL OR local_photo_path = '') AND (local_compressed_photo_path IS NULL OR local_compressed_photo_path = '') AND (sha256_checksum IS NULL OR sha256_checksum = '') AND (evidence_id IS NULL OR evidence_id = ''))))";
+  static const String _draftNotQuarantinedMarkerSql =
+      "(last_error_message IS NULL OR last_error_message NOT LIKE 'LW4B1:%' OR last_error_message LIKE 'LW4B1:RETRY_SCHEDULED%')";
+  static const String _draftActiveLeaseWhereSql =
+      "local_draft_id = ? AND lease_token = ? AND lease_expires_at IS NOT NULL AND lease_expires_at > ? AND actor_user_id IS NOT NULL AND actor_user_id = ? AND dispatch_state IN ('never_dispatched', 'possibly_dispatched') AND $_draftValidWireStatusSql AND $_draftLeaseShapeConsistentSql AND $_draftVerifiedEvidenceOrUnphotoedInFlightSql AND $_draftNotQuarantinedMarkerSql";
+
   LocalAssessmentDraft _mapRowToDraft(LocalAssessmentDraftEntry row) {
     SubjectKey key;
     try {
@@ -613,6 +700,17 @@ class AppDatabase extends _$AppDatabase
     } catch (_) {
       ctx = EntryContext.sharedChild;
     }
+
+    final parsedStatus = DraftSubmissionStatus.tryFromString(
+      row.submissionStatus,
+    );
+    final effectiveStatus = parsedStatus ?? DraftSubmissionStatus.terminalError;
+    final effectiveLastError = parsedStatus == null
+        ? DraftRecoveryCode.format(
+            DraftRecoveryCode.unknownWireStatus,
+            row.submissionStatus.isEmpty ? '<empty>' : row.submissionStatus,
+          )
+        : row.lastErrorMessage;
 
     return LocalAssessmentDraft(
       localDraftId: row.localDraftId,
@@ -636,15 +734,763 @@ class AppDatabase extends _$AppDatabase
       serverEvidenceId: row.serverEvidenceId,
       sha256Checksum: row.sha256Checksum,
       localCompressedPhotoPath: row.localCompressedPhotoPath,
-      submissionStatus: DraftSubmissionStatus.fromString(row.submissionStatus),
+      submissionStatus: effectiveStatus,
       retryCount: row.retryCount,
       dispatchState: CommandDispatchState.fromString(row.dispatchState),
-      lastErrorMessage: row.lastErrorMessage,
+      lastErrorMessage: effectiveLastError,
       actorUserId: row.actorUserId,
       actorRole: row.actorRole,
       nextAttemptAt: row.nextAttemptAt?.toUtc(),
       leaseToken: row.leaseToken,
       leaseExpiresAt: row.leaseExpiresAt?.toUtc(),
+    );
+  }
+
+  Future<DraftCasResult> _execFencedDraftUpdate({
+    required String localDraftId,
+    required String sql,
+    required List<Variable<Object>> variables,
+    required DraftCasResult Function(LocalAssessmentDraft? current)
+    diagnoseZeroRows,
+  }) async {
+    final rowsAffected = await _withSqliteBusyRetry(
+      () => customUpdate(
+        sql,
+        variables: variables,
+        updates: {localAssessmentDrafts},
+      ),
+    );
+    final latest = await _withSqliteBusyRetry(
+      () => getLocalDraft(localDraftId),
+    );
+    if (rowsAffected == 1) {
+      return DraftCasResult(status: DraftCasStatus.succeeded, draft: latest);
+    }
+    return diagnoseZeroRows(latest);
+  }
+
+  @override
+  Future<DraftCasResult> registerOrUpdateDraftIfUnchanged({
+    required LocalAssessmentDraft? expected,
+    required LocalAssessmentDraft desired,
+    DateTime? now,
+  }) {
+    final effectiveNow = normalizeDraftUtcNow(now);
+    return _withSqliteBusyRetry(() async {
+      try {
+        return await transaction(() async {
+          final existingRow =
+              await (select(localAssessmentDrafts)..where(
+                    (entry) => entry.localDraftId.equals(desired.localDraftId),
+                  ))
+                  .getSingleOrNull();
+          final existing = existingRow == null
+              ? null
+              : _mapRowToDraft(existingRow);
+
+          final eval = evaluateDraftRegistrationCas(
+            existing: existing,
+            expected: expected,
+            desired: desired,
+            secondPrecisionTimestamps: true,
+            now: effectiveNow,
+          );
+          if (!eval.isSuccess) {
+            return eval;
+          }
+
+          final persistedTarget = eval.draft!;
+          if (expected == null) {
+            await into(localAssessmentDrafts).insert(
+              _draftToCompanion(persistedTarget),
+              mode: InsertMode.insert,
+            );
+          } else {
+            await update(localAssessmentDrafts)
+                .replace(_draftToCompanion(persistedTarget));
+          }
+
+          final reloaded = await getLocalDraft(desired.localDraftId);
+          return DraftCasResult(
+            status: DraftCasStatus.succeeded,
+            draft: reloaded,
+          );
+        });
+      } catch (e) {
+        final msg = e.toString().toLowerCase();
+        if (expected == null &&
+            (msg.contains('unique constraint') ||
+                msg.contains('primarykey') ||
+                msg.contains('sqlite_constraint'))) {
+          final current = await getLocalDraft(desired.localDraftId);
+          return DraftCasResult(
+            status: DraftCasStatus.casConflict,
+            draft: current,
+            reason:
+                'Draft ${desired.localDraftId} was registered concurrently.',
+          );
+        }
+        rethrow;
+      }
+    });
+  }
+
+  Future<DraftCasResult> _claimOrResumeDraftLease({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    required bool expectingExpiredLease,
+    DateTime? now,
+    String? overrideLeaseToken,
+  }) async {
+    if (actorUserId.isEmpty ||
+        familyId.isEmpty ||
+        childId.isEmpty ||
+        leaseDuration <= Duration.zero) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'Claim requires non-empty actorUserId, familyId, childId, and positive leaseDuration.',
+      );
+    }
+    if (overrideLeaseToken != null && overrideLeaseToken.isEmpty) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'overrideLeaseToken cannot be empty.',
+      );
+    }
+
+    final effectiveNow = normalizeDraftUtcNow(now);
+    final newToken = overrideLeaseToken ?? generateDraftLeaseToken();
+    final newExpiresAt = effectiveNow.add(leaseDuration);
+
+    final leaseClause = expectingExpiredLease
+        ? 'lease_token IS NOT NULL AND lease_expires_at IS NOT NULL AND lease_expires_at <= ? AND lease_token != ?'
+        : 'lease_token IS NULL AND lease_expires_at IS NULL';
+
+    final variables = <Variable<Object>>[
+      Variable<String>(newToken),
+      Variable<DateTime>(newExpiresAt),
+      Variable<DateTime>(effectiveNow),
+      Variable<String>(localDraftId),
+      Variable<String>(actorUserId),
+      Variable<String>(familyId),
+      Variable<String>(childId),
+      if (expectingExpiredLease) ...[
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(newToken),
+      ],
+      Variable<DateTime>(effectiveNow),
+    ];
+
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET lease_token = ?,
+          lease_expires_at = ?,
+          next_attempt_at = NULL,
+          updated_at = ?
+      WHERE local_draft_id = ?
+        AND actor_user_id IS NOT NULL
+        AND actor_user_id = ?
+        AND family_id = ?
+        AND child_id = ?
+        AND $leaseClause
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND $_draftValidWireStatusSql
+        AND $_draftLeaseShapeConsistentSql
+        AND $_draftVerifiedEvidenceOrUnphotoedInFlightSql
+        AND $_draftNotQuarantinedMarkerSql
+        AND (
+          (submission_status != 'failed_retryable' AND (last_error_message IS NULL OR last_error_message NOT LIKE 'LW4B1:RETRY_SCHEDULED%'))
+          OR next_attempt_at IS NULL
+          OR next_attempt_at <= ?
+        );
+      ''',
+      variables: variables,
+      diagnoseZeroRows: (current) => diagnoseDraftClaimFailure(
+        existing: current,
+        localDraftId: localDraftId,
+        actorUserId: actorUserId,
+        familyId: familyId,
+        childId: childId,
+        effectiveNow: effectiveNow,
+        expectingExpiredLease: expectingExpiredLease,
+        existingLeaseToken: overrideLeaseToken,
+      ),
+    );
+  }
+
+  @override
+  Future<DraftCasResult> acquireDraftClaim({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    DateTime? now,
+    String? overrideLeaseToken,
+  }) => _claimOrResumeDraftLease(
+    localDraftId: localDraftId,
+    actorUserId: actorUserId,
+    familyId: familyId,
+    childId: childId,
+    leaseDuration: leaseDuration,
+    expectingExpiredLease: false,
+    now: now,
+    overrideLeaseToken: overrideLeaseToken,
+  );
+
+  @override
+  Future<DraftCasResult> resumeDraftClaimAfterExpiry({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    required DateTime now,
+    String? overrideLeaseToken,
+  }) => _claimOrResumeDraftLease(
+    localDraftId: localDraftId,
+    actorUserId: actorUserId,
+    familyId: familyId,
+    childId: childId,
+    leaseDuration: leaseDuration,
+    expectingExpiredLease: true,
+    now: now,
+    overrideLeaseToken: overrideLeaseToken,
+  );
+
+  @override
+  Future<DraftCasResult> markDraftStageAndDispatch({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DraftSubmissionStatus targetStage,
+    required DateTime now,
+  }) async {
+    final effectiveNow = now.toUtc();
+    if (leaseToken.isEmpty ||
+        authenticatedActorId.isEmpty ||
+        (targetStage != DraftSubmissionStatus.uploadingEvidence &&
+            targetStage != DraftSubmissionStatus.submittingAssessment)) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'markDraftStageAndDispatch requires non-empty lease/actor and uploadingEvidence or submittingAssessment targetStage.',
+      );
+    }
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET submission_status = ?,
+          dispatch_state = 'possibly_dispatched',
+          next_attempt_at = NULL,
+          last_error_message = CASE
+            WHEN last_error_message LIKE 'LW4B1:RETRY_SCHEDULED%' THEN NULL
+            ELSE last_error_message
+          END,
+          updated_at = ?
+      WHERE $_draftActiveLeaseWhereSql;
+      ''',
+      variables: [
+        Variable<String>(targetStage.wireValue),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(localDraftId),
+        Variable<String>(leaseToken),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(authenticatedActorId),
+      ],
+      diagnoseZeroRows: (current) => diagnoseLeasedMutationFailure(
+        existing: current,
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: authenticatedActorId,
+        effectiveNow: effectiveNow,
+      ),
+    );
+  }
+
+  @override
+  Future<DraftCasResult> persistServerAssessmentId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+  }) async {
+    final effectiveNow = now.toUtc();
+    if (leaseToken.isEmpty ||
+        authenticatedActorId.isEmpty ||
+        serverAssessmentId.isEmpty) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'persistServerAssessmentId requires non-empty leaseToken, actorId, and serverAssessmentId.',
+      );
+    }
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET server_assessment_id = ?,
+          updated_at = ?
+      WHERE $_draftActiveLeaseWhereSql
+        AND (server_assessment_id IS NULL OR server_assessment_id = '' OR server_assessment_id = ?);
+      ''',
+      variables: [
+        Variable<String>(serverAssessmentId),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(localDraftId),
+        Variable<String>(leaseToken),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(authenticatedActorId),
+        Variable<String>(serverAssessmentId),
+      ],
+      diagnoseZeroRows: (current) {
+        final eval = evaluatePersistServerAssessmentId(
+          existing: current,
+          localDraftId: localDraftId,
+          leaseToken: leaseToken,
+          authenticatedActorId: authenticatedActorId,
+          serverAssessmentId: serverAssessmentId,
+          now: effectiveNow,
+        );
+        return eval.isSuccess
+            ? DraftCasResult(
+                status: DraftCasStatus.casConflict,
+                draft: current,
+                reason: 'Concurrent modification during serverAssessmentId CAS update.',
+              )
+            : eval;
+      },
+    );
+  }
+
+  @override
+  Future<DraftCasResult> persistServerEvidenceId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverEvidenceId,
+    required String expectedEvidenceId,
+    required String expectedSha256Checksum,
+    required DateTime now,
+  }) async {
+    final effectiveNow = now.toUtc();
+    if (leaseToken.isEmpty ||
+        authenticatedActorId.isEmpty ||
+        serverEvidenceId.isEmpty ||
+        expectedEvidenceId.isEmpty ||
+        !isValidSha256Hex(expectedSha256Checksum)) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'persistServerEvidenceId requires non-empty IDs and valid 64-char lowercase sha256Checksum.',
+      );
+    }
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET server_evidence_id = ?,
+          updated_at = ?
+      WHERE $_draftActiveLeaseWhereSql
+        AND evidence_id = ?
+        AND sha256_checksum = ?
+        AND (server_evidence_id IS NULL OR server_evidence_id = '' OR server_evidence_id = ?);
+      ''',
+      variables: [
+        Variable<String>(serverEvidenceId),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(localDraftId),
+        Variable<String>(leaseToken),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(authenticatedActorId),
+        Variable<String>(expectedEvidenceId),
+        Variable<String>(expectedSha256Checksum),
+        Variable<String>(serverEvidenceId),
+      ],
+      diagnoseZeroRows: (current) {
+        final eval = evaluatePersistServerEvidenceId(
+          existing: current,
+          localDraftId: localDraftId,
+          leaseToken: leaseToken,
+          authenticatedActorId: authenticatedActorId,
+          serverEvidenceId: serverEvidenceId,
+          expectedEvidenceId: expectedEvidenceId,
+          expectedSha256Checksum: expectedSha256Checksum,
+          now: effectiveNow,
+        );
+        return eval.isSuccess
+            ? DraftCasResult(
+                status: DraftCasStatus.casConflict,
+                draft: current,
+                reason: 'Concurrent modification during serverEvidenceId CAS update.',
+              )
+            : eval;
+      },
+    );
+  }
+
+  @override
+  Future<DraftCasResult> scheduleDraftRetry({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime nextAttemptAt,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) async {
+    final effectiveNow = normalizeDraftUtcNow(now);
+    final parsedCode = DraftRecoveryCode.parseCode(recoveryCode);
+    if (leaseToken.isEmpty ||
+        authenticatedActorId.isEmpty ||
+        parsedCode != DraftRecoveryCode.retryScheduled) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason:
+            'scheduleDraftRetry requires valid lease/actor and ${DraftRecoveryCode.retryScheduled} recoveryCode.',
+      );
+    }
+    final envelope = formatSanitizedRecoveryEnvelope(
+      recoveryCode: DraftRecoveryCode.retryScheduled,
+      errorMessage: errorMessage,
+    );
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET submission_status = 'failed_retryable',
+          retry_count = retry_count + 1,
+          next_attempt_at = ?,
+          last_error_message = ?,
+          lease_token = NULL,
+          lease_expires_at = NULL,
+          updated_at = ?
+      WHERE $_draftActiveLeaseWhereSql;
+      ''',
+      variables: [
+        Variable<DateTime>(nextAttemptAt.toUtc()),
+        Variable<String>(envelope),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(localDraftId),
+        Variable<String>(leaseToken),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(authenticatedActorId),
+      ],
+      diagnoseZeroRows: (current) => diagnoseLeasedMutationFailure(
+        existing: current,
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: authenticatedActorId,
+        effectiveNow: effectiveNow,
+      ),
+    );
+  }
+
+  @override
+  Future<DraftCasResult> quarantineDraftOutcome({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) async {
+    final effectiveNow = normalizeDraftUtcNow(now);
+    final parsedCode = DraftRecoveryCode.parseCode(recoveryCode);
+    final isAllowed =
+        parsedCode != null &&
+        (DraftRecoveryCode.quarantineCodes.contains(parsedCode) ||
+            parsedCode == DraftRecoveryCode.terminalPolicyDenial ||
+            parsedCode == DraftRecoveryCode.authContextExpiredOrMismatched);
+    if (leaseToken.isEmpty || authenticatedActorId.isEmpty || !isAllowed) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'quarantineDraftOutcome requires valid lease/actor and allowed quarantine/terminal recoveryCode.',
+      );
+    }
+    final envelope = parsedCode == DraftRecoveryCode.unknownWireStatus
+        ? DraftRecoveryCode.format(
+            DraftRecoveryCode.unknownWireStatus,
+            sanitizeStorageError(errorMessage),
+          )
+        : formatSanitizedRecoveryEnvelope(
+            recoveryCode: parsedCode,
+            errorMessage: errorMessage,
+          );
+
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET submission_status = 'terminal_error',
+          next_attempt_at = NULL,
+          last_error_message = ?,
+          lease_token = NULL,
+          lease_expires_at = NULL,
+          updated_at = ?
+      WHERE $_draftActiveLeaseWhereSql;
+      ''',
+      variables: [
+        Variable<String>(envelope),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(localDraftId),
+        Variable<String>(leaseToken),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(authenticatedActorId),
+      ],
+      diagnoseZeroRows: (current) => diagnoseLeasedMutationFailure(
+        existing: current,
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: authenticatedActorId,
+        effectiveNow: effectiveNow,
+      ),
+    );
+  }
+
+  @override
+  Future<DraftCasResult> completeDraftSubmission({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+    String? serverEvidenceId,
+  }) async {
+    final effectiveNow = now.toUtc();
+    if (leaseToken.isEmpty ||
+        authenticatedActorId.isEmpty ||
+        serverAssessmentId.isEmpty ||
+        (serverEvidenceId != null && serverEvidenceId.isEmpty)) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'completeDraftSubmission requires non-empty leaseToken, actorId, serverAssessmentId, and non-empty serverEvidenceId when supplied.',
+      );
+    }
+    final hasServerEvidenceId = serverEvidenceId != null;
+    final setEvidenceSql = hasServerEvidenceId ? 'server_evidence_id = ?,' : '';
+    final evidenceGuardSql = hasServerEvidenceId
+        ? "AND (server_evidence_id IS NULL OR server_evidence_id = '' OR server_evidence_id = ?)"
+        : '';
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET server_assessment_id = ?,
+          $setEvidenceSql
+          submission_status = 'submitting_assessment',
+          dispatch_state = 'confirmed_committed',
+          next_attempt_at = NULL,
+          last_error_message = NULL,
+          lease_token = NULL,
+          lease_expires_at = NULL,
+          updated_at = ?
+      WHERE $_draftActiveLeaseWhereSql
+        AND (server_assessment_id IS NULL OR server_assessment_id = '' OR server_assessment_id = ?)
+        $evidenceGuardSql;
+      ''',
+      variables: [
+        Variable<String>(serverAssessmentId),
+        if (hasServerEvidenceId) Variable<String>(serverEvidenceId),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(localDraftId),
+        Variable<String>(leaseToken),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(authenticatedActorId),
+        Variable<String>(serverAssessmentId),
+        if (hasServerEvidenceId) Variable<String>(serverEvidenceId),
+      ],
+      diagnoseZeroRows: (current) {
+        final eval = evaluateCompleteDraftSubmission(
+          existing: current,
+          localDraftId: localDraftId,
+          leaseToken: leaseToken,
+          authenticatedActorId: authenticatedActorId,
+          serverAssessmentId: serverAssessmentId,
+          now: effectiveNow,
+          serverEvidenceId: serverEvidenceId,
+        );
+        return eval.isSuccess
+            ? DraftCasResult(
+                status: DraftCasStatus.casConflict,
+                draft: current,
+                reason: 'Concurrent modification during completeDraftSubmission CAS update.',
+              )
+            : eval;
+      },
+    );
+  }
+
+  @override
+  Future<DraftCasResult> releaseDraftClaim({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) async {
+    final effectiveNow = normalizeDraftUtcNow(now);
+    if (leaseToken.isEmpty || authenticatedActorId.isEmpty) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'releaseDraftClaim requires non-empty leaseToken and actorId.',
+      );
+    }
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET lease_token = NULL,
+          lease_expires_at = NULL,
+          updated_at = ?
+      WHERE $_draftActiveLeaseWhereSql;
+      ''',
+      variables: [
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(localDraftId),
+        Variable<String>(leaseToken),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(authenticatedActorId),
+      ],
+      diagnoseZeroRows: (current) => diagnoseLeasedMutationFailure(
+        existing: current,
+        localDraftId: localDraftId,
+        leaseToken: leaseToken,
+        authenticatedActorId: authenticatedActorId,
+        effectiveNow: effectiveNow,
+      ),
+    );
+  }
+
+  @override
+  Future<DraftCasResult> pauseMismatchedActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    String? mismatchReason,
+    DateTime? now,
+  }) async {
+    final effectiveNow = normalizeDraftUtcNow(now);
+    if (familyId.isEmpty || authenticatedActorId.isEmpty) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'familyId and authenticatedActorId must be non-empty.',
+      );
+    }
+    final envelope = formatSanitizedRecoveryEnvelope(
+      recoveryCode: DraftRecoveryCode.waitingOriginalActor,
+      errorMessage: mismatchReason ?? 'Paused because active session switched away from original draft author.',
+    );
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET last_error_message = ?,
+          lease_token = NULL,
+          lease_expires_at = NULL,
+          updated_at = ?
+      WHERE local_draft_id = ?
+        AND family_id = ?
+        AND actor_user_id IS NOT NULL
+        AND length(actor_user_id) > 0
+        AND actor_user_id != ?
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND $_draftValidWireStatusSql
+        AND $_draftLeaseShapeConsistentSql
+        AND $_draftVerifiedEvidenceOrUnphotoedInFlightSql
+        AND $_draftNotQuarantinedMarkerSql
+        AND (lease_token IS NULL OR lease_expires_at <= ?);
+      ''',
+      variables: [
+        Variable<String>(envelope),
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(localDraftId),
+        Variable<String>(familyId),
+        Variable<String>(authenticatedActorId),
+        Variable<DateTime>(effectiveNow),
+      ],
+      diagnoseZeroRows: (current) => diagnoseActorPauseOrResumeFailure(
+        existing: current,
+        localDraftId: localDraftId,
+        familyId: familyId,
+        authenticatedActorId: authenticatedActorId,
+        effectiveNow: effectiveNow,
+        expectingResume: false,
+      ),
+    );
+  }
+
+  @override
+  Future<DraftCasResult> resumeOriginalActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) async {
+    final effectiveNow = normalizeDraftUtcNow(now);
+    if (familyId.isEmpty || authenticatedActorId.isEmpty) {
+      return DraftCasResult(
+        status: DraftCasStatus.invalidInput,
+        draft: await _withSqliteBusyRetry(() => getLocalDraft(localDraftId)),
+        reason: 'familyId and authenticatedActorId must be non-empty.',
+      );
+    }
+    return _execFencedDraftUpdate(
+      localDraftId: localDraftId,
+      sql:
+          '''
+      UPDATE local_assessment_drafts
+      SET last_error_message = NULL,
+          lease_token = NULL,
+          lease_expires_at = NULL,
+          updated_at = ?
+      WHERE local_draft_id = ?
+        AND family_id = ?
+        AND actor_user_id = ?
+        AND dispatch_state IN ('never_dispatched', 'possibly_dispatched')
+        AND $_draftValidWireStatusSql
+        AND $_draftLeaseShapeConsistentSql
+        AND $_draftVerifiedEvidenceOrUnphotoedInFlightSql
+        AND last_error_message LIKE 'LW4B1:WAITING_ORIGINAL_ACTOR%'
+        AND (lease_token IS NULL OR lease_expires_at <= ?);
+      ''',
+      variables: [
+        Variable<DateTime>(effectiveNow),
+        Variable<String>(localDraftId),
+        Variable<String>(familyId),
+        Variable<String>(authenticatedActorId),
+        Variable<DateTime>(effectiveNow),
+      ],
+      diagnoseZeroRows: (current) => diagnoseActorPauseOrResumeFailure(
+        existing: current,
+        localDraftId: localDraftId,
+        familyId: familyId,
+        authenticatedActorId: authenticatedActorId,
+        effectiveNow: effectiveNow,
+        expectingResume: true,
+      ),
     );
   }
 

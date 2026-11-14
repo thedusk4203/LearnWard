@@ -67,6 +67,7 @@ void main() {
           entryContext: EntryContext.sharedChild,
           occurredAt: DateTime.utc(2026, 11, 1),
           updatedAt: DateTime.utc(2026, 11, 1, 10, 0),
+          actorUserId: 'usr-test-1',
         );
 
         await database.saveLocalDraft(draft1);

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:learnward_application/learnward_application.dart';
@@ -6,16 +7,30 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../shared/utils/uuid_generator.dart';
 
+/// Machine-readable classification for [EvidenceStorageException].
+enum EvidenceStorageFailureKind {
+  ioOrCollision,
+  missingSnapshot,
+  corruptedOrTamperedSnapshot,
+  outOfBoundsOrSymlink,
+  invalidInput,
+}
+
 /// Exception thrown when evidence file storage operations fail safely
 /// without risking data loss, collision, or uncoordinated file destruction.
 final class EvidenceStorageException implements Exception {
-  const EvidenceStorageException(this.message, {this.cause});
+  const EvidenceStorageException(
+    this.message, {
+    this.cause,
+    this.kind = EvidenceStorageFailureKind.ioOrCollision,
+  });
 
   final String message;
   final Object? cause;
+  final EvidenceStorageFailureKind kind;
 
   @override
-  String toString() => 'EvidenceStorageException: $message';
+  String toString() => 'EvidenceStorageException(${kind.name}): $message';
 }
 
 /// Status of an unreferenced evidence file deletion attempt.
@@ -78,7 +93,8 @@ final class EvidenceFileDeletionResult {
 /// disabled across all cleanup paths to eliminate the risk of destroying unsynced
 /// or unverified evidence. Physical garbage collection is explicitly deferred
 /// pending an approved design.
-abstract interface class LocalEvidenceFileStore {
+abstract interface class LocalEvidenceFileStore
+    implements CanonicalEvidenceSnapshotStore {
   /// Saves durable evidence attached to [localDraftId] using exclusive, non-overwriting creation.
   ///
   /// Throws [EvidenceStorageException] if [localDraftId] is invalid, if path traversal is attempted,
@@ -127,12 +143,40 @@ abstract interface class LocalEvidenceFileStore {
     required String filePath,
     required LocalDraftStore draftStore,
   });
+
+  /// Freezes an immutable canonical JPEG/PNG evidence snapshot for [localDraftId]
+  /// using exclusive file creation, `RandomAccessFile` write + `flushSync` + `closeSync`,
+  /// and mandatory disk re-read checksum verification.
+  @override
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  });
+
+  /// Verifies an existing canonical snapshot file on disk against directory confinement,
+  /// symlink safety, magic-byte MIME, optional length/mediaType, and lowercase SHA-256.
+  Future<VerifiedCanonicalEvidence> verifyCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required String canonicalFilePath,
+    required String expectedSha256,
+    int? expectedByteLength,
+    String? expectedMediaType,
+    DateTime? frozenAt,
+  });
+
+  /// Reads and verifies ONLY the immutable `draft.localCompressedPhotoPath` using
+  /// `draft.sha256Checksum`. Never falls back to mutable `draft.localPhotoPath`.
+  @override
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  });
 }
 
 final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
   DefaultLocalEvidenceFileStore({
     Directory? baseDirectory,
     this.onPreUnlink,
+    this.onBeforeCanonicalVerify,
     String Function()? suffixGenerator,
     DateTime Function()? clock,
   }) : _customBaseDir = baseDirectory,
@@ -143,6 +187,9 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
 
   /// Optional test seam invoked during reference checks.
   final Future<void> Function(String filePath)? onPreUnlink;
+
+  /// Optional test seam invoked after closing the canonical file and before disk verification.
+  final FutureOr<void> Function(String filePath)? onBeforeCanonicalVerify;
 
   /// Deterministic suffix generator seam for collision testing. Defaults to [generateUuid].
   final String Function() _suffixGenerator;
@@ -160,18 +207,347 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
     return dir;
   }
 
+  void _validateSafeLocalDraftId(String localDraftId) {
+    if (localDraftId.isEmpty ||
+        !RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(localDraftId)) {
+      throw EvidenceStorageException(
+        'Invalid localDraftId "$localDraftId": must contain only alphanumeric characters, dashes, and underscores.',
+        kind: EvidenceStorageFailureKind.invalidInput,
+      );
+    }
+  }
+
+  Future<
+    ({
+      bool inBounds,
+      bool isSymlinkEscape,
+      String canonicalEvidenceDir,
+      String resolvedEvidenceDir,
+      String canonicalFilePath,
+      String? resolvedFilePath,
+      FileSystemEntityType entityType,
+      String? errorReason,
+    })
+  >
+  _inspectConfinedPath(String filePath) async {
+    final Directory evidenceDir = await _getEvidenceDirectory();
+    final canonicalEvidenceDir = p.canonicalize(evidenceDir.path);
+    final resolvedEvidenceDir = evidenceDir.existsSync()
+        ? p.canonicalize(evidenceDir.resolveSymbolicLinksSync())
+        : canonicalEvidenceDir;
+    final canonicalFilePath = p.canonicalize(filePath);
+
+    if (filePath.isEmpty ||
+        (!p.isWithin(canonicalEvidenceDir, canonicalFilePath) &&
+            !p.isWithin(resolvedEvidenceDir, canonicalFilePath))) {
+      return (
+        inBounds: false,
+        isSymlinkEscape: false,
+        canonicalEvidenceDir: canonicalEvidenceDir,
+        resolvedEvidenceDir: resolvedEvidenceDir,
+        canonicalFilePath: canonicalFilePath,
+        resolvedFilePath: null,
+        entityType: FileSystemEntityType.notFound,
+        errorReason:
+            'Target path "$canonicalFilePath" is outside evidence directory "$canonicalEvidenceDir".',
+      );
+    }
+
+    final linkAwareType = FileSystemEntity.typeSync(
+      canonicalFilePath,
+      followLinks: false,
+    );
+    if (linkAwareType == FileSystemEntityType.link) {
+      return (
+        inBounds: true,
+        isSymlinkEscape: true,
+        canonicalEvidenceDir: canonicalEvidenceDir,
+        resolvedEvidenceDir: resolvedEvidenceDir,
+        canonicalFilePath: canonicalFilePath,
+        resolvedFilePath: null,
+        entityType: FileSystemEntityType.link,
+        errorReason: 'Symlinks are not permitted inside evidence storage.',
+      );
+    }
+    if (linkAwareType == FileSystemEntityType.notFound) {
+      return (
+        inBounds: true,
+        isSymlinkEscape: false,
+        canonicalEvidenceDir: canonicalEvidenceDir,
+        resolvedEvidenceDir: resolvedEvidenceDir,
+        canonicalFilePath: canonicalFilePath,
+        resolvedFilePath: null,
+        entityType: FileSystemEntityType.notFound,
+        errorReason: null,
+      );
+    }
+    if (linkAwareType != FileSystemEntityType.file) {
+      return (
+        inBounds: true,
+        isSymlinkEscape: false,
+        canonicalEvidenceDir: canonicalEvidenceDir,
+        resolvedEvidenceDir: resolvedEvidenceDir,
+        canonicalFilePath: canonicalFilePath,
+        resolvedFilePath: null,
+        entityType: linkAwareType,
+        errorReason: 'Target entity is not a regular file.',
+      );
+    }
+
+    try {
+      final resolved = p.canonicalize(
+        File(canonicalFilePath).resolveSymbolicLinksSync(),
+      );
+      if (!p.isWithin(resolvedEvidenceDir, resolved) &&
+          !p.isWithin(canonicalEvidenceDir, resolved)) {
+        return (
+          inBounds: true,
+          isSymlinkEscape: true,
+          canonicalEvidenceDir: canonicalEvidenceDir,
+          resolvedEvidenceDir: resolvedEvidenceDir,
+          canonicalFilePath: canonicalFilePath,
+          resolvedFilePath: resolved,
+          entityType: FileSystemEntityType.file,
+          errorReason:
+              'Target symlink resolves to "$resolved" outside evidence directory "$resolvedEvidenceDir".',
+        );
+      }
+      return (
+        inBounds: true,
+        isSymlinkEscape: false,
+        canonicalEvidenceDir: canonicalEvidenceDir,
+        resolvedEvidenceDir: resolvedEvidenceDir,
+        canonicalFilePath: canonicalFilePath,
+        resolvedFilePath: resolved,
+        entityType: FileSystemEntityType.file,
+        errorReason: null,
+      );
+    } catch (e) {
+      return (
+        inBounds: true,
+        isSymlinkEscape: true,
+        canonicalEvidenceDir: canonicalEvidenceDir,
+        resolvedEvidenceDir: resolvedEvidenceDir,
+        canonicalFilePath: canonicalFilePath,
+        resolvedFilePath: null,
+        entityType: FileSystemEntityType.file,
+        errorReason: 'Failed to resolve symbolic links safely: $e',
+      );
+    }
+  }
+
+  @override
+  Future<CanonicalEvidenceSnapshot> saveCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required List<int> bytes,
+  }) async {
+    _validateSafeLocalDraftId(localDraftId);
+
+    final InspectedEvidenceBytes inspected;
+    try {
+      inspected = inspectAndValidateEvidenceBytes(bytes);
+    } on CanonicalEvidenceValidationException catch (e) {
+      throw EvidenceStorageException(
+        e.message,
+        cause: e,
+        kind: EvidenceStorageFailureKind.invalidInput,
+      );
+    }
+
+    final dir = await _getEvidenceDirectory();
+    final canonicalEvidenceDir = p.canonicalize(dir.path);
+    final resolvedEvidenceDir = dir.existsSync()
+        ? p.canonicalize(dir.resolveSymbolicLinksSync())
+        : canonicalEvidenceDir;
+    final timestamp = _clock().toUtc().millisecondsSinceEpoch;
+
+    for (int attempt = 0; attempt < 5; attempt++) {
+      final uniqueSuffix = _suffixGenerator();
+      final targetPath = p.join(
+        dir.path,
+        '${localDraftId}_canonical_${timestamp}_$uniqueSuffix.${inspected.fileExtension}',
+      );
+      final canonicalFilePath = p.canonicalize(targetPath);
+      if (!p.isWithin(canonicalEvidenceDir, canonicalFilePath) &&
+          !p.isWithin(resolvedEvidenceDir, canonicalFilePath)) {
+        throw const EvidenceStorageException(
+          'Canonical snapshot target path escapes evidence storage directory.',
+          kind: EvidenceStorageFailureKind.outOfBoundsOrSymlink,
+        );
+      }
+
+      final File file;
+      try {
+        file = File(canonicalFilePath)..createSync(exclusive: true);
+      } on PathExistsException {
+        continue;
+      } on FileSystemException catch (e) {
+        if (File(canonicalFilePath).existsSync()) continue;
+        throw EvidenceStorageException(
+          'I/O failure allocating canonical snapshot for draft "$localDraftId".',
+          cause: e,
+          kind: EvidenceStorageFailureKind.ioOrCollision,
+        );
+      }
+
+      try {
+        final raf = file.openSync(mode: FileMode.writeOnly);
+        try {
+          raf.writeFromSync(inspected.bytes);
+          raf.flushSync();
+        } finally {
+          raf.closeSync();
+        }
+      } on FileSystemException catch (e) {
+        throw EvidenceStorageException(
+          'Failed writing canonical evidence bytes for draft "$localDraftId".',
+          cause: e,
+          kind: EvidenceStorageFailureKind.ioOrCollision,
+        );
+      }
+
+      if (onBeforeCanonicalVerify != null) {
+        await onBeforeCanonicalVerify!(canonicalFilePath);
+      }
+
+      final verified = await verifyCanonicalEvidenceSnapshot(
+        localDraftId: localDraftId,
+        canonicalFilePath: canonicalFilePath,
+        expectedSha256: inspected.sha256Checksum,
+        expectedByteLength: inspected.byteLength,
+        expectedMediaType: inspected.mediaType,
+        frozenAt: _clock().toUtc(),
+      );
+      return verified.snapshot;
+    }
+
+    throw EvidenceStorageException(
+      'Failed to exclusively create canonical evidence snapshot after 5 collision attempts for draft "$localDraftId".',
+      kind: EvidenceStorageFailureKind.ioOrCollision,
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> verifyCanonicalEvidenceSnapshot({
+    required String localDraftId,
+    required String canonicalFilePath,
+    required String expectedSha256,
+    int? expectedByteLength,
+    String? expectedMediaType,
+    DateTime? frozenAt,
+  }) async {
+    _validateSafeLocalDraftId(localDraftId);
+    if (!isValidSha256Hex(expectedSha256)) {
+      throw const EvidenceStorageException(
+        'Canonical snapshot SHA-256 checksum must be a lowercase 64-character hex digest.',
+        kind: EvidenceStorageFailureKind.invalidInput,
+      );
+    }
+
+    final inspection = await _inspectConfinedPath(canonicalFilePath);
+    if (!inspection.inBounds || inspection.isSymlinkEscape) {
+      throw const EvidenceStorageException(
+        'Canonical snapshot path rejected due to directory confinement or symlink policy.',
+        kind: EvidenceStorageFailureKind.outOfBoundsOrSymlink,
+      );
+    }
+    if (inspection.entityType == FileSystemEntityType.notFound) {
+      throw EvidenceStorageException(
+        'Canonical evidence snapshot file is missing: ${redactStoragePath(canonicalFilePath)}.',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    if (inspection.entityType != FileSystemEntityType.file) {
+      throw const EvidenceStorageException(
+        'Canonical evidence snapshot target is not a regular file.',
+        kind: EvidenceStorageFailureKind.corruptedOrTamperedSnapshot,
+      );
+    }
+
+    final file = File(
+      inspection.resolvedFilePath ?? inspection.canonicalFilePath,
+    );
+    final List<int> diskBytes;
+    try {
+      final length = file.lengthSync();
+      if (length == 0 || length > AssessmentEvidenceStorage.maxFileSizeBytes) {
+        throw EvidenceStorageException(
+          'Canonical evidence snapshot has invalid byte length: $length.',
+          kind: EvidenceStorageFailureKind.corruptedOrTamperedSnapshot,
+        );
+      }
+      diskBytes = file.readAsBytesSync();
+    } on FileSystemException catch (e) {
+      throw EvidenceStorageException(
+        'Failed reading canonical evidence snapshot ${redactStoragePath(canonicalFilePath)}.',
+        cause: e,
+        kind: EvidenceStorageFailureKind.ioOrCollision,
+      );
+    }
+
+    final InspectedEvidenceBytes verified;
+    try {
+      verified = verifyCanonicalEvidenceBytes(
+        bytes: diskBytes,
+        expectedSha256: expectedSha256,
+        expectedByteLength: expectedByteLength,
+        expectedMediaType: expectedMediaType,
+      );
+    } on CanonicalEvidenceValidationException catch (e) {
+      throw EvidenceStorageException(
+        e.message,
+        cause: e,
+        kind: EvidenceStorageFailureKind.corruptedOrTamperedSnapshot,
+      );
+    }
+
+    return VerifiedCanonicalEvidence(
+      snapshot: CanonicalEvidenceSnapshot(
+        localDraftId: localDraftId,
+        filePath: inspection.canonicalFilePath,
+        mediaType: verified.mediaType,
+        fileExtension: verified.fileExtension,
+        byteLength: verified.byteLength,
+        sha256Checksum: verified.sha256Checksum,
+        frozenAt: (frozenAt ?? _clock()).toUtc(),
+      ),
+      bytes: verified.bytes,
+    );
+  }
+
+  @override
+  Future<VerifiedCanonicalEvidence> readVerifiedCanonicalSnapshot({
+    required LocalAssessmentDraft draft,
+  }) async {
+    final canonicalPath = draft.localCompressedPhotoPath;
+    final expectedSha256 = draft.sha256Checksum;
+    if (canonicalPath == null || canonicalPath.isEmpty) {
+      throw const EvidenceStorageException(
+        'Draft does not have a frozen canonical snapshot path; refusing fallback to mutable source path.',
+        kind: EvidenceStorageFailureKind.missingSnapshot,
+      );
+    }
+    if (!isValidSha256Hex(expectedSha256)) {
+      throw const EvidenceStorageException(
+        'Draft canonical SHA-256 checksum is missing or malformed.',
+        kind: EvidenceStorageFailureKind.corruptedOrTamperedSnapshot,
+      );
+    }
+    return verifyCanonicalEvidenceSnapshot(
+      localDraftId: draft.localDraftId,
+      canonicalFilePath: canonicalPath,
+      expectedSha256: expectedSha256!,
+      frozenAt: draft.updatedAt,
+    );
+  }
+
   @override
   Future<String> saveDurableEvidence({
     required String localDraftId,
     required List<int> bytes,
     required String mediaType,
   }) async {
-    if (localDraftId.isEmpty ||
-        !RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(localDraftId)) {
-      throw EvidenceStorageException(
-        'Invalid localDraftId "$localDraftId": must contain only alphanumeric characters, dashes, and underscores.',
-      );
-    }
+    _validateSafeLocalDraftId(localDraftId);
 
     final dir = await _getEvidenceDirectory();
     final canonicalEvidenceDir = p.canonicalize(dir.path);
@@ -297,62 +673,33 @@ final class DefaultLocalEvidenceFileStore implements LocalEvidenceFileStore {
     required LocalDraftStore draftStore,
   }) async {
     try {
-      final Directory evidenceDir = await _getEvidenceDirectory();
-      final canonicalEvidenceDir = p.canonicalize(evidenceDir.path);
-      final resolvedEvidenceDir = evidenceDir.existsSync()
-          ? p.canonicalize(evidenceDir.resolveSymbolicLinksSync())
-          : canonicalEvidenceDir;
-      final canonicalFilePath = p.canonicalize(filePath);
+      final inspection = await _inspectConfinedPath(filePath);
+      final canonicalFilePath = inspection.canonicalFilePath;
 
-      // 1. Boundary check: ensure target path is strictly within canonical evidence directory
-      if (!p.isWithin(canonicalEvidenceDir, canonicalFilePath) &&
-          !p.isWithin(resolvedEvidenceDir, canonicalFilePath)) {
+      if (!inspection.inBounds || inspection.isSymlinkEscape) {
         return EvidenceFileDeletionResult(
           status: EvidenceFileDeletionStatus.rejectedOutOfBounds,
           filePath: filePath,
-          reason:
-              'Target path "$canonicalFilePath" is outside evidence directory "$canonicalEvidenceDir".',
+          reason: inspection.errorReason,
         );
       }
-
-      final entityType = FileSystemEntity.typeSync(canonicalFilePath);
-      if (entityType == FileSystemEntityType.notFound) {
+      if (inspection.entityType == FileSystemEntityType.notFound) {
         return EvidenceFileDeletionResult(
           status: EvidenceFileDeletionStatus.alreadyAbsent,
           filePath: filePath,
         );
       }
-      if (entityType != FileSystemEntityType.file) {
+      if (inspection.entityType != FileSystemEntityType.file ||
+          inspection.resolvedFilePath == null) {
         return EvidenceFileDeletionResult(
           status: EvidenceFileDeletionStatus.deletionFailed,
           filePath: filePath,
-          reason: 'Target entity is not a regular file.',
+          reason:
+              inspection.errorReason ?? 'Target entity is not a regular file.',
         );
       }
 
-      final file = File(canonicalFilePath);
-
-      // 2. Symlink escape check
-      String resolved;
-      try {
-        resolved = p.canonicalize(file.resolveSymbolicLinksSync());
-        if (!p.isWithin(resolvedEvidenceDir, resolved) &&
-            !p.isWithin(canonicalEvidenceDir, resolved)) {
-          return EvidenceFileDeletionResult(
-            status: EvidenceFileDeletionStatus.rejectedOutOfBounds,
-            filePath: filePath,
-            reason:
-                'Target symlink resolves to "$resolved" outside evidence directory "$resolvedEvidenceDir".',
-          );
-        }
-      } catch (e) {
-        // If symlink resolution fails, conservatively reject deletion
-        return EvidenceFileDeletionResult(
-          status: EvidenceFileDeletionStatus.rejectedOutOfBounds,
-          filePath: filePath,
-          reason: 'Failed to resolve symbolic links safely: $e',
-        );
-      }
+      final resolved = inspection.resolvedFilePath!;
 
       // 3. Initial reference count check in draftStore
       final initialCount = await draftStore.countDraftReferencesToFile(

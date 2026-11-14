@@ -260,6 +260,12 @@ base class FakeAssessmentRepository implements AssessmentRepository {
     if (assessment == null) {
       throw StateError('Assessment not found');
     }
+    for (final existing in evidence.values) {
+      if (existing.assessmentId == assessmentId &&
+          existing.storagePath == storagePath) {
+        return existing;
+      }
+    }
     final id = EvidenceId('fake-evidence-${_evidenceIdCounter++}');
     final ev = AssessmentEvidence(
       id: id,
