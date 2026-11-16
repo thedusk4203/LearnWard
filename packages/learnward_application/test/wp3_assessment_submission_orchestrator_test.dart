@@ -366,7 +366,6 @@ void main() {
     authPort = FakeAuthSessionPort(
       activeUserId: 'actor-a',
       sessionGeneration: 'gen-actor-a-1',
-      clock: clock,
       role: 'parent',
     );
     repo = _ScriptedAssessmentRepository(

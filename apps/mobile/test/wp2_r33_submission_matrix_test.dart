@@ -1906,7 +1906,8 @@ void main() {
         expect(unboundAfterRestart!.hasUnboundActor, isTrue);
         expect(unboundAfterRestart.isReadOnlyQuarantined, isTrue);
 
-        // Different authenticated actor cannot adopt or submit reopened draft
+        // Different authenticated actor cannot adopt or submit reopened draft:
+        // R35-04 keeps the primary Retry Now button disabled and surfaces original-actor guidance.
         final wrongActorAuth = FakeAuthSessionPort(
           activeUserId: 'parent-actor-2',
           sessionGeneration: 'gen-other-1',
@@ -1921,12 +1922,12 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        await tapButton(tester, 'submit_assessment_button');
-        expect(find.byType(AddAssessmentScreen), findsOneWidget);
-        expect(
-          find.textContaining('session is no longer valid'),
-          findsOneWidget,
+        final wrongActorSubmitButton = tester.widget<FilledButton>(
+          find.byKey(const Key('submit_assessment_button')),
         );
+        expect(wrongActorSubmitButton.onPressed, isNull);
+        expect(find.byType(AddAssessmentScreen), findsOneWidget);
+        expect(find.text('Verification Needs Original Author'), findsOneWidget);
         expect(repo.submitAssessmentCalls, equals(0));
 
         // Original actor resumes after restart -> single server assessment, confirmedCommitted

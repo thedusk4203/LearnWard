@@ -127,7 +127,8 @@ bool isDraftPayloadLocked(LocalAssessmentDraft draft, {DateTime? now}) {
 
 /// Whether [draft] is in a safe state for direct retry/submission in UI,
 /// assuming the displayed payload still matches the persisted row identically.
-bool isDraftDirectRetryAllowed(LocalAssessmentDraft draft) {
+bool isDraftDirectRetryAllowed(LocalAssessmentDraft draft, {DateTime? now}) {
+  final effectiveNow = normalizeDraftUtcNow(now);
   if (draft.isLegacyUnknown ||
       draft.hasUnboundActor ||
       draft.isReadOnlyQuarantined ||
@@ -139,8 +140,7 @@ bool isDraftDirectRetryAllowed(LocalAssessmentDraft draft) {
       draft.submissionStatus == DraftSubmissionStatus.terminalError ||
       (draft.hasRecoveryMarker &&
           draft.recoveryCode != DraftRecoveryCode.retryScheduled) ||
-      draft.leaseToken != null ||
-      draft.leaseExpiresAt != null) {
+      draft.hasActiveLease(now: effectiveNow)) {
     return false;
   }
   return true;
