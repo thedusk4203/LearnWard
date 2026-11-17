@@ -550,8 +550,8 @@ async function main() {
   }
   console.log(`PASS [Test I]: Upload denied after submit (HTTP ${resI.status}).`);
 
-  // Cleanup
-  console.log('\nCleaning up storage and database...');
+  // Cleanup Tests A-Q fixtures before isolated WP5 Extensions R, S, T
+  console.log('\nCleaning up Tests A-Q fixtures...');
   await runPsql(`
     delete from public.assessments where id = '${ASSESSMENT_A}';
     delete from public.child_profiles where id in ('${CHILD_A}', '${CHILD_B}');
@@ -559,7 +559,303 @@ async function main() {
     delete from auth.users where id in ('${OWNER_A}', '${OWNER_B}', '${PARENT_A}');
   `);
 
-  console.log('=== All Storage Evidence Security Tests A-Q PASSED ===\n');
+  // -------------------------------------------------------------------------
+  // WP5 Real-Backend Extensions: Tests S, R, T (B1-02, B1-05, B1-12, B1-13, B1-15, B1-17, B1-19, B1-20, B1-29)
+  // Using isolated randomUUID() tenancy because assessments/receipts/review_events have immutability triggers.
+  // -------------------------------------------------------------------------
+  const FAMILY_ST = crypto.randomUUID();
+  const OWNER_ST = crypto.randomUUID();
+  const PARENT_ST = crypto.randomUUID();
+  const CHILD_ST = crypto.randomUUID();
+  const FAMILY_B_ST = crypto.randomUUID();
+  const OWNER_B_ST = crypto.randomUUID();
+
+  const stSetup = await runPsql(`
+    insert into auth.users (id, email) values
+      ('${OWNER_ST}', 'wp5_owner_${OWNER_ST}@example.com'),
+      ('${PARENT_ST}', 'wp5_parent_${PARENT_ST}@example.com'),
+      ('${OWNER_B_ST}', 'wp5_foreign_${OWNER_B_ST}@example.com');
+
+    insert into public.families (id, name, timezone, locale, created_by_user_id) values
+      ('${FAMILY_ST}', 'WP5 Security Family', 'UTC', 'en-US', '${OWNER_ST}'),
+      ('${FAMILY_B_ST}', 'WP5 Foreign Family', 'UTC', 'en-US', '${OWNER_B_ST}');
+
+    insert into public.family_memberships (family_id, auth_user_id, role, status) values
+      ('${FAMILY_ST}', '${OWNER_ST}', 'owner', 'active'),
+      ('${FAMILY_ST}', '${PARENT_ST}', 'parent', 'active'),
+      ('${FAMILY_B_ST}', '${OWNER_B_ST}', 'owner', 'active');
+
+    insert into public.child_profiles (id, family_id, display_name, school_grade, birth_year) values
+      ('${CHILD_ST}', '${FAMILY_ST}', 'WP5 Child', 4, 2016);
+  `);
+  if (stSetup.code !== 0) {
+    console.error('FAIL: WP5 R/S/T fixture setup failed:', stSetup.stderr);
+    process.exit(1);
+  }
+
+  const tokenStOwner = createJwt(OWNER_ST);
+  const tokenStParent = createJwt(PARENT_ST);
+  const tokenStForeign = createJwt(OWNER_B_ST);
+
+  // S. PNG upload + DB-generated serverEvidenceId != evidenceId + LW109 read-only reconciliation
+  console.log('\n[Test S] PNG evidence registration, DB-generated serverEvidenceId, and LW109 read-only reconciliation...');
+  const CMD_CREATE_PNG = crypto.randomUUID();
+  const CMD_SUBMIT_PNG = crypto.randomUUID();
+  const CLIENT_PNG_EVIDENCE_ID = crypto.randomUUID();
+  const pngBytes = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x42, 0x43, 0x44, 0x45,
+  ]);
+  const expectedPngSha = crypto.createHash('sha256').update(pngBytes).digest('hex');
+
+  const createPngRes = await fetch(`${API_URL}/rest/v1/rpc/create_assessment_draft`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      p_command_id: CMD_CREATE_PNG,
+      p_family_id: FAMILY_ST,
+      p_child_id: CHILD_ST,
+      p_subject_key: 'math',
+      p_subject: 'Mathematics',
+      p_title: 'WP5 PNG Evidence Test',
+      p_assessment_type: 'quiz',
+      p_difficulty: 'normal',
+      p_raw_score: 9.0,
+      p_max_score: 10.0,
+      p_entry_context: 'adult',
+    }),
+  });
+  if (!createPngRes.ok) {
+    console.error('FAIL [Test S]: create_assessment_draft failed:', await createPngRes.text());
+    process.exit(1);
+  }
+  const pngDraft = await createPngRes.json();
+  const pngAssessmentId = pngDraft.id;
+  const pngPath = `${FAMILY_ST}/${CHILD_ST}/${pngAssessmentId}/${CLIENT_PNG_EVIDENCE_ID}.png`;
+
+  const uploadPngRes = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pngPath}`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}`, 'Content-Type': 'image/png', 'x-upsert': 'false' },
+    body: pngBytes,
+  });
+  if (!uploadPngRes.ok) {
+    console.error('FAIL [Test S]: PNG Storage upload failed:', await uploadPngRes.text());
+    process.exit(1);
+  }
+
+  const regPngRes = await fetch(`${API_URL}/rest/v1/rpc/register_assessment_evidence`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      p_assessment_id: pngAssessmentId,
+      p_storage_path: pngPath,
+      p_media_type: 'image/png',
+      p_file_size_bytes: pngBytes.length,
+    }),
+  });
+  if (!regPngRes.ok) {
+    console.error('FAIL [Test S]: register_assessment_evidence for PNG failed:', await regPngRes.text());
+    process.exit(1);
+  }
+  const regPngRow = await regPngRes.json();
+  if (!regPngRow.id || regPngRow.id === CLIENT_PNG_EVIDENCE_ID) {
+    console.error('FAIL [Test S]: Expected DB-generated serverEvidenceId != client evidenceId!', regPngRow);
+    process.exit(1);
+  }
+
+  // Idempotent register while still draft returns exact same row id
+  const regPngIdempotent = await fetch(`${API_URL}/rest/v1/rpc/register_assessment_evidence`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      p_assessment_id: pngAssessmentId,
+      p_storage_path: pngPath,
+      p_media_type: 'image/png',
+      p_file_size_bytes: pngBytes.length,
+    }),
+  });
+  const regPngRow2 = await regPngIdempotent.json();
+  if (regPngRow2.id !== regPngRow.id) {
+    console.error('FAIL [Test S]: Idempotent registration changed row.id!');
+    process.exit(1);
+  }
+
+  // Submit assessment to leave draft -> subsequent register returns LW109 -> read-only GET + byte SHA reconcile passes
+  const submitPngRes = await fetch(`${API_URL}/rest/v1/rpc/submit_assessment`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_assessment_id: pngAssessmentId, p_expected_version: 1, p_command_id: CMD_SUBMIT_PNG }),
+  });
+  if (!submitPngRes.ok) {
+    console.error('FAIL [Test S]: submit_assessment failed:', await submitPngRes.text());
+    process.exit(1);
+  }
+  const lw109Res = await fetch(`${API_URL}/rest/v1/rpc/register_assessment_evidence`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      p_assessment_id: pngAssessmentId,
+      p_storage_path: pngPath,
+      p_media_type: 'image/png',
+      p_file_size_bytes: pngBytes.length,
+    }),
+  });
+  const lw109Text = await lw109Res.text();
+  if (lw109Res.ok || !lw109Text.includes('LW109')) {
+    console.error('FAIL [Test S]: Expected LW109 on post-submit register call, got:', lw109Res.status, lw109Text);
+    process.exit(1);
+  }
+  const listEvRes = await fetch(`${API_URL}/rest/v1/assessment_evidence?assessment_id=eq.${pngAssessmentId}`, {
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}` },
+  });
+  const listEvRows = await listEvRes.json();
+  if (listEvRows.length !== 1 || listEvRows[0].id !== regPngRow.id || listEvRows[0].media_type !== 'image/png' || listEvRows[0].file_size_bytes !== pngBytes.length) {
+    console.error('FAIL [Test S]: Read-only evidence row reconciliation mismatch:', listEvRows);
+    process.exit(1);
+  }
+  const dlPngRes = await fetch(`${API_URL}/storage/v1/object/assessment-evidence/${pngPath}`, {
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}` },
+  });
+  const dlPngBuf = Buffer.from(await dlPngRes.arrayBuffer());
+  const actualPngSha = crypto.createHash('sha256').update(dlPngBuf).digest('hex');
+  if (actualPngSha !== expectedPngSha || !dlPngBuf.equals(pngBytes)) {
+    console.error('FAIL [Test S]: PNG Storage byte SHA-256 verification failed!');
+    process.exit(1);
+  }
+  console.log(`PASS [Test S]: PNG stored (serverEvidenceId=${regPngRow.id} != client=${CLIENT_PNG_EVIDENCE_ID}), LW109 reconciled read-only, SHA-256 verified.`);
+
+  // R. PostgREST RLS-null verification (foreign adult and revoked adult receive 200 [])
+  console.log('\n[Test R] PostgREST RLS-null reads for foreign & revoked actors...');
+  const rlsForeignAssess = await fetch(`${API_URL}/rest/v1/assessments?id=eq.${pngAssessmentId}`, {
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStForeign}` },
+  });
+  const rlsForeignEv = await fetch(`${API_URL}/rest/v1/assessment_evidence?assessment_id=eq.${pngAssessmentId}`, {
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStForeign}` },
+  });
+  if (!rlsForeignAssess.ok || !rlsForeignEv.ok) {
+    console.error('FAIL [Test R]: Unexpected HTTP error on foreign RLS SELECT');
+    process.exit(1);
+  }
+  const foreignAssessRows = await rlsForeignAssess.json();
+  const foreignEvRows = await rlsForeignEv.json();
+  if (foreignAssessRows.length !== 0 || foreignEvRows.length !== 0) {
+    console.error('FAIL [Test R]: Foreign actor observed WP5 family rows via PostgREST!');
+    process.exit(1);
+  }
+
+  // Revoke PARENT_ST and verify RLS returns [] while OWNER_ST still sees intact assessment + evidence
+  await runPsql(`update public.family_memberships set status = 'revoked' where family_id = '${FAMILY_ST}' and auth_user_id = '${PARENT_ST}';`);
+  const rlsRevokedAssess = await fetch(`${API_URL}/rest/v1/assessments?id=eq.${pngAssessmentId}`, {
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStParent}` },
+  });
+  const revokedAssessRows = await rlsRevokedAssess.json();
+  if (revokedAssessRows.length !== 0) {
+    console.error('FAIL [Test R]: Revoked member observed WP5 assessment via PostgREST!');
+    process.exit(1);
+  }
+  const ownerCheckAssess = await fetch(`${API_URL}/rest/v1/assessments?id=eq.${pngAssessmentId}`, {
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}` },
+  });
+  const ownerCheckEv = await fetch(`${API_URL}/rest/v1/assessment_evidence?assessment_id=eq.${pngAssessmentId}`, {
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}` },
+  });
+  const ownerAssessRows = await ownerCheckAssess.json();
+  const ownerEvRows = await ownerCheckEv.json();
+  if (ownerAssessRows.length !== 1 || ownerEvRows.length !== 1) {
+    console.error('FAIL [Test R]: RLS-null test corrupted owner visibility!');
+    process.exit(1);
+  }
+  await runPsql(`update public.family_memberships set status = 'active' where family_id = '${FAMILY_ST}' and auth_user_id = '${PARENT_ST}';`);
+  console.log('PASS [Test R]: PostgREST RLS returns [] for foreign/revoked callers while retaining real rows & bytes.');
+
+  // T. Real Postgres submit_assessment execution order & 42501 ambiguity proof
+  console.log('\n[Test T] Real Postgres submit_assessment SQL execution order (Step 3, Step 4, Step 6)...');
+  // T.1: Second adult (PARENT_ST) replaying OWNER_ST's committed submitCommandId is rejected at Step 6 with 42501
+  const t1Res = await fetch(`${API_URL}/rest/v1/rpc/submit_assessment`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStParent}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_assessment_id: pngAssessmentId, p_expected_version: 1, p_command_id: CMD_SUBMIT_PNG }),
+  });
+  const t1Err = await t1Res.json();
+  if (t1Res.ok || t1Err.code !== '42501') {
+    console.error('FAIL [Test T.1]: Expected 42501 on foreign adult command replay, got:', t1Res.status, t1Err);
+    process.exit(1);
+  }
+  console.log(`PASS [Test T.1]: Foreign adult replay of OWNER submitCommandId rejected at Step 6 (${t1Err.code}).`);
+
+  // T.2: Revoking PARENT_ST AFTER PARENT_ST's submit_assessment committed triggers Step 3 42501 before Step 6 receipt check
+  const CMD_CREATE_P = crypto.randomUUID();
+  const CMD_SUBMIT_P = crypto.randomUUID();
+  const createPRes = await fetch(`${API_URL}/rest/v1/rpc/create_assessment_draft`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStParent}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      p_command_id: CMD_CREATE_P,
+      p_family_id: FAMILY_ST,
+      p_child_id: CHILD_ST,
+      p_subject_key: 'science',
+      p_subject: 'Science',
+      p_title: 'Parent ST Submit Then Revoke',
+      p_assessment_type: 'quiz',
+      p_difficulty: 'normal',
+      p_raw_score: 10.0,
+      p_max_score: 10.0,
+      p_entry_context: 'adult',
+    }),
+  });
+  const draftP = await createPRes.json();
+  const submitPRes = await fetch(`${API_URL}/rest/v1/rpc/submit_assessment`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStParent}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_assessment_id: draftP.id, p_expected_version: 1, p_command_id: CMD_SUBMIT_P }),
+  });
+  if (!submitPRes.ok) {
+    console.error('FAIL [Test T.2]: PARENT_ST submit failed:', await submitPRes.text());
+    process.exit(1);
+  }
+  await runPsql(`update public.family_memberships set status = 'revoked' where family_id = '${FAMILY_ST}' and auth_user_id = '${PARENT_ST}';`);
+  const t2Res = await fetch(`${API_URL}/rest/v1/rpc/submit_assessment`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStParent}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_assessment_id: draftP.id, p_expected_version: 1, p_command_id: CMD_SUBMIT_P }),
+  });
+  const t2Err = await t2Res.json();
+  if (t2Res.ok || t2Err.code !== '42501') {
+    console.error('FAIL [Test T.2]: Expected Step 3 42501 ambiguity for revoked original actor, got:', t2Res.status, t2Err);
+    process.exit(1);
+  }
+  console.log(`PASS [Test T.2]: Revoked actor replay hits Step 3 42501 despite committed receipt (ambiguous 42501 proven).`);
+
+  // T.3: Archiving CHILD_ST AFTER submit_assessment committed triggers Step 4 42501 before Step 6 receipt check
+  const archiveRes = await fetch(`${API_URL}/rest/v1/rpc/archive_child_profile`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_child_id: CHILD_ST }),
+  });
+  if (!archiveRes.ok) {
+    console.error('FAIL [Test T.3]: archive_child_profile failed:', await archiveRes.text());
+    process.exit(1);
+  }
+  const t3Res = await fetch(`${API_URL}/rest/v1/rpc/submit_assessment`, {
+    method: 'POST',
+    headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${tokenStOwner}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_assessment_id: pngAssessmentId, p_expected_version: 1, p_command_id: CMD_SUBMIT_PNG }),
+  });
+  const t3Err = await t3Res.json();
+  if (t3Res.ok || t3Err.code !== '42501' || !String(t3Err.message || '').includes('archived')) {
+    console.error('FAIL [Test T.3]: Expected Step 4 42501 archived-child error before Step 6 receipt check, got:', t3Res.status, t3Err);
+    process.exit(1);
+  }
+  // Confirm committed rows and PNG object remain intact in Postgres/Storage
+  const dbVerifyT3 = await runPsql(`select a.status || ':' || (select count(*) from public.command_receipts r where r.command_id = '${CMD_SUBMIT_PNG}') || ':' || (select count(*) from storage.objects o where o.name = '${pngPath}') as proof from public.assessments a where a.id = '${pngAssessmentId}';`);
+  if (!dbVerifyT3.stdout.includes('pending_review:1:1')) {
+    console.error('FAIL [Test T.3]: Committed assessment/receipt/object state was lost:', dbVerifyT3.stdout);
+    process.exit(1);
+  }
+  console.log(`PASS [Test T.3]: Archived child replay hits Step 4 42501 while pending_review:1:1 remains intact.`);
+
+  console.log('=== All Storage Evidence Security Tests A-T PASSED ===\n');
 }
 
 main().catch((err) => {
