@@ -136,6 +136,312 @@ final class _DurableDiskCanonicalSnapshotStore
   }
 }
 
+final class _SimulatedProcessCrashException implements Exception {
+  const _SimulatedProcessCrashException(this.stage);
+
+  final String stage;
+
+  @override
+  String toString() => '_SimulatedProcessCrashException($stage)';
+}
+
+final class _CrashableLocalDraftStore implements LocalDraftStore {
+  _CrashableLocalDraftStore(this.inner);
+
+  final LocalDraftStore inner;
+  bool _hardCrashed = false;
+  bool get hardCrashed => _hardCrashed;
+  Future<void> Function()? onBeforeMarkStageAndDispatch;
+
+  void tripHardCrash() {
+    _hardCrashed = true;
+  }
+
+  void _checkAlive(String operation) {
+    if (_hardCrashed) {
+      throw _SimulatedProcessCrashException('hard_crash_blocked_$operation');
+    }
+  }
+
+  @override
+  Future<DraftCasResult> acquireDraftClaim({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    DateTime? now,
+    String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
+  }) {
+    _checkAlive('acquireDraftClaim');
+    return inner.acquireDraftClaim(
+      localDraftId: localDraftId,
+      actorUserId: actorUserId,
+      familyId: familyId,
+      childId: childId,
+      leaseDuration: leaseDuration,
+      now: now,
+      overrideLeaseToken: overrideLeaseToken,
+      ignoreRetryBackoff: ignoreRetryBackoff,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> resumeDraftClaimAfterExpiry({
+    required String localDraftId,
+    required String actorUserId,
+    required String familyId,
+    required String childId,
+    required Duration leaseDuration,
+    required DateTime now,
+    String? overrideLeaseToken,
+    bool ignoreRetryBackoff = false,
+  }) {
+    _checkAlive('resumeDraftClaimAfterExpiry');
+    return inner.resumeDraftClaimAfterExpiry(
+      localDraftId: localDraftId,
+      actorUserId: actorUserId,
+      familyId: familyId,
+      childId: childId,
+      leaseDuration: leaseDuration,
+      now: now,
+      overrideLeaseToken: overrideLeaseToken,
+      ignoreRetryBackoff: ignoreRetryBackoff,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> markDraftStageAndDispatch({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DraftSubmissionStatus targetStage,
+    required DateTime now,
+  }) async {
+    _checkAlive('markDraftStageAndDispatch');
+    if (onBeforeMarkStageAndDispatch != null) {
+      await onBeforeMarkStageAndDispatch!();
+    }
+    _checkAlive('markDraftStageAndDispatch');
+    return inner.markDraftStageAndDispatch(
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      targetStage: targetStage,
+      now: now,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> persistServerAssessmentId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+  }) {
+    _checkAlive('persistServerAssessmentId');
+    return inner.persistServerAssessmentId(
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      serverAssessmentId: serverAssessmentId,
+      now: now,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> persistServerEvidenceId({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverEvidenceId,
+    required String expectedEvidenceId,
+    required String expectedSha256Checksum,
+    required DateTime now,
+  }) {
+    _checkAlive('persistServerEvidenceId');
+    return inner.persistServerEvidenceId(
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      serverEvidenceId: serverEvidenceId,
+      expectedEvidenceId: expectedEvidenceId,
+      expectedSha256Checksum: expectedSha256Checksum,
+      now: now,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> scheduleDraftRetry({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required DateTime nextAttemptAt,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) {
+    _checkAlive('scheduleDraftRetry');
+    return inner.scheduleDraftRetry(
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      nextAttemptAt: nextAttemptAt,
+      recoveryCode: recoveryCode,
+      errorMessage: errorMessage,
+      now: now,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> quarantineDraftOutcome({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String recoveryCode,
+    required String errorMessage,
+    DateTime? now,
+  }) {
+    _checkAlive('quarantineDraftOutcome');
+    return inner.quarantineDraftOutcome(
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      recoveryCode: recoveryCode,
+      errorMessage: errorMessage,
+      now: now,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> completeDraftSubmission({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    required String serverAssessmentId,
+    required DateTime now,
+    String? serverEvidenceId,
+  }) {
+    _checkAlive('completeDraftSubmission');
+    return inner.completeDraftSubmission(
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      serverAssessmentId: serverAssessmentId,
+      now: now,
+      serverEvidenceId: serverEvidenceId,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> releaseDraftClaim({
+    required String localDraftId,
+    required String leaseToken,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) {
+    _checkAlive('releaseDraftClaim');
+    return inner.releaseDraftClaim(
+      localDraftId: localDraftId,
+      leaseToken: leaseToken,
+      authenticatedActorId: authenticatedActorId,
+      now: now,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> pauseMismatchedActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    String? mismatchReason,
+    DateTime? now,
+  }) {
+    _checkAlive('pauseMismatchedActorDraft');
+    return inner.pauseMismatchedActorDraft(
+      localDraftId: localDraftId,
+      familyId: familyId,
+      authenticatedActorId: authenticatedActorId,
+      mismatchReason: mismatchReason,
+      now: now,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> resumeOriginalActorDraft({
+    required String localDraftId,
+    required String familyId,
+    required String authenticatedActorId,
+    DateTime? now,
+  }) {
+    _checkAlive('resumeOriginalActorDraft');
+    return inner.resumeOriginalActorDraft(
+      localDraftId: localDraftId,
+      familyId: familyId,
+      authenticatedActorId: authenticatedActorId,
+      now: now,
+    );
+  }
+
+  @override
+  Future<void> saveLocalDraft(LocalAssessmentDraft draft) {
+    _checkAlive('saveLocalDraft');
+    return inner.saveLocalDraft(draft);
+  }
+
+  @override
+  Future<void> deleteLocalDraft(String localDraftId) {
+    _checkAlive('deleteLocalDraft');
+    return inner.deleteLocalDraft(localDraftId);
+  }
+
+  @override
+  Future<DraftDeletionOutcome> deleteDraftSafely({
+    required String localDraftId,
+    required LocalAssessmentDraft expectedDraft,
+    DateTime? now,
+  }) {
+    _checkAlive('deleteDraftSafely');
+    return inner.deleteDraftSafely(
+      localDraftId: localDraftId,
+      expectedDraft: expectedDraft,
+      now: now,
+    );
+  }
+
+  @override
+  Future<DraftCasResult> registerOrUpdateDraftIfUnchanged({
+    required LocalAssessmentDraft? expected,
+    required LocalAssessmentDraft desired,
+    DateTime? now,
+  }) {
+    _checkAlive('registerOrUpdateDraftIfUnchanged');
+    return inner.registerOrUpdateDraftIfUnchanged(
+      expected: expected,
+      desired: desired,
+      now: now,
+    );
+  }
+
+  @override
+  Future<LocalAssessmentDraft?> getLocalDraft(String localDraftId) =>
+      inner.getLocalDraft(localDraftId);
+
+  @override
+  Future<List<LocalAssessmentDraft>> listLocalDrafts(ChildId childId) =>
+      inner.listLocalDrafts(childId);
+
+  @override
+  Future<bool> hasDraftReferenceToFile(String filePath) =>
+      inner.hasDraftReferenceToFile(filePath);
+
+  @override
+  Future<int> countDraftReferencesToFile(String filePath) =>
+      inner.countDraftReferencesToFile(filePath);
+}
+
 final class _InstrumentedAssessmentRepository extends FakeAssessmentRepository {
   _InstrumentedAssessmentRepository({super.activeActorIdProvider});
 
@@ -171,6 +477,30 @@ final class _InstrumentedAssessmentRepository extends FakeAssessmentRepository {
     listEvidenceCalls = 0;
     registerEvidenceCalls = 0;
     submitAssessmentCalls = 0;
+  }
+
+  /// Simulates another worker/request committing evidence registration +
+  /// assessment submission directly on the server without incrementing
+  /// orchestrator call counters.
+  Future<AssessmentEvidence> seedConcurrentEvidenceAndSubmit({
+    required AssessmentId assessmentId,
+    required String storagePath,
+    required String mediaType,
+    required int fileSizeBytes,
+    required String submitCommandId,
+  }) async {
+    final registered = await super.registerEvidence(
+      assessmentId: assessmentId,
+      storagePath: storagePath,
+      mediaType: mediaType,
+      fileSizeBytes: fileSizeBytes,
+    );
+    await super.submitAssessment(
+      assessmentId: assessmentId,
+      expectedVersion: 1,
+      commandId: submitCommandId,
+    );
+    return registered;
   }
 
   @override
@@ -303,10 +633,17 @@ final class _MockStorageHttpClient extends http.BaseClient {
   final List<http.BaseRequest> requests = [];
 
   bool simulateUpload409 = false;
+  bool commitUploadThenLoseResponseOnce = false;
   int? downloadStatusOverride;
   bool simulateDownloadTimeout = false;
 
+  Future<void> Function()? onBeforeUpload;
+  Future<void> Function()? onAfterRemoteWriteBeforeResponse;
+
   int uploadCallCount = 0;
+  int successfulUploadWrites = 0;
+  int rejectedNoUpsertUploadAttempts = 0;
+  int overwriteCount = 0;
   int downloadCallCount = 0;
   int deleteCallCount = 0;
 
@@ -383,7 +720,18 @@ final class _MockStorageHttpClient extends http.BaseClient {
     if (method == 'POST' &&
         path.contains('/storage/v1/object/assessment-evidence/')) {
       uploadCallCount++;
-      if (simulateUpload409) {
+      if (onBeforeUpload != null) {
+        await onBeforeUpload!();
+      }
+      const marker = '/assessment-evidence/';
+      final idx = path.indexOf(marker);
+      final key = idx != -1 ? path.substring(idx + marker.length) : '';
+      final upsertHeader = request.headers['x-upsert']?.toLowerCase();
+      final isNoUpsertRejection =
+          simulateUpload409 ||
+          (remoteStorage.containsKey(key) && upsertHeader != 'true');
+      if (isNoUpsertRejection) {
+        rejectedNoUpsertUploadAttempts++;
         return http.StreamedResponse(
           Stream.value(
             utf8.encode(
@@ -399,16 +747,34 @@ final class _MockStorageHttpClient extends http.BaseClient {
           headers: {'content-type': 'application/json'},
         );
       }
-      const marker = '/assessment-evidence/';
-      final idx = path.indexOf(marker);
-      final key = idx != -1 ? path.substring(idx + marker.length) : '';
+      final existedBefore = remoteStorage.containsKey(key);
+      final List<int> writtenBytes;
+      final String contentType;
       if (request is http.MultipartRequest && request.files.isNotEmpty) {
-        remoteStorage[key] = await request.files.first.finalize().toBytes();
+        writtenBytes = await request.files.first.finalize().toBytes();
+        contentType = request.files.first.contentType.mimeType;
       } else {
-        remoteStorage[key] = await request.finalize().toBytes();
+        writtenBytes = await request.finalize().toBytes();
+        contentType =
+            request.headers['content-type'] ?? 'application/octet-stream';
       }
-      remoteContentTypes[key] =
-          request.headers['content-type'] ?? 'application/octet-stream';
+      remoteStorage[key] = writtenBytes;
+      remoteContentTypes[key] = contentType;
+      if (existedBefore) {
+        overwriteCount++;
+      } else {
+        successfulUploadWrites++;
+      }
+      if (onAfterRemoteWriteBeforeResponse != null) {
+        await onAfterRemoteWriteBeforeResponse!();
+      }
+      if (commitUploadThenLoseResponseOnce) {
+        commitUploadThenLoseResponseOnce = false;
+        throw http.ClientException(
+          'Simulated lost upload response after remote storage commit',
+          request.url,
+        );
+      }
       return http.StreamedResponse(
         Stream.value(
           utf8.encode(jsonEncode({'Key': 'assessment-evidence/$key'})),
@@ -1349,7 +1715,7 @@ void main() {
       );
     });
 
-    test('B1-11: Lost upload response reconciles via exact byte download without duplicate upload (I03, I05)', () async {
+    test('B1-11: Remote upload commits then loses client response; reopened SQLite & file store resume without duplicate upload or overwrite (I03, I05)', () async {
       const draftId = 'b1-11-lost-upload-ack';
       const evId = '33333333-3333-4333-8333-000000000011';
       final seeded = await seedDraft(
@@ -1359,8 +1725,10 @@ void main() {
         evidenceId: evId,
         evidenceBytes: jpegHeaderBytes,
       );
+      final expectedSha = computeSha256Hex(jpegHeaderBytes);
 
-      final mockHttp = _MockStorageHttpClient();
+      final mockHttp = _MockStorageHttpClient()
+        ..commitUploadThenLoseResponseOnce = true;
       final sbClient = SupabaseClient(
         'https://mock.supabase.co',
         'anon-key',
@@ -1371,52 +1739,103 @@ void main() {
         authSessionPort: authPort,
       );
 
-      final preCreated = await repo.createDraft(
-        commandId: 'cmd-c-b111',
-        familyId: familyId,
-        childId: childId,
-        subjectKey: SubjectKey.math,
-        subject: 'Mathematics',
-        title: 'WP5 Fraction Quiz',
-        type: AssessmentType.quiz,
-        difficulty: AssessmentDifficulty.normal,
-        score: AssessmentScore(rawScore: 9.0, maxScore: 10.0),
-        occurredAt: baseNow,
-        entryContext: EntryContext.sharedChild,
-      );
-      final path =
-          '${familyId.value}/${childId.value}/${preCreated.id.value}/$evId.jpg';
-      // Simulate server Storage object actually persisted from attempt 1 while client timed out.
-      mockHttp.remoteStorage[path] = List<int>.from(jpegHeaderBytes);
-      repo.resetCounts();
-
-      // Direct reconcileEvidence verifies bytes without upload.
-      final directCheck = await realAdapter.reconcileEvidence(
-        storagePath: path,
-        localBytes: jpegHeaderBytes,
-      );
-      expect(directCheck, isA<MatchingBytesOutcome>());
-      expect(mockHttp.uploadCallCount, equals(0));
-      expect(mockHttp.downloadCallCount, equals(1));
-
-      // Now run full orchestrator encountering 409 (because remote object exists) -> reconciles cleanly.
-      mockHttp.downloadCallCount = 0;
-      mockHttp.simulateUpload409 = true;
-      final orchestrator = buildOrchestrator(storageOverride: realAdapter);
-      final outcome = await executeDraft(
-        orchestrator,
+      // Attempt 1 through actual orchestrator: createDraft commits, Storage POST commits bytes,
+      // then HTTP response is lost -> retry scheduled before registerEvidence / submitAssessment.
+      final outcome1 = await executeDraft(
+        buildOrchestrator(storageOverride: realAdapter),
         localDraftId: draftId,
         createCommandId: 'cmd-c-b111',
         submitCommandId: 'cmd-s-b111',
         evidenceId: evId,
       );
-
-      expect(outcome, isA<AssessmentSubmissionConfirmed>());
+      expect(outcome1, isA<AssessmentSubmissionRetryScheduled>());
+      expect(repo.createDraftCalls, equals(1));
+      expect(repo.registerEvidenceCalls, equals(0));
+      expect(repo.submitAssessmentCalls, equals(0));
       expect(mockHttp.uploadCallCount, equals(1));
-      expect(mockHttp.downloadCallCount, equals(1));
+      expect(mockHttp.successfulUploadWrites, equals(1));
+      expect(mockHttp.rejectedNoUpsertUploadAttempts, equals(0));
+      expect(mockHttp.overwriteCount, equals(0));
+      expect(mockHttp.downloadCallCount, equals(0));
       expect(mockHttp.deleteCallCount, equals(0));
+
+      final expectedAssessmentId = repo.commandToAssessmentId['cmd-c-b111']!;
+      final expectedPath =
+          '${familyId.value}/${childId.value}/$expectedAssessmentId/$evId.jpg';
+      expect(mockHttp.remoteStorage[expectedPath], equals(jpegHeaderBytes));
+
+      // Simulate restart: reopen file-backed SQLite and recreate canonical file store.
+      await reopenDb();
+      snapshotStore = _DurableDiskCanonicalSnapshotStore(tempDir);
+
+      final midPersisted = await db.getLocalDraft(draftId);
+      expect(midPersisted?.localDraftId, equals(draftId));
+      expect(midPersisted?.createCommandId, equals('cmd-c-b111'));
+      expect(midPersisted?.submitCommandId, equals('cmd-s-b111'));
+      expect(midPersisted?.evidenceId, equals(evId));
+      expect(
+        midPersisted?.dispatchState,
+        equals(CommandDispatchState.possiblyDispatched),
+      );
+      expect(
+        midPersisted?.submissionStatus,
+        equals(DraftSubmissionStatus.failedRetryable),
+      );
+      expect(
+        midPersisted?.recoveryCode,
+        equals(DraftRecoveryCode.retryScheduled),
+      );
+      expect(midPersisted?.serverAssessmentId, equals(expectedAssessmentId));
+      expect(midPersisted?.serverEvidenceId, isNull);
+      expect(midPersisted?.sha256Checksum, equals(expectedSha));
+      expectCanonicalFileIntact(
+        seeded.localCompressedPhotoPath,
+        jpegHeaderBytes,
+      );
+
+      // Advance past retry backoff and resume through fresh orchestrator.
+      clock.advance(const Duration(minutes: 5));
+      repo.resetCounts();
+
+      final outcome2 = await executeDraft(
+        buildOrchestrator(storageOverride: realAdapter),
+        localDraftId: draftId,
+        createCommandId: 'cmd-c-b111',
+        submitCommandId: 'cmd-s-b111',
+        evidenceId: evId,
+      );
+      expect(outcome2, isA<AssessmentSubmissionConfirmed>());
+      final confirmed = outcome2 as AssessmentSubmissionConfirmed;
+      expect(confirmed.assessment.id.value, equals(expectedAssessmentId));
+      expect(repo.createDraftCalls, equals(0));
       expect(repo.registerEvidenceCalls, equals(1));
       expect(repo.submitAssessmentCalls, equals(1));
+
+      // Attempt 2's x-upsert:false upload is rejected with HTTP 409 and reconciled via download;
+      // zero duplicate successful uploads, zero overwrites, zero deletions, single remote object.
+      expect(mockHttp.uploadCallCount, equals(2));
+      expect(mockHttp.successfulUploadWrites, equals(1));
+      expect(mockHttp.rejectedNoUpsertUploadAttempts, equals(1));
+      expect(mockHttp.overwriteCount, equals(0));
+      expect(mockHttp.downloadCallCount, equals(1));
+      expect(mockHttp.deleteCallCount, equals(0));
+      expect(mockHttp.remoteStorage.keys.toList(), equals([expectedPath]));
+      expect(mockHttp.remoteStorage[expectedPath], equals(jpegHeaderBytes));
+
+      await reopenDb();
+      final finalPersisted = await db.getLocalDraft(draftId);
+      expect(finalPersisted?.localDraftId, equals(draftId));
+      expect(finalPersisted?.createCommandId, equals('cmd-c-b111'));
+      expect(finalPersisted?.submitCommandId, equals('cmd-s-b111'));
+      expect(finalPersisted?.evidenceId, equals(evId));
+      expect(finalPersisted?.serverAssessmentId, equals(expectedAssessmentId));
+      expect(finalPersisted?.serverEvidenceId, isNotNull);
+      expect(finalPersisted?.serverEvidenceId, isNot(equals(evId)));
+      expect(finalPersisted?.sha256Checksum, equals(expectedSha));
+      expect(
+        finalPersisted?.dispatchState,
+        equals(CommandDispatchState.confirmedCommitted),
+      );
       expectCanonicalFileIntact(
         seeded.localCompressedPhotoPath,
         jpegHeaderBytes,
@@ -1576,18 +1995,19 @@ void main() {
       expect(storage.deleteCallCount, equals(0));
     });
 
-    test('B1-13: Registration committed + non-draft LW109 reconciles read-only without re-registering & confirms (I04, I12, I13)', () async {
-      const draftId = 'b1-13-lw109';
-      const evId = '33333333-3333-4333-8333-000000000013';
-      final seeded = await seedDraft(
-        localDraftId: draftId,
-        createCommandId: 'cmd-c-b113',
-        submitCommandId: 'cmd-s-b113',
-        evidenceId: evId,
+    test('B1-13: Active LW109 registration rejection reconciles read-only, separately from pre-committed non-draft reconciliation (I04, I12, I13)', () async {
+      // Subcase A: Active LW109 execution path during registerEvidence (isNonDraftRemote == false at Stage B entry).
+      const draftIdA = 'b1-13a-lw109-active';
+      const evIdA = '33333333-3333-4333-8333-000000000013';
+      final seededA = await seedDraft(
+        localDraftId: draftIdA,
+        createCommandId: 'cmd-c-b113a',
+        submitCommandId: 'cmd-s-b113a',
+        evidenceId: evIdA,
         evidenceBytes: jpegHeaderBytes,
       );
-      final a = await repo.createDraft(
-        commandId: 'cmd-c-b113',
+      final a1 = await repo.createDraft(
+        commandId: 'cmd-c-b113a',
         familyId: familyId,
         childId: childId,
         subjectKey: SubjectKey.math,
@@ -1599,47 +2019,113 @@ void main() {
         occurredAt: baseNow,
         entryContext: EntryContext.sharedChild,
       );
-      final path = '${familyId.value}/${childId.value}/${a.id.value}/$evId.jpg';
-      storage.storage[path] = List<int>.from(jpegHeaderBytes);
-      final regRow = await repo.registerEvidence(
-        assessmentId: a.id,
-        storagePath: path,
-        mediaType: 'image/jpeg',
-        fileSizeBytes: jpegHeaderBytes.length,
-      );
-      await repo.submitAssessment(
-        assessmentId: a.id,
-        expectedVersion: 1,
-        commandId: 'cmd-s-b113',
-      );
+      final pathA =
+          '${familyId.value}/${childId.value}/${a1.id.value}/$evIdA.jpg';
       repo.resetCounts();
+      storage.reconcileCallCount = 0;
 
-      // Inject LW109 on register attempt to exercise LW109 read-only reconciliation branch too.
-      repo.nextRegisterError = const BackendRpcException(
-        message: 'Assessment must be draft to register evidence',
-        code: 'LW109',
+      late final AssessmentEvidence regRowA;
+      // Just as registerEvidence is called, another worker/request finishes registering regRowA
+      // and transitions a1 out of draft under cmd-s-b113a, causing registerEvidence to throw LW109.
+      repo.onBeforeRegister = () async {
+        repo.onBeforeRegister = null;
+        regRowA = await repo.seedConcurrentEvidenceAndSubmit(
+          assessmentId: a1.id,
+          storagePath: pathA,
+          mediaType: 'image/jpeg',
+          fileSizeBytes: jpegHeaderBytes.length,
+          submitCommandId: 'cmd-s-b113a',
+        );
+        repo.nextRegisterError = const BackendRpcException(
+          message: 'Assessment must be draft to register evidence',
+          code: 'LW109',
+        );
+      };
+
+      final outcomeA = await executeDraft(
+        buildOrchestrator(),
+        localDraftId: draftIdA,
+        createCommandId: 'cmd-c-b113a',
+        submitCommandId: 'cmd-s-b113a',
+        evidenceId: evIdA,
       );
 
-      final orchestrator = buildOrchestrator();
-      final outcome = await executeDraft(
-        orchestrator,
-        localDraftId: draftId,
-        createCommandId: 'cmd-c-b113',
-        submitCommandId: 'cmd-s-b113',
-        evidenceId: evId,
-      );
-
-      expect(outcome, isA<AssessmentSubmissionConfirmed>());
-      expect(storage.reconcileCallCount, greaterThanOrEqualTo(1));
+      expect(outcomeA, isA<AssessmentSubmissionConfirmed>());
+      expect(repo.registerEvidenceCalls, equals(1));
+      expect(repo.nextRegisterError, isNull);
+      expect(storage.reconcileCallCount, equals(1));
       expect(storage.deleteCallCount, equals(0));
-      final persisted = await (await reopenDb()).getLocalDraft(draftId);
-      expect(persisted?.serverEvidenceId, equals(regRow.id.value));
+      final persistedA = await (await reopenDb()).getLocalDraft(draftIdA);
+      expect(persistedA?.serverEvidenceId, equals(regRowA.id.value));
+      expect(regRowA.id.value, isNot(equals(evIdA)));
       expect(
-        persisted?.dispatchState,
+        persistedA?.dispatchState,
         equals(CommandDispatchState.confirmedCommitted),
       );
       expectCanonicalFileIntact(
-        seeded.localCompressedPhotoPath,
+        seededA.localCompressedPhotoPath,
+        jpegHeaderBytes,
+      );
+
+      // Subcase B: Pre-committed non-draft assessment reconciles read-only at Stage B entry
+      // without invoking uploadEvidence or registerEvidence (no LW109 injection needed).
+      const draftIdB = 'b1-13b-nondraft-readonly';
+      const evIdB = '33333333-3333-4333-8333-000000000113';
+      final seededB = await seedDraft(
+        localDraftId: draftIdB,
+        createCommandId: 'cmd-c-b113b',
+        submitCommandId: 'cmd-s-b113b',
+        evidenceId: evIdB,
+        evidenceBytes: jpegHeaderBytes,
+      );
+      final a2 = await repo.createDraft(
+        commandId: 'cmd-c-b113b',
+        familyId: familyId,
+        childId: childId,
+        subjectKey: SubjectKey.math,
+        subject: 'Mathematics',
+        title: 'WP5 Fraction Quiz',
+        type: AssessmentType.quiz,
+        difficulty: AssessmentDifficulty.normal,
+        score: AssessmentScore(rawScore: 9.0, maxScore: 10.0),
+        occurredAt: baseNow,
+        entryContext: EntryContext.sharedChild,
+      );
+      final pathB =
+          '${familyId.value}/${childId.value}/${a2.id.value}/$evIdB.jpg';
+      storage.storage[pathB] = List<int>.from(jpegHeaderBytes);
+      final regRowB = await repo.seedConcurrentEvidenceAndSubmit(
+        assessmentId: a2.id,
+        storagePath: pathB,
+        mediaType: 'image/jpeg',
+        fileSizeBytes: jpegHeaderBytes.length,
+        submitCommandId: 'cmd-s-b113b',
+      );
+      repo.resetCounts();
+      storage.uploadCallCount = 0;
+      storage.reconcileCallCount = 0;
+
+      final outcomeB = await executeDraft(
+        buildOrchestrator(),
+        localDraftId: draftIdB,
+        createCommandId: 'cmd-c-b113b',
+        submitCommandId: 'cmd-s-b113b',
+        evidenceId: evIdB,
+      );
+
+      expect(outcomeB, isA<AssessmentSubmissionConfirmed>());
+      expect(storage.uploadCallCount, equals(0));
+      expect(repo.registerEvidenceCalls, equals(0));
+      expect(storage.reconcileCallCount, equals(1));
+      expect(storage.deleteCallCount, equals(0));
+      final persistedB = await (await reopenDb()).getLocalDraft(draftIdB);
+      expect(persistedB?.serverEvidenceId, equals(regRowB.id.value));
+      expect(
+        persistedB?.dispatchState,
+        equals(CommandDispatchState.confirmedCommitted),
+      );
+      expectCanonicalFileIntact(
+        seededB.localCompressedPhotoPath,
         jpegHeaderBytes,
       );
     });
@@ -2062,24 +2548,23 @@ void main() {
       );
     });
 
-    test('B1-18: Crash & auth boundary resilience across pre-marker, post-marker, post-create, and pre-register restarts (I07, I08, I14)', () async {
-      // Part 1: Auth revoked between snapshot + SQLite registration and RPC -> 0 RPCs
+    test('B1-18: Deterministic crash/restart resilience across all 5 crash boundaries with SQLite CAS/lease fencing & auth abort (I07, I08, I14)', () async {
+      // Part 0: Auth revoked between snapshot + SQLite registration and RPC -> 0 RPCs
       const authCrashId = 'b1-18-auth-abort';
       final seededAbort = await seedDraft(
         localDraftId: authCrashId,
-        createCommandId: 'cmd-c-b118-a',
-        submitCommandId: 'cmd-s-b118-a',
-        evidenceId: '33333333-3333-4333-8333-000000001801',
+        createCommandId: 'cmd-c-b118-0',
+        submitCommandId: 'cmd-s-b118-0',
+        evidenceId: '33333333-3333-4333-8333-000000001800',
         evidenceBytes: jpegHeaderBytes,
       );
       authPort.signOut();
-      final orchestrator = buildOrchestrator();
       final abortOut = await executeDraft(
-        orchestrator,
+        buildOrchestrator(),
         localDraftId: authCrashId,
-        createCommandId: 'cmd-c-b118-a',
-        submitCommandId: 'cmd-s-b118-a',
-        evidenceId: '33333333-3333-4333-8333-000000001801',
+        createCommandId: 'cmd-c-b118-0',
+        submitCommandId: 'cmd-s-b118-0',
+        evidenceId: '33333333-3333-4333-8333-000000001800',
       );
       expect(abortOut, isA<AssessmentSubmissionPausedSessionInvalid>());
       expect(repo.createDraftCalls, equals(0));
@@ -2090,77 +2575,509 @@ void main() {
         jpegHeaderBytes,
       );
 
-      // Restore valid auth for crash stage tests
+      // Restore valid auth for all 5 crash/restart boundary cases.
       authPort.setSession(
         userId: 'actor-parent-1',
         sessionGeneration: 'gen-1',
         role: 'parent',
       );
 
-      // Part 2: Crash after upload before registration -> resumes cleanly without duplicate assessment
-      const midCrashId = 'b1-18-crash-mid';
-      const midEvId = '33333333-3333-4333-8333-000000001802';
-      final seededMid = await seedDraft(
-        localDraftId: midCrashId,
-        createCommandId: 'cmd-c-b118-b',
-        submitCommandId: 'cmd-s-b118-b',
-        evidenceId: midEvId,
-        evidenceBytes: jpegHeaderBytes,
+      Future<void> runCrashBoundaryCase({
+        required String draftId,
+        required String createCommandId,
+        required String submitCommandId,
+        required String evidenceId,
+        required String crashStageLabel,
+        required void Function(
+          _CrashableLocalDraftStore crashStore,
+          _MockStorageHttpClient mockHttp,
+        )
+        configureCrash,
+        required void Function(
+          LocalAssessmentDraft crashedRow,
+          _MockStorageHttpClient mockHttp,
+        )
+        verifyPostCrash,
+        required Future<void> Function(
+          AssessmentSubmissionConfirmed confirmed,
+          _MockStorageHttpClient mockHttp,
+        )
+        verifyPostResume,
+      }) async {
+        final seeded = await seedDraft(
+          localDraftId: draftId,
+          createCommandId: createCommandId,
+          submitCommandId: submitCommandId,
+          evidenceId: evidenceId,
+          evidenceBytes: jpegHeaderBytes,
+        );
+        final expectedSha = computeSha256Hex(jpegHeaderBytes);
+        final crashStore = _CrashableLocalDraftStore(db);
+        final mockHttp = _MockStorageHttpClient();
+        final sbClient = SupabaseClient(
+          'https://mock.supabase.co',
+          'anon-key',
+          httpClient: mockHttp,
+        );
+        final realStorage = SupabaseAssessmentEvidenceStorage(
+          sbClient,
+          authSessionPort: authPort,
+        );
+
+        configureCrash(crashStore, mockHttp);
+        repo.resetCounts();
+
+        await expectLater(
+          () => executeDraft(
+            buildOrchestrator(
+              storeOverride: crashStore,
+              storageOverride: realStorage,
+            ),
+            localDraftId: draftId,
+            createCommandId: createCommandId,
+            submitCommandId: submitCommandId,
+            evidenceId: evidenceId,
+          ),
+          throwsA(
+            anyOf(
+              isA<_SimulatedProcessCrashException>(),
+              predicate<Object>(
+                (e) =>
+                    e is DraftSubmissionCasException &&
+                    e.cause is _SimulatedProcessCrashException,
+              ),
+            ),
+          ),
+          reason: '$crashStageLabel should fail at injected hard crash point',
+        );
+        expect(crashStore.hardCrashed, isTrue);
+
+        // Simulate restart: reopen file-backed SQLite and recreate canonical file store.
+        await reopenDb();
+        snapshotStore = _DurableDiskCanonicalSnapshotStore(tempDir);
+
+        final crashedRow = await db.getLocalDraft(draftId);
+        expect(crashedRow, isNotNull);
+        final staleLeaseToken = crashedRow!.leaseToken!;
+        expect(staleLeaseToken, isNotEmpty);
+        expect(crashedRow.hasActiveLease(now: clock.now().toUtc()), isTrue);
+        expect(crashedRow.localDraftId, equals(draftId));
+        expect(crashedRow.createCommandId, equals(createCommandId));
+        expect(crashedRow.submitCommandId, equals(submitCommandId));
+        expect(crashedRow.evidenceId, equals(evidenceId));
+        expect(crashedRow.sha256Checksum, equals(expectedSha));
+        expectCanonicalFileIntact(
+          seeded.localCompressedPhotoPath,
+          jpegHeaderBytes,
+        );
+
+        verifyPostCrash(crashedRow, mockHttp);
+
+        // Lease fencing BEFORE expiry: competing worker sees leaseConflict and executes 0 RPCs/uploads/deletes.
+        final preConflictCreate = repo.createDraftCalls;
+        final preConflictUpload = mockHttp.uploadCallCount;
+        final preConflictReg = repo.registerEvidenceCalls;
+        final preConflictSub = repo.submitAssessmentCalls;
+        final preConflictDel = mockHttp.deleteCallCount;
+
+        final conflictOut = await executeDraft(
+          buildOrchestrator(storageOverride: realStorage),
+          localDraftId: draftId,
+          createCommandId: createCommandId,
+          submitCommandId: submitCommandId,
+          evidenceId: evidenceId,
+        );
+        expect(conflictOut, isA<AssessmentSubmissionLeaseConflict>());
+        expect(
+          (conflictOut as AssessmentSubmissionLeaseConflict).casStatus,
+          equals(DraftCasStatus.leaseConflict),
+        );
+        expect(repo.createDraftCalls, equals(preConflictCreate));
+        expect(mockHttp.uploadCallCount, equals(preConflictUpload));
+        expect(repo.registerEvidenceCalls, equals(preConflictReg));
+        expect(repo.submitAssessmentCalls, equals(preConflictSub));
+        expect(mockHttp.deleteCallCount, equals(preConflictDel));
+
+        // Advance clock past 2-minute lease expiry so recovery reclaims lease and rotates token.
+        clock.advance(const Duration(minutes: 3));
+        final expiredMark = await db.markDraftStageAndDispatch(
+          localDraftId: draftId,
+          leaseToken: staleLeaseToken,
+          authenticatedActorId: 'actor-parent-1',
+          targetStage: DraftSubmissionStatus.uploadingEvidence,
+          now: clock.now().toUtc(),
+        );
+        expect(expiredMark.status, equals(DraftCasStatus.leaseConflict));
+
+        repo.resetCounts();
+        var staleFenceChecked = false;
+        repo.onBeforeSubmit = () async {
+          repo.onBeforeSubmit = null;
+          staleFenceChecked = true;
+          final activeRow = await db.getLocalDraft(draftId);
+          expect(activeRow?.leaseToken, isNotNull);
+          expect(activeRow?.leaseToken, isNot(equals(staleLeaseToken)));
+          final ops = <Future<DraftCasResult>>[
+            db.markDraftStageAndDispatch(
+              localDraftId: draftId,
+              leaseToken: staleLeaseToken,
+              authenticatedActorId: 'actor-parent-1',
+              targetStage: DraftSubmissionStatus.submittingAssessment,
+              now: clock.now().toUtc(),
+            ),
+            db.persistServerAssessmentId(
+              localDraftId: draftId,
+              leaseToken: staleLeaseToken,
+              authenticatedActorId: 'actor-parent-1',
+              serverAssessmentId: 'fenced-assessment-id',
+              now: clock.now().toUtc(),
+            ),
+            db.persistServerEvidenceId(
+              localDraftId: draftId,
+              leaseToken: staleLeaseToken,
+              authenticatedActorId: 'actor-parent-1',
+              serverEvidenceId: 'fenced-evidence-id',
+              expectedEvidenceId: evidenceId,
+              expectedSha256Checksum: expectedSha,
+              now: clock.now().toUtc(),
+            ),
+            db.scheduleDraftRetry(
+              localDraftId: draftId,
+              leaseToken: staleLeaseToken,
+              authenticatedActorId: 'actor-parent-1',
+              nextAttemptAt: clock.now().toUtc().add(
+                const Duration(seconds: 30),
+              ),
+              recoveryCode: DraftRecoveryCode.retryScheduled,
+              errorMessage: 'stale worker retry',
+              now: clock.now().toUtc(),
+            ),
+            db.completeDraftSubmission(
+              localDraftId: draftId,
+              leaseToken: staleLeaseToken,
+              authenticatedActorId: 'actor-parent-1',
+              serverAssessmentId: activeRow!.serverAssessmentId!,
+              now: clock.now().toUtc(),
+              serverEvidenceId: activeRow.serverEvidenceId,
+            ),
+            db.releaseDraftClaim(
+              localDraftId: draftId,
+              leaseToken: staleLeaseToken,
+              authenticatedActorId: 'actor-parent-1',
+              now: clock.now().toUtc(),
+            ),
+          ];
+          for (final res in await Future.wait(ops)) {
+            expect(res.isSuccess, isFalse);
+            expect(res.status, equals(DraftCasStatus.leaseConflict));
+          }
+        };
+
+        final resumed = await executeDraft(
+          buildOrchestrator(storageOverride: realStorage),
+          localDraftId: draftId,
+          createCommandId: createCommandId,
+          submitCommandId: submitCommandId,
+          evidenceId: evidenceId,
+        );
+        expect(resumed, isA<AssessmentSubmissionConfirmed>());
+        final confirmed = resumed as AssessmentSubmissionConfirmed;
+        expect(staleFenceChecked, isTrue);
+        expect(repo.submitAssessmentCalls, equals(1));
+        expect(mockHttp.overwriteCount, equals(0));
+        expect(mockHttp.deleteCallCount, equals(0));
+
+        await verifyPostResume(confirmed, mockHttp);
+
+        await reopenDb();
+        final finalRow = await db.getLocalDraft(draftId);
+        expect(
+          finalRow?.dispatchState,
+          equals(CommandDispatchState.confirmedCommitted),
+        );
+        expect(finalRow?.localDraftId, equals(draftId));
+        expect(finalRow?.createCommandId, equals(createCommandId));
+        expect(finalRow?.submitCommandId, equals(submitCommandId));
+        expect(finalRow?.evidenceId, equals(evidenceId));
+        expect(
+          finalRow?.serverAssessmentId,
+          equals(confirmed.assessment.id.value),
+        );
+        expect(finalRow?.serverEvidenceId, isNotNull);
+        expect(finalRow?.serverEvidenceId, isNot(equals(evidenceId)));
+        expect(finalRow?.sha256Checksum, equals(expectedSha));
+        expectCanonicalFileIntact(
+          seeded.localCompressedPhotoPath,
+          jpegHeaderBytes,
+        );
+      }
+
+      // Case 1: Crash before durable upload marker (after lease acquired, before markDraftStageAndDispatch).
+      await runCrashBoundaryCase(
+        draftId: 'b1-18-case1-before-marker',
+        createCommandId: 'cmd-c-b118-1',
+        submitCommandId: 'cmd-s-b118-1',
+        evidenceId: '33333333-3333-4333-8333-000000001801',
+        crashStageLabel: 'Case 1: before durable upload marker',
+        configureCrash: (crashStore, mockHttp) {
+          crashStore.onBeforeMarkStageAndDispatch = () async {
+            crashStore.onBeforeMarkStageAndDispatch = null;
+            crashStore.tripHardCrash();
+            throw const _SimulatedProcessCrashException('case1_before_marker');
+          };
+        },
+        verifyPostCrash: (crashedRow, mockHttp) {
+          expect(
+            crashedRow.dispatchState,
+            equals(CommandDispatchState.neverDispatched),
+          );
+          expect(
+            crashedRow.submissionStatus,
+            equals(DraftSubmissionStatus.draft),
+          );
+          expect(crashedRow.serverAssessmentId, isNull);
+          expect(crashedRow.serverEvidenceId, isNull);
+          expect(repo.createDraftCalls, equals(0));
+          expect(mockHttp.uploadCallCount, equals(0));
+          expect(mockHttp.successfulUploadWrites, equals(0));
+          expect(repo.registerEvidenceCalls, equals(0));
+          expect(repo.submitAssessmentCalls, equals(0));
+        },
+        verifyPostResume: (confirmed, mockHttp) async {
+          expect(repo.createDraftCalls, equals(1));
+          expect(mockHttp.uploadCallCount, equals(1));
+          expect(mockHttp.successfulUploadWrites, equals(1));
+          expect(mockHttp.rejectedNoUpsertUploadAttempts, equals(0));
+          expect(mockHttp.downloadCallCount, equals(0));
+          expect(repo.registerEvidenceCalls, equals(1));
+        },
       );
 
-      // Inject simulated process crash (StateError) right before registerEvidence after Stage A + Upload committed.
-      repo.onBeforeRegister = () async {
-        repo.onBeforeRegister = null;
-        throw StateError('Simulated process crash after upload');
-      };
-      await expectLater(
-        () => executeDraft(
-          orchestrator,
-          localDraftId: midCrashId,
-          createCommandId: 'cmd-c-b118-b',
-          submitCommandId: 'cmd-s-b118-b',
-          evidenceId: midEvId,
-        ),
-        throwsStateError,
+      // Case 2a: Crash after durable upload marker, before createDraft RPC.
+      await runCrashBoundaryCase(
+        draftId: 'b1-18-case2a-after-marker-before-create',
+        createCommandId: 'cmd-c-b118-2a',
+        submitCommandId: 'cmd-s-b118-2a',
+        evidenceId: '33333333-3333-4333-8333-000000001821',
+        crashStageLabel: 'Case 2a: after marker, before createDraft',
+        configureCrash: (crashStore, mockHttp) {
+          repo.onBeforeCreate = () async {
+            repo.onBeforeCreate = null;
+            crashStore.tripHardCrash();
+            throw const _SimulatedProcessCrashException('case2a_before_create');
+          };
+        },
+        verifyPostCrash: (crashedRow, mockHttp) {
+          expect(
+            crashedRow.dispatchState,
+            equals(CommandDispatchState.possiblyDispatched),
+          );
+          expect(
+            crashedRow.submissionStatus,
+            equals(DraftSubmissionStatus.uploadingEvidence),
+          );
+          expect(crashedRow.serverAssessmentId, isNull);
+          expect(crashedRow.serverEvidenceId, isNull);
+          expect(repo.commandToAssessmentId['cmd-c-b118-2a'], isNull);
+          expect(mockHttp.uploadCallCount, equals(0));
+          expect(mockHttp.successfulUploadWrites, equals(0));
+          expect(repo.registerEvidenceCalls, equals(0));
+          expect(repo.submitAssessmentCalls, equals(0));
+        },
+        verifyPostResume: (confirmed, mockHttp) async {
+          expect(repo.createDraftCalls, equals(1));
+          expect(mockHttp.uploadCallCount, equals(1));
+          expect(mockHttp.successfulUploadWrites, equals(1));
+          expect(mockHttp.rejectedNoUpsertUploadAttempts, equals(0));
+          expect(repo.registerEvidenceCalls, equals(1));
+        },
       );
-      expect(repo.createDraftCalls, equals(1));
-      expect(storage.uploadCallCount, equals(1));
 
-      // Reopen SQLite database from disk and resume after lease expiry / release
-      await reopenDb();
-      final midRow = await db.getLocalDraft(midCrashId);
-      expect(
-        midRow?.dispatchState,
-        equals(CommandDispatchState.possiblyDispatched),
+      // Case 2b: Crash after durable upload marker and persistServerAssessmentId, before upload RPC writes bytes.
+      late String case2bAssessmentId;
+      await runCrashBoundaryCase(
+        draftId: 'b1-18-case2b-after-marker-before-upload',
+        createCommandId: 'cmd-c-b118-2b',
+        submitCommandId: 'cmd-s-b118-2b',
+        evidenceId: '33333333-3333-4333-8333-000000001822',
+        crashStageLabel: 'Case 2b: after marker + createDraft, before upload',
+        configureCrash: (crashStore, mockHttp) {
+          mockHttp.onBeforeUpload = () async {
+            mockHttp.onBeforeUpload = null;
+            crashStore.tripHardCrash();
+            throw const _SimulatedProcessCrashException('case2b_before_upload');
+          };
+        },
+        verifyPostCrash: (crashedRow, mockHttp) {
+          expect(
+            crashedRow.dispatchState,
+            equals(CommandDispatchState.possiblyDispatched),
+          );
+          expect(
+            crashedRow.submissionStatus,
+            equals(DraftSubmissionStatus.uploadingEvidence),
+          );
+          expect(crashedRow.serverAssessmentId, isNotNull);
+          expect(crashedRow.serverEvidenceId, isNull);
+          case2bAssessmentId = crashedRow.serverAssessmentId!;
+          expect(repo.createDraftCalls, equals(1));
+          expect(mockHttp.uploadCallCount, equals(1));
+          expect(mockHttp.successfulUploadWrites, equals(0));
+          expect(mockHttp.remoteStorage, isEmpty);
+          expect(repo.registerEvidenceCalls, equals(0));
+          expect(repo.submitAssessmentCalls, equals(0));
+        },
+        verifyPostResume: (confirmed, mockHttp) async {
+          expect(confirmed.assessment.id.value, equals(case2bAssessmentId));
+          expect(repo.createDraftCalls, equals(0));
+          expect(mockHttp.uploadCallCount, equals(2));
+          expect(mockHttp.successfulUploadWrites, equals(1));
+          expect(mockHttp.rejectedNoUpsertUploadAttempts, equals(0));
+          expect(repo.registerEvidenceCalls, equals(1));
+        },
       );
-      expect(midRow?.serverAssessmentId, isNotNull);
-      expect(midRow?.serverEvidenceId, isNull);
-      final savedAssessmentId = midRow!.serverAssessmentId!;
 
-      repo.resetCounts();
-      storage.uploadCallCount = 0;
-      clock.advance(const Duration(seconds: 30));
+      // Case 3: Crash during uncertain upload (Storage write committed before HTTP response returned).
+      late String case3AssessmentId;
+      await runCrashBoundaryCase(
+        draftId: 'b1-18-case3-uncertain-upload',
+        createCommandId: 'cmd-c-b118-3',
+        submitCommandId: 'cmd-s-b118-3',
+        evidenceId: '33333333-3333-4333-8333-000000001803',
+        crashStageLabel: 'Case 3: during uncertain upload',
+        configureCrash: (crashStore, mockHttp) {
+          mockHttp.onAfterRemoteWriteBeforeResponse = () async {
+            mockHttp.onAfterRemoteWriteBeforeResponse = null;
+            crashStore.tripHardCrash();
+            throw const _SimulatedProcessCrashException(
+              'case3_during_uncertain_upload',
+            );
+          };
+        },
+        verifyPostCrash: (crashedRow, mockHttp) {
+          expect(
+            crashedRow.dispatchState,
+            equals(CommandDispatchState.possiblyDispatched),
+          );
+          expect(
+            crashedRow.submissionStatus,
+            equals(DraftSubmissionStatus.uploadingEvidence),
+          );
+          expect(crashedRow.serverAssessmentId, isNotNull);
+          expect(crashedRow.serverEvidenceId, isNull);
+          case3AssessmentId = crashedRow.serverAssessmentId!;
+          expect(repo.createDraftCalls, equals(1));
+          expect(mockHttp.uploadCallCount, equals(1));
+          expect(mockHttp.successfulUploadWrites, equals(1));
+          expect(mockHttp.remoteStorage.length, equals(1));
+          expect(repo.registerEvidenceCalls, equals(0));
+          expect(repo.submitAssessmentCalls, equals(0));
+        },
+        verifyPostResume: (confirmed, mockHttp) async {
+          expect(confirmed.assessment.id.value, equals(case3AssessmentId));
+          expect(repo.createDraftCalls, equals(0));
+          expect(mockHttp.uploadCallCount, equals(2));
+          expect(mockHttp.successfulUploadWrites, equals(1));
+          expect(mockHttp.rejectedNoUpsertUploadAttempts, equals(1));
+          expect(mockHttp.downloadCallCount, equals(1));
+          expect(repo.registerEvidenceCalls, equals(1));
+        },
+      );
 
-      final recovered = await executeDraft(
-        buildOrchestrator(),
-        localDraftId: midCrashId,
-        createCommandId: 'cmd-c-b118-b',
-        submitCommandId: 'cmd-s-b118-b',
-        evidenceId: midEvId,
+      // Case 4: Crash after successful upload (HTTP 200), before registerEvidence RPC.
+      late String case4AssessmentId;
+      await runCrashBoundaryCase(
+        draftId: 'b1-18-case4-after-upload-before-register',
+        createCommandId: 'cmd-c-b118-4',
+        submitCommandId: 'cmd-s-b118-4',
+        evidenceId: '33333333-3333-4333-8333-000000001804',
+        crashStageLabel: 'Case 4: after successful upload, before register',
+        configureCrash: (crashStore, mockHttp) {
+          repo.onBeforeRegister = () async {
+            repo.onBeforeRegister = null;
+            crashStore.tripHardCrash();
+            throw const _SimulatedProcessCrashException(
+              'case4_before_register',
+            );
+          };
+        },
+        verifyPostCrash: (crashedRow, mockHttp) {
+          expect(
+            crashedRow.dispatchState,
+            equals(CommandDispatchState.possiblyDispatched),
+          );
+          expect(
+            crashedRow.submissionStatus,
+            equals(DraftSubmissionStatus.uploadingEvidence),
+          );
+          expect(crashedRow.serverAssessmentId, isNotNull);
+          expect(crashedRow.serverEvidenceId, isNull);
+          case4AssessmentId = crashedRow.serverAssessmentId!;
+          expect(repo.createDraftCalls, equals(1));
+          expect(mockHttp.uploadCallCount, equals(1));
+          expect(mockHttp.successfulUploadWrites, equals(1));
+          expect(mockHttp.remoteStorage.length, equals(1));
+          expect(repo.registerEvidenceCalls, equals(1));
+          expect(repo.submitAssessmentCalls, equals(0));
+        },
+        verifyPostResume: (confirmed, mockHttp) async {
+          expect(confirmed.assessment.id.value, equals(case4AssessmentId));
+          expect(repo.createDraftCalls, equals(0));
+          expect(mockHttp.uploadCallCount, equals(2));
+          expect(mockHttp.successfulUploadWrites, equals(1));
+          expect(mockHttp.rejectedNoUpsertUploadAttempts, equals(1));
+          expect(mockHttp.downloadCallCount, equals(1));
+          expect(repo.registerEvidenceCalls, equals(1));
+        },
       );
-      expect(recovered, isA<AssessmentSubmissionConfirmed>());
-      expect(repo.createDraftCalls, equals(0));
-      // Existing object in FakeStorage handles 409/reconcile on re-upload, registers once, and submits once.
-      expect(repo.registerEvidenceCalls, equals(1));
-      expect(repo.submitAssessmentCalls, equals(1));
-      expect(
-        (recovered as AssessmentSubmissionConfirmed).assessment.id.value,
-        equals(savedAssessmentId),
-      );
-      expect(storage.deleteCallCount, equals(0));
-      expectCanonicalFileIntact(
-        seededMid.localCompressedPhotoPath,
-        jpegHeaderBytes,
+
+      // Case 5: Crash after createDraft committed on server, but response lost before persistServerAssessmentId.
+      final beforeCase5Count = repo.assessments.length;
+      late String case5CommittedId;
+      await runCrashBoundaryCase(
+        draftId: 'b1-18-case5-after-create-lost-response',
+        createCommandId: 'cmd-c-b118-5',
+        submitCommandId: 'cmd-s-b118-5',
+        evidenceId: '33333333-3333-4333-8333-000000001805',
+        crashStageLabel: 'Case 5: after createDraft committed, response lost',
+        configureCrash: (crashStore, mockHttp) {
+          repo.onAfterCreate = () async {
+            repo.onAfterCreate = null;
+            crashStore.tripHardCrash();
+            throw const _SimulatedProcessCrashException(
+              'case5_after_create_lost_response',
+            );
+          };
+        },
+        verifyPostCrash: (crashedRow, mockHttp) {
+          expect(
+            crashedRow.dispatchState,
+            equals(CommandDispatchState.possiblyDispatched),
+          );
+          expect(
+            crashedRow.submissionStatus,
+            equals(DraftSubmissionStatus.uploadingEvidence),
+          );
+          expect(crashedRow.serverAssessmentId, isNull);
+          expect(crashedRow.serverEvidenceId, isNull);
+          expect(repo.createDraftCalls, equals(1));
+          expect(repo.commandToAssessmentId['cmd-c-b118-5'], isNotNull);
+          case5CommittedId = repo.commandToAssessmentId['cmd-c-b118-5']!;
+          expect(repo.assessments.length, equals(beforeCase5Count + 1));
+          expect(mockHttp.uploadCallCount, equals(0));
+          expect(mockHttp.successfulUploadWrites, equals(0));
+          expect(repo.registerEvidenceCalls, equals(0));
+          expect(repo.submitAssessmentCalls, equals(0));
+        },
+        verifyPostResume: (confirmed, mockHttp) async {
+          expect(confirmed.assessment.id.value, equals(case5CommittedId));
+          expect(repo.createDraftCalls, equals(1));
+          expect(repo.assessments.length, equals(beforeCase5Count + 1));
+          expect(mockHttp.uploadCallCount, equals(1));
+          expect(mockHttp.successfulUploadWrites, equals(1));
+          expect(mockHttp.rejectedNoUpsertUploadAttempts, equals(0));
+          expect(repo.registerEvidenceCalls, equals(1));
+        },
       );
     });
 

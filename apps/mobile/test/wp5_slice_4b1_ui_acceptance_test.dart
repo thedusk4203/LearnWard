@@ -208,7 +208,7 @@ void main() {
   _ensureSqliteInitialized();
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
 
-  final baseNow = DateTime.utc(2026, 11, 16, 8, 0, 0);
+  final entityCreatedAt = DateTime.utc(2026, 11, 1, 8, 0, 0);
   final validJpeg = <int>[
     0xFF,
     0xD8,
@@ -252,7 +252,7 @@ void main() {
     timezone: 'UTC',
     locale: 'en-US',
     createdByUserId: 'parent-a',
-    createdAt: baseNow,
+    createdAt: entityCreatedAt,
   );
   final child = ChildProfile(
     id: ChildId('20000000-0000-4000-8000-000000000002'),
@@ -260,12 +260,13 @@ void main() {
     displayName: 'Maya',
     schoolGrade: 4,
     birthYear: 2016,
-    createdAt: baseNow,
+    createdAt: entityCreatedAt,
   );
 
   group(
     'WP5 Mobile UI + DefaultLocalEvidenceFileStore + SQLite Acceptance',
     () {
+      late DateTime baseNow;
       late Directory tempDir;
       late File dbFile;
       late AppDatabase db;
@@ -277,6 +278,15 @@ void main() {
       late FakeAssessmentEvidenceStorage storage;
 
       setUp(() async {
+        final rawNow = DateTime.now().toUtc();
+        baseNow = DateTime.utc(
+          rawNow.year,
+          rawNow.month,
+          rawNow.day,
+          rawNow.hour,
+          rawNow.minute,
+          rawNow.second,
+        );
         tempDir = await Directory.systemTemp.createTemp('lw_wp5_ui_');
         dbFile = File('${tempDir.path}/wp5_ui.sqlite');
         db = AppDatabase(NativeDatabase(dbFile));
