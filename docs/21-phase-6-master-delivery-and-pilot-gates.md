@@ -19,8 +19,9 @@
 | Phase 6 Slice 4A-1 — Actor-aware Spin/Redeem recovery runtime | MERGED / FROZEN | PR #24, merge `6b1d4da03254264ac180e4b1503de93e146c963e`, run `42509975267`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4a-1-recovery-dispatcher-freeze.md` |
 | Phase 6 Slice 4B-0 — Immediate local evidence safety | MERGED / FROZEN | PR #26, merge `f921bb67b67e4e0d528911f0da2b90f7b693fc00`, run `42643730956`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4b-0-local-evidence-safety-freeze.md` |
 | Phase 6 Slice 4A-2 — Adult Fulfill/Cancel reliability | MERGED / FROZEN | PR #28 (design), PR #29 (impl), merge `9b253a268be01498266f86013d7db903f6cb01b9`, run `42844354262`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4a-2-adult-fulfill-cancel-freeze.md` |
-| Phase 6 Slice 4B-1 — Evidence resumability & Storage 409 reconciliation | WP0–WP5 MERGED / WP6 PENDING REVIEW | PR #31 (design), PRs #32–#36 (WP1–WP5), final impl merge `06d4d7253c1b234ab11e51ab7a7e53d7739a5a1c`, run `43999993238`, success 4/4; freeze receipt PR #37 pending review (`docs/freezes/phase-6-slice-4b-1-evidence-resumability-freeze.md`) |
-| Slice 4C-0, 4C-1, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
+| Phase 6 Slice 4B-1 — Evidence resumability & Storage 409 reconciliation | MERGED / FROZEN | PR #31 (design), PRs #32–#36 (WP1–WP5, impl merge `06d4d7253c1b234ab11e51ab7a7e53d7739a5a1c`, run `43999993238`), WP6 freeze PR #37 merge `d49e39af66978fe4315411789e367e8eb8a51233` (tree `ce7a81fd4c29d72fb77f0be705674642c093dcb1`), main CI `45378350261`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4b-1-evidence-resumability-freeze.md` |
+| Phase 6 Slice 4C-0 — Auth, Child Mode & device containment | DESIGN PR PENDING REVIEW | Design contract `docs/25-phase-6-slice-4c-0-auth-child-mode-containment-design-contract.md` (WP0 pending independent review; runtime NOT IMPLEMENTED) |
+| Slice 4C-1, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
 
 ## 2. Ordered workstream / PR boundaries
 
@@ -54,23 +55,27 @@
 
 **Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 556 Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria B01–B05 and review dispositions R26-01 through R26-6-01 verified. Schema v6 and backend contracts preserved with 0 diff.
 
-### PRs #31–#36 — Slice 4B-1: Evidence resumability and 409 reconciliation (WP0–WP5 MERGED / WP6 PENDING)
+### PRs #31–#37 — Slice 4B-1: Evidence resumability and 409 reconciliation (MERGED / FROZEN)
 
-**Status:** WP0–WP5 MERGED & VERIFIED ON `main` (Design PR #31, merge `2fc02ac10bf7b994d28274c23a52c134c182a3a7`; WP1 PR #32, merge `2d2369a57c7b9ba4f19b227c88592b8e86a83f42`; WP2 PR #33, merge `d226f1b043ebcb9b13d19287bffa327251af8704`; WP3 PR #34, merge `eb7cef1ef52e3e15b4a4de967da017839c9716a9`; WP4 PR #35, merge `a24b391514720dafaa487188f06624d2815bad25`; WP5 PR #36, merge `06d4d7253c1b234ab11e51ab7a7e53d7739a5a1c`, post-merge main CI run `43999993238`). WP6 freeze receipt PR #37 is **PENDING** independent review and merge.
+**Status:** MERGED and FROZEN (Design PR #31, merge `2fc02ac10bf7b994d28274c23a52c134c182a3a7`; WP1 PR #32, merge `2d2369a57c7b9ba4f19b227c88592b8e86a83f42`; WP2 PR #33, merge `d226f1b043ebcb9b13d19287bffa327251af8704`; WP3 PR #34, merge `eb7cef1ef52e3e15b4a4de967da017839c9716a9`; WP4 PR #35, merge `a24b391514720dafaa487188f06624d2815bad25`; WP5 PR #36, merge `06d4d7253c1b234ab11e51ab7a7e53d7739a5a1c`, main CI run `43999993238`; WP6 freeze PR #37, merge `d49e39af66978fe4315411789e367e8eb8a51233`, tree `ce7a81fd4c29d72fb77f0be705674642c093dcb1`, post-merge main CI run `45378350261`, 4/4 `SUCCESS`).
 
 **Goal:** Byte-identical canonical JPEG/PNG snapshots, `upsert: false` Storage uploads with byte-length and SHA-256 409/lost-response reconciliation, read-only `LW109` & distinct `serverEvidenceId` reconciliation, token-fenced Drift v6 draft CAS/leases, derived read-only quarantine for unbound/legacy/unknown-wire drafts, unified staged `AssessmentSubmissionOrchestrator` with per-stage session/target revalidation, and authorized foreground recovery UI.
 
-**Authoritative implementation details:** Freeze receipt tracked in PR #37 at `docs/freezes/phase-6-slice-4b-1-evidence-resumability-freeze.md` and approved design contract in `docs/24-phase-6-slice-4b-1-evidence-resumability-design-contract.md`.
+**Authoritative implementation details:** Freeze receipt recorded in `docs/freezes/phase-6-slice-4b-1-evidence-resumability-freeze.md` and approved design contract in `docs/24-phase-6-slice-4b-1-evidence-resumability-design-contract.md`.
 
-**Gate:** Implementation & main CI COMPLETED (`43999993238`: 4/4 jobs, 833 workspace Dart/Flutter tests, 659 pgTAP + 19 concurrency/security scripts incl. `test_storage_evidence_security.mjs` Tests A–T; acceptance criteria `B1-01`–`B1-30`, invariants `I01`–`I16`, and review findings `R31`–`R36` verified; schema v6, backend RPC/RLS/Storage contracts, and `RECOVERY_DISPATCHER_ENABLED=false` preserved with 0 diff). Documentation freeze gate pending PR #37 review/merge; pilot and production gates remain strictly **CLOSED**.
+**Gate:** COMPLETED. CI green on exact WP6 freeze merge commit (`45378350261`: 4/4 jobs; implementation main CI `43999993238`: 4/4 jobs, 833 workspace Dart/Flutter tests, 659 pgTAP + 19 concurrency/security scripts incl. `test_storage_evidence_security.mjs` Tests A–T; acceptance criteria `B1-01`–`B1-30`, invariants `I01`–`I16`, and review findings `R31`–`R37` verified; schema v6, backend RPC/RLS/Storage contracts, and `RECOVERY_DISPATCHER_ENABLED=false` preserved with 0 diff). Pilot and production gates remain strictly **CLOSED**.
 
-### Slice 4C-0: Auth, Child Mode and device containment (PR: TBD / not allocated)
+### Slice 4C-0: Auth, Child Mode and device containment (WP0 DESIGN PR PENDING REVIEW)
 
-**Dependencies:** shared auth/session port in PR #24, local evidence safety and recoverability.
+**Status:** DESIGN PR PENDING REVIEW — RUNTIME NOT IMPLEMENTED.
 
-**Scope:** Tie restored Child Mode state to the verified current actor, family and child; invalidate stale Riverpod providers on sign-out or account switch; route auth guard must outrank persisted child overlay. Preserve Parent PIN/salt across parent sign-out on shared hardware until explicit legitimate exit/reset; write PIN + salt atomically. Add attempt throttling / timed lockout, with resistant password derivation after compatibility/migration review. Preserve pending commands/drafts and photos by data lifecycle classification; no blanket SQLite wipe.
+**Dependencies:** shared auth/session port in PR #24, adult recovery reliability in PR #29, local evidence safety and resumability in PR #26 / PRs #31–#37.
 
-**Tests:** child mode while signed out; A->B account switch; family switch; restart on shared hardware; PIN cracking attempts; salted hash migration; lost auth session; revoked paired child grant; child profile archived; data kept quarantined for an adult export path. **Gate:** no cross-user data presentation or child containment bypass.
+**Scope:** Tie restored Child Mode state to the verified current actor, family and child; invalidate stale Riverpod providers and stateful screen scopes on sign-out, account switch, or family switch; route auth guard must outrank persisted child overlay while enforcing strict `/child` segment containment and offline same-actor PIN containment (`ChildModeOfflineContained`). Preserve Parent PIN/lockout across parent sign-out on shared hardware until explicit authorized reset outside Child Mode; persist PIN + salt atomically via `LocalMetadataStore.applyMetadataBatch` using PBKDF2-HMAC-SHA256 (100,000+ iterations, constant-time verify, isolate offload), persistent monotonic timed lockout, and atomic v1→v2 upgrade-on-verify. Preserve pending commands/drafts and photos by data lifecycle classification (no blanket SQLite wipe; supersedes `docs/17` §3.4).
+
+**Authoritative design contract:** `docs/25-phase-6-slice-4c-0-auth-child-mode-containment-design-contract.md` (WP0 design PR pending independent review; runtime implementation WP1–WP4 not started).
+
+**Tests:** Deterministic acceptance matrix `C0-01`–`C0-23` covering signed-out child mode, expired/errored session, legacy v1 unbound session, adult sign-out, A->B account switch (incl. `FamilyHomeScreen` family bleed fix), family switch, shared-hardware restart, Airplane-Mode restart containment, PIN brute-force throttling + backward clock-skew + atomic crash rollback, salted SHA-256 v1→v2 migration, revoked paired child grant (positive proof only), archived child profile (incl. Phase 6.1 RLS 0-row), and local data preserved quarantined for adult export path. **Gate:** no cross-user data presentation, no child containment bypass, and 0 unintended schema/SQL/dispatcher diffs.
 
 ### Slice 4C-1: Manual recovery and export UX (PR: TBD / not allocated)
 
@@ -99,9 +104,9 @@ flowchart TD
  A["4A-0 Drift v6 CAS (FROZEN)"] --> B["4A-1 Spin/Redeem runtime (FROZEN)"]
  B --> C["4A-2 Fulfill/Cancel (FROZEN)"]
  A --> D["4B-0 Local evidence safety (FROZEN)"]
- D --> E["4B-1 Storage integrity and resume (WP0-WP5 MERGED / WP6 PENDING)"]
+ D --> E["4B-1 Storage integrity and resume (FROZEN)"]
  B --> E
- B --> F["4C-0 Session and device containment (PENDING)"]
+ B --> F["4C-0 Session and device containment (DESIGN PR PENDING)"]
  D --> F
  E --> G["4C-1 Manual recovery / export (PENDING)"]
  F --> G
@@ -184,7 +189,6 @@ Each agent implementation PR must include:
 | Pilot/release authorization | **OWN sign-off with user** | Produce evidence, never self-release |
 
 **Next action / Planning Status:**
-- Slice 4B-1 implementation (WP0–WP5): **MERGED & VERIFIED ON `main`** (PRs #31–#36, final merge commit `06d4d7253c1b234ab11e51ab7a7e53d7739a5a1c`, post-merge main CI run `43999993238`).
-- Slice 4B-1 freeze receipt (WP6): **PENDING** independent review and merge in [PR #37](https://github.com/thedusk4203/LearnWard/pull/37) (`docs/freezes/phase-6-slice-4b-1-evidence-resumability-freeze.md`).
-- Next planning milestone: **Slice 4C-0** — *Auth, Child Mode & Device Containment*.
+- Slice 4B-1 (WP0–WP6): **MERGED & FROZEN ON `main`** (PRs #31–#37; impl merge `06d4d7253c1b234ab11e51ab7a7e53d7739a5a1c`, main CI `43999993238`; WP6 freeze merge `d49e39af66978fe4315411789e367e8eb8a51233`, tree `ce7a81fd4c29d72fb77f0be705674642c093dcb1`, post-merge `main` CI run `45378350261`, 4/4 `SUCCESS`).
+- Slice 4C-0 — *Auth, Child Mode & Device Containment* (WP0): **DESIGN PR PENDING INDEPENDENT REVIEW** (`docs/25-phase-6-slice-4c-0-auth-child-mode-containment-design-contract.md`; runtime NOT IMPLEMENTED; no merge without independent review).
 - Pilot and production distribution gates: remain strictly **CLOSED**.
