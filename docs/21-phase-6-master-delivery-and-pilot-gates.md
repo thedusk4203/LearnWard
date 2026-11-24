@@ -19,7 +19,8 @@
 | Phase 6 Slice 4A-1 — Actor-aware Spin/Redeem recovery runtime | MERGED / FROZEN | PR #24, merge `6b1d4da03254264ac180e4b1503de93e146c963e`, run `42509975267`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4a-1-recovery-dispatcher-freeze.md` |
 | Phase 6 Slice 4B-0 — Immediate local evidence safety | MERGED / FROZEN | PR #26, merge `f921bb67b67e4e0d528911f0da2b90f7b693fc00`, run `42643730956`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4b-0-local-evidence-safety-freeze.md` |
 | Phase 6 Slice 4A-2 — Adult Fulfill/Cancel reliability | MERGED / FROZEN | PR #28 (design), PR #29 (impl), merge `9b253a268be01498266f86013d7db903f6cb01b9`, run `42844354262`, success 4/4, freeze receipt `docs/freezes/phase-6-slice-4a-2-adult-fulfill-cancel-freeze.md` |
-| Slice 4B-1, 4C, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
+| Phase 6 Slice 4B-1 — Evidence resumability & Storage 409 reconciliation | WP0–WP5 MERGED / WP6 PENDING REVIEW | PR #31 (design), PRs #32–#36 (WP1–WP5), final impl merge `06d4d7253c1b234ab11e51ab7a7e53d7739a5a1c`, run `43999993238`, success 4/4; freeze receipt PR #37 pending review (`docs/freezes/phase-6-slice-4b-1-evidence-resumability-freeze.md`) |
+| Slice 4C-0, 4C-1, 5, 6 | NOT IMPLEMENTED | Plans below; no release readiness implied |
 
 ## 2. Ordered workstream / PR boundaries
 
@@ -53,15 +54,15 @@
 
 **Gate:** COMPLETED. CI green on exact merge commit (4/4 jobs, 556 Dart tests, 659 pgTAP + 19 concurrency scripts). All acceptance criteria B01–B05 and review dispositions R26-01 through R26-6-01 verified. Schema v6 and backend contracts preserved with 0 diff.
 
-### Slice 4B-1: Evidence resumability and 409 reconciliation (PR: TBD / not allocated)
+### PRs #31–#36 — Slice 4B-1: Evidence resumability and 409 reconciliation (WP0–WP5 MERGED / WP6 PENDING)
 
-**Dependency:** v6 draft persistence, PR #26 local-deletion safety, validated actor/session port and original command markers.
+**Status:** WP0–WP5 MERGED & VERIFIED ON `main` (Design PR #31, merge `2fc02ac10bf7b994d28274c23a52c134c182a3a7`; WP1 PR #32, merge `2d2369a57c7b9ba4f19b227c88592b8e86a83f42`; WP2 PR #33, merge `d226f1b043ebcb9b13d19287bffa327251af8704`; WP3 PR #34, merge `eb7cef1ef52e3e15b4a4de967da017839c9716a9`; WP4 PR #35, merge `a24b391514720dafaa487188f06624d2815bad25`; WP5 PR #36, merge `06d4d7253c1b234ab11e51ab7a7e53d7739a5a1c`, post-merge main CI run `43999993238`). WP6 freeze receipt PR #37 is **PENDING** independent review and merge.
 
-**Scope:** Persist stable compressed JPEG bytes, SHA-256, original evidence UUID, exact storage path, draft/create/submit command IDs and original actor. On HTTP 409 or upload-response loss, **download authorized private Storage bytes**, compare SHA-256 **and size** to local bytes. No upsert/overwrite based on matching path, metadata or file size alone.
+**Goal:** Byte-identical canonical JPEG/PNG snapshots, `upsert: false` Storage uploads with byte-length and SHA-256 409/lost-response reconciliation, read-only `LW109` & distinct `serverEvidenceId` reconciliation, token-fenced Drift v6 draft CAS/leases, derived read-only quarantine for unbound/legacy/unknown-wire drafts, unified staged `AssessmentSubmissionOrchestrator` with per-stage session/target revalidation, and authorized foreground recovery UI.
 
-**Registration reconciliation:** authorized SELECT on evidence row + assessment status before repeating `register_assessment_evidence`; frozen RPC can reject repeat registration after assessment leaves draft even if original registration succeeded. Preserve all evidence on unknown result, offline, revoked actor and archived child; never infer absence from RLS zero-row. Explicit manual conflict state if same path/different bytes; do not generate new UUID automatically.
+**Authoritative implementation details:** Freeze receipt tracked in PR #37 at `docs/freezes/phase-6-slice-4b-1-evidence-resumability-freeze.md` and approved design contract in `docs/24-phase-6-slice-4b-1-evidence-resumability-design-contract.md`.
 
-**Tests:** identical 409; same-size/different-content; missing custom metadata; server commit/response loss; local file survives restart; assessment submitted on another device; RLS visibility failure; revoked device; conflict quarantine. **Gate:** no data loss, no silent overwrite.
+**Gate:** Implementation & main CI COMPLETED (`43999993238`: 4/4 jobs, 833 workspace Dart/Flutter tests, 659 pgTAP + 19 concurrency/security scripts incl. `test_storage_evidence_security.mjs` Tests A–T; acceptance criteria `B1-01`–`B1-30`, invariants `I01`–`I16`, and review findings `R31`–`R36` verified; schema v6, backend RPC/RLS/Storage contracts, and `RECOVERY_DISPATCHER_ENABLED=false` preserved with 0 diff). Documentation freeze gate pending PR #37 review/merge; pilot and production gates remain strictly **CLOSED**.
 
 ### Slice 4C-0: Auth, Child Mode and device containment (PR: TBD / not allocated)
 
@@ -98,7 +99,7 @@ flowchart TD
  A["4A-0 Drift v6 CAS (FROZEN)"] --> B["4A-1 Spin/Redeem runtime (FROZEN)"]
  B --> C["4A-2 Fulfill/Cancel (FROZEN)"]
  A --> D["4B-0 Local evidence safety (FROZEN)"]
- D --> E["4B-1 Storage integrity and resume (PENDING)"]
+ D --> E["4B-1 Storage integrity and resume (WP0-WP5 MERGED / WP6 PENDING)"]
  B --> E
  B --> F["4C-0 Session and device containment (PENDING)"]
  D --> F
@@ -183,7 +184,7 @@ Each agent implementation PR must include:
 | Pilot/release authorization | **OWN sign-off with user** | Produce evidence, never self-release |
 
 **Next action / Planning Status:**
-- Slice 4A-2 implementation: **MERGED** (PR #29, merge commit `9b253a268be01498266f86013d7db903f6cb01b9`, post-merge main CI run `42844354262`).
-- Slice 4A-2 freeze receipt: **PR #30** pending final documentation review and merge.
-- Next planning milestone: **Slice 4B-1** — *Evidence Resumability and Storage 409 Reconciliation*.
+- Slice 4B-1 implementation (WP0–WP5): **MERGED & VERIFIED ON `main`** (PRs #31–#36, final merge commit `06d4d7253c1b234ab11e51ab7a7e53d7739a5a1c`, post-merge main CI run `43999993238`).
+- Slice 4B-1 freeze receipt (WP6): **PENDING** independent review and merge in [PR #37](https://github.com/thedusk4203/LearnWard/pull/37) (`docs/freezes/phase-6-slice-4b-1-evidence-resumability-freeze.md`).
+- Next planning milestone: **Slice 4C-0** — *Auth, Child Mode & Device Containment*.
 - Pilot and production distribution gates: remain strictly **CLOSED**.
