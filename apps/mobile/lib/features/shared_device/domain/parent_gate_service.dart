@@ -98,159 +98,37 @@ class ParentGateService {
     return snapshot.v2?.ownerFamilyId;
   }
 
-  /// Configures or updates a 4-digit Parent PIN atomically using PBKDF2-HMAC-SHA-256.
+  /// Configures an initial 4-digit Parent PIN when no credential exists (`R39-03`).
   ///
-  /// Refuses silent overwrite when:
-  /// - existing credential metadata is corrupted ([ParentGatePinCorruptException]), or
-  /// - an existing v2 credential belongs to a different `ownerFamilyId`
-  ///   ([ParentGateOwnershipConflictException]).
+  /// Strictly restricted to initial setup (`ParentGateCredentialStatus.missing`).
+  /// Throws:
+  /// - [ParentGateOwnershipConflictException] if an existing v2 credential belongs
+  ///   to another household,
+  /// - [ParentGatePinAlreadyConfiguredException] if an active v2 or legacy v1
+  ///   credential already exists (use [changePin] or an authorized recovery API),
+  /// - [ParentGatePinCorruptException] if persisted credential metadata is corrupted.
   Future<ParentGateCredentialV2> setPin(
     String newPin, {
     String? ownerFamilyId,
     String? configuredByActorUserId,
-    bool allowCrossFamilyReassignment = false,
-    bool forceCorruptReset = false,
     ParentGateOperationFence? fence,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
-  }) async {
-    if (!_pinRegex.hasMatch(newPin)) {
-      throw ArgumentError('Parent PIN must be exactly 4 digits');
-    }
-
-    final normalizedFamilyId = _normalizeOptionalId(ownerFamilyId);
-    final normalizedActorId = _normalizeOptionalId(configuredByActorUserId);
-    final saltBytes = ParentGateCrypto.generateRandomBytes();
-    final saltHex = ParentGateCrypto.bytesToHex(saltBytes);
-    final derived = await ParentGateCrypto.pbkdf2HmacSha256(
-      password: utf8.encode(newPin),
-      salt: saltBytes,
-      iterations: configuredIterations,
-      keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
-      runInIsolate: runInIsolate,
-    );
-    final hashHex = ParentGateCrypto.bytesToHex(derived);
-
-    for (var attempt = 0; attempt < _maxCasRetries; attempt++) {
-      final snap = await _readCredentialSnapshot();
-      final rawLockout = await _store.readMetadata(lockoutV1Key);
-      final parsedLockout = rawLockout == null
-          ? null
-          : ParentGateLockoutV1.tryParse(rawLockout);
-      final rawContainmentFence = await _store.readMetadata(
-        containmentFenceV1Key,
-      );
-
-      if (preCommitGuard != null && !preCommitGuard()) {
-        throw ParentGateFencedOperationException(
-          'PIN setup aborted by pre-commit guard.',
-        );
-      }
-      if (fence?.expectedContainmentFenceRaw != null &&
-          rawContainmentFence != fence!.expectedContainmentFenceRaw) {
-        throw ParentGateFencedOperationException(
-          'Containment fence mismatch during PIN setup.',
-        );
-      }
-
-      if (snap.status == ParentGateCredentialStatus.corrupt &&
-          !forceCorruptReset) {
-        throw ParentGatePinCorruptException(
-          'Persisted Parent PIN credential is corrupted; explicit recovery is required.',
-        );
-      }
-
-      if (snap.status == ParentGateCredentialStatus.validV2 &&
-          snap.v2!.ownerFamilyId != null &&
-          !allowCrossFamilyReassignment) {
-        if (normalizedFamilyId == null ||
-            snap.v2!.ownerFamilyId != normalizedFamilyId) {
-          throw ParentGateOwnershipConflictException(
-            'Existing Parent PIN belongs to another household; explicit cross-family reassignment is required.',
-          );
-        }
-      }
-
-      final nextCredentialRevision = (snap.v2?.credentialRevision ?? 0) + 1;
-      final nowUtc = _clock.now().toUtc();
-      final nextCred = ParentGateCredentialV2(
-        version: 2,
-        kdf: ParentGateCrypto.kdfAlgorithmId,
-        iterations: configuredIterations,
-        keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
-        saltHex: saltHex,
-        hashHex: hashHex,
-        ownerFamilyId: normalizedFamilyId,
-        configuredByActorUserId: normalizedActorId,
-        credentialRevision: nextCredentialRevision,
-        updatedAtUtc: nowUtc,
-      );
-
-      final nextLockout = ParentGateLockoutV1(
-        version: 1,
-        revision: (parsedLockout?.revision ?? 0) + 1,
-        failedAttempts: 0,
-        lockoutUntilUtc: null,
-        lockoutDurationSeconds: 0,
-        lockoutOwnerAttemptId: null,
-        lastAttemptAtUtc: parsedLockout?.lastAttemptAtUtc,
-        credentialRevision: nextCredentialRevision,
-        inFlightReservations: const [],
-      );
-
-      final expectedValues = <String, String?>{
-        credentialV2Key: snap.rawV2,
-        pinHashKey: snap.rawV1Hash,
-        pinSaltKey: snap.rawV1Salt,
-        lockoutV1Key: rawLockout,
-        if (fence?.expectedContainmentFenceRaw != null)
-          containmentFenceV1Key: fence!.expectedContainmentFenceRaw,
-      };
-
-      final mutations = <MetadataMutation>[
-        MetadataMutation.upsert(
-          key: credentialV2Key,
-          value: nextCred.toJsonString(),
-          updatedAt: nowUtc,
-        ),
-        MetadataMutation.upsert(
-          key: lockoutV1Key,
-          value: nextLockout.toJsonString(),
-          updatedAt: nowUtc,
-        ),
-        if (snap.rawV1Hash != null)
-          const MetadataMutation.delete(key: pinHashKey),
-        if (snap.rawV1Salt != null)
-          const MetadataMutation.delete(key: pinSaltKey),
-      ];
-
-      final committed = await _store.compareAndSwapMetadataBatch(
-        expectedValues: expectedValues,
-        mutations: mutations,
-        preCommitGuard: preCommitGuard,
-        onBeforePreCommitGuard: onBeforePreCommitGuard,
-        onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
-      );
-
-      if (committed) {
-        _observedLockout = null;
-        return nextCred;
-      }
-
-      if (preCommitGuard != null && !preCommitGuard()) {
-        throw ParentGateFencedOperationException(
-          'PIN setup aborted by pre-commit guard before commit.',
-        );
-      }
-    }
-
-    throw ParentGateFencedOperationException(
-      'Exceeded CAS retry budget while setting Parent PIN.',
+  }) {
+    return _commitReplacementCredential(
+      newPin,
+      ownerFamilyId: ownerFamilyId,
+      configuredByActorUserId: configuredByActorUserId,
+      mode: _CredentialWriteMode.initialSetupOnly,
+      fence: fence,
+      preCommitGuard: preCommitGuard,
+      onBeforePreCommitGuard: onBeforePreCommitGuard,
+      onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
     );
   }
 
-  /// Explicitly reassigns a cross-household PIN after confirmation in Parent Mode (`C0-27`).
+  /// Explicitly reassigns a cross-household PIN after confirmation in Parent Mode (`C0-27`, `R39-03`).
   Future<ParentGateCredentialV2> reassignCrossFamilyPin({
     required String newPin,
     required String targetFamilyId,
@@ -262,17 +140,24 @@ class ParentGateService {
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
   }) {
+    final normalizedFamilyId = _normalizeOptionalId(targetFamilyId);
+    final normalizedActorId = _normalizeOptionalId(actorUserId);
+    if (normalizedFamilyId == null || normalizedActorId == null) {
+      throw ParentGateFencedOperationException(
+        'Target family and actor IDs are required for cross-family reassignment.',
+      );
+    }
     if (!hasPositiveServerAdultVerification ||
-        !verifiedActiveAdultFamilyIds.contains(targetFamilyId)) {
+        !verifiedActiveAdultFamilyIds.contains(normalizedFamilyId)) {
       throw ParentGateFencedOperationException(
         'Cross-family PIN reassignment requires positively verified active adult membership.',
       );
     }
-    return setPin(
+    return _commitReplacementCredential(
       newPin,
-      ownerFamilyId: targetFamilyId,
-      configuredByActorUserId: actorUserId,
-      allowCrossFamilyReassignment: true,
+      ownerFamilyId: normalizedFamilyId,
+      configuredByActorUserId: normalizedActorId,
+      mode: _CredentialWriteMode.authorizedCrossFamilyReassignment,
       fence: fence,
       preCommitGuard: preCommitGuard,
       onBeforePreCommitGuard: onBeforePreCommitGuard,
@@ -280,7 +165,10 @@ class ParentGateService {
     );
   }
 
-  /// Recovers a corrupted credential by installing a brand-new PIN after adult verification.
+  /// Recovers a corrupted credential by installing a brand-new PIN after adult verification (`R39-03`).
+  ///
+  /// Refuses to overwrite an intact valid v2 or legacy v1 PIN; use [changePin],
+  /// [resetPinAfterReauth], or [reassignCrossFamilyPin] instead.
   Future<ParentGateCredentialV2> recoverCorruptCredential({
     required String newPin,
     required String targetFamilyId,
@@ -292,18 +180,24 @@ class ParentGateService {
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
   }) {
+    final normalizedFamilyId = _normalizeOptionalId(targetFamilyId);
+    final normalizedActorId = _normalizeOptionalId(actorUserId);
+    if (normalizedFamilyId == null || normalizedActorId == null) {
+      throw ParentGateFencedOperationException(
+        'Target family and actor IDs are required for corrupt PIN recovery.',
+      );
+    }
     if (!hasPositiveServerAdultVerification ||
-        !verifiedActiveAdultFamilyIds.contains(targetFamilyId)) {
+        !verifiedActiveAdultFamilyIds.contains(normalizedFamilyId)) {
       throw ParentGateFencedOperationException(
         'Corrupt PIN recovery requires positively verified active adult membership.',
       );
     }
-    return setPin(
+    return _commitReplacementCredential(
       newPin,
-      ownerFamilyId: targetFamilyId,
-      configuredByActorUserId: actorUserId,
-      allowCrossFamilyReassignment: true,
-      forceCorruptReset: true,
+      ownerFamilyId: normalizedFamilyId,
+      configuredByActorUserId: normalizedActorId,
+      mode: _CredentialWriteMode.authorizedCorruptRecoveryOnly,
       fence: fence,
       preCommitGuard: preCommitGuard,
       onBeforePreCommitGuard: onBeforePreCommitGuard,
@@ -432,16 +326,199 @@ class ParentGateService {
       );
     }
 
-    return setPin(
+    return _commitReplacementCredential(
       newPin,
       ownerFamilyId: normalizedFamilyId,
       configuredByActorUserId: normalizedActorId,
-      allowCrossFamilyReassignment: false,
-      forceCorruptReset: snap.status == ParentGateCredentialStatus.corrupt,
+      mode: _CredentialWriteMode.authorizedSameHouseholdOrUnownedReset,
       fence: fence,
       preCommitGuard: preCommitGuard,
       onBeforePreCommitGuard: onBeforePreCommitGuard,
       onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
+    );
+  }
+
+  Future<ParentGateCredentialV2> _commitReplacementCredential(
+    String newPin, {
+    required _CredentialWriteMode mode,
+    String? ownerFamilyId,
+    String? configuredByActorUserId,
+    ParentGateOperationFence? fence,
+    bool Function()? preCommitGuard,
+    Future<void> Function()? onBeforePreCommitGuard,
+    Future<void> Function()? onAfterGuardBeforeCommit,
+  }) async {
+    if (!_pinRegex.hasMatch(newPin)) {
+      throw ArgumentError('Parent PIN must be exactly 4 digits');
+    }
+
+    final normalizedFamilyId = _normalizeOptionalId(ownerFamilyId);
+    final normalizedActorId = _normalizeOptionalId(configuredByActorUserId);
+    final saltBytes = ParentGateCrypto.generateRandomBytes();
+    final saltHex = ParentGateCrypto.bytesToHex(saltBytes);
+    final derived = await ParentGateCrypto.pbkdf2HmacSha256(
+      password: utf8.encode(newPin),
+      salt: saltBytes,
+      iterations: configuredIterations,
+      keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
+      runInIsolate: runInIsolate,
+    );
+    final hashHex = ParentGateCrypto.bytesToHex(derived);
+
+    for (var attempt = 0; attempt < _maxCasRetries; attempt++) {
+      final snap = await _readCredentialSnapshot();
+      final rawLockout = await _store.readMetadata(lockoutV1Key);
+      final parsedLockout = rawLockout == null
+          ? null
+          : ParentGateLockoutV1.tryParse(rawLockout);
+      final rawContainmentFence = await _store.readMetadata(
+        containmentFenceV1Key,
+      );
+
+      if (preCommitGuard != null && !preCommitGuard()) {
+        throw ParentGateFencedOperationException(
+          'PIN write aborted by pre-commit guard.',
+        );
+      }
+      if (fence?.expectedContainmentFenceRaw != null &&
+          rawContainmentFence != fence!.expectedContainmentFenceRaw) {
+        throw ParentGateFencedOperationException(
+          'Containment fence mismatch during PIN write.',
+        );
+      }
+
+      switch (mode) {
+        case _CredentialWriteMode.initialSetupOnly:
+          if (snap.status == ParentGateCredentialStatus.corrupt) {
+            throw ParentGatePinCorruptException(
+              'Persisted Parent PIN credential is corrupted; explicit recovery is required.',
+            );
+          }
+          if (snap.status == ParentGateCredentialStatus.validV2) {
+            if (snap.v2!.ownerFamilyId != null &&
+                (normalizedFamilyId == null ||
+                    snap.v2!.ownerFamilyId != normalizedFamilyId)) {
+              throw ParentGateOwnershipConflictException(
+                'Existing Parent PIN belongs to another household; explicit cross-family reassignment is required.',
+              );
+            }
+            throw ParentGatePinAlreadyConfiguredException(
+              'Parent PIN is already configured; use changePin with the current PIN or an authorized recovery flow.',
+            );
+          }
+          if (snap.status == ParentGateCredentialStatus.legacyV1) {
+            throw ParentGatePinAlreadyConfiguredException(
+              'An existing legacy Parent PIN is configured; verify and upgrade or use changePin / authorized recovery.',
+            );
+          }
+        case _CredentialWriteMode.authorizedCorruptRecoveryOnly:
+          if (snap.status == ParentGateCredentialStatus.validV2) {
+            if (snap.v2!.ownerFamilyId != null &&
+                snap.v2!.ownerFamilyId != normalizedFamilyId) {
+              throw ParentGateOwnershipConflictException(
+                'Cannot use corrupt recovery against another household\'s intact PIN.',
+              );
+            }
+            throw ParentGatePinAlreadyConfiguredException(
+              'Parent PIN is not corrupted; use changePin or resetPinAfterReauth.',
+            );
+          }
+          if (snap.status == ParentGateCredentialStatus.legacyV1) {
+            throw ParentGatePinAlreadyConfiguredException(
+              'Legacy Parent PIN is intact; corrupt recovery applies only when credential metadata is corrupted or missing.',
+            );
+          }
+        case _CredentialWriteMode.authorizedSameHouseholdOrUnownedReset:
+          if (snap.status == ParentGateCredentialStatus.validV2 &&
+              snap.v2!.ownerFamilyId != null &&
+              snap.v2!.ownerFamilyId != normalizedFamilyId) {
+            throw ParentGateOwnershipConflictException(
+              'Cannot reset Parent PIN owned by a different household without explicit cross-family reassignment.',
+            );
+          }
+        case _CredentialWriteMode.authorizedCrossFamilyReassignment:
+          if (snap.status == ParentGateCredentialStatus.corrupt) {
+            throw ParentGatePinCorruptException(
+              'Persisted Parent PIN credential is corrupted; use recoverCorruptCredential.',
+            );
+          }
+      }
+
+      final nextCredentialRevision = (snap.v2?.credentialRevision ?? 0) + 1;
+      final nowUtc = _clock.now().toUtc();
+      final nextCred = ParentGateCredentialV2(
+        version: 2,
+        kdf: ParentGateCrypto.kdfAlgorithmId,
+        iterations: configuredIterations,
+        keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
+        saltHex: saltHex,
+        hashHex: hashHex,
+        ownerFamilyId: normalizedFamilyId,
+        configuredByActorUserId: normalizedActorId,
+        credentialRevision: nextCredentialRevision,
+        updatedAtUtc: nowUtc,
+      );
+
+      final nextLockout = ParentGateLockoutV1(
+        version: 1,
+        revision: (parsedLockout?.revision ?? 0) + 1,
+        failedAttempts: 0,
+        lockoutUntilUtc: null,
+        lockoutDurationSeconds: 0,
+        lockoutOwnerAttemptId: null,
+        lastAttemptAtUtc: parsedLockout?.lastAttemptAtUtc,
+        credentialRevision: nextCredentialRevision,
+        inFlightReservations: const [],
+      );
+
+      final expectedValues = <String, String?>{
+        credentialV2Key: snap.rawV2,
+        pinHashKey: snap.rawV1Hash,
+        pinSaltKey: snap.rawV1Salt,
+        lockoutV1Key: rawLockout,
+        if (fence?.expectedContainmentFenceRaw != null)
+          containmentFenceV1Key: fence!.expectedContainmentFenceRaw,
+      };
+
+      final mutations = <MetadataMutation>[
+        MetadataMutation.upsert(
+          key: credentialV2Key,
+          value: nextCred.toJsonString(),
+          updatedAt: nowUtc,
+        ),
+        MetadataMutation.upsert(
+          key: lockoutV1Key,
+          value: nextLockout.toJsonString(),
+          updatedAt: nowUtc,
+        ),
+        if (snap.rawV1Hash != null)
+          const MetadataMutation.delete(key: pinHashKey),
+        if (snap.rawV1Salt != null)
+          const MetadataMutation.delete(key: pinSaltKey),
+      ];
+
+      final committed = await _store.compareAndSwapMetadataBatch(
+        expectedValues: expectedValues,
+        mutations: mutations,
+        preCommitGuard: preCommitGuard,
+        onBeforePreCommitGuard: onBeforePreCommitGuard,
+        onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
+      );
+
+      if (committed) {
+        _observedLockout = null;
+        return nextCred;
+      }
+
+      if (preCommitGuard != null && !preCommitGuard()) {
+        throw ParentGateFencedOperationException(
+          'PIN write aborted by pre-commit guard before commit.',
+        );
+      }
+    }
+
+    throw ParentGateFencedOperationException(
+      'Exceeded CAS retry budget while writing Parent PIN.',
     );
   }
 
@@ -460,10 +537,18 @@ class ParentGateService {
   }
 
   /// Executes all three verification phases with atomic reservation, KDF, and CAS finalize.
+  ///
+  /// When the persisted credential is legacy v1 (`pinHashKey` + `pinSaltKey`),
+  /// verification only upgrades `v1 -> v2` if explicit actor/family binding,
+  /// a matching [fence], AND positive current adult authorization
+  /// ([hasPositiveServerAdultVerification] + [verifiedActiveAdultFamilyIds])
+  /// are all present (`R39-02`). Otherwise legacy v1 credentials remain intact.
   Future<PinVerificationResult> verifyPinDetailed(
     String enteredPin, {
     String? actorFamilyId,
     String? actorUserId,
+    bool hasPositiveServerAdultVerification = false,
+    List<String> verifiedActiveAdultFamilyIds = const [],
     ParentGateOperationFence? fence,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePhase1PreCommitGuard,
@@ -480,6 +565,8 @@ class ParentGateService {
       enteredPin: enteredPin,
       actorFamilyId: actorFamilyId,
       actorUserId: actorUserId,
+      hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
+      verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
       fence: fence,
       preCommitGuard: preCommitGuard,
       onBeforePreCommitGuard: onBeforePhase1PreCommitGuard,
@@ -502,12 +589,15 @@ class ParentGateService {
   }
 
   /// Phases 1 + 2: Pessimistically reserves the attempt BEFORE KDF execution,
-  /// evaluates PBKDF2-HMAC-SHA-256 (or legacy v1 digest + derived v2 upgrade),
-  /// and returns a staged handle ready for fenced CAS finalization.
+  /// evaluates PBKDF2-HMAC-SHA-256 (or legacy v1 digest + derived v2 upgrade
+  /// strictly when adult/actor/family/fence preconditions hold), and returns a
+  /// staged handle ready for fenced CAS finalization.
   Future<StagedPinReservationResult> beginStagedVerification({
     required String enteredPin,
     String? actorFamilyId,
     String? actorUserId,
+    bool hasPositiveServerAdultVerification = false,
+    List<String> verifiedActiveAdultFamilyIds = const [],
     ParentGateOperationFence? fence,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
@@ -769,7 +859,16 @@ class ParentGateService {
         candidateDigest,
         credSnapshot.rawV1Hash!,
       );
-      if (pinMatched) {
+      final canUpgradeLegacyV1 =
+          pinMatched &&
+          effectiveFamilyId != null &&
+          effectiveActorId != null &&
+          fence != null &&
+          fence.actorUserId.trim() == effectiveActorId &&
+          fence.verifiedFamilyId?.trim() == effectiveFamilyId &&
+          hasPositiveServerAdultVerification &&
+          verifiedActiveAdultFamilyIds.contains(effectiveFamilyId);
+      if (canUpgradeLegacyV1) {
         final newSaltBytes = ParentGateCrypto.generateRandomBytes();
         final newDerived = await ParentGateCrypto.pbkdf2HmacSha256(
           password: utf8.encode(enteredPin),
@@ -1552,4 +1651,11 @@ final class _ObservedLockoutDeadline {
 
   final String signature;
   final Duration deadline;
+}
+
+enum _CredentialWriteMode {
+  initialSetupOnly,
+  authorizedSameHouseholdOrUnownedReset,
+  authorizedCorruptRecoveryOnly,
+  authorizedCrossFamilyReassignment,
 }

@@ -813,6 +813,15 @@ final class UnresolvableLegacyOwnershipResolution
   bool allowsExitPathBAutoUnlockForFamily(String verifiedFamilyId) => false;
 }
 
+/// Thrown when `setPin` is called while a valid Parent PIN already exists (`R39-03`).
+final class ParentGatePinAlreadyConfiguredException implements Exception {
+  ParentGatePinAlreadyConfiguredException(this.message);
+  final String message;
+
+  @override
+  String toString() => 'ParentGatePinAlreadyConfiguredException: $message';
+}
+
 /// Thrown when `setPin` would overwrite an existing v2 credential owned by a different family (`C0-27`).
 final class ParentGateOwnershipConflictException implements Exception {
   ParentGateOwnershipConflictException(this.message);

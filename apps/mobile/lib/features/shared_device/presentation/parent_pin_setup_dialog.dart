@@ -6,6 +6,12 @@ import '../../../app/bootstrap/app_providers.dart';
 
 /// Modal dialog prompting the parent to configure a 4-digit Parent PIN
 /// before entering shared-device Child Mode.
+///
+/// **WP3 Integration Note (`R39-02`, `R39-03`):** In WP1, `onSavePin` defaults
+/// to `null` and performs initial setup (`ParentGateService.setPin`) without
+/// active session/family binding. WP3 will wire `onSavePin` through
+/// `SessionLifecycleController` to supply verified `ownerFamilyId`,
+/// `configuredByActorUserId`, and `ParentGateOperationFence`.
 class ParentPinSetupDialog extends ConsumerStatefulWidget {
   const ParentPinSetupDialog({this.onSavePin, super.key});
 

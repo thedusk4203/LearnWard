@@ -41,14 +41,23 @@ abstract interface class LocalMetadataStore {
   Future<void> applyMetadataBatch(List<MetadataMutation> mutations);
 
   /// Atomically checks [expectedValues] (where `null` requires absence) and,
-  /// if [preCommitGuard] still returns `true`, applies [mutations].
+  /// if [preCommitGuard] still returns `true` inside the transaction immediately
+  /// before mutation admission, applies [mutations].
   ///
   /// Returns `true` when committed, or `false` when rolled back due to CAS
   /// mismatch or a `false` [preCommitGuard].
   ///
-  /// [onBeforePreCommitGuard] and [onAfterGuardBeforeCommit] are deterministic
-  /// test hooks modeling async windows immediately before [preCommitGuard] and
-  /// between [preCommitGuard] and durable commit.
+  /// Deterministic test hooks & SQLite transaction boundaries (`D1.1`, `R38-07`):
+  /// - [onBeforePreCommitGuard] (Barrier 1) executes after [expectedValues] is
+  ///   verified and immediately before synchronous [preCommitGuard] evaluation.
+  /// - [onAfterGuardBeforeCommit] (Barrier 2) executes after [preCommitGuard]
+  ///   admitted mutations and writes were issued into the uncommitted batch,
+  ///   immediately before durable commit. On SQLite, the active transaction
+  ///   already holds the WAL writer lock between mutation admission and `COMMIT`,
+  ///   so SQLite Barrier 2 must not await an independent blocking SQLite writer;
+  ///   in-process WP3 `_ContainmentArbiter` preserves `t_commit < t_event` by
+  ///   queuing post-guard fence transitions behind `COMMIT` while synchronously
+  ///   flipping UI fail-closed immediately.
   Future<bool> compareAndSwapMetadataBatch({
     required Map<String, String?> expectedValues,
     required List<MetadataMutation> mutations,

@@ -9,6 +9,13 @@ import '../domain/parent_gate_service.dart';
 ///
 /// Uses parent-defined 4-digit PIN verification to exit Child Mode.
 /// Plaintext PIN is never stored; verified against salted PBKDF2-HMAC-SHA-256.
+///
+/// **WP3 Integration Note (`R39-02`):** In WP1, `onSubmitPin` defaults to `null`
+/// and delegates directly to `ParentGateService.verifyPinDetailed` without actor,
+/// family, fence, or positive server adult authorization, which verifies legacy v1
+/// credentials *without* triggering v1->v2 migration. WP3 will wire `onSubmitPin`
+/// cleanly through `SessionLifecycleController` (`_ContainmentArbiter`,
+/// `ParentGateOperationFence`, and positive server adult authorization).
 class ParentGateDialog extends ConsumerStatefulWidget {
   const ParentGateDialog({
     required this.onGatePassed,

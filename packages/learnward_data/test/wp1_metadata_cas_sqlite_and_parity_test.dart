@@ -163,8 +163,70 @@ void main() {
       );
     }
 
-    test('Barrier 2 (onAfterGuardBeforeCommit) overlapping writer aborts stale CAS on both in-memory and multi-connection SQLite', () async {
-      // 1) In-memory parity
+    test('R39-01: SQLite preCommitGuard runs inside transaction after preliminary read and before mutation admission', () async {
+      final tempDir = Directory.systemTemp.createTempSync('lw_wp1_r39_01_');
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final dbFile = File(
+        '${tempDir.path}${Platform.pathSeparator}r39_01.sqlite',
+      );
+      final db = AppDatabase(NativeDatabase(dbFile));
+      final t0 = DateTime.utc(2026, 11, 25, 10, 0);
+
+      await db.applyMetadataBatch([
+        MetadataMutation.upsert(
+          key: 'active_child_session',
+          value: '{"id":"child-a","family_id":"fam-a"}',
+          updatedAt: t0,
+        ),
+        MetadataMutation.upsert(
+          key: 'parent_gate_credential_v2',
+          value: '{"version":2,"revision":1}',
+          updatedAt: t0,
+        ),
+      ]);
+
+      // Preliminary expectedValues read succeeds inside txn; then live guard
+      // invalidates inside Barrier 1 BEFORE SQLite mutation admission.
+      var liveGuardValid = true;
+      var barrier1Ran = false;
+      final committed = await db.compareAndSwapMetadataBatch(
+        expectedValues: {
+          'active_child_session': '{"id":"child-a","family_id":"fam-a"}',
+          'parent_gate_credential_v2': '{"version":2,"revision":1}',
+        },
+        mutations: [
+          const MetadataMutation.delete(key: 'active_child_session'),
+          MetadataMutation.upsert(
+            key: 'parent_gate_credential_v2',
+            value: '{"version":2,"revision":2}',
+            updatedAt: t0,
+          ),
+        ],
+        onBeforePreCommitGuard: () async {
+          barrier1Ran = true;
+          liveGuardValid = false;
+        },
+        preCommitGuard: () => liveGuardValid,
+      );
+
+      expect(barrier1Ran, isTrue);
+      expect(committed, isFalse);
+      await db.close();
+
+      final reopened = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(reopened.close);
+      expect(
+        await reopened.readMetadata('active_child_session'),
+        equals('{"id":"child-a","family_id":"fam-a"}'),
+      );
+      expect(
+        await reopened.readMetadata('parent_gate_credential_v2'),
+        equals('{"version":2,"revision":1}'),
+      );
+    });
+
+    test('Barrier 2 (onAfterGuardBeforeCommit) preserves in-memory CAS abort and SQLite WAL pre-commit isolation + rollback safety', () async {
+      // 1) In-memory parity: overlapping CAS commits cleanly abort stale Barrier 2 writer
       final memStore = InMemoryLocalMetadataStore();
       final t0 = DateTime.utc(2026, 11, 25, 10, 0);
       await memStore.writeMetadata(key: 'slot', value: 'v1', updatedAt: t0);
@@ -202,7 +264,9 @@ void main() {
       expect(await memFirst, isFalse);
       expect(await memStore.readMetadata('slot'), equals('v2-from-second'));
 
-      // 2) File-backed SQLite multi-connection WAL parity
+      // 2) File-backed SQLite WAL Barrier 2:
+      //    (a) Uncommitted write in Barrier 2 is invisible to WAL readers until COMMIT,
+      //        while an in-process UI transition flips fail-closed (t_commit < t_event).
       final tempDir = Directory.systemTemp.createTempSync('lw_wp1_cas_');
       addTearDown(() => tempDir.deleteSync(recursive: true));
       final dbFile = File('${tempDir.path}${Platform.pathSeparator}cas.sqlite');
@@ -214,12 +278,11 @@ void main() {
       });
 
       await conn1.writeMetadata(key: 'slot', value: 'v1', updatedAt: t0);
-      // Ensure conn2 initializes and observes v1 before race
       expect(await conn2.readMetadata('slot'), equals('v1'));
 
-      final sqlBarrierEntered = Completer<void>();
-      final sqlReleaseBarrier = Completer<void>();
-      final sqlFirst = conn1.compareAndSwapMetadataBatch(
+      var uiLiveFailClosed = false;
+      String? readerValueDuringBarrier2;
+      final sqlFirst = await conn1.compareAndSwapMetadataBatch(
         expectedValues: {'slot': 'v1'},
         mutations: [
           MetadataMutation.upsert(
@@ -230,27 +293,36 @@ void main() {
         ],
         preCommitGuard: () => true,
         onAfterGuardBeforeCommit: () async {
-          sqlBarrierEntered.complete();
-          await sqlReleaseBarrier.future;
+          readerValueDuringBarrier2 = await conn2.readMetadata('slot');
+          uiLiveFailClosed = true;
         },
       );
-      await sqlBarrierEntered.future;
 
-      final sqlSecond = await conn2.compareAndSwapMetadataBatch(
-        expectedValues: {'slot': 'v1'},
-        mutations: [
-          MetadataMutation.upsert(
-            key: 'slot',
-            value: 'v2-conn2',
-            updatedAt: t0,
-          ),
-        ],
+      expect(sqlFirst, isTrue);
+      expect(readerValueDuringBarrier2, equals('v1'));
+      expect(uiLiveFailClosed, isTrue);
+      expect(await conn2.readMetadata('slot'), equals('v2-conn1'));
+
+      //    (b) Simulated crash/error inside Barrier 2 before COMMIT rolls back atomically.
+      await expectLater(
+        () => conn1.compareAndSwapMetadataBatch(
+          expectedValues: {'slot': 'v2-conn1'},
+          mutations: [
+            MetadataMutation.upsert(
+              key: 'slot',
+              value: 'v3-aborted',
+              updatedAt: t0,
+            ),
+          ],
+          preCommitGuard: () => true,
+          onAfterGuardBeforeCommit: () async {
+            throw StateError('simulated crash before COMMIT');
+          },
+        ),
+        throwsStateError,
       );
-      sqlReleaseBarrier.complete();
-
-      expect(sqlSecond, isTrue);
-      expect(await sqlFirst, isFalse);
-      expect(await conn2.readMetadata('slot'), equals('v2-conn2'));
+      expect(await conn1.readMetadata('slot'), equals('v2-conn1'));
+      expect(await conn2.readMetadata('slot'), equals('v2-conn1'));
     });
 
     test('multi-connection SQLite CAS increments lose zero updates across 10 concurrent writers', () async {

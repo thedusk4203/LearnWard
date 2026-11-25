@@ -381,36 +381,47 @@ class AppDatabase extends _$AppDatabase
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
   }) async {
-    // Evaluate initial snapshot and async guard hooks BEFORE entering
-    // BEGIN IMMEDIATE so concurrent writers/connections cannot deadlock across
-    // Barrier 1 / Barrier 2 windows.
-    final initial = await _readMetadataValuesLocked(expectedValues.keys);
-    if (!_matchesExpectedMetadata(initial, expectedValues)) {
-      return false;
-    }
-    if (onBeforePreCommitGuard != null) {
-      await onBeforePreCommitGuard();
-    }
-    if (preCommitGuard != null && !preCommitGuard()) {
-      return false;
-    }
-    final midCheck = await _readMetadataValuesLocked(expectedValues.keys);
-    if (!_matchesExpectedMetadata(midCheck, expectedValues)) {
-      return false;
-    }
-    if (onAfterGuardBeforeCommit != null) {
-      await onAfterGuardBeforeCommit();
-    }
+    var beforeHookExecuted = false;
+    var afterHookExecuted = false;
+    return _withSqliteBusyRetry(() async {
+      try {
+        return await transaction(() async {
+          // 1. Verify persisted expectedValues inside the SQLite transaction.
+          final current = await _readMetadataValuesLocked(expectedValues.keys);
+          if (!_matchesExpectedMetadata(current, expectedValues)) {
+            throw const _MetadataCasAborted();
+          }
 
-    return _withSqliteBusyRetry(() {
-      return transaction(() async {
-        final rechecked = await _readMetadataValuesLocked(expectedValues.keys);
-        if (!_matchesExpectedMetadata(rechecked, expectedValues)) {
-          return false;
-        }
-        await _applyMetadataMutationsLocked(mutations);
-        return true;
-      });
+          // 2. Barrier 1: inside transaction after preliminary read and before
+          // synchronous preCommitGuard() admission.
+          if (onBeforePreCommitGuard != null && !beforeHookExecuted) {
+            beforeHookExecuted = true;
+            await onBeforePreCommitGuard();
+          }
+
+          // 3. Synchronous admission guard INSIDE SQLite transaction right
+          // before mutation admission; false triggers SQLite ROLLBACK.
+          if (preCommitGuard != null && !preCommitGuard()) {
+            throw const _MetadataCasAborted();
+          }
+
+          // 4. Execute mutations inside the uncommitted SQLite transaction.
+          await _applyMetadataMutationsLocked(mutations);
+
+          // 5. Barrier 2: post-guard/post-write pre-COMMIT window inside the
+          // active transaction. SQLite holds the exclusive WAL writer lock
+          // through COMMIT, so concurrent writers serialize after COMMIT while
+          // WAL readers continue seeing the pre-commit snapshot until COMMIT.
+          if (onAfterGuardBeforeCommit != null && !afterHookExecuted) {
+            afterHookExecuted = true;
+            await onAfterGuardBeforeCommit();
+          }
+
+          return true;
+        });
+      } on _MetadataCasAborted {
+        return false;
+      }
     });
   }
 
@@ -2489,4 +2500,8 @@ $backoffSql;
       leaseExpiresAt: row.leaseExpiresAt?.toUtc(),
     );
   }
+}
+
+final class _MetadataCasAborted implements Exception {
+  const _MetadataCasAborted();
 }
