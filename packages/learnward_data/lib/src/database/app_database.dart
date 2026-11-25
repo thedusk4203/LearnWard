@@ -18,7 +18,11 @@ part 'app_database.g.dart';
   tables: [LocalMetadataEntries, LocalAssessmentDrafts, PendingRewardCommands],
 )
 class AppDatabase extends _$AppDatabase
-    implements LocalMetadataStore, LocalDraftStore, PendingRewardCommandStore {
+    implements
+        LocalMetadataStore,
+        LocalDraftStore,
+        PendingRewardCommandStore,
+        LegacyOutboxProvenanceSource {
   AppDatabase(super.executor);
 
   @override
@@ -355,6 +359,170 @@ class AppDatabase extends _$AppDatabase
       ..where((entry) => entry.key.equals(key));
     final entry = await query.getSingleOrNull();
     return entry?.value;
+  }
+
+  @override
+  Future<void> applyMetadataBatch(List<MetadataMutation> mutations) {
+    if (mutations.isEmpty) {
+      return Future<void>.value();
+    }
+    return _withSqliteBusyRetry(() {
+      return transaction(() async {
+        await _applyMetadataMutationsLocked(mutations);
+      });
+    });
+  }
+
+  @override
+  Future<bool> compareAndSwapMetadataBatch({
+    required Map<String, String?> expectedValues,
+    required List<MetadataMutation> mutations,
+    bool Function()? preCommitGuard,
+    Future<void> Function()? onBeforePreCommitGuard,
+    Future<void> Function()? onAfterGuardBeforeCommit,
+  }) async {
+    var beforeHookExecuted = false;
+    var afterHookExecuted = false;
+    return _withSqliteBusyRetry(() async {
+      try {
+        return await transaction(() async {
+          // 1. Verify persisted expectedValues inside the SQLite transaction.
+          final current = await _readMetadataValuesLocked(expectedValues.keys);
+          if (!_matchesExpectedMetadata(current, expectedValues)) {
+            throw const _MetadataCasAborted();
+          }
+
+          // 2. Barrier 1: inside transaction after preliminary read and before
+          // synchronous preCommitGuard() admission.
+          if (onBeforePreCommitGuard != null && !beforeHookExecuted) {
+            beforeHookExecuted = true;
+            await onBeforePreCommitGuard();
+          }
+
+          // 3. Synchronous admission guard INSIDE SQLite transaction right
+          // before mutation admission; false triggers SQLite ROLLBACK.
+          if (preCommitGuard != null && !preCommitGuard()) {
+            throw const _MetadataCasAborted();
+          }
+
+          // 4. Execute mutations inside the uncommitted SQLite transaction.
+          await _applyMetadataMutationsLocked(mutations);
+
+          // 5. Barrier 2: post-guard/post-write pre-COMMIT window inside the
+          // active transaction. SQLite holds the exclusive WAL writer lock
+          // through COMMIT, so concurrent writers serialize after COMMIT while
+          // WAL readers continue seeing the pre-commit snapshot until COMMIT.
+          if (onAfterGuardBeforeCommit != null && !afterHookExecuted) {
+            afterHookExecuted = true;
+            await onAfterGuardBeforeCommit();
+          }
+
+          return true;
+        });
+      } on _MetadataCasAborted {
+        return false;
+      }
+    });
+  }
+
+  Future<Map<String, String?>> _readMetadataValuesLocked(
+    Iterable<String> keys,
+  ) async {
+    final uniqueKeys = keys.toSet().toList();
+    if (uniqueKeys.isEmpty) {
+      return const {};
+    }
+    final query = select(localMetadataEntries)
+      ..where((entry) => entry.key.isIn(uniqueKeys));
+    final rows = await query.get();
+    final result = <String, String?>{for (final key in uniqueKeys) key: null};
+    for (final row in rows) {
+      result[row.key] = row.value;
+    }
+    return result;
+  }
+
+  bool _matchesExpectedMetadata(
+    Map<String, String?> current,
+    Map<String, String?> expectedValues,
+  ) {
+    for (final entry in expectedValues.entries) {
+      if (current[entry.key] != entry.value) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Future<void> _applyMetadataMutationsLocked(
+    List<MetadataMutation> mutations,
+  ) async {
+    for (final mutation in mutations) {
+      if (mutation.isDelete) {
+        await (delete(
+          localMetadataEntries,
+        )..where((entry) => entry.key.equals(mutation.key))).go();
+      } else {
+        await into(localMetadataEntries).insertOnConflictUpdate(
+          LocalMetadataEntriesCompanion.insert(
+            key: mutation.key,
+            value: mutation.value!,
+            updatedAt: mutation.updatedAt!.toUtc(),
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Future<List<ActorBoundOutboxRecord>> listActorBoundRecords() async {
+    final records = <ActorBoundOutboxRecord>[];
+
+    if (await _tableExists('local_assessment_drafts')) {
+      final draftRows = await customSelect(
+        '''
+        SELECT local_draft_id AS record_id, family_id, child_id, actor_user_id
+        FROM local_assessment_drafts
+        WHERE actor_user_id IS NOT NULL AND TRIM(actor_user_id) != ''
+        ''',
+        readsFrom: {localAssessmentDrafts},
+      ).get();
+      for (final row in draftRows) {
+        records.add(
+          ActorBoundOutboxRecord(
+            source: LegacyOutboxRecordSource.assessmentDraft,
+            recordId: row.read<String>('record_id'),
+            familyId: row.read<String>('family_id'),
+            childId: row.readNullable<String>('child_id'),
+            actorUserId: row.read<String>('actor_user_id'),
+          ),
+        );
+      }
+    }
+
+    if (await _tableExists('pending_reward_commands')) {
+      final rewardRows = await customSelect(
+        '''
+        SELECT command_id AS record_id, family_id, child_id, actor_user_id
+        FROM pending_reward_commands
+        WHERE actor_user_id IS NOT NULL AND TRIM(actor_user_id) != ''
+        ''',
+        readsFrom: {pendingRewardCommands},
+      ).get();
+      for (final row in rewardRows) {
+        records.add(
+          ActorBoundOutboxRecord(
+            source: LegacyOutboxRecordSource.rewardCommand,
+            recordId: row.read<String>('record_id'),
+            familyId: row.read<String>('family_id'),
+            childId: row.readNullable<String>('child_id'),
+            actorUserId: row.read<String>('actor_user_id'),
+          ),
+        );
+      }
+    }
+
+    return records;
   }
 
   LocalAssessmentDraftsCompanion _draftToCompanion(LocalAssessmentDraft draft) {
@@ -2332,4 +2500,8 @@ $backoffSql;
       leaseExpiresAt: row.leaseExpiresAt?.toUtc(),
     );
   }
+}
+
+final class _MetadataCasAborted implements Exception {
+  const _MetadataCasAborted();
 }

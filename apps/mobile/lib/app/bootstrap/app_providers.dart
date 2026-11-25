@@ -96,10 +96,17 @@ final localEvidenceFileStoreProvider = Provider<LocalEvidenceFileStore>((ref) {
   return DefaultLocalEvidenceFileStore();
 });
 
-/// Parent Gate service provider.
+/// Parent Gate service provider (production hardened PBKDF2-HMAC-SHA-256).
 final parentGateServiceProvider = Provider<ParentGateService>((ref) {
   final store = ref.watch(localMetadataStoreProvider);
-  return ParentGateService(store);
+  return ParentGateService(
+    store,
+    clock: const SystemClock(),
+    monotonicClock: StopwatchMonotonicClock(),
+    minIterations: ParentGateCrypto.productionMinIterations,
+    configuredIterations: ParentGateCrypto.productionMinIterations,
+    runInIsolate: true,
+  );
 });
 
 /// Supabase client provider.

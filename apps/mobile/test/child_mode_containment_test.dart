@@ -6,6 +6,7 @@ import 'package:learnward/app/app.dart';
 import 'package:learnward/app/bootstrap/app_providers.dart';
 import 'package:learnward/app/routing/app_routes.dart';
 import 'package:learnward/features/shared_device/domain/parent_gate_service.dart';
+import 'package:learnward/features/shared_device/presentation/parent_gate_dialog.dart';
 import 'package:learnward/features/shared_device/presentation/parent_pin_setup_dialog.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:learnward_test_support/learnward_test_support.dart';
@@ -25,6 +26,22 @@ void main() {
     late ChildProfile testChild;
     late FakeFamilyRepository fakeFamilyRepo;
     late FakeChildProfileRepository fakeChildRepo;
+
+    const setupFence = ParentGateOperationFence(
+      actorUserId: 'user-smith',
+      sessionGeneration: 1,
+      containmentEpoch: 1,
+      expectedContainmentStatus: 'parent_mode',
+      verifiedFamilyId: 'fam-containment',
+    );
+    const exitFence = ParentGateOperationFence(
+      actorUserId: 'user-smith',
+      sessionGeneration: 1,
+      containmentEpoch: 1,
+      expectedContainmentStatus: 'active_child',
+      verifiedFamilyId: 'fam-containment',
+      expectedChildId: 'child-smith-1',
+    );
 
     setUp(() {
       store = InMemoryLocalMetadataStore();
@@ -61,12 +78,15 @@ void main() {
     });
 
     testWidgets(
-      'no PIN configured: cannot enter Child Mode without configuring PIN (cancelling cancels entry)',
+      'no PIN configured: FamilyHomeScreen opens ParentPinSetupDialog fail-closed and cannot enter Child Mode without verified delegate',
       (tester) async {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
               localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(
+                ParentGateService(store, runInIsolate: false),
+              ),
               familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
               childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
               activeFamilyProvider.overrideWith(
@@ -84,46 +104,70 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // PIN setup dialog must be presented because no PIN exists
+        // PIN setup dialog presented in fail-closed restricted state (R39-04)
         expect(find.byType(ParentPinSetupDialog), findsOneWidget);
         expect(find.text('Set Parent PIN'), findsOneWidget);
+        expect(
+          find.byKey(const Key('parent_pin_setup_restricted_notice')),
+          findsOneWidget,
+        );
+        final submitButton = tester.widget<FilledButton>(
+          find.byKey(const Key('parent_pin_setup_submit')),
+        );
+        expect(submitButton.onPressed, isNull);
 
-        // Cancel dialog
+        // Cancel dialog -> stays in Parent Mode with zero PIN written
         await tester.tap(find.byKey(const Key('parent_pin_setup_cancel')));
         await tester.pumpAndSettle();
 
-        // Must still be in Parent Mode
         expect(find.text('The Smiths'), findsOneWidget);
         expect(find.text('Parent Mode'), findsOneWidget);
         expect(find.text('Hi, Leo!'), findsNothing);
+        expect(
+          await store.readMetadata(ParentGateService.credentialV2Key),
+          isNull,
+        );
       },
     );
 
     testWidgets(
-      'setting PIN 8392 never stores plaintext, enters Child Mode, and persists session',
+      'setting PIN 8392 via authorized delegate never stores plaintext and validates mismatched confirmations',
       (tester) async {
+        final gateService = ParentGateService(store, runInIsolate: false);
+        var saved = false;
+
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
               localMetadataStoreProvider.overrideWithValue(store),
-              familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
-              childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
-              activeFamilyProvider.overrideWith(
-                () => _PresetFamilyNotifier(testFamily),
-              ),
+              parentGateServiceProvider.overrideWithValue(gateService),
             ],
-            child: const LearnWardApp(),
+            child: MaterialApp(
+              home: Builder(
+                builder: (context) => ElevatedButton(
+                  key: const Key('open_authorized_setup'),
+                  onPressed: () async {
+                    saved = await ParentPinSetupDialog.show(
+                      context,
+                      onSavePin: (pin) => gateService.setPin(
+                        pin,
+                        ownerFamilyId: testFamily.id.value,
+                        configuredByActorUserId: 'user-smith',
+                        hasPositiveServerAdultVerification: true,
+                        verifiedActiveAdultFamilyIds: [testFamily.id.value],
+                        fence: setupFence,
+                      ),
+                    );
+                  },
+                  child: const Text('Configure PIN'),
+                ),
+              ),
+            ),
           ),
         );
-        await tester.pumpAndSettle();
 
-        // Tap enter Child Mode
-        await tester.tap(
-          find.byKey(Key('enter_child_mode_${testChild.id.value}')),
-        );
+        await tester.tap(find.byKey(const Key('open_authorized_setup')));
         await tester.pumpAndSettle();
-
-        expect(find.byType(ParentPinSetupDialog), findsOneWidget);
 
         // Enter PIN and mismatched confirmation
         await tester.enterText(
@@ -141,6 +185,7 @@ void main() {
           find.text('PINs do not match. Please verify and re-enter.'),
           findsOneWidget,
         );
+        expect(saved, isFalse);
 
         // Enter matching confirmation
         await tester.enterText(
@@ -150,40 +195,43 @@ void main() {
         await tester.tap(find.byKey(const Key('parent_pin_setup_submit')));
         await tester.pumpAndSettle();
 
-        // Successfully entered Child Mode
-        expect(find.text('Hi, Leo!'), findsOneWidget);
+        expect(saved, isTrue);
 
-        // Verify plaintext 8392 is NOT present in storage
-        final storedHash = await store.readMetadata(
-          ParentGateService.pinHashKey,
+        // Verify plaintext 8392 is NOT present in storage and owned v2 PBKDF2 credential is stored
+        final rawV2 = await store.readMetadata(
+          ParentGateService.credentialV2Key,
         );
-        final storedSalt = await store.readMetadata(
-          ParentGateService.pinSaltKey,
-        );
-        expect(storedHash, isNotNull);
-        expect(storedSalt, isNotNull);
-        expect(storedHash, isNot(contains('8392')));
-        expect(storedSalt, isNot(contains('8392')));
-
-        // Verify active child session is persisted
-        final storedSession = await store.readMetadata(
-          ActiveChildModeNotifier.activeSessionKey,
-        );
-        expect(storedSession, contains('child-smith-1'));
-        expect(storedSession, contains('Leo'));
+        final parsedV2 = ParentGateCredentialV2.tryParse(rawV2);
+        expect(parsedV2, isNotNull);
+        expect(parsedV2!.iterations, greaterThanOrEqualTo(100000));
+        expect(parsedV2.ownerFamilyId, equals(testFamily.id.value));
+        expect(parsedV2.configuredByActorUserId, equals('user-smith'));
+        expect(rawV2, isNot(contains('8392')));
+        expect(await store.readMetadata(ParentGateService.pinHashKey), isNull);
+        expect(await store.readMetadata(ParentGateService.pinSaltKey), isNull);
       },
     );
 
     testWidgets(
-      'exit Child Mode with 1234 FAILS; exit with configured PIN 8392 PASSES',
+      'exit Child Mode via authorized delegate: 1234 FAILS; verified 8392 PASSES; unfenced ChildModeScreen fails closed',
       (tester) async {
-        // Pre-configure PIN 8392
-        await ParentGateService(store).setPin('8392');
+        final gateService = ParentGateService(store, runInIsolate: false);
+        await gateService.setPin(
+          '8392',
+          ownerFamilyId: testFamily.id.value,
+          configuredByActorUserId: 'user-smith',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: [testFamily.id.value],
+          fence: setupFence,
+        );
 
+        // Part A: ChildModeScreen without WP3 delegate fails closed (R39-05)
         await tester.pumpWidget(
           ProviderScope(
+            key: UniqueKey(),
             overrides: [
               localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(gateService),
               initialChildModeSessionProvider.overrideWithValue(testChild),
               familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
               childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
@@ -196,13 +244,59 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // Tap Exit Child Mode
         await tester.tap(find.byKey(const Key('exit_child_mode_button')));
         await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('parent_gate_restricted_notice')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('parent_gate_verify_button')),
+              )
+              .onPressed,
+          isNull,
+        );
+        await tester.tap(find.byKey(const Key('parent_gate_cancel_button')));
+        await tester.pumpAndSettle();
+        expect(find.text('Hi, Leo!'), findsOneWidget);
 
-        expect(find.text('Parent Gate'), findsOneWidget);
+        // Part B: Authorized delegate rejects 1234 and approves 8392
+        var gatePassed = false;
+        await tester.pumpWidget(
+          ProviderScope(
+            key: UniqueKey(),
+            overrides: [
+              localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(gateService),
+            ],
+            child: MaterialApp(
+              home: Builder(
+                builder: (context) => ElevatedButton(
+                  key: const Key('open_authorized_gate'),
+                  onPressed: () => ParentGateDialog.show(
+                    context,
+                    onGatePassed: () => gatePassed = true,
+                    onSubmitPin: (pin) => gateService.verifyPinDetailed(
+                      pin,
+                      actorFamilyId: testFamily.id.value,
+                      actorUserId: 'user-smith',
+                      hasPositiveServerAdultVerification: true,
+                      verifiedActiveAdultFamilyIds: [testFamily.id.value],
+                      fence: exitFence,
+                    ),
+                  ),
+                  child: const Text('Gate'),
+                ),
+              ),
+            ),
+          ),
+        );
 
-        // Attempt default PIN 1234 -> MUST FAIL
+        await tester.tap(find.byKey(const Key('open_authorized_gate')));
+        await tester.pumpAndSettle();
+
         await tester.enterText(
           find.byKey(const Key('parent_gate_pin_field')),
           '1234',
@@ -211,9 +305,8 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Incorrect PIN. Try again.'), findsOneWidget);
-        expect(find.text('Parent Gate'), findsOneWidget);
+        expect(gatePassed, isFalse);
 
-        // Attempt configured PIN 8392 -> MUST PASS
         await tester.enterText(
           find.byKey(const Key('parent_gate_pin_field')),
           '8392',
@@ -221,18 +314,23 @@ void main() {
         await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
         await tester.pumpAndSettle();
 
-        // Unlocked to Parent Mode
-        expect(find.text('Parent Gate'), findsNothing);
-        expect(find.text('The Smiths'), findsOneWidget);
-        expect(find.text('Parent Mode'), findsOneWidget);
+        expect(gatePassed, isTrue);
+        expect(find.byType(ParentGateDialog), findsNothing);
       },
     );
 
     testWidgets(
-      'restart while Child Mode is active remains locked and requires same configured PIN 8392',
+      'restart while Child Mode is active remains locked against /parent and fails closed on Exit Child Mode without WP3 delegate',
       (tester) async {
-        // Pre-configure PIN 8392 and persist active child session
-        await ParentGateService(store).setPin('8392');
+        // Pre-configure owned PIN 8392 and persist active child session
+        await ParentGateService(store, runInIsolate: false).setPin(
+          '8392',
+          ownerFamilyId: testFamily.id.value,
+          configuredByActorUserId: 'user-smith',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: [testFamily.id.value],
+          fence: setupFence,
+        );
         await store.writeMetadata(
           key: ActiveChildModeNotifier.activeSessionKey,
           value: '{"id":"child-smith-1","family_id":"fam-containment","display_name":"Leo","school_grade":5,"status":"active","created_at":"2026-10-31T00:00:00.000Z"}',
@@ -244,6 +342,9 @@ void main() {
           ProviderScope(
             overrides: [
               localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(
+                ParentGateService(store, runInIsolate: false),
+              ),
               initialChildModeSessionProvider.overrideWithValue(testChild),
               familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
               childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
@@ -269,29 +370,13 @@ void main() {
         expect(find.text('Hi, Leo!'), findsOneWidget);
         expect(find.text('The Smiths'), findsNothing);
 
-        // Exit Child Mode
+        // Exit Child Mode stays fail-closed while WP3 delegate is absent
         await tester.tap(find.byKey(const Key('exit_child_mode_button')));
         await tester.pumpAndSettle();
-
-        // 1234 fails
-        await tester.enterText(
-          find.byKey(const Key('parent_gate_pin_field')),
-          '1234',
+        expect(
+          find.byKey(const Key('parent_gate_restricted_notice')),
+          findsOneWidget,
         );
-        await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
-        await tester.pumpAndSettle();
-        expect(find.text('Incorrect PIN. Try again.'), findsOneWidget);
-
-        // 8392 succeeds
-        await tester.enterText(
-          find.byKey(const Key('parent_gate_pin_field')),
-          '8392',
-        );
-        await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
-        await tester.pumpAndSettle();
-
-        expect(find.text('The Smiths'), findsOneWidget);
-        expect(find.text('Parent Mode'), findsOneWidget);
       },
     );
   });
