@@ -11,6 +11,7 @@ final class ValidatedActorContext {
     required this.sessionGeneration,
     required this.observedAt,
     this.role,
+    this.isAnonymous = false,
   });
 
   /// The verified user ID of the authenticated actor.
@@ -23,8 +24,13 @@ final class ValidatedActorContext {
   /// The timestamp when this session validity was observed.
   final DateTime observedAt;
 
-  /// Optional actor role (e.g. 'parent', 'child', 'owner').
+  /// Optional actor role hint (e.g. 'parent', 'child', 'owner').
+  ///
+  /// Non-authoritative hint only; database memberships/grants remain authoritative.
   final String? role;
+
+  /// Whether the authenticated Supabase session is anonymous.
+  final bool isAnonymous;
 
   /// Checks if this observation is still within an acceptable time-to-live.
   bool isValidAt(DateTime now, {Duration ttl = const Duration(minutes: 5)}) {
@@ -39,18 +45,16 @@ final class ValidatedActorContext {
           userId == other.userId &&
           sessionGeneration == other.sessionGeneration &&
           observedAt == other.observedAt &&
-          role == other.role;
+          role == other.role &&
+          isAnonymous == other.isAnonymous;
 
   @override
   int get hashCode =>
-      userId.hashCode ^
-      sessionGeneration.hashCode ^
-      observedAt.hashCode ^
-      role.hashCode;
+      Object.hash(userId, sessionGeneration, observedAt, role, isAnonymous);
 
   @override
   String toString() =>
-      'ValidatedActorContext(userId: $userId, sessionGeneration: $sessionGeneration, observedAt: $observedAt)';
+      'ValidatedActorContext(userId: $userId, sessionGeneration: $sessionGeneration, observedAt: $observedAt, isAnonymous: $isAnonymous)';
 }
 
 /// Port for verifying active authenticated session state prior to executing mutating RPCs.

@@ -8,6 +8,7 @@ import 'package:learnward/app/routing/app_routes.dart';
 import 'package:learnward/features/shared_device/domain/parent_gate_service.dart';
 import 'package:learnward/features/shared_device/presentation/parent_gate_dialog.dart';
 import 'package:learnward/features/shared_device/presentation/parent_pin_setup_dialog.dart';
+import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:learnward_test_support/learnward_test_support.dart';
 
@@ -83,6 +84,9 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              authSessionPortProvider.overrideWithValue(
+                FakeAuthSessionPort(activeUserId: 'user-smith'),
+              ),
               localMetadataStoreProvider.overrideWithValue(store),
               parentGateServiceProvider.overrideWithValue(
                 ParentGateService(store, runInIsolate: false),
@@ -226,13 +230,27 @@ void main() {
         );
 
         // Part A: ChildModeScreen without WP3 delegate fails closed (R39-05)
+        await store.writeMetadata(
+          key: ActiveChildModeNotifier.activeSessionKey,
+          value: PersistedChildModeSession(
+            modeKind: PersistedChildModeKind.sharedDeviceAdult,
+            actorUserId: 'user-smith',
+            familyId: testFamily.id,
+            childId: testChild.id,
+            childProfileSnapshot: testChild,
+            persistedAtUtc: DateTime.utc(2026, 10, 31),
+          ).toJsonString(),
+          updatedAt: DateTime.utc(2026, 10, 31),
+        );
         await tester.pumpWidget(
           ProviderScope(
             key: UniqueKey(),
             overrides: [
+              authSessionPortProvider.overrideWithValue(
+                FakeAuthSessionPort(activeUserId: 'user-smith'),
+              ),
               localMetadataStoreProvider.overrideWithValue(store),
               parentGateServiceProvider.overrideWithValue(gateService),
-              initialChildModeSessionProvider.overrideWithValue(testChild),
               familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
               childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
               activeFamilyProvider.overrideWith(
@@ -333,7 +351,14 @@ void main() {
         );
         await store.writeMetadata(
           key: ActiveChildModeNotifier.activeSessionKey,
-          value: '{"id":"child-smith-1","family_id":"fam-containment","display_name":"Leo","school_grade":5,"status":"active","created_at":"2026-10-31T00:00:00.000Z"}',
+          value: PersistedChildModeSession(
+            modeKind: PersistedChildModeKind.sharedDeviceAdult,
+            actorUserId: 'user-smith',
+            familyId: testFamily.id,
+            childId: testChild.id,
+            childProfileSnapshot: testChild,
+            persistedAtUtc: DateTime.utc(2026, 10, 31),
+          ).toJsonString(),
           updatedAt: DateTime.now().toUtc(),
         );
 
@@ -341,11 +366,13 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              authSessionPortProvider.overrideWithValue(
+                FakeAuthSessionPort(activeUserId: 'user-smith'),
+              ),
               localMetadataStoreProvider.overrideWithValue(store),
               parentGateServiceProvider.overrideWithValue(
                 ParentGateService(store, runInIsolate: false),
               ),
-              initialChildModeSessionProvider.overrideWithValue(testChild),
               familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
               childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
               activeFamilyProvider.overrideWith(

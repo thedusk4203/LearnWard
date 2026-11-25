@@ -12,6 +12,7 @@ final class FakeAuthSessionPort implements AuthSessionPort {
     String? sessionGeneration,
     Clock clock = const SystemClock(),
     String? role,
+    bool isAnonymous = false,
   }) : _currentContext =
            initialContext ??
            (activeUserId != null
@@ -20,6 +21,7 @@ final class FakeAuthSessionPort implements AuthSessionPort {
                    sessionGeneration: sessionGeneration ?? 'gen-$activeUserId',
                    observedAt: clock.now().toUtc(),
                    role: role,
+                   isAnonymous: isAnonymous,
                  )
                : null) {
     _sessionGeneration = _currentContext?.sessionGeneration;
@@ -49,6 +51,7 @@ final class FakeAuthSessionPort implements AuthSessionPort {
     required String userId,
     String? role,
     String? sessionGeneration,
+    bool isAnonymous = false,
   }) {
     setContext(
       ValidatedActorContext(
@@ -56,6 +59,7 @@ final class FakeAuthSessionPort implements AuthSessionPort {
         sessionGeneration: sessionGeneration ?? 'gen-$userId',
         observedAt: DateTime.now().toUtc(),
         role: role,
+        isAnonymous: isAnonymous,
       ),
     );
   }
@@ -68,6 +72,7 @@ final class FakeAuthSessionPort implements AuthSessionPort {
         sessionGeneration: gen,
         observedAt: _currentContext!.observedAt,
         role: _currentContext!.role,
+        isAnonymous: _currentContext!.isAnonymous,
       );
     }
     _controller.add(gen);
@@ -77,13 +82,14 @@ final class FakeAuthSessionPort implements AuthSessionPort {
     _controller.addError(error);
   }
 
-  void switchActor(String userId, {String? role}) {
+  void switchActor(String userId, {String? role, bool isAnonymous = false}) {
     final nextGen = 'gen-${DateTime.now().microsecondsSinceEpoch}';
     final context = ValidatedActorContext(
       userId: userId,
       sessionGeneration: nextGen,
       observedAt: DateTime.now().toUtc(),
       role: role,
+      isAnonymous: isAnonymous,
     );
     setContext(context);
   }

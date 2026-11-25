@@ -1,6 +1,7 @@
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:learnward_application/learnward_application.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -127,12 +128,40 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
     }
 
     final user = session.user;
+    final isAnonymous =
+        user.isAnonymous || _extractJwtIsAnonymousClaim(session.accessToken);
     return ValidatedActorContext(
       userId: user.id,
       sessionGeneration: _currentGeneration!,
       observedAt: _clock.now().toUtc(),
       role: user.appMetadata['role'] as String?,
+      isAnonymous: isAnonymous,
     );
+  }
+
+  static bool _extractJwtIsAnonymousClaim(String accessToken) {
+    final parts = accessToken.split('.');
+    if (parts.length != 3) {
+      return false;
+    }
+    try {
+      final normalized = base64Url.normalize(parts[1]);
+      final payloadJson = utf8.decode(base64Url.decode(normalized));
+      final decoded = jsonDecode(payloadJson);
+      if (decoded is! Map<String, dynamic>) {
+        return false;
+      }
+      final claim = decoded['is_anonymous'];
+      if (claim is bool) {
+        return claim;
+      }
+      if (claim is String) {
+        return claim.trim().toLowerCase() == 'true';
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   void dispose() {

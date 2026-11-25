@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_initializing_formals
+
 import 'dart:math';
 
 import 'package:learnward_application/learnward_application.dart';
@@ -2842,12 +2844,20 @@ final class InMemoryLearningRepository implements LearningRepository {
 
 /// Lightweight in-memory fallback for [AuthSessionPort] in local development.
 final class InMemoryAuthSessionPort implements AuthSessionPort {
-  InMemoryAuthSessionPort({String? activeUserId, String? sessionGeneration})
-    : _userId = activeUserId ?? 'local-parent-user',
-      _generation = sessionGeneration ?? 'demo-generation-1';
+  InMemoryAuthSessionPort({
+    String? activeUserId,
+    String? sessionGeneration,
+    String? role = 'parent',
+    bool isAnonymous = false,
+  }) : _userId = activeUserId ?? 'local-parent-user',
+       _generation = sessionGeneration ?? 'demo-generation-1',
+       _role = role,
+       _isAnonymous = isAnonymous;
 
   final String _userId;
   final String _generation;
+  final String? _role;
+  final bool _isAnonymous;
 
   @override
   String? get currentSessionGeneration => _generation;
@@ -2861,7 +2871,8 @@ final class InMemoryAuthSessionPort implements AuthSessionPort {
       userId: _userId,
       sessionGeneration: _generation,
       observedAt: DateTime.now().toUtc(),
-      role: 'parent',
+      role: _role,
+      isAnonymous: _isAnonymous,
     );
   }
 }
@@ -2934,4 +2945,250 @@ final class InMemoryRecoveryAuthorizationPort
     required String redemptionId,
     required RewardCommandOperation operation,
   }) => _evaluateAdultContext(context);
+}
+
+/// In-memory representation of a `public.child_device_grants` row for demo/test verification.
+final class InMemoryChildDeviceGrantRecord {
+  const InMemoryChildDeviceGrantRecord({
+    required this.grantId,
+    required this.familyId,
+    required this.childId,
+    required this.authUserId,
+    required this.status,
+    this.revokedAt,
+  });
+
+  final String grantId;
+  final FamilyId familyId;
+  final ChildId childId;
+  final String authUserId;
+  final String status;
+  final DateTime? revokedAt;
+}
+
+/// Lightweight in-memory fallback for [ContainmentAuthorizationVerifier] in local development.
+final class InMemoryContainmentAuthorizationVerifier
+    implements ContainmentAuthorizationVerifier {
+  const InMemoryContainmentAuthorizationVerifier({
+    required FamilyRepository familyRepository,
+    required ChildProfileRepository childProfileRepository,
+    Map<String, InMemoryChildDeviceGrantRecord> grantsByAuthUserId = const {},
+    Set<String> revokedAdultUserIds = const {},
+    Clock clock = const SystemClock(),
+  }) : _familyRepository = familyRepository,
+       _childProfileRepository = childProfileRepository,
+       _grantsByAuthUserId = grantsByAuthUserId,
+       _revokedAdultUserIds = revokedAdultUserIds,
+       _clock = clock;
+
+  final FamilyRepository _familyRepository;
+  final ChildProfileRepository _childProfileRepository;
+  final Map<String, InMemoryChildDeviceGrantRecord> _grantsByAuthUserId;
+  final Set<String> _revokedAdultUserIds;
+  final Clock _clock;
+
+  @override
+  Future<ContainmentVerificationOutcome> verifySession({
+    required ValidatedActorContext context,
+    PersistedChildModeSession? persistedChildSession,
+    FamilyId? preferredFamilyId,
+    ChildId? targetChildId,
+    FamilyId? targetFamilyId,
+  }) async {
+    final nowUtc = _clock.now().toUtc();
+    if (context.userId.trim().isEmpty ||
+        context.sessionGeneration.trim().isEmpty ||
+        !context.isValidAt(nowUtc)) {
+      return const SessionAuthorizationUnverified(
+        reason: 'stale_or_invalid_actor_context',
+      );
+    }
+
+    final persistedPairedForActor =
+        persistedChildSession != null &&
+        persistedChildSession.modeKind ==
+            PersistedChildModeKind.pairedChildDevice &&
+        persistedChildSession.actorUserId == context.userId;
+
+    final hasPairedChildSignal =
+        context.isAnonymous ||
+        context.role == 'child' ||
+        persistedPairedForActor;
+
+    final grant = _grantsByAuthUserId[context.userId];
+    if (grant != null) {
+      if (grant.status == 'active') {
+        final families = await _familyRepository.listMyFamilies();
+        final family = families
+            .where((f) => f.id == grant.familyId && !f.isArchived)
+            .firstOrNull;
+        final children = await _childProfileRepository.listChildren(
+          grant.familyId,
+        );
+        final child = children
+            .where((c) => c.id == grant.childId && c.isActive && !c.isArchived)
+            .firstOrNull;
+        if (family == null || child == null) {
+          return const PairedChildUnverified(
+            reason:
+                PairedChildUnverifiedReason.childProfileUnavailableOrArchived,
+          );
+        }
+        return AuthorizedPairedChild(
+          verifiedChild: child,
+          verifiedFamily: family,
+          grantId: grant.grantId,
+        );
+      }
+      if (grant.status == 'revoked' && grant.revokedAt != null) {
+        return ConfirmedPairedChildGrantRevoked(
+          revokedAt: grant.revokedAt!.toUtc(),
+          grantId: grant.grantId,
+        );
+      }
+      return const PairedChildUnverified(
+        reason: PairedChildUnverifiedReason.grantStatusMalformedOrAmbiguous,
+      );
+    }
+
+    if (hasPairedChildSignal) {
+      return const PairedChildUnverified(
+        reason: PairedChildUnverifiedReason.grantMissingForPairedIdentity,
+      );
+    }
+
+    if (_revokedAdultUserIds.contains(context.userId)) {
+      return const ConfirmedAdultMembershipRevoked(
+        reason: 'adult_membership_revoked_in_memory',
+      );
+    }
+
+    final families = (await _familyRepository.listMyFamilies())
+        .where((f) => !f.isArchived)
+        .toList(growable: false);
+    if (families.isEmpty) {
+      return const NoActiveFamilyMembershipObserved();
+    }
+
+    final verifiedFamilies = <Family>[];
+    final verifiedRolesByFamilyId = <String, VerifiedAdultRole>{};
+    var sawNonActiveOrNonAdultMembership = false;
+
+    for (final family in families) {
+      final membership = await _familyRepository.getMyMembership(family.id);
+      if (membership == null) {
+        // Local InMemoryFamilyRepository seeded without per-user check vs explicit FakeFamilyRepository:
+        // only grant active adult membership when membership exists for this actor and is active.
+        continue;
+      }
+      if (membership.authUserId != context.userId) {
+        continue;
+      }
+      final role = VerifiedAdultRole.tryFromWire(membership.role.wireName);
+      if (membership.isActive && role != null) {
+        verifiedFamilies.add(family);
+        verifiedRolesByFamilyId[family.id.value] = role;
+      } else {
+        sawNonActiveOrNonAdultMembership = true;
+      }
+    }
+
+    if (verifiedFamilies.isEmpty) {
+      if (sawNonActiveOrNonAdultMembership) {
+        return const ConfirmedAdultMembershipRevoked(
+          reason: 'adult_membership_revoked_or_non_adult',
+        );
+      }
+      return const NoActiveFamilyMembershipObserved();
+    }
+
+    final sameActorSharedSession =
+        persistedChildSession != null &&
+            persistedChildSession.modeKind ==
+                PersistedChildModeKind.sharedDeviceAdult &&
+            persistedChildSession.actorUserId == context.userId
+        ? persistedChildSession
+        : null;
+    final effectiveTargetChildId =
+        targetChildId ?? sameActorSharedSession?.childId;
+    final effectiveTargetFamilyId =
+        targetFamilyId ?? sameActorSharedSession?.familyId;
+
+    Family primaryFamily = verifiedFamilies.first;
+    if (effectiveTargetFamilyId != null) {
+      primaryFamily = verifiedFamilies.firstWhere(
+        (f) => f.id == effectiveTargetFamilyId,
+        orElse: () => primaryFamily,
+      );
+    } else if (preferredFamilyId != null) {
+      primaryFamily = verifiedFamilies.firstWhere(
+        (f) => f.id == preferredFamilyId,
+        orElse: () => primaryFamily,
+      );
+    }
+    final primaryRole = verifiedRolesByFamilyId[primaryFamily.id.value]!;
+
+    if (effectiveTargetChildId == null) {
+      return AuthorizedActiveAdult(
+        verifiedRole: primaryRole,
+        verifiedFamily: primaryFamily,
+        verifiedFamilies: verifiedFamilies,
+        verifiedRolesByFamilyId: verifiedRolesByFamilyId,
+      );
+    }
+
+    if (effectiveTargetFamilyId == null ||
+        !verifiedRolesByFamilyId.containsKey(effectiveTargetFamilyId.value)) {
+      return AuthorizedAdultChildUnavailable(
+        verifiedRole: primaryRole,
+        verifiedFamily: primaryFamily,
+        verifiedFamilies: verifiedFamilies,
+        verifiedRolesByFamilyId: verifiedRolesByFamilyId,
+        reason: TargetChildUnavailabilityReason.familyMismatch,
+        targetChildId: effectiveTargetChildId,
+        targetFamilyId: effectiveTargetFamilyId,
+      );
+    }
+
+    final targetFamily = verifiedFamilies.firstWhere(
+      (f) => f.id == effectiveTargetFamilyId,
+    );
+    final targetRole = verifiedRolesByFamilyId[targetFamily.id.value]!;
+    final children = await _childProfileRepository.listChildren(
+      targetFamily.id,
+    );
+    final child = children
+        .where((c) => c.id == effectiveTargetChildId)
+        .firstOrNull;
+    if (child == null) {
+      return AuthorizedAdultChildUnavailable(
+        verifiedRole: targetRole,
+        verifiedFamily: targetFamily,
+        verifiedFamilies: verifiedFamilies,
+        verifiedRolesByFamilyId: verifiedRolesByFamilyId,
+        reason: TargetChildUnavailabilityReason.notActiveOrRlsHidden,
+        targetChildId: effectiveTargetChildId,
+        targetFamilyId: targetFamily.id,
+      );
+    }
+    if (child.isArchived || !child.isActive) {
+      return AuthorizedAdultChildUnavailable(
+        verifiedRole: targetRole,
+        verifiedFamily: targetFamily,
+        verifiedFamilies: verifiedFamilies,
+        verifiedRolesByFamilyId: verifiedRolesByFamilyId,
+        reason: TargetChildUnavailabilityReason.confirmedArchived,
+        targetChildId: effectiveTargetChildId,
+        targetFamilyId: targetFamily.id,
+      );
+    }
+
+    return AuthorizedActiveAdult(
+      verifiedRole: targetRole,
+      verifiedFamily: targetFamily,
+      verifiedFamilies: verifiedFamilies,
+      verifiedRolesByFamilyId: verifiedRolesByFamilyId,
+      verifiedChild: child,
+    );
+  }
 }

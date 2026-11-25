@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:drift_flutter/drift_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:learnward_application/learnward_application.dart';
@@ -11,8 +9,10 @@ import '../../features/assessments/presentation/evidence_picker_service.dart';
 import '../../features/assessments/services/local_evidence_file_store.dart';
 import '../../features/shared_device/domain/parent_gate_service.dart';
 import 'app_config.dart';
+import 'cold_start_containment_bootstrap.dart';
 import 'in_memory_repositories.dart';
 import 'supabase_auth_session_adapter.dart';
+import 'supabase_containment_authorization_verifier.dart';
 import 'supabase_recovery_authorization_adapter.dart';
 
 /// Build-time application configuration.
@@ -308,6 +308,30 @@ final recoveryAuthorizationPortProvider = Provider<RecoveryAuthorizationPort>((
   throw MissingSupabaseConfigurationException(config.environment);
 });
 
+/// Containment authorization verifier provider separating identity hints from
+/// authoritative DB grants/memberships/child profiles (`WP2`).
+final containmentAuthorizationVerifierProvider =
+    Provider<ContainmentAuthorizationVerifier>((ref) {
+      final config = ref.watch(appConfigProvider);
+      final client = ref.watch(supabaseClientProvider);
+      if (client != null) {
+        return SupabaseContainmentAuthorizationVerifier(client);
+      }
+      if (config.canUseLocalDemoRepositories) {
+        return InMemoryContainmentAuthorizationVerifier(
+          familyRepository: ref.watch(familyRepositoryProvider),
+          childProfileRepository: ref.watch(childProfileRepositoryProvider),
+        );
+      }
+      throw MissingSupabaseConfigurationException(config.environment);
+    });
+
+/// Fail-closed cold-start containment state provider (`WP2`).
+final coldStartContainmentProvider =
+    NotifierProvider<ColdStartContainmentNotifier, ColdStartContainmentState>(
+      ColdStartContainmentNotifier.new,
+    );
+
 /// Shared recovery coordinator provider for Spin and Redeem operations.
 final recoveryCoordinatorProvider = Provider<RecoveryCoordinator>((ref) {
   final commandStore = ref.watch(pendingRewardCommandStoreProvider);
@@ -365,76 +389,63 @@ final activeFamilyProvider = NotifierProvider<ActiveFamilyNotifier, Family?>(
   ActiveFamilyNotifier.new,
 );
 
-/// Initial child mode session provider loaded synchronously from local storage during bootstrap.
-final initialChildModeSessionProvider = Provider<ChildProfile?>((ref) => null);
-
-/// Notifier managing the active child mode state with persistent storage.
+/// Notifier managing verified active child mode state and v2 persistence.
 ///
-/// Child Mode lock survives app kill / restart until Parent Gate is solved.
+/// Cold start NEVER blindly restores unverified persisted child sessions;
+/// [ColdStartContainmentNotifier] hydrates verified sessions asynchronously.
 class ActiveChildModeNotifier extends Notifier<ChildProfile?> {
   static const activeSessionKey = 'active_child_session';
 
   @override
-  ChildProfile? build() {
-    final initial = ref.watch(initialChildModeSessionProvider);
-    if (initial != null) {
-      return initial;
-    }
-    // Asynchronously verify local store in case session was restored after build
-    _restorePersistedSession();
-    return null;
-  }
+  ChildProfile? build() => null;
 
-  Future<void> _restorePersistedSession() async {
-    final store = ref.read(localMetadataStoreProvider);
-    final rawSession = await store.readMetadata(activeSessionKey);
-    if (rawSession != null && rawSession.isNotEmpty && state == null) {
-      try {
-        final map = jsonDecode(rawSession) as Map<String, dynamic>;
-        state = ChildProfile(
-          id: ChildId(map['id'] as String),
-          familyId: FamilyId(map['family_id'] as String),
-          displayName: map['display_name'] as String,
-          schoolGrade: map['school_grade'] as int?,
-          birthYear: map['birth_year'] as int?,
-          avatarKey:
-              map['avatar_key'] as String? ?? map['avatarKey'] as String?,
-          status: ChildProfileStatus.parse(map['status'] as String),
-          createdAt: DateTime.parse(map['created_at'] as String),
-        );
-      } catch (_) {}
-    }
-  }
-
-  Future<void> selectChild(ChildProfile child) async {
+  /// Populates in-memory Child Mode state only after verified cold-start checks.
+  void restoreVerifiedChild(ChildProfile? child) {
     state = child;
+  }
+
+  Future<void> selectChild(
+    ChildProfile child, {
+    String? actorUserId,
+    PersistedChildModeKind modeKind = PersistedChildModeKind.sharedDeviceAdult,
+  }) async {
+    var resolvedActorId = actorUserId?.trim();
+    if (resolvedActorId == null || resolvedActorId.isEmpty) {
+      final actor = await ref
+          .read(authSessionPortProvider)
+          .validateForMutation();
+      resolvedActorId = actor?.userId.trim();
+    }
+    if (resolvedActorId == null || resolvedActorId.isEmpty) {
+      throw StateError(
+        'Cannot enter Child Mode without a validated authenticated actor.',
+      );
+    }
+
+    final nowUtc = ref.read(appClockProvider)();
+    final envelope = PersistedChildModeSession(
+      modeKind: modeKind,
+      actorUserId: resolvedActorId,
+      familyId: child.familyId,
+      childId: child.id,
+      childProfileSnapshot: child,
+      persistedAtUtc: nowUtc,
+    );
     final store = ref.read(localMetadataStoreProvider);
-    final jsonStr = jsonEncode({
-      'id': child.id.value,
-      'family_id': child.familyId.value,
-      'display_name': child.displayName,
-      'school_grade': child.schoolGrade,
-      'birth_year': child.birthYear,
-      'avatar_key': child.avatarKey,
-      'avatarKey': child.avatarKey,
-      'status': child.status.name,
-      'created_at': child.createdAt.toIso8601String(),
-    });
     await store.writeMetadata(
       key: activeSessionKey,
-      value: jsonStr,
-      updatedAt: DateTime.now().toUtc(),
+      value: envelope.toJsonString(),
+      updatedAt: nowUtc,
     );
+    state = child;
   }
 
   Future<void> exitChildMode() async {
     state = null;
     final store = ref.read(localMetadataStoreProvider);
-    await store.writeMetadata(
-      key: activeSessionKey,
-      value: '',
-      updatedAt: DateTime.now().toUtc(),
-    );
+    await store.applyMetadataBatch([
+      const MetadataMutation.delete(key: activeSessionKey),
+    ]);
   }
 }
 

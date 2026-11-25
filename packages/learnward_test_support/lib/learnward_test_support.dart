@@ -8,6 +8,7 @@ export 'src/fake_assessment_evidence_storage.dart';
 export 'src/fake_assessment_repository.dart';
 export 'src/fake_auth_session_port.dart';
 export 'src/fake_child_profile_repository.dart';
+export 'src/fake_containment_authorization_verifier.dart';
 export 'src/fake_family_repository.dart';
 export 'src/fake_learning_repository.dart';
 export 'src/fake_recovery_authorization_port.dart';
