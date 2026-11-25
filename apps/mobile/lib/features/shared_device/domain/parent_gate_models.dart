@@ -639,7 +639,11 @@ enum ParentGateCredentialStatus { missing, validV2, legacyV1, corrupt }
 
 /// Outcome of a verification attempt returned by [ParentGateService].
 enum PinVerificationOutcome {
+  /// Cryptographic PIN matched AND positive adult/actor/family/fence authorization succeeded.
   verified,
+
+  /// Cryptographic PIN matched, but adult/actor/family/session fence authorization was absent (`R39-05`).
+  pinMatchedAuthorizationRequired,
   incorrectPin,
   lockedOut,
   credentialMissing,
@@ -671,7 +675,18 @@ final class PinVerificationResult {
   final bool upgradedFromV1;
   final String? message;
 
+  /// True ONLY when cryptographic match AND full adult/session fence authorization succeeded.
   bool get isVerified => outcome == PinVerificationOutcome.verified;
+
+  /// Explicit alias separating Parent Mode exit authorization from pure PIN matching (`R39-05`).
+  bool get isAuthorizedToExitChildMode =>
+      outcome == PinVerificationOutcome.verified;
+
+  /// Whether the PIN digest matched cryptographically (even if Parent Mode exit authorization was denied).
+  bool get isPinCryptographicallyMatched =>
+      outcome == PinVerificationOutcome.verified ||
+      outcome == PinVerificationOutcome.pinMatchedAuthorizationRequired;
+
   bool get isLockedOut => outcome == PinVerificationOutcome.lockedOut;
 }
 
@@ -680,6 +695,7 @@ final class StagedPinVerificationAttempt {
   const StagedPinVerificationAttempt({
     required this.attemptId,
     required this.pinMatched,
+    required this.hasAuthorizedExitContext,
     required this.credentialStatus,
     required this.reservedCredentialRevision,
     required this.reservedLockoutRevision,
@@ -692,6 +708,7 @@ final class StagedPinVerificationAttempt {
 
   final String attemptId;
   final bool pinMatched;
+  final bool hasAuthorizedExitContext;
   final ParentGateCredentialStatus credentialStatus;
   final int reservedCredentialRevision;
   final int reservedLockoutRevision;

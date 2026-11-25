@@ -98,24 +98,34 @@ class ParentGateService {
     return snapshot.v2?.ownerFamilyId;
   }
 
-  /// Configures an initial 4-digit Parent PIN when no credential exists (`R39-03`).
+  /// Configures an initial 4-digit Parent PIN when no credential exists (`D1.5`, `R39-03`, `R39-04`).
   ///
-  /// Strictly restricted to initial setup (`ParentGateCredentialStatus.missing`).
-  /// Throws:
-  /// - [ParentGateOwnershipConflictException] if an existing v2 credential belongs
-  ///   to another household,
-  /// - [ParentGatePinAlreadyConfiguredException] if an active v2 or legacy v1
-  ///   credential already exists (use [changePin] or an authorized recovery API),
-  /// - [ParentGatePinCorruptException] if persisted credential metadata is corrupted.
+  /// Strictly restricted to initial setup (`ParentGateCredentialStatus.missing`)
+  /// with non-empty [ownerFamilyId], non-empty [configuredByActorUserId], a
+  /// matching [ParentGateOperationFence], and positive active adult verification
+  /// for [ownerFamilyId]. Never writes an unowned `parent_gate_credential_v2`.
   Future<ParentGateCredentialV2> setPin(
     String newPin, {
     String? ownerFamilyId,
     String? configuredByActorUserId,
+    bool hasPositiveServerAdultVerification = false,
+    List<String> verifiedActiveAdultFamilyIds = const [],
     ParentGateOperationFence? fence,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
-  }) {
+  }) async {
+    if (!_pinRegex.hasMatch(newPin)) {
+      throw ArgumentError('Parent PIN must be exactly 4 digits');
+    }
+    _requireAuthorizedAdultFence(
+      familyId: ownerFamilyId,
+      actorUserId: configuredByActorUserId,
+      hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
+      verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
+      fence: fence,
+      operationName: 'Initial Parent PIN setup',
+    );
     return _commitReplacementCredential(
       newPin,
       ownerFamilyId: ownerFamilyId,
@@ -140,23 +150,21 @@ class ParentGateService {
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
   }) {
-    final normalizedFamilyId = _normalizeOptionalId(targetFamilyId);
-    final normalizedActorId = _normalizeOptionalId(actorUserId);
-    if (normalizedFamilyId == null || normalizedActorId == null) {
-      throw ParentGateFencedOperationException(
-        'Target family and actor IDs are required for cross-family reassignment.',
-      );
+    if (!_pinRegex.hasMatch(newPin)) {
+      throw ArgumentError('Parent PIN must be exactly 4 digits');
     }
-    if (!hasPositiveServerAdultVerification ||
-        !verifiedActiveAdultFamilyIds.contains(normalizedFamilyId)) {
-      throw ParentGateFencedOperationException(
-        'Cross-family PIN reassignment requires positively verified active adult membership.',
-      );
-    }
+    _requireAuthorizedAdultFence(
+      familyId: targetFamilyId,
+      actorUserId: actorUserId,
+      hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
+      verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
+      fence: fence,
+      operationName: 'Cross-family PIN reassignment',
+    );
     return _commitReplacementCredential(
       newPin,
-      ownerFamilyId: normalizedFamilyId,
-      configuredByActorUserId: normalizedActorId,
+      ownerFamilyId: targetFamilyId,
+      configuredByActorUserId: actorUserId,
       mode: _CredentialWriteMode.authorizedCrossFamilyReassignment,
       fence: fence,
       preCommitGuard: preCommitGuard,
@@ -180,23 +188,21 @@ class ParentGateService {
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
   }) {
-    final normalizedFamilyId = _normalizeOptionalId(targetFamilyId);
-    final normalizedActorId = _normalizeOptionalId(actorUserId);
-    if (normalizedFamilyId == null || normalizedActorId == null) {
-      throw ParentGateFencedOperationException(
-        'Target family and actor IDs are required for corrupt PIN recovery.',
-      );
+    if (!_pinRegex.hasMatch(newPin)) {
+      throw ArgumentError('Parent PIN must be exactly 4 digits');
     }
-    if (!hasPositiveServerAdultVerification ||
-        !verifiedActiveAdultFamilyIds.contains(normalizedFamilyId)) {
-      throw ParentGateFencedOperationException(
-        'Corrupt PIN recovery requires positively verified active adult membership.',
-      );
-    }
+    _requireAuthorizedAdultFence(
+      familyId: targetFamilyId,
+      actorUserId: actorUserId,
+      hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
+      verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
+      fence: fence,
+      operationName: 'Corrupt PIN recovery',
+    );
     return _commitReplacementCredential(
       newPin,
-      ownerFamilyId: normalizedFamilyId,
-      configuredByActorUserId: normalizedActorId,
+      ownerFamilyId: targetFamilyId,
+      configuredByActorUserId: actorUserId,
       mode: _CredentialWriteMode.authorizedCorruptRecoveryOnly,
       fence: fence,
       preCommitGuard: preCommitGuard,
@@ -205,12 +211,14 @@ class ParentGateService {
     );
   }
 
-  /// Authenticated PIN change requiring valid [currentPin] verification first (`C0-18`).
+  /// Authenticated PIN change requiring valid [currentPin] verification first (`C0-18`, `R39-03`).
   Future<PinVerificationResult> changePin({
     required String currentPin,
     required String newPin,
     String? actorFamilyId,
     String? actorUserId,
+    bool hasPositiveServerAdultVerification = false,
+    List<String> verifiedActiveAdultFamilyIds = const [],
     ParentGateOperationFence? fence,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePhase1PreCommitGuard,
@@ -249,6 +257,8 @@ class ParentGateService {
       currentPin,
       actorFamilyId: normalizedFamilyId,
       actorUserId: normalizedActorId,
+      hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
+      verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
       fence: fence,
       preCommitGuard: preCommitGuard,
       onBeforePhase1PreCommitGuard: onBeforePhase1PreCommitGuard,
@@ -302,20 +312,25 @@ class ParentGateService {
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
   }) async {
-    final normalizedFamilyId = _normalizeOptionalId(targetFamilyId);
-    final normalizedActorId = _normalizeOptionalId(actorUserId);
-    if (normalizedFamilyId == null || normalizedActorId == null) {
+    if (!_pinRegex.hasMatch(newPin)) {
+      throw ArgumentError('Parent PIN must be exactly 4 digits');
+    }
+    if (!isPostSignOutFreshAdultAuth) {
       throw ParentGateFencedOperationException(
-        'Target family and actor IDs are required for PIN reset.',
+        'PIN reset requires fresh post-sign-out adult reauthentication.',
       );
     }
-    if (!isPostSignOutFreshAdultAuth ||
-        !hasPositiveServerAdultVerification ||
-        !verifiedActiveAdultFamilyIds.contains(normalizedFamilyId)) {
-      throw ParentGateFencedOperationException(
-        'PIN reset requires fresh post-sign-out verified active adult membership.',
-      );
-    }
+    _requireAuthorizedAdultFence(
+      familyId: targetFamilyId,
+      actorUserId: actorUserId,
+      hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
+      verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
+      fence: fence,
+      operationName: 'PIN reset',
+    );
+
+    final normalizedFamilyId = _normalizeOptionalId(targetFamilyId)!;
+    final normalizedActorId = _normalizeOptionalId(actorUserId)!;
 
     final snap = await _readCredentialSnapshot();
     if (snap.status == ParentGateCredentialStatus.validV2 &&
@@ -522,18 +537,25 @@ class ParentGateService {
     );
   }
 
-  /// Backward-compatible boolean PIN check using full three-phase hardened verification.
+  /// Checks whether cryptographic PIN verification AND full adult/actor/family/fence
+  /// Parent Mode authorization succeed (`R39-05`).
   Future<bool> verifyPin(
     String enteredPin, {
     String? actorFamilyId,
     String? actorUserId,
+    bool hasPositiveServerAdultVerification = false,
+    List<String> verifiedActiveAdultFamilyIds = const [],
+    ParentGateOperationFence? fence,
   }) async {
     final result = await verifyPinDetailed(
       enteredPin,
       actorFamilyId: actorFamilyId,
       actorUserId: actorUserId,
+      hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
+      verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
+      fence: fence,
     );
-    return result.isVerified;
+    return result.isAuthorizedToExitChildMode;
   }
 
   /// Executes all three verification phases with atomic reservation, KDF, and CAS finalize.
@@ -861,13 +883,14 @@ class ParentGateService {
       );
       final canUpgradeLegacyV1 =
           pinMatched &&
-          effectiveFamilyId != null &&
-          effectiveActorId != null &&
-          fence != null &&
-          fence.actorUserId.trim() == effectiveActorId &&
-          fence.verifiedFamilyId?.trim() == effectiveFamilyId &&
-          hasPositiveServerAdultVerification &&
-          verifiedActiveAdultFamilyIds.contains(effectiveFamilyId);
+          _hasAuthorizedAdultFence(
+            familyId: effectiveFamilyId,
+            actorUserId: effectiveActorId,
+            hasPositiveServerAdultVerification:
+                hasPositiveServerAdultVerification,
+            verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
+            fence: fence,
+          );
       if (canUpgradeLegacyV1) {
         final newSaltBytes = ParentGateCrypto.generateRandomBytes();
         final newDerived = await ParentGateCrypto.pbkdf2HmacSha256(
@@ -892,9 +915,18 @@ class ParentGateService {
       }
     }
 
+    final hasAuthorizedExitContext = _hasAuthorizedAdultFence(
+      familyId: effectiveFamilyId,
+      actorUserId: effectiveActorId,
+      hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
+      verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
+      fence: fence,
+    );
+
     final stagedAttempt = StagedPinVerificationAttempt(
       attemptId: attemptId,
       pinMatched: pinMatched,
+      hasAuthorizedExitContext: hasAuthorizedExitContext,
       credentialStatus: credSnapshot.status,
       reservedCredentialRevision: credSnapshot.v2?.credentialRevision ?? 1,
       reservedLockoutRevision: committedLockout.revision,
@@ -1004,10 +1036,39 @@ class ParentGateService {
       final expiredOrSupersededSuccess =
           attempt.pinMatched &&
           (!hasValidSelfReservation || supersededByOtherLockout);
+      final unauthorizedMatch =
+          attempt.pinMatched && !attempt.hasAuthorizedExitContext;
 
-      if (!attempt.pinMatched || expiredOrSupersededSuccess) {
+      if (!attempt.pinMatched ||
+          expiredOrSupersededSuccess ||
+          unauthorizedMatch) {
+        var nextFailedAttempts = currentLockout.failedAttempts;
+        var nextLockoutUntilUtc = currentLockout.lockoutUntilUtc;
+        var nextLockoutDurationSeconds = currentLockout.lockoutDurationSeconds;
+        var nextLockoutOwnerAttemptId = currentLockout.lockoutOwnerAttemptId;
+
+        // If PIN matched cryptographically without adult/fence exit authority,
+        // revert only this attempt's speculative Phase 1 increment so wrong-PIN
+        // accounting stays exact without resetting prior failures or authorizing unlock.
+        if (unauthorizedMatch &&
+            hasValidSelfReservation &&
+            !supersededByOtherLockout &&
+            nextFailedAttempts > 0) {
+          nextFailedAttempts -= 1;
+          if (currentLockout.lockoutOwnerAttemptId == attempt.attemptId) {
+            nextLockoutUntilUtc = null;
+            nextLockoutDurationSeconds = 0;
+            nextLockoutOwnerAttemptId = null;
+            _observedLockout = null;
+          }
+        }
+
         final nextLockout = currentLockout.copyWith(
           revision: currentLockout.revision + 1,
+          failedAttempts: nextFailedAttempts,
+          lockoutUntilUtc: () => nextLockoutUntilUtc,
+          lockoutDurationSeconds: nextLockoutDurationSeconds,
+          lockoutOwnerAttemptId: () => nextLockoutOwnerAttemptId,
           inFlightReservations: remainingReservations,
         );
         final committed = await _store.compareAndSwapMetadataBatch(
@@ -1044,7 +1105,9 @@ class ParentGateService {
           }
           continue;
         }
-        if (lockedByAnotherAttempt || activeRemaining > Duration.zero) {
+        if (lockedByAnotherAttempt ||
+            (activeRemaining > Duration.zero &&
+                (!unauthorizedMatch || supersededByOtherLockout))) {
           return PinVerificationResult(
             outcome: PinVerificationOutcome.lockedOut,
             attemptId: attempt.attemptId,
@@ -1059,6 +1122,15 @@ class ParentGateService {
             attemptId: attempt.attemptId,
             failedAttempts: nextLockout.failedAttempts,
             message: 'Verification reservation expired or was superseded before unlock.',
+          );
+        }
+        if (unauthorizedMatch) {
+          return PinVerificationResult(
+            outcome: PinVerificationOutcome.pinMatchedAuthorizationRequired,
+            attemptId: attempt.attemptId,
+            failedAttempts: nextLockout.failedAttempts,
+            upgradedFromV1: false,
+            message: 'Parent PIN matched, but verified adult session authorization is required to leave Child Mode.',
           );
         }
         return PinVerificationResult(
@@ -1624,6 +1696,60 @@ class ParentGateService {
     if (value == null) return null;
     final trimmed = value.trim();
     return trimmed.isEmpty ? null : trimmed;
+  }
+
+  bool _hasAuthorizedAdultFence({
+    required String? familyId,
+    required String? actorUserId,
+    required bool hasPositiveServerAdultVerification,
+    required List<String> verifiedActiveAdultFamilyIds,
+    required ParentGateOperationFence? fence,
+  }) {
+    final normalizedFamily = _normalizeOptionalId(familyId);
+    final normalizedActor = _normalizeOptionalId(actorUserId);
+    if (normalizedFamily == null || normalizedActor == null || fence == null) {
+      return false;
+    }
+    if (fence.actorUserId.trim() != normalizedActor ||
+        fence.verifiedFamilyId?.trim() != normalizedFamily) {
+      return false;
+    }
+    return hasPositiveServerAdultVerification &&
+        verifiedActiveAdultFamilyIds.contains(normalizedFamily);
+  }
+
+  void _requireAuthorizedAdultFence({
+    required String? familyId,
+    required String? actorUserId,
+    required bool hasPositiveServerAdultVerification,
+    required List<String> verifiedActiveAdultFamilyIds,
+    required ParentGateOperationFence? fence,
+    required String operationName,
+  }) {
+    final normalizedFamily = _normalizeOptionalId(familyId);
+    final normalizedActor = _normalizeOptionalId(actorUserId);
+    if (normalizedFamily == null || normalizedActor == null) {
+      throw ParentGateFencedOperationException(
+        '$operationName requires non-empty ownerFamilyId and actorUserId.',
+      );
+    }
+    if (fence == null) {
+      throw ParentGateFencedOperationException(
+        '$operationName requires an active ParentGateOperationFence.',
+      );
+    }
+    if (fence.actorUserId.trim() != normalizedActor ||
+        fence.verifiedFamilyId?.trim() != normalizedFamily) {
+      throw ParentGateFencedOperationException(
+        '$operationName fence actor/family does not match target ownership.',
+      );
+    }
+    if (!hasPositiveServerAdultVerification ||
+        !verifiedActiveAdultFamilyIds.contains(normalizedFamily)) {
+      throw ParentGateFencedOperationException(
+        '$operationName requires positively verified active adult membership for the target household.',
+      );
+    }
   }
 }
 

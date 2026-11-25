@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:learnward_design_system/learnward_design_system.dart';
 
-import '../../../app/bootstrap/app_providers.dart';
 import '../domain/parent_gate_service.dart';
 
 /// Parent Gate Challenge Dialog.
@@ -10,11 +9,11 @@ import '../domain/parent_gate_service.dart';
 /// Uses parent-defined 4-digit PIN verification to exit Child Mode.
 /// Plaintext PIN is never stored; verified against salted PBKDF2-HMAC-SHA-256.
 ///
-/// **WP3 Integration Note (`R39-02`):** In WP1, `onSubmitPin` defaults to `null`
-/// and delegates directly to `ParentGateService.verifyPinDetailed` without actor,
-/// family, fence, or positive server adult authorization, which verifies legacy v1
-/// credentials *without* triggering v1->v2 migration. WP3 will wire `onSubmitPin`
-/// cleanly through `SessionLifecycleController` (`_ContainmentArbiter`,
+/// **WP3 Integration Note (`R39-02`, `R39-05`):** In WP1, `onSubmitPin` defaults
+/// to `null` and fails closed with Parent Mode unlock disabled so a direct or
+/// unfenced PIN check cannot exit Child Mode without verified adult session
+/// authorization. WP3 will wire `onSubmitPin` cleanly through
+/// `SessionLifecycleController` (`_ContainmentArbiter`,
 /// `ParentGateOperationFence`, and positive server adult authorization).
 class ParentGateDialog extends ConsumerStatefulWidget {
   const ParentGateDialog({
@@ -25,7 +24,7 @@ class ParentGateDialog extends ConsumerStatefulWidget {
 
   final VoidCallback onGatePassed;
 
-  /// Optional Arbiter-fenced verification delegate used by WP3.
+  /// Arbiter-fenced verification delegate supplied by WP3 (`SessionLifecycleController`).
   final Future<PinVerificationResult> Function(String pin)? onSubmitPin;
 
   static Future<void> show(
@@ -59,6 +58,13 @@ class _ParentGateDialogState extends ConsumerState<ParentGateDialog> {
   }
 
   Future<void> _verifyPin() async {
+    if (widget.onSubmitPin == null) {
+      setState(() {
+        _errorMessage = 'Adult session authorization is unavailable. Exiting Child Mode is blocked.';
+      });
+      return;
+    }
+
     final enteredPin = _pinController.text.trim();
     if (enteredPin.length != 4) {
       setState(() {
@@ -73,15 +79,11 @@ class _ParentGateDialogState extends ConsumerState<ParentGateDialog> {
     });
 
     try {
-      final result = widget.onSubmitPin != null
-          ? await widget.onSubmitPin!(enteredPin)
-          : await ref
-                .read(parentGateServiceProvider)
-                .verifyPinDetailed(enteredPin);
+      final result = await widget.onSubmitPin!(enteredPin);
 
       if (!mounted) return;
 
-      if (result.isVerified) {
+      if (result.isAuthorizedToExitChildMode) {
         Navigator.of(context).pop();
         widget.onGatePassed();
       } else {
@@ -102,6 +104,7 @@ class _ParentGateDialogState extends ConsumerState<ParentGateDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isAuthorizedDelegateAvailable = widget.onSubmitPin != null;
 
     return AlertDialog(
       title: const Row(
@@ -117,6 +120,14 @@ class _ParentGateDialogState extends ConsumerState<ParentGateDialog> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text('Enter your 4-digit Parent PIN to exit Child Mode.'),
+            if (!isAuthorizedDelegateAvailable) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'Parent Mode unlock is disabled until verified adult session lifecycle authorization is active.',
+                key: const Key('parent_gate_restricted_notice'),
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ],
             const SizedBox(height: AppSpacing.md),
             TextField(
               key: const Key('parent_gate_pin_field'),
@@ -125,6 +136,7 @@ class _ParentGateDialogState extends ConsumerState<ParentGateDialog> {
               maxLength: 4,
               obscureText: true,
               autofocus: true,
+              enabled: isAuthorizedDelegateAvailable,
               decoration: const InputDecoration(
                 labelText: '4-Digit PIN',
                 hintText: '••••',
@@ -153,7 +165,9 @@ class _ParentGateDialogState extends ConsumerState<ParentGateDialog> {
         ),
         FilledButton(
           key: const Key('parent_gate_verify_button'),
-          onPressed: _isChecking ? null : _verifyPin,
+          onPressed: (!isAuthorizedDelegateAvailable || _isChecking)
+              ? null
+              : _verifyPin,
           child: _isChecking
               ? const SizedBox(
                   height: 16,

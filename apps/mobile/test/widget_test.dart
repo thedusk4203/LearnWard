@@ -76,8 +76,21 @@ void main() {
     );
     final fakeChildRepo = FakeChildProfileRepository(children: [child]);
     final fakeStore = InMemoryLocalMetadataStore();
-    // Pre-configure parent PIN so that child mode can be entered directly
-    await ParentGateService(fakeStore, runInIsolate: false).setPin('8392');
+    // Pre-configure parent PIN with bound household authorization
+    await ParentGateService(fakeStore, runInIsolate: false).setPin(
+      '8392',
+      ownerFamilyId: 'fam-alpha',
+      configuredByActorUserId: 'user-1',
+      hasPositiveServerAdultVerification: true,
+      verifiedActiveAdultFamilyIds: const ['fam-alpha'],
+      fence: const ParentGateOperationFence(
+        actorUserId: 'user-1',
+        sessionGeneration: 1,
+        containmentEpoch: 1,
+        expectedContainmentStatus: 'parent_mode',
+        verifiedFamilyId: 'fam-alpha',
+      ),
+    );
 
     await tester.pumpWidget(
       ProviderScope(
@@ -139,8 +152,21 @@ void main() {
     );
     final fakeChildRepo = FakeChildProfileRepository(children: [child]);
     final fakeStore = InMemoryLocalMetadataStore();
-    // Pre-configure parent PIN so that child mode can be entered directly
-    await ParentGateService(fakeStore, runInIsolate: false).setPin('8392');
+    // Pre-configure parent PIN with bound household authorization
+    await ParentGateService(fakeStore, runInIsolate: false).setPin(
+      '8392',
+      ownerFamilyId: 'fam-alpha',
+      configuredByActorUserId: 'user-1',
+      hasPositiveServerAdultVerification: true,
+      verifiedActiveAdultFamilyIds: const ['fam-alpha'],
+      fence: const ParentGateOperationFence(
+        actorUserId: 'user-1',
+        sessionGeneration: 1,
+        containmentEpoch: 1,
+        expectedContainmentStatus: 'parent_mode',
+        verifiedFamilyId: 'fam-alpha',
+      ),
+    );
 
     await tester.pumpWidget(
       ProviderScope(
@@ -173,23 +199,22 @@ void main() {
     await tester.tap(find.byKey(const Key('exit_child_mode_button')));
     await tester.pumpAndSettle();
 
-    // Verify Parent Gate challenge dialog appears
+    // Parent Gate fails closed until WP3 wires an authorized submit handler.
     expect(find.text('Parent Gate'), findsOneWidget);
     expect(
-      find.text('Enter your 4-digit Parent PIN to exit Child Mode.'),
+      find.byKey(const Key('parent_gate_restricted_notice')),
       findsOneWidget,
     );
-
-    // Enter configured PIN 8392
-    await tester.enterText(
-      find.byKey(const Key('parent_gate_pin_field')),
-      '8392',
+    final verifyButton = tester.widget<FilledButton>(
+      find.byKey(const Key('parent_gate_verify_button')),
     );
-    await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
+    expect(verifyButton.onPressed, isNull);
+
+    // Cancel keeps Child Mode active and never unlocks Parent Mode.
+    await tester.tap(find.byKey(const Key('parent_gate_cancel_button')));
     await tester.pumpAndSettle();
 
-    // Successfully returned to Parent Mode
-    expect(find.text('The Millers'), findsOneWidget);
-    expect(find.text('Parent Mode'), findsOneWidget);
+    expect(find.text('Hi, Maya!'), findsOneWidget);
+    expect(find.text('Parent Mode'), findsNothing);
   });
 }

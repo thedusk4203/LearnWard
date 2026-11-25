@@ -8,6 +8,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:learnward/app/app.dart';
 import 'package:learnward/app/bootstrap/app_providers.dart';
 import 'package:learnward/app/bootstrap/in_memory_repositories.dart';
 import 'package:learnward/features/shared_device/domain/parent_gate_service.dart';
@@ -18,6 +19,20 @@ import 'package:learnward_data/learnward_data.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:path/path.dart' as p;
+
+ParentGateOperationFence _testFence({
+  String actorUserId = 'actor-a',
+  String familyId = 'fam-a',
+  String expectedStatus = 'parent_mode',
+  String? expectedChildId,
+}) => ParentGateOperationFence(
+  actorUserId: actorUserId,
+  sessionGeneration: 1,
+  containmentEpoch: 1,
+  expectedContainmentStatus: expectedStatus,
+  verifiedFamilyId: familyId,
+  expectedChildId: expectedChildId,
+);
 
 void main() {
   setUpAll(() {
@@ -119,28 +134,60 @@ void main() {
         (tester) async {
           final store = InMemoryLocalMetadataStore();
           var unlocked = false;
+          const fam = 'fam-a';
+          const actor = 'actor-a';
+          final setupFence = _testFence(actorUserId: actor, familyId: fam);
+          final exitFence = _testFence(
+            actorUserId: actor,
+            familyId: fam,
+            expectedStatus: 'active_child',
+          );
 
           await tester.pumpWidget(
             ProviderScope(
               overrides: [localMetadataStoreProvider.overrideWithValue(store)],
-              child: MaterialApp(
-                home: Builder(
-                  builder: (context) => Column(
-                    children: [
-                      ElevatedButton(
-                        key: const Key('open_setup'),
-                        onPressed: () => ParentPinSetupDialog.show(context),
-                        child: const Text('Setup'),
-                      ),
-                      ElevatedButton(
-                        key: const Key('open_gate'),
-                        onPressed: () => ParentGateDialog.show(
-                          context,
-                          onGatePassed: () => unlocked = true,
+              child: Consumer(
+                builder: (context, ref, _) => MaterialApp(
+                  home: Builder(
+                    builder: (innerContext) => Column(
+                      children: [
+                        ElevatedButton(
+                          key: const Key('open_setup'),
+                          onPressed: () => ParentPinSetupDialog.show(
+                            innerContext,
+                            onSavePin: (pin) => ref
+                                .read(parentGateServiceProvider)
+                                .setPin(
+                                  pin,
+                                  ownerFamilyId: fam,
+                                  configuredByActorUserId: actor,
+                                  hasPositiveServerAdultVerification: true,
+                                  verifiedActiveAdultFamilyIds: const [fam],
+                                  fence: setupFence,
+                                ),
+                          ),
+                          child: const Text('Setup'),
                         ),
-                        child: const Text('Gate'),
-                      ),
-                    ],
+                        ElevatedButton(
+                          key: const Key('open_gate'),
+                          onPressed: () => ParentGateDialog.show(
+                            innerContext,
+                            onGatePassed: () => unlocked = true,
+                            onSubmitPin: (pin) => ref
+                                .read(parentGateServiceProvider)
+                                .verifyPinDetailed(
+                                  pin,
+                                  actorFamilyId: fam,
+                                  actorUserId: actor,
+                                  hasPositiveServerAdultVerification: true,
+                                  verifiedActiveAdultFamilyIds: const [fam],
+                                  fence: exitFence,
+                                ),
+                          ),
+                          child: const Text('Gate'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -230,7 +277,14 @@ void main() {
       );
 
       final service = newService();
-      await service.setPin('8392', ownerFamilyId: 'fam-a');
+      await service.setPin(
+        '8392',
+        ownerFamilyId: 'fam-a',
+        configuredByActorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
+      );
 
       final r1 = await service.verifyPinDetailed('0001');
       expect(r1.outcome, PinVerificationOutcome.incorrectPin);
@@ -366,7 +420,14 @@ void main() {
             configuredIterations: 1000,
             runInIsolate: false,
           );
-          await s1.setPin('8392', ownerFamilyId: 'fam-a');
+          await s1.setPin(
+            '8392',
+            ownerFamilyId: 'fam-a',
+            configuredByActorUserId: 'actor-a',
+            hasPositiveServerAdultVerification: true,
+            verifiedActiveAdultFamilyIds: const ['fam-a'],
+            fence: _testFence(),
+          );
 
           // Launch 4 concurrent wrong guesses held after Phase 2 KDF before Phase 3 finalize
           final gates = List.generate(4, (_) => Completer<void>());
@@ -433,7 +494,14 @@ void main() {
         configuredIterations: 1000,
         runInIsolate: false,
       );
-      await service.setPin('8392', ownerFamilyId: 'fam-a');
+      await service.setPin(
+        '8392',
+        ownerFamilyId: 'fam-a',
+        configuredByActorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
+      );
 
       // 3 prior wrong attempts
       await service.verifyPinDetailed('0001');
@@ -445,6 +513,11 @@ void main() {
       final releaseA = Completer<void>();
       final callAFuture = service.verifyPinDetailed(
         '8392',
+        actorFamilyId: 'fam-a',
+        actorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
         onAfterKdfBeforeFinalize: (_) async {
           aReservedAndHashed.complete();
           await releaseA.future;
@@ -473,9 +546,26 @@ void main() {
       clock.advance(const Duration(seconds: 31));
       mono.advance(const Duration(seconds: 31));
       // Unlock cleanly first so we test fresh zombie & abort
-      expect((await service.verifyPinDetailed('8392')).isVerified, isTrue);
+      expect(
+        (await service.verifyPinDetailed(
+          '8392',
+          actorFamilyId: 'fam-a',
+          actorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(),
+        )).isVerified,
+        isTrue,
+      );
 
-      final staged = await service.beginStagedVerification(enteredPin: '8392');
+      final staged = await service.beginStagedVerification(
+        enteredPin: '8392',
+        actorFamilyId: 'fam-a',
+        actorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
+      );
       expect(staged.isReserved, isTrue);
       final afterReserve = ParentGateLockoutV1.tryParse(
         await store.readMetadata(ParentGateService.lockoutV1Key),
@@ -519,7 +609,14 @@ void main() {
         configuredIterations: 1000,
         runInIsolate: false,
       );
-      await service.setPin('8392', ownerFamilyId: 'fam-a');
+      await service.setPin(
+        '8392',
+        ownerFamilyId: 'fam-a',
+        configuredByActorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
+      );
 
       for (var i = 0; i < 5; i++) {
         await service.verifyPinDetailed('000$i');
@@ -540,7 +637,17 @@ void main() {
 
       // Advance remaining 20s on monotonic clock even while UTC is backward -> expires!
       mono.advance(const Duration(seconds: 21));
-      expect((await service.verifyPinDetailed('8392')).isVerified, isTrue);
+      expect(
+        (await service.verifyPinDetailed(
+          '8392',
+          actorFamilyId: 'fam-a',
+          actorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(),
+        )).isVerified,
+        isTrue,
+      );
 
       // Trigger #5 30s lockout again for restart skew checks
       clock.setTime(DateTime.utc(2026, 11, 25, 13, 0));
@@ -614,11 +721,18 @@ void main() {
       expect(wrong1.outcome, PinVerificationOutcome.incorrectPin);
       expect(wrong1.failedAttempts, 1);
 
-      // Case 1: bare call without actor/family/fence verifies v1 WITHOUT upgrading to unowned v2
+      // Case 1: bare call without actor/family/fence evaluates KDF & preserves lockout,
+      // reports cryptographic match WITHOUT authorizing exit or upgrading to unowned v2
       final bareOk = await service.verifyPinDetailed('8392');
-      expect(bareOk.isVerified, isTrue);
+      expect(bareOk.isPinCryptographicallyMatched, isTrue);
+      expect(bareOk.isAuthorizedToExitChildMode, isFalse);
+      expect(bareOk.isVerified, isFalse);
+      expect(
+        bareOk.outcome,
+        PinVerificationOutcome.pinMatchedAuthorizationRequired,
+      );
       expect(bareOk.upgradedFromV1, isFalse);
-      expect(bareOk.failedAttempts, 0);
+      expect(bareOk.failedAttempts, 1);
       expect(
         await store.readMetadata(ParentGateService.credentialV2Key),
         isNull,
@@ -632,7 +746,7 @@ void main() {
         equals(v1Salt),
       );
 
-      // Case 2: actor + family + fence present, but negative adult verification -> NO v1->v2 upgrade
+      // Case 2: actor + family + fence present, but negative adult verification -> NO unlock, NO v1->v2 upgrade
       final fence = const ParentGateOperationFence(
         actorUserId: 'actor-a',
         sessionGeneration: 1,
@@ -649,14 +763,20 @@ void main() {
         hasPositiveServerAdultVerification: false,
         verifiedActiveAdultFamilyIds: const ['fam-a'],
       );
-      expect(unverifiedAdult.isVerified, isTrue);
+      expect(unverifiedAdult.isPinCryptographicallyMatched, isTrue);
+      expect(unverifiedAdult.isAuthorizedToExitChildMode, isFalse);
+      expect(unverifiedAdult.isVerified, isFalse);
+      expect(
+        unverifiedAdult.outcome,
+        PinVerificationOutcome.pinMatchedAuthorizationRequired,
+      );
       expect(unverifiedAdult.upgradedFromV1, isFalse);
       expect(
         await store.readMetadata(ParentGateService.credentialV2Key),
         isNull,
       );
 
-      // Case 3: unverified household -> NO v1->v2 upgrade
+      // Case 3: unverified household -> NO unlock, NO v1->v2 upgrade
       final wrongFamilyList = await service.verifyPinDetailed(
         '8392',
         actorFamilyId: 'fam-a',
@@ -664,6 +784,13 @@ void main() {
         fence: fence,
         hasPositiveServerAdultVerification: true,
         verifiedActiveAdultFamilyIds: const ['fam-other'],
+      );
+      expect(wrongFamilyList.isPinCryptographicallyMatched, isTrue);
+      expect(wrongFamilyList.isAuthorizedToExitChildMode, isFalse);
+      expect(wrongFamilyList.isVerified, isFalse);
+      expect(
+        wrongFamilyList.outcome,
+        PinVerificationOutcome.pinMatchedAuthorizationRequired,
       );
       expect(wrongFamilyList.upgradedFromV1, isFalse);
       expect(
@@ -677,10 +804,17 @@ void main() {
     });
 
     testWidgets(
-      'R39-02: ParentGateDialog pre-WP3 call path verifies legacy v1 without creating unowned v2 credential and preserves lockout',
+      'R39-02: ParentGateDialog without authorized delegate fails closed on legacy v1 and unfenced delegate preserves lockout without unlock or unowned v2',
       (tester) async {
         final store = InMemoryLocalMetadataStore();
         final clock = TestClock(DateTime.utc(2026, 11, 25, 12, 0));
+        final gateService = ParentGateService(
+          store,
+          clock: clock,
+          minIterations: 1000,
+          configuredIterations: 1000,
+          runInIsolate: false,
+        );
         const v1Salt = 'aabbccddeeff00112233445566778899';
         final v1Hash = ParentGateCrypto.sha256V1PinHex(
           pin: '8392',
@@ -699,20 +833,54 @@ void main() {
           ),
         ]);
 
+        // Part A: Without onSubmitPin delegate, dialog renders restricted notice and disables unlock
+        var passedRestricted = false;
+        await tester.pumpWidget(
+          ProviderScope(
+            key: UniqueKey(),
+            overrides: [
+              localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(gateService),
+            ],
+            child: MaterialApp(
+              home: Builder(
+                builder: (context) => ElevatedButton(
+                  key: const Key('open_restricted_v1_gate'),
+                  onPressed: () => ParentGateDialog.show(
+                    context,
+                    onGatePassed: () => passedRestricted = true,
+                  ),
+                  child: const Text('Gate'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.byKey(const Key('open_restricted_v1_gate')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('parent_gate_restricted_notice')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('parent_gate_verify_button')),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(passedRestricted, isFalse);
+
+        // Part B: With unfenced delegate, wrong PIN increments lockout cleanly,
+        // and valid v1 PIN refuses exit and refuses creating unowned v2
         var passed = false;
         await tester.pumpWidget(
           ProviderScope(
+            key: UniqueKey(),
             overrides: [
               localMetadataStoreProvider.overrideWithValue(store),
-              parentGateServiceProvider.overrideWithValue(
-                ParentGateService(
-                  store,
-                  clock: clock,
-                  minIterations: 1000,
-                  configuredIterations: 1000,
-                  runInIsolate: false,
-                ),
-              ),
+              parentGateServiceProvider.overrideWithValue(gateService),
             ],
             child: MaterialApp(
               home: Builder(
@@ -721,6 +889,7 @@ void main() {
                   onPressed: () => ParentGateDialog.show(
                     context,
                     onGatePassed: () => passed = true,
+                    onSubmitPin: (pin) => gateService.verifyPinDetailed(pin),
                   ),
                   child: const Text('Gate'),
                 ),
@@ -748,7 +917,7 @@ void main() {
           equals(1),
         );
 
-        // Valid v1 PIN passes gate WITHOUT upgrading to unowned v2
+        // Valid v1 PIN without adult proof does NOT pass gate and does NOT upgrade to unowned v2
         await tester.enterText(
           find.byKey(const Key('parent_gate_pin_field')),
           '8392',
@@ -756,7 +925,9 @@ void main() {
         await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
         await tester.pumpAndSettle();
 
-        expect(passed, isTrue);
+        expect(passed, isFalse);
+        expect(find.byType(ParentGateDialog), findsOneWidget);
+        expect(find.byKey(const Key('parent_gate_error')), findsOneWidget);
         expect(
           await store.readMetadata(ParentGateService.credentialV2Key),
           isNull,
@@ -801,6 +972,7 @@ void main() {
       final service = ParentGateService(
         db,
         clock: clock,
+        monotonicClock: TestMonotonicClock(),
         minIterations: 1000,
         configuredIterations: 1000,
         runInIsolate: false,
@@ -900,7 +1072,14 @@ void main() {
         PinVerificationOutcome.corruptCredential,
       );
       await expectLater(
-        () => service.setPin('4455', ownerFamilyId: 'fam-a'),
+        () => service.setPin(
+          '4455',
+          ownerFamilyId: 'fam-a',
+          configuredByActorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(),
+        ),
         throwsA(isA<ParentGatePinCorruptException>()),
       );
 
@@ -910,8 +1089,19 @@ void main() {
         actorUserId: 'actor-a',
         hasPositiveServerAdultVerification: true,
         verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
       );
-      expect(await service.verifyPin('4455', actorFamilyId: 'fam-a'), isTrue);
+      expect(
+        await service.verifyPin(
+          '4455',
+          actorFamilyId: 'fam-a',
+          actorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(),
+        ),
+        isTrue,
+      );
 
       // Once valid v2 is restored, recoverCorruptCredential MUST NOT act as a generic overwrite
       await expectLater(
@@ -921,6 +1111,7 @@ void main() {
           actorUserId: 'actor-a',
           hasPositiveServerAdultVerification: true,
           verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(),
         ),
         throwsA(isA<ParentGatePinAlreadyConfiguredException>()),
       );
@@ -931,6 +1122,7 @@ void main() {
           actorUserId: 'actor-b',
           hasPositiveServerAdultVerification: true,
           verifiedActiveAdultFamilyIds: const ['fam-b'],
+          fence: _testFence(actorUserId: 'actor-b', familyId: 'fam-b'),
         ),
         throwsA(isA<ParentGateOwnershipConflictException>()),
       );
@@ -949,6 +1141,9 @@ void main() {
         '8392',
         ownerFamilyId: 'fam-a',
         configuredByActorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
       );
 
       // Same-family unauthorized overwrite via setPin MUST FAIL
@@ -957,14 +1152,34 @@ void main() {
           '1122',
           ownerFamilyId: 'fam-a',
           configuredByActorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(),
         ),
         throwsA(isA<ParentGatePinAlreadyConfiguredException>()),
       );
-      expect(await service.verifyPin('8392', actorFamilyId: 'fam-a'), isTrue);
+      expect(
+        await service.verifyPin(
+          '8392',
+          actorFamilyId: 'fam-a',
+          actorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(),
+        ),
+        isTrue,
+      );
 
       // Wrong household silent overwrite & cross-family resetPinAfterReauth rejected
       await expectLater(
-        () => service.setPin('1122', ownerFamilyId: 'fam-b'),
+        () => service.setPin(
+          '1122',
+          ownerFamilyId: 'fam-b',
+          configuredByActorUserId: 'actor-b',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-b'],
+          fence: _testFence(actorUserId: 'actor-b', familyId: 'fam-b'),
+        ),
         throwsA(isA<ParentGateOwnershipConflictException>()),
       );
       await expectLater(
@@ -975,16 +1190,20 @@ void main() {
           isPostSignOutFreshAdultAuth: true,
           hasPositiveServerAdultVerification: true,
           verifiedActiveAdultFamilyIds: const ['fam-b'],
+          fence: _testFence(actorUserId: 'actor-b', familyId: 'fam-b'),
         ),
         throwsA(isA<ParentGateOwnershipConflictException>()),
       );
 
-      // Same household changePin requires current PIN first
+      // Same household changePin requires current PIN first AND valid fence/adult auth
       final badChange = await service.changePin(
         currentPin: '0000',
         newPin: '5566',
         actorFamilyId: 'fam-a',
         actorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
       );
       expect(badChange.outcome, PinVerificationOutcome.incorrectPin);
 
@@ -993,9 +1212,22 @@ void main() {
         newPin: '5566',
         actorFamilyId: 'fam-a',
         actorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
       );
       expect(goodChange.isVerified, isTrue);
-      expect(await service.verifyPin('5566', actorFamilyId: 'fam-a'), isTrue);
+      expect(
+        await service.verifyPin(
+          '5566',
+          actorFamilyId: 'fam-a',
+          actorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(),
+        ),
+        isTrue,
+      );
 
       // Explicit confirmed cross-family reassignment rebinds ownership to fam-b
       await service.reassignCrossFamilyPin(
@@ -1004,9 +1236,20 @@ void main() {
         actorUserId: 'actor-b',
         hasPositiveServerAdultVerification: true,
         verifiedActiveAdultFamilyIds: const ['fam-b'],
+        fence: _testFence(actorUserId: 'actor-b', familyId: 'fam-b'),
       );
       expect(await service.readOwnerFamilyId(), equals('fam-b'));
-      expect(await service.verifyPin('7788', actorFamilyId: 'fam-b'), isTrue);
+      expect(
+        await service.verifyPin(
+          '7788',
+          actorFamilyId: 'fam-b',
+          actorUserId: 'actor-b',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-b'],
+          fence: _testFence(actorUserId: 'actor-b', familyId: 'fam-b'),
+        ),
+        isTrue,
+      );
 
       // Legacy v1 store ALSO blocks setPin overwrite without authentication/recovery
       final v1Store = InMemoryLocalMetadataStore();
@@ -1032,7 +1275,14 @@ void main() {
         runInIsolate: false,
       );
       await expectLater(
-        () => v1Service.setPin('1234', ownerFamilyId: 'fam-a'),
+        () => v1Service.setPin(
+          '1234',
+          ownerFamilyId: 'fam-a',
+          configuredByActorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(),
+        ),
         throwsA(isA<ParentGatePinAlreadyConfiguredException>()),
       );
     });
@@ -1070,6 +1320,12 @@ void main() {
         '8392',
         ownerFamilyId: 'fam-a',
         configuredByActorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(
+          expectedStatus: 'active_child',
+          expectedChildId: 'child-a',
+        ),
       );
 
       final fence = ParentGateOperationFence(
@@ -1088,6 +1344,10 @@ void main() {
       var guardOk = true;
       final barrier1Res = await service.verifyPinDetailed(
         '8392',
+        actorFamilyId: 'fam-a',
+        actorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
         fence: fence,
         onBeforeFinalizePreCommitGuard: () async {
           guardOk = false;
@@ -1106,6 +1366,10 @@ void main() {
       // Barrier 2: concurrent containment fence bump lands during async commit window
       final barrier2Res = await service.verifyPinDetailed(
         '8392',
+        actorFamilyId: 'fam-a',
+        actorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
         fence: fence,
         onAfterFinalizeGuardBeforeCommit: () async {
           await store.writeMetadata(
@@ -1254,7 +1518,14 @@ void main() {
       expect(otherChildRow, isA<UnresolvableLegacyOwnershipResolution>());
 
       // BoundOwnerResolution takes authoritative precedence once v2 PIN is set
-      await service.setPin('8392', ownerFamilyId: 'fam-a');
+      await service.setPin(
+        '8392',
+        ownerFamilyId: 'fam-a',
+        configuredByActorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(),
+      );
       final bound = await service.resolveLegacyOwnership(
         provenanceSource: provenance,
         hasPositiveServerAdultVerification: true,
@@ -1485,8 +1756,496 @@ void main() {
         configuredIterations: 1000,
         runInIsolate: false,
       );
-      await gate.setPin('4242', ownerFamilyId: 'fam-m');
-      expect(await gate.verifyPin('4242', actorFamilyId: 'fam-m'), isTrue);
+      await gate.setPin(
+        '4242',
+        ownerFamilyId: 'fam-m',
+        configuredByActorUserId: 'actor-m',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-m'],
+        fence: _testFence(actorUserId: 'actor-m', familyId: 'fam-m'),
+      );
+      expect(
+        await gate.verifyPin(
+          '4242',
+          actorFamilyId: 'fam-m',
+          actorUserId: 'actor-m',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-m'],
+          fence: _testFence(actorUserId: 'actor-m', familyId: 'fam-m'),
+        ),
+        isTrue,
+      );
     });
+  });
+
+  group('R39-04 & R39-05 Fail-Closed Initial Setup and Adult-Authorized Child Exit Boundaries', () {
+    test('R39-04: initial setup rejects unowned, unfenced, unverified, and mismatched actor/family inputs while preserving all local data', () async {
+      final store = InMemoryLocalMetadataStore();
+      final clock = TestClock(DateTime.utc(2026, 11, 25, 14, 0));
+      await store.writeMetadata(
+        key: 'sentinel_key',
+        value: 'preserve-me',
+        updatedAt: clock.now(),
+      );
+      final service = ParentGateService(
+        store,
+        clock: clock,
+        minIterations: 1000,
+        configuredIterations: 1000,
+        runInIsolate: false,
+      );
+
+      // 1. Bare unowned setPin('8392') fails closed without writing credential v2
+      await expectLater(
+        () => service.setPin('8392'),
+        throwsA(isA<ParentGateFencedOperationException>()),
+      );
+      expect(
+        await store.readMetadata(ParentGateService.credentialV2Key),
+        isNull,
+      );
+
+      // 2. Missing actor/fence/adult proof fails closed
+      await expectLater(
+        () => service.setPin('8392', ownerFamilyId: 'fam-a'),
+        throwsA(isA<ParentGateFencedOperationException>()),
+      );
+      await expectLater(
+        () => service.setPin(
+          '8392',
+          ownerFamilyId: 'fam-a',
+          configuredByActorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+        ),
+        throwsA(isA<ParentGateFencedOperationException>()),
+      );
+
+      // 3. Mismatched actor/family/fence inputs fail closed
+      await expectLater(
+        () => service.setPin(
+          '8392',
+          ownerFamilyId: 'fam-a',
+          configuredByActorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-a'],
+          fence: _testFence(actorUserId: 'actor-other', familyId: 'fam-a'),
+        ),
+        throwsA(isA<ParentGateFencedOperationException>()),
+      );
+      await expectLater(
+        () => service.setPin(
+          '8392',
+          ownerFamilyId: 'fam-a',
+          configuredByActorUserId: 'actor-a',
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const ['fam-b'],
+          fence: _testFence(actorUserId: 'actor-a', familyId: 'fam-a'),
+        ),
+        throwsA(isA<ParentGateFencedOperationException>()),
+      );
+
+      expect(
+        await store.readMetadata(ParentGateService.credentialV2Key),
+        isNull,
+      );
+      expect(await store.readMetadata('sentinel_key'), equals('preserve-me'));
+
+      // 4. Valid bound authorization persists matching ownerFamilyId & configuredByActorUserId
+      final cred = await service.setPin(
+        '8392',
+        ownerFamilyId: 'fam-a',
+        configuredByActorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: _testFence(actorUserId: 'actor-a', familyId: 'fam-a'),
+      );
+      expect(cred.ownerFamilyId, equals('fam-a'));
+      expect(cred.configuredByActorUserId, equals('actor-a'));
+      expect(await store.readMetadata('sentinel_key'), equals('preserve-me'));
+    });
+
+    testWidgets(
+      'R39-04: ParentPinSetupDialog fallback without WP3 onSavePin delegate stays disabled and cannot write unowned credential',
+      (tester) async {
+        final store = InMemoryLocalMetadataStore();
+        final gateService = ParentGateService(
+          store,
+          minIterations: 1000,
+          configuredIterations: 1000,
+          runInIsolate: false,
+        );
+        var popResult = true;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(gateService),
+            ],
+            child: MaterialApp(
+              home: Builder(
+                builder: (context) => ElevatedButton(
+                  key: const Key('open_unfenced_setup'),
+                  onPressed: () async {
+                    popResult = await ParentPinSetupDialog.show(context);
+                  },
+                  child: const Text('Setup'),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        await tester.tap(find.byKey(const Key('open_unfenced_setup')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('parent_pin_setup_restricted_notice')),
+          findsOneWidget,
+        );
+        final submitButton = tester.widget<FilledButton>(
+          find.byKey(const Key('parent_pin_setup_submit')),
+        );
+        expect(submitButton.onPressed, isNull);
+
+        await tester.tap(find.byKey(const Key('parent_pin_setup_cancel')));
+        await tester.pumpAndSettle();
+        expect(popResult, isFalse);
+        expect(
+          await store.readMetadata(ParentGateService.credentialV2Key),
+          isNull,
+        );
+      },
+    );
+
+    test('R39-05: separates cryptographic PIN matching from exit authorization for both v1 and v2 credentials, preserves drafts/commands/photos & progressive lockout', () async {
+      final tempDir = Directory.systemTemp.createTempSync('lw_wp1_r39_05_');
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final dbFile = File(p.join(tempDir.path, 'r39_05.sqlite'));
+      final photoFile = File(p.join(tempDir.path, 'r39_05_evidence.jpg'));
+      final photoBytes = <int>[0xFF, 0xD8, 0xFF, 0xE0, 9, 8, 7, 6];
+      await photoFile.writeAsBytes(photoBytes, flush: true);
+      final expectedDigest = sha256.convert(photoBytes).toString();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+      final clock = TestClock(DateTime.utc(2026, 11, 25, 15, 0));
+
+      await db.saveLocalDraft(
+        LocalAssessmentDraft(
+          localDraftId: 'draft-r39-05',
+          familyId: 'fam-a',
+          childId: 'child-a',
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Preserved',
+          assessmentType: 'quiz',
+          difficulty: 'easy',
+          rawScore: 8,
+          maxScore: 10,
+          localCompressedPhotoPath: photoFile.path,
+          sha256Checksum: expectedDigest,
+          occurredAt: clock.now(),
+          updatedAt: clock.now(),
+          actorUserId: 'actor-a',
+          actorRole: 'owner',
+        ),
+      );
+      await db.registerFreshCommand(
+        command: PendingRewardCommand(
+          operation: RewardCommandOperation.redeemReward,
+          commandId: 'cmd-r39-05',
+          familyId: 'fam-a',
+          childId: 'child-a',
+          rewardId: 'rew-1',
+          createdAt: clock.now(),
+          actorUserId: 'actor-a',
+          actorRole: 'owner',
+        ),
+      );
+
+      const v1Salt = '00112233445566778899aabbccddeeff';
+      final v1Hash = ParentGateCrypto.sha256V1PinHex(pin: '8392', salt: v1Salt);
+      await db.applyMetadataBatch([
+        MetadataMutation.upsert(
+          key: ParentGateService.pinSaltKey,
+          value: v1Salt,
+          updatedAt: clock.now(),
+        ),
+        MetadataMutation.upsert(
+          key: ParentGateService.pinHashKey,
+          value: v1Hash,
+          updatedAt: clock.now(),
+        ),
+        MetadataMutation.upsert(
+          key: ParentGateService.activeChildSessionKey,
+          value: '{"id":"child-a","family_id":"fam-a"}',
+          updatedAt: clock.now(),
+        ),
+      ]);
+
+      final mono = TestMonotonicClock();
+      final service = ParentGateService(
+        db,
+        clock: clock,
+        monotonicClock: mono,
+        minIterations: 1000,
+        configuredIterations: 1000,
+        runInIsolate: false,
+      );
+      final exitFence = _testFence(
+        actorUserId: 'actor-a',
+        familyId: 'fam-a',
+        expectedStatus: 'active_child',
+        expectedChildId: 'child-a',
+      );
+
+      // 1. Correct v1 PIN + absent adult proof -> matches cryptographically, NO unlock, NO v1->v2 upgrade
+      final noAdult = await service.verifyPinDetailed(
+        '8392',
+        actorFamilyId: 'fam-a',
+        actorUserId: 'actor-a',
+        fence: exitFence,
+        hasPositiveServerAdultVerification: false,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+      );
+      expect(noAdult.isPinCryptographicallyMatched, isTrue);
+      expect(noAdult.isAuthorizedToExitChildMode, isFalse);
+      expect(noAdult.isVerified, isFalse);
+      expect(
+        noAdult.outcome,
+        PinVerificationOutcome.pinMatchedAuthorizationRequired,
+      );
+      expect(noAdult.upgradedFromV1, isFalse);
+      expect(
+        await db.readMetadata(ParentGateService.activeChildSessionKey),
+        isNotNull,
+      );
+
+      // 2. Correct v1 PIN + absent fence -> matches cryptographically, NO unlock, v1 hash/salt intact
+      final noFence = await service.verifyPinDetailed(
+        '8392',
+        actorFamilyId: 'fam-a',
+        actorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: null,
+      );
+      expect(noFence.isPinCryptographicallyMatched, isTrue);
+      expect(noFence.isAuthorizedToExitChildMode, isFalse);
+      expect(await db.readMetadata(ParentGateService.credentialV2Key), isNull);
+      expect(
+        await db.readMetadata(ParentGateService.pinHashKey),
+        equals(v1Hash),
+      );
+
+      // 3. Wrong guesses against v1 still trigger lockout at #5 (4 wrong + 1 = #5 -> 30s)
+      for (var i = 1; i <= 4; i++) {
+        final w = await service.verifyPinDetailed('000$i');
+        expect(w.outcome, PinVerificationOutcome.incorrectPin);
+        expect(w.failedAttempts, i);
+      }
+      final locked = await service.verifyPinDetailed('0005');
+      expect(locked.outcome, PinVerificationOutcome.lockedOut);
+      expect(locked.remainingLockout.inSeconds, 30);
+
+      // Advance past lockout -> authorized v1->v2 migration succeeds and deletes child lock
+      clock.advance(const Duration(seconds: 31));
+      mono.advance(const Duration(seconds: 31));
+      final authorized = await service.verifyPinDetailed(
+        '8392',
+        actorFamilyId: 'fam-a',
+        actorUserId: 'actor-a',
+        hasPositiveServerAdultVerification: true,
+        verifiedActiveAdultFamilyIds: const ['fam-a'],
+        fence: exitFence,
+        additionalMutationsBuilder: (_) => const [
+          MetadataMutation.delete(key: ParentGateService.activeChildSessionKey),
+        ],
+      );
+      expect(authorized.isAuthorizedToExitChildMode, isTrue);
+      expect(authorized.upgradedFromV1, isTrue);
+      expect(
+        await db.readMetadata(ParentGateService.activeChildSessionKey),
+        isNull,
+      );
+
+      // 4. Valid v2 PIN ALSO refuses unfenced / unauthenticated exit (R39-05 #8)
+      final bareV2 = await service.verifyPinDetailed('8392');
+      expect(bareV2.isPinCryptographicallyMatched, isTrue);
+      expect(bareV2.isAuthorizedToExitChildMode, isFalse);
+      expect(
+        bareV2.outcome,
+        PinVerificationOutcome.pinMatchedAuthorizationRequired,
+      );
+
+      // 5. Drafts, reward commands, and evidence photo bytes remain 100% intact
+      final outbox = await db.listActorBoundRecords();
+      expect(outbox.where((r) => r.recordId == 'draft-r39-05'), hasLength(1));
+      expect(outbox.where((r) => r.recordId == 'cmd-r39-05'), hasLength(1));
+      expect(
+        sha256.convert(await photoFile.readAsBytes()).toString(),
+        equals(expectedDigest),
+      );
+    });
+
+    testWidgets(
+      'R39-05: ParentGateDialog without verified onSubmitPin OR returning unauthorized match never calls onGatePassed; ChildModeScreen never reaches /parent',
+      (tester) async {
+        final store = InMemoryLocalMetadataStore();
+        final clock = TestClock(DateTime.utc(2026, 11, 25, 16, 0));
+        const famId = 'fam-dialog';
+        const actorId = 'actor-dialog';
+        final child = ChildProfile(
+          id: ChildId('child-dialog'),
+          familyId: FamilyId(famId),
+          displayName: 'Maya',
+          schoolGrade: 6,
+          createdAt: DateTime.utc(2026, 10, 31),
+        );
+        final family = Family(
+          id: FamilyId(famId),
+          name: 'Dialog Family',
+          timezone: 'UTC',
+          locale: 'en_US',
+          createdByUserId: actorId,
+          createdAt: DateTime.utc(2026, 10, 31),
+        );
+        final gateService = ParentGateService(
+          store,
+          clock: clock,
+          minIterations: 1000,
+          configuredIterations: 1000,
+          runInIsolate: false,
+        );
+        await gateService.setPin(
+          '8392',
+          ownerFamilyId: famId,
+          configuredByActorUserId: actorId,
+          hasPositiveServerAdultVerification: true,
+          verifiedActiveAdultFamilyIds: const [famId],
+          fence: _testFence(actorUserId: actorId, familyId: famId),
+        );
+
+        // Part 1: Direct ParentGateDialog without onSubmitPin delegate disables unlock & blocks onGatePassed
+        var passedWithoutDelegate = false;
+        await tester.pumpWidget(
+          ProviderScope(
+            key: UniqueKey(),
+            overrides: [
+              localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(gateService),
+            ],
+            child: MaterialApp(
+              home: Builder(
+                builder: (context) => ElevatedButton(
+                  key: const Key('open_unwired_gate'),
+                  onPressed: () => ParentGateDialog.show(
+                    context,
+                    onGatePassed: () => passedWithoutDelegate = true,
+                  ),
+                  child: const Text('Gate'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.byKey(const Key('open_unwired_gate')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('parent_gate_restricted_notice')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('parent_gate_verify_button')),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(passedWithoutDelegate, isFalse);
+
+        // Part 2: ParentGateDialog with onSubmitPin calling unfenced verifyPinDetailed('8392') on valid v2 refuses onGatePassed
+        var passedWithUnfencedMatch = false;
+        await tester.pumpWidget(
+          ProviderScope(
+            key: UniqueKey(),
+            overrides: [
+              localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(gateService),
+            ],
+            child: MaterialApp(
+              home: Builder(
+                builder: (context) => ElevatedButton(
+                  key: const Key('open_unfenced_delegate_gate'),
+                  onPressed: () => ParentGateDialog.show(
+                    context,
+                    onGatePassed: () => passedWithUnfencedMatch = true,
+                    onSubmitPin: (pin) => gateService.verifyPinDetailed(pin),
+                  ),
+                  child: const Text('Gate'),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.byKey(const Key('open_unfenced_delegate_gate')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('parent_gate_pin_field')),
+          '8392',
+        );
+        await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
+        await tester.pumpAndSettle();
+        expect(passedWithUnfencedMatch, isFalse);
+        expect(find.byType(ParentGateDialog), findsOneWidget);
+        expect(find.byKey(const Key('parent_gate_error')), findsOneWidget);
+
+        // Part 3: Full ChildModeScreen flow stays on Child Mode and never navigates to /parent
+        await tester.pumpWidget(
+          ProviderScope(
+            key: UniqueKey(),
+            overrides: [
+              localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(gateService),
+              initialChildModeSessionProvider.overrideWithValue(child),
+              familyRepositoryProvider.overrideWithValue(
+                FakeFamilyRepository(
+                  currentUserId: actorId,
+                  families: [family],
+                  memberships: [
+                    FamilyMembership(
+                      familyId: family.id,
+                      authUserId: actorId,
+                      role: FamilyRole.owner,
+                      status: MembershipStatus.active,
+                      joinedAt: DateTime.utc(2026, 10, 31),
+                    ),
+                  ],
+                ),
+              ),
+              childProfileRepositoryProvider.overrideWithValue(
+                FakeChildProfileRepository(children: [child]),
+              ),
+            ],
+            child: const LearnWardApp(),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Hi, Maya!'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('exit_child_mode_button')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('parent_gate_restricted_notice')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const Key('parent_gate_cancel_button')));
+        await tester.pumpAndSettle();
+        expect(find.text('Hi, Maya!'), findsOneWidget);
+        expect(find.text('Parent Mode'), findsNothing);
+      },
+    );
   });
 }

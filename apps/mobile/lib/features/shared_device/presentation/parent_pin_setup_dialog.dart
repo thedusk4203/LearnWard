@@ -2,20 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:learnward_design_system/learnward_design_system.dart';
 
-import '../../../app/bootstrap/app_providers.dart';
-
 /// Modal dialog prompting the parent to configure a 4-digit Parent PIN
 /// before entering shared-device Child Mode.
 ///
-/// **WP3 Integration Note (`R39-02`, `R39-03`):** In WP1, `onSavePin` defaults
-/// to `null` and performs initial setup (`ParentGateService.setPin`) without
-/// active session/family binding. WP3 will wire `onSavePin` through
+/// **WP3 Integration Note (`R39-04`):** In WP1, `onSavePin` defaults
+/// to `null` and disables Parent PIN setup fail-closed so unowned credentials
+/// cannot be written from UI state. WP3 will wire `onSavePin` through
 /// `SessionLifecycleController` to supply verified `ownerFamilyId`,
-/// `configuredByActorUserId`, and `ParentGateOperationFence`.
+/// `configuredByActorUserId`, positive adult verification, and
+/// `ParentGateOperationFence`.
 class ParentPinSetupDialog extends ConsumerStatefulWidget {
   const ParentPinSetupDialog({this.onSavePin, super.key});
 
-  /// Optional Arbiter-fenced save delegate used by WP3.
+  /// Arbiter-fenced save delegate supplied by WP3 (`SessionLifecycleController`).
   final Future<void> Function(String pin)? onSavePin;
 
   /// Displays the PIN setup dialog.
@@ -52,6 +51,13 @@ class _ParentPinSetupDialogState extends ConsumerState<ParentPinSetupDialog> {
   }
 
   Future<void> _submitPin() async {
+    if (widget.onSavePin == null) {
+      setState(() {
+        _errorMessage = 'Adult session authorization is required before saving a Parent PIN.';
+      });
+      return;
+    }
+
     final pin = _pinController.text.trim();
     final confirm = _confirmController.text.trim();
 
@@ -76,12 +82,7 @@ class _ParentPinSetupDialogState extends ConsumerState<ParentPinSetupDialog> {
     });
 
     try {
-      if (widget.onSavePin != null) {
-        await widget.onSavePin!(pin);
-      } else {
-        final gateService = ref.read(parentGateServiceProvider);
-        await gateService.setPin(pin);
-      }
+      await widget.onSavePin!(pin);
 
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -101,6 +102,7 @@ class _ParentPinSetupDialogState extends ConsumerState<ParentPinSetupDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isAuthorizedDelegateAvailable = widget.onSavePin != null;
 
     return AlertDialog(
       title: const Row(
@@ -119,6 +121,14 @@ class _ParentPinSetupDialogState extends ConsumerState<ParentPinSetupDialog> {
               'Before entering Child Mode, configure a 4-digit PIN to protect '
               'your family settings and prevent unauthorized exit from Child Mode.',
             ),
+            if (!isAuthorizedDelegateAvailable) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'Parent PIN setup is unavailable until verified adult session lifecycle authorization is active.',
+                key: const Key('parent_pin_setup_restricted_notice'),
+                style: TextStyle(color: theme.colorScheme.error),
+              ),
+            ],
             const SizedBox(height: AppSpacing.md),
             TextField(
               key: const Key('parent_pin_setup_field'),
@@ -127,6 +137,7 @@ class _ParentPinSetupDialogState extends ConsumerState<ParentPinSetupDialog> {
               maxLength: 4,
               obscureText: true,
               autofocus: true,
+              enabled: isAuthorizedDelegateAvailable,
               decoration: const InputDecoration(
                 labelText: 'New 4-Digit PIN',
                 hintText: '••••',
@@ -141,6 +152,7 @@ class _ParentPinSetupDialogState extends ConsumerState<ParentPinSetupDialog> {
               keyboardType: TextInputType.number,
               maxLength: 4,
               obscureText: true,
+              enabled: isAuthorizedDelegateAvailable,
               decoration: const InputDecoration(
                 labelText: 'Confirm PIN',
                 hintText: '••••',
@@ -169,7 +181,9 @@ class _ParentPinSetupDialogState extends ConsumerState<ParentPinSetupDialog> {
         ),
         FilledButton(
           key: const Key('parent_pin_setup_submit'),
-          onPressed: _isSaving ? null : _submitPin,
+          onPressed: (!isAuthorizedDelegateAvailable || _isSaving)
+              ? null
+              : _submitPin,
           child: _isSaving
               ? const SizedBox(
                   height: 16,
