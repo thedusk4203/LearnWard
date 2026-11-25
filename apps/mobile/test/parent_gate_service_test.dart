@@ -21,20 +21,23 @@ void main() {
       expect(await service.verifyPin('0000'), isFalse);
     });
 
-    test('sets custom 4-digit PIN, hashes it with salt, never persists plaintext, and verifies', () async {
+    test('sets custom 4-digit PIN, hashes it with PBKDF2 + salt, never persists plaintext, and verifies', () async {
       await service.setPin('8392');
 
       expect(await service.hasConfiguredPin(), isTrue);
 
-      // Verify that plaintext PIN 8392 is NEVER stored in metadata
-      final storedHash = await store.readMetadata(ParentGateService.pinHashKey);
-      final storedSalt = await store.readMetadata(ParentGateService.pinSaltKey);
+      // Verify that plaintext PIN 8392 is NEVER stored in metadata and v2 payload is used
+      final rawV2 = await store.readMetadata(ParentGateService.credentialV2Key);
+      final parsedV2 = ParentGateCredentialV2.tryParse(rawV2);
+      expect(parsedV2, isNotNull);
+      expect(parsedV2!.kdf, equals('pbkdf2-hmac-sha256'));
+      expect(parsedV2.iterations, greaterThanOrEqualTo(100000));
+      expect(parsedV2.hashHex.length, equals(64));
+      expect(parsedV2.saltHex.length, equals(32));
+      expect(rawV2, isNot(contains('8392')));
 
-      expect(storedHash, isNotNull);
-      expect(storedSalt, isNotNull);
-      expect(storedHash, isNot(contains('8392')));
-      expect(storedSalt, isNot(contains('8392')));
-      expect(storedHash!.length, equals(64)); // SHA-256 hex length
+      expect(await store.readMetadata(ParentGateService.pinHashKey), isNull);
+      expect(await store.readMetadata(ParentGateService.pinSaltKey), isNull);
 
       // Exit with 1234 must FAIL
       expect(await service.verifyPin('1234'), isFalse);

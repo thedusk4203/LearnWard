@@ -27,6 +27,9 @@ void main() {
       ProviderScope(
         overrides: [
           localMetadataStoreProvider.overrideWithValue(fakeStore),
+          parentGateServiceProvider.overrideWithValue(
+            ParentGateService(fakeStore, runInIsolate: false),
+          ),
           familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
           childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
         ],
@@ -74,12 +77,15 @@ void main() {
     final fakeChildRepo = FakeChildProfileRepository(children: [child]);
     final fakeStore = InMemoryLocalMetadataStore();
     // Pre-configure parent PIN so that child mode can be entered directly
-    await ParentGateService(fakeStore).setPin('8392');
+    await ParentGateService(fakeStore, runInIsolate: false).setPin('8392');
 
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           localMetadataStoreProvider.overrideWithValue(fakeStore),
+          parentGateServiceProvider.overrideWithValue(
+            ParentGateService(fakeStore, runInIsolate: false),
+          ),
           familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
           childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
           activeFamilyProvider.overrideWith(
@@ -134,12 +140,15 @@ void main() {
     final fakeChildRepo = FakeChildProfileRepository(children: [child]);
     final fakeStore = InMemoryLocalMetadataStore();
     // Pre-configure parent PIN so that child mode can be entered directly
-    await ParentGateService(fakeStore).setPin('8392');
+    await ParentGateService(fakeStore, runInIsolate: false).setPin('8392');
 
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           localMetadataStoreProvider.overrideWithValue(fakeStore),
+          parentGateServiceProvider.overrideWithValue(
+            ParentGateService(fakeStore, runInIsolate: false),
+          ),
           familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
           childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
           activeFamilyProvider.overrideWith(

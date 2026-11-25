@@ -7,16 +7,22 @@ import '../../../app/bootstrap/app_providers.dart';
 /// Modal dialog prompting the parent to configure a 4-digit Parent PIN
 /// before entering shared-device Child Mode.
 class ParentPinSetupDialog extends ConsumerStatefulWidget {
-  const ParentPinSetupDialog({super.key});
+  const ParentPinSetupDialog({this.onSavePin, super.key});
+
+  /// Optional Arbiter-fenced save delegate used by WP3.
+  final Future<void> Function(String pin)? onSavePin;
 
   /// Displays the PIN setup dialog.
   ///
   /// Returns `true` if a PIN was successfully saved, or `false` if cancelled.
-  static Future<bool> show(BuildContext context) async {
+  static Future<bool> show(
+    BuildContext context, {
+    Future<void> Function(String pin)? onSavePin,
+  }) async {
     final result = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const ParentPinSetupDialog(),
+      builder: (context) => ParentPinSetupDialog(onSavePin: onSavePin),
     );
     return result ?? false;
   }
@@ -64,8 +70,12 @@ class _ParentPinSetupDialogState extends ConsumerState<ParentPinSetupDialog> {
     });
 
     try {
-      final gateService = ref.read(parentGateServiceProvider);
-      await gateService.setPin(pin);
+      if (widget.onSavePin != null) {
+        await widget.onSavePin!(pin);
+      } else {
+        final gateService = ref.read(parentGateServiceProvider);
+        await gateService.setPin(pin);
+      }
 
       if (!mounted) return;
       Navigator.of(context).pop(true);

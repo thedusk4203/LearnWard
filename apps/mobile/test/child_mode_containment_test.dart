@@ -67,6 +67,9 @@ void main() {
           ProviderScope(
             overrides: [
               localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(
+                ParentGateService(store, runInIsolate: false),
+              ),
               familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
               childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
               activeFamilyProvider.overrideWith(
@@ -106,6 +109,9 @@ void main() {
           ProviderScope(
             overrides: [
               localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(
+                ParentGateService(store, runInIsolate: false),
+              ),
               familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
               childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
               activeFamilyProvider.overrideWith(
@@ -153,17 +159,16 @@ void main() {
         // Successfully entered Child Mode
         expect(find.text('Hi, Leo!'), findsOneWidget);
 
-        // Verify plaintext 8392 is NOT present in storage
-        final storedHash = await store.readMetadata(
-          ParentGateService.pinHashKey,
+        // Verify plaintext 8392 is NOT present in storage and v2 PBKDF2 credential is stored
+        final rawV2 = await store.readMetadata(
+          ParentGateService.credentialV2Key,
         );
-        final storedSalt = await store.readMetadata(
-          ParentGateService.pinSaltKey,
-        );
-        expect(storedHash, isNotNull);
-        expect(storedSalt, isNotNull);
-        expect(storedHash, isNot(contains('8392')));
-        expect(storedSalt, isNot(contains('8392')));
+        final parsedV2 = ParentGateCredentialV2.tryParse(rawV2);
+        expect(parsedV2, isNotNull);
+        expect(parsedV2!.iterations, greaterThanOrEqualTo(100000));
+        expect(rawV2, isNot(contains('8392')));
+        expect(await store.readMetadata(ParentGateService.pinHashKey), isNull);
+        expect(await store.readMetadata(ParentGateService.pinSaltKey), isNull);
 
         // Verify active child session is persisted
         final storedSession = await store.readMetadata(
@@ -178,12 +183,15 @@ void main() {
       'exit Child Mode with 1234 FAILS; exit with configured PIN 8392 PASSES',
       (tester) async {
         // Pre-configure PIN 8392
-        await ParentGateService(store).setPin('8392');
+        await ParentGateService(store, runInIsolate: false).setPin('8392');
 
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
               localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(
+                ParentGateService(store, runInIsolate: false),
+              ),
               initialChildModeSessionProvider.overrideWithValue(testChild),
               familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
               childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),
@@ -232,7 +240,7 @@ void main() {
       'restart while Child Mode is active remains locked and requires same configured PIN 8392',
       (tester) async {
         // Pre-configure PIN 8392 and persist active child session
-        await ParentGateService(store).setPin('8392');
+        await ParentGateService(store, runInIsolate: false).setPin('8392');
         await store.writeMetadata(
           key: ActiveChildModeNotifier.activeSessionKey,
           value: '{"id":"child-smith-1","family_id":"fam-containment","display_name":"Leo","school_grade":5,"status":"active","created_at":"2026-10-31T00:00:00.000Z"}',
@@ -244,6 +252,9 @@ void main() {
           ProviderScope(
             overrides: [
               localMetadataStoreProvider.overrideWithValue(store),
+              parentGateServiceProvider.overrideWithValue(
+                ParentGateService(store, runInIsolate: false),
+              ),
               initialChildModeSessionProvider.overrideWithValue(testChild),
               familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
               childProfileRepositoryProvider.overrideWithValue(fakeChildRepo),

@@ -14,6 +14,7 @@ export 'src/ports/draft_store_rules.dart';
 export 'src/ports/family_repository.dart';
 export 'src/ports/growth_repository.dart';
 export 'src/ports/learning_repository.dart';
+export 'src/ports/legacy_outbox_provenance_source.dart';
 export 'src/ports/local_draft_store.dart';
 export 'src/ports/local_metadata_store.dart';
 export 'src/ports/pending_reward_command_store.dart';

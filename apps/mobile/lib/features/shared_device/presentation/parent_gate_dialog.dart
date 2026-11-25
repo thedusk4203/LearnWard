@@ -3,24 +3,36 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:learnward_design_system/learnward_design_system.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
+import '../domain/parent_gate_service.dart';
 
 /// Parent Gate Challenge Dialog.
 ///
 /// Uses parent-defined 4-digit PIN verification to exit Child Mode.
-/// Plaintext PIN is never stored; verified against salted SHA-256 hash.
+/// Plaintext PIN is never stored; verified against salted PBKDF2-HMAC-SHA-256.
 class ParentGateDialog extends ConsumerStatefulWidget {
-  const ParentGateDialog({required this.onGatePassed, super.key});
+  const ParentGateDialog({
+    required this.onGatePassed,
+    this.onSubmitPin,
+    super.key,
+  });
 
   final VoidCallback onGatePassed;
+
+  /// Optional Arbiter-fenced verification delegate used by WP3.
+  final Future<PinVerificationResult> Function(String pin)? onSubmitPin;
 
   static Future<void> show(
     BuildContext context, {
     required VoidCallback onGatePassed,
+    Future<PinVerificationResult> Function(String pin)? onSubmitPin,
   }) {
     return showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => ParentGateDialog(onGatePassed: onGatePassed),
+      builder: (context) => ParentGateDialog(
+        onGatePassed: onGatePassed,
+        onSubmitPin: onSubmitPin,
+      ),
     );
   }
 
@@ -54,17 +66,20 @@ class _ParentGateDialogState extends ConsumerState<ParentGateDialog> {
     });
 
     try {
-      final service = ref.read(parentGateServiceProvider);
-      final isValid = await service.verifyPin(enteredPin);
+      final result = widget.onSubmitPin != null
+          ? await widget.onSubmitPin!(enteredPin)
+          : await ref
+                .read(parentGateServiceProvider)
+                .verifyPinDetailed(enteredPin);
 
       if (!mounted) return;
 
-      if (isValid) {
+      if (result.isVerified) {
         Navigator.of(context).pop();
         widget.onGatePassed();
       } else {
         setState(() {
-          _errorMessage = 'Incorrect PIN. Try again.';
+          _errorMessage = result.message ?? 'Incorrect PIN. Try again.';
           _pinController.clear();
         });
       }
