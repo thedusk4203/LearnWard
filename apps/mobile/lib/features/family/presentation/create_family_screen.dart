@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_design_system/learnward_design_system.dart';
+import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../app/routing/app_routes.dart';
@@ -25,7 +26,25 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
   final _formKey = GlobalKey<FormState>();
 
   bool _isLoading = false;
+  Family? _createdFamily;
   String? _errorMessage;
+  String? _verificationNotice;
+
+  @override
+  void initState() {
+    super.initState();
+    final pendingFamily = ref
+        .read(coldStartContainmentProvider.notifier)
+        .pendingCreatedFamily;
+    if (pendingFamily != null) {
+      _createdFamily = pendingFamily;
+      _nameController.text = pendingFamily.name;
+      _timezoneController.text = pendingFamily.timezone;
+      _localeController.text = pendingFamily.locale;
+      _verificationNotice =
+          'Family "${pendingFamily.name}" was already created. Tap Retry Verification to check active membership without recreating it.';
+    }
+  }
 
   @override
   void dispose() {
@@ -36,32 +55,78 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
   }
 
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (_isLoading) return;
+    if (_createdFamily == null && !_formKey.currentState!.validate()) return;
 
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      _verificationNotice = null;
     });
 
     try {
-      final repo = ref.read(familyRepositoryProvider);
-      final createFamily = CreateFamily(repo);
+      var family = _createdFamily;
+      if (family == null) {
+        try {
+          final repo = ref.read(familyRepositoryProvider);
+          final createFamily = CreateFamily(repo);
 
-      final family = await createFamily(
-        name: _nameController.text.trim(),
-        timezone: _timezoneController.text.trim(),
-        locale: _localeController.text.trim(),
-      );
+          family = await createFamily(
+            name: _nameController.text.trim(),
+            timezone: _timezoneController.text.trim(),
+            locale: _localeController.text.trim(),
+          );
+          if (mounted) {
+            setState(() {
+              _createdFamily = family;
+            });
+          } else {
+            _createdFamily = family;
+          }
+        } catch (e) {
+          if (mounted) {
+            setState(() {
+              _errorMessage = 'Failed to create family: ${e.toString()}';
+            });
+          }
+          return;
+        }
+      }
 
-      ref.read(activeFamilyProvider.notifier).selectFamily(family);
+      // Trigger fresh membership verification via ContainmentAuthorizationVerifier
+      // before allowing entry into ParentMode. Never assign activeFamilyProvider
+      // until positive active adult membership for the created family is confirmed.
+      bool verified = false;
+      try {
+        verified = await ref
+            .read(coldStartContainmentProvider.notifier)
+            .confirmCreatedFamily(family);
+      } catch (_) {
+        if (mounted) {
+          setState(() {
+            _verificationNotice =
+                'Family "${family!.name}" was created, but membership verification did not complete right now. Tap Retry Verification to continue without recreating the family.';
+          });
+        }
+        return;
+      }
+
+      if (!verified) {
+        if (mounted) {
+          setState(() {
+            _verificationNotice =
+                'Family "${family!.name}" was created, but active membership verification has not confirmed Parent Mode yet. Tap Retry Verification to check access again.';
+          });
+        }
+        return;
+      }
 
       if (mounted) {
-        context.go(AppRoutes.parentHome);
+        final router = GoRouter.maybeOf(context);
+        if (router != null) {
+          router.go(AppRoutes.parentHome);
+        }
       }
-    } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to create family: ${e.toString()}';
-      });
     } finally {
       if (mounted) {
         setState(() {
@@ -103,6 +168,7 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
                     TextFormField(
                       key: const Key('family_name_field'),
                       controller: _nameController,
+                      enabled: !_isLoading && _createdFamily == null,
                       decoration: const InputDecoration(
                         labelText: 'Family Name',
                         hintText: 'e.g. The Miller Family',
@@ -122,6 +188,7 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
                     TextFormField(
                       key: const Key('family_timezone_field'),
                       controller: _timezoneController,
+                      enabled: !_isLoading && _createdFamily == null,
                       decoration: const InputDecoration(
                         labelText: 'Timezone',
                         hintText: 'UTC',
@@ -138,6 +205,7 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
                     TextFormField(
                       key: const Key('family_locale_field'),
                       controller: _localeController,
+                      enabled: !_isLoading && _createdFamily == null,
                       decoration: const InputDecoration(
                         labelText: 'Locale',
                         hintText: 'en_US',
@@ -159,6 +227,19 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
                           style: TextStyle(color: theme.colorScheme.error),
                         ),
                       ),
+                    if (_verificationNotice != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        child: Text(
+                          _verificationNotice!,
+                          key: const Key(
+                            'create_family_verification_pending_notice',
+                          ),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.secondary,
+                          ),
+                        ),
+                      ),
                     FilledButton(
                       key: const Key('save_family_button'),
                       onPressed: _isLoading ? null : _submit,
@@ -168,7 +249,11 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
                               width: 20,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
-                          : const Text('Create Family'),
+                          : Text(
+                              _createdFamily == null
+                                  ? 'Create Family'
+                                  : 'Retry Verification',
+                            ),
                     ),
                   ],
                 ),

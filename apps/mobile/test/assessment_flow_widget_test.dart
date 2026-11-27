@@ -623,6 +623,19 @@ void main() {
       overrides: [
         localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
         authSessionPortProvider.overrideWithValue(fakeAuth),
+        containmentAuthorizationVerifierProvider.overrideWithValue(
+          FakeContainmentAuthorizationVerifier(
+            defaultOutcome: AuthorizedActiveAdult(
+              verifiedRole: VerifiedAdultRole.owner,
+              verifiedFamily: testFamily,
+              verifiedFamilies: [testFamily],
+              verifiedRolesByFamilyId: {
+                testFamily.id.value: VerifiedAdultRole.owner,
+              },
+              verifiedChild: childWithAvatar,
+            ),
+          ),
+        ),
       ],
     );
     addTearDown(container.dispose);

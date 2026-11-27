@@ -1,5 +1,6 @@
 // ignore_for_file: prefer_initializing_formals
 
+import 'dart:async';
 import 'dart:math';
 
 import 'package:learnward_application/learnward_application.dart';
@@ -2858,15 +2859,22 @@ final class InMemoryAuthSessionPort implements AuthSessionPort {
   final String _generation;
   final String? _role;
   final bool _isAnonymous;
+  final _controller = StreamController<String?>.broadcast();
+  bool _isDisposed = false;
+  bool _isSignedOut = false;
 
   @override
-  String? get currentSessionGeneration => _generation;
+  String? get currentSessionGeneration =>
+      (_isDisposed || _isSignedOut) ? null : _generation;
 
   @override
-  Stream<String?> get sessionGenerationStream => Stream.value(_generation);
+  Stream<String?> get sessionGenerationStream => _controller.stream;
 
   @override
   Future<ValidatedActorContext?> validateForMutation() async {
+    if (_isDisposed || _isSignedOut) {
+      return null;
+    }
     return ValidatedActorContext(
       userId: _userId,
       sessionGeneration: _generation,
@@ -2874,6 +2882,27 @@ final class InMemoryAuthSessionPort implements AuthSessionPort {
       role: _role,
       isAnonymous: _isAnonymous,
     );
+  }
+
+  void signOut() {
+    if (_isDisposed || _isSignedOut) {
+      return;
+    }
+    _isSignedOut = true;
+    if (!_controller.isClosed) {
+      _controller.add(null);
+    }
+  }
+
+  void dispose() {
+    if (_isDisposed) {
+      return;
+    }
+    _isDisposed = true;
+    _isSignedOut = true;
+    if (!_controller.isClosed) {
+      _controller.close();
+    }
   }
 }
 

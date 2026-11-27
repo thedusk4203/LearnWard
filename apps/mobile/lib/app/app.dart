@@ -57,6 +57,9 @@ class LearnWardApp extends ConsumerWidget {
           containmentState: coldStart,
           onRetry: () =>
               ref.read(coldStartContainmentProvider.notifier).rehydrate(),
+          onSignOut: () => ref
+              .read(coldStartContainmentProvider.notifier)
+              .signOutFromRestrictedShell(),
         ),
       );
     }

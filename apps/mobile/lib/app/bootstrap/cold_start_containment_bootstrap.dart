@@ -306,9 +306,14 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
   bool _rehydratePending = false;
   bool _rehydrateRunning = false;
   bool _rehydrateNeedsRerun = false;
+  bool _pendingHideHydrating = false;
+  Family? _pendingCreatedFamily;
   Completer<void>? _rehydrateDoneCompleter;
   bool _restoredFromPersistedBootstrap = false;
   StreamSubscription<String?>? _sessionGenSub;
+
+  /// Newly created family awaiting positive adult verification (`R40-01`).
+  Family? get pendingCreatedFamily => _pendingCreatedFamily;
 
   @override
   ColdStartContainmentState build() {
@@ -324,6 +329,8 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
     ref.onDispose(() {
       _rehydratePending = false;
       _rehydrateNeedsRerun = false;
+      _pendingHideHydrating = false;
+      _pendingCreatedFamily = null;
       final pendingCompleter = _rehydrateDoneCompleter;
       _rehydrateDoneCompleter = null;
       if (pendingCompleter != null && !pendingCompleter.isCompleted) {
@@ -350,8 +357,47 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
   }
 
   Future<void> rehydrate() async {
+    await _runRehydrate(showHydrating: true);
+  }
+
+  /// Verifies newly created family membership with [ContainmentAuthorizationVerifier]
+  /// before allowing entry into `ParentMode` (`R40-01`).
+  ///
+  /// Keeps the current restricted navigator mounted during verification so a
+  /// transient verification failure does not discard [CreateFamilyScreen] and
+  /// cause duplicate `create_family` RPC submissions. Returns `true` only when
+  /// positive active adult membership for [createdFamily] is confirmed and
+  /// [ColdStartContainmentStatus.verifiedParentMode] is entered.
+  Future<bool> confirmCreatedFamily(Family createdFamily) async {
+    if (!ref.mounted) return false;
+    _pendingCreatedFamily = createdFamily;
+    await _runRehydrate(showHydrating: false);
+    if (!ref.mounted) return false;
+    return state.status == ColdStartContainmentStatus.verifiedParentMode &&
+        state.verifiedFamily?.id == createdFamily.id;
+  }
+
+  /// Signs out from a restricted shell via Supabase Auth (or local demo port)
+  /// without deleting unresolved local containment locks, sessions, PIN
+  /// metadata, drafts, reward commands, or evidence photos (`R40-03`).
+  ///
+  /// Note: Full normal vs Exit Path B recovery sign-out policy inside active
+  /// Parent/Child modes remains scoped to WP3.
+  Future<void> signOutFromRestrictedShell() async {
+    if (!ref.mounted) return;
+    _pendingCreatedFamily = null;
+    _clearInMemoryProtectedState();
+    await ref.read(restrictedShellSignOutProvider)();
+    if (!ref.mounted) return;
+    await _runRehydrate(showHydrating: false);
+  }
+
+  Future<void> _runRehydrate({required bool showHydrating}) async {
     if (!ref.mounted) return;
     _rehydratePending = false;
+    if (!showHydrating) {
+      _pendingHideHydrating = true;
+    }
     if (_rehydrateRunning) {
       _rehydrateNeedsRerun = true;
       await _rehydrateDoneCompleter?.future;
@@ -364,10 +410,13 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
     try {
       do {
         _rehydrateNeedsRerun = false;
-        await _performRehydratePass();
+        final suppressHydrating = _pendingHideHydrating;
+        _pendingHideHydrating = false;
+        await _performRehydratePass(showHydrating: !suppressHydrating);
       } while (ref.mounted && _rehydrateNeedsRerun);
     } finally {
       _rehydrateRunning = false;
+      _pendingHideHydrating = false;
       if (!completer.isCompleted) {
         completer.complete();
       }
@@ -377,11 +426,13 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
     }
   }
 
-  Future<void> _performRehydratePass() async {
+  Future<void> _performRehydratePass({required bool showHydrating}) async {
     if (!ref.mounted) return;
-    state = const ColdStartContainmentState(
-      status: ColdStartContainmentStatus.hydrating,
-    );
+    if (showHydrating) {
+      state = const ColdStartContainmentState(
+        status: ColdStartContainmentStatus.hydrating,
+      );
+    }
 
     final store = ref.read(localMetadataStoreProvider);
     final rawChild = await store.readMetadata(
@@ -401,6 +452,7 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
 
     final nowUtc = ref.read(appClockProvider)();
     if (actor == null || !actor.isValidAt(nowUtc)) {
+      _pendingCreatedFamily = null;
       _clearInMemoryProtectedState();
       state = ColdStartContainmentState(
         status: ColdStartContainmentStatus.unauthenticated,
@@ -414,16 +466,19 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
     final validV2 = parsedSession is ValidPersistedChildModeSessionV2
         ? parsedSession.session
         : null;
+    final preferredFamilyId =
+        _pendingCreatedFamily?.id ?? ref.read(activeFamilyProvider)?.id;
     final verifier = ref.read(containmentAuthorizationVerifierProvider);
     final outcome = await verifier.verifySession(
       context: actor,
       persistedChildSession: validV2,
-      preferredFamilyId: ref.read(activeFamilyProvider)?.id,
+      preferredFamilyId: preferredFamilyId,
     );
     if (!ref.mounted || _rehydrateNeedsRerun) return;
 
     // Ensure auth session generation did not invalidate/rotate mid-verification.
     if (authPort.currentSessionGeneration != actor.sessionGeneration) {
+      _pendingCreatedFamily = null;
       _clearInMemoryProtectedState();
       state = ColdStartContainmentState(
         status: ColdStartContainmentStatus.unauthenticated,
@@ -453,7 +508,19 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
       parentGateCredentialStatus: pinStatus,
     );
 
-    _applyInMemoryState(resolved, outcome);
+    final confirmedPendingFamily =
+        _pendingCreatedFamily != null &&
+        resolved.status == ColdStartContainmentStatus.verifiedParentMode &&
+        resolved.verifiedFamily?.id == _pendingCreatedFamily!.id;
+    if (confirmedPendingFamily) {
+      _pendingCreatedFamily = null;
+    }
+
+    _applyInMemoryState(
+      resolved,
+      outcome,
+      forceSelectVerifiedFamily: confirmedPendingFamily,
+    );
     state = resolved;
   }
 
@@ -465,8 +532,9 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
 
   void _applyInMemoryState(
     ColdStartContainmentState resolved,
-    ContainmentVerificationOutcome outcome,
-  ) {
+    ContainmentVerificationOutcome outcome, {
+    bool forceSelectVerifiedFamily = false,
+  }) {
     if (!resolved.allowsProtectedUi) {
       _clearInMemoryProtectedState();
       return;
@@ -478,7 +546,8 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
         AuthorizedActiveAdult(:final verifiedFamilies) => verifiedFamilies,
         _ => const <Family>[],
       };
-      if (currentFamily == null ||
+      if (forceSelectVerifiedFamily ||
+          currentFamily == null ||
           !verifiedFamilies.any((f) => f.id == currentFamily.id)) {
         ref
             .read(activeFamilyProvider.notifier)
@@ -533,20 +602,55 @@ class ContainmentHydratingScreen extends StatelessWidget {
 }
 
 /// Data-free WP2 restricted containment shells exposing zero child/family PII.
-class ColdStartRestrictedShell extends StatelessWidget {
+class ColdStartRestrictedShell extends StatefulWidget {
   const ColdStartRestrictedShell({
     super.key,
     required this.containmentState,
     required this.onRetry,
+    required this.onSignOut,
   });
 
   final ColdStartContainmentState containmentState;
   final VoidCallback onRetry;
+  final Future<void> Function() onSignOut;
+
+  @override
+  State<ColdStartRestrictedShell> createState() =>
+      _ColdStartRestrictedShellState();
+}
+
+class _ColdStartRestrictedShellState extends State<ColdStartRestrictedShell> {
+  bool _isSigningOut = false;
+  String? _signOutError;
+
+  Future<void> _handleSignOut() async {
+    if (_isSigningOut) return;
+    setState(() {
+      _isSigningOut = true;
+      _signOutError = null;
+    });
+    try {
+      await widget.onSignOut();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _signOutError =
+              'Unable to complete sign out right now. Please try again.';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSigningOut = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final status = containmentState.status;
+    final status = widget.containmentState.status;
 
     final ({Key key, IconData icon, String title, String message}) details =
         switch (status) {
@@ -625,26 +729,52 @@ class ColdStartRestrictedShell extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: AppSpacing.lg),
+                  if (_signOutError != null) ...[
+                    Text(
+                      _signOutError!,
+                      key: const Key('cold_start_sign_out_error'),
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
                   if (status ==
                       ColdStartContainmentStatus.noActiveFamilyMembership) ...[
                     FilledButton(
                       key: const Key('create_family_button'),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => const CreateFamilyScreen(),
-                          ),
-                        );
-                      },
+                      onPressed: _isSigningOut
+                          ? null
+                          : () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => const CreateFamilyScreen(),
+                                ),
+                              );
+                            },
                       child: const Text('Create Family'),
                     ),
                     const SizedBox(height: AppSpacing.sm),
                   ],
                   OutlinedButton.icon(
                     key: const Key('cold_start_retry_button'),
-                    onPressed: onRetry,
+                    onPressed: _isSigningOut ? null : widget.onRetry,
                     icon: const Icon(Icons.refresh),
                     label: const Text('Retry Verification'),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  TextButton.icon(
+                    key: const Key('cold_start_sign_out_button'),
+                    onPressed: _isSigningOut ? null : _handleSignOut,
+                    icon: _isSigningOut
+                        ? const SizedBox(
+                            height: 16,
+                            width: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.logout),
+                    label: Text(_isSigningOut ? 'Signing Out...' : 'Sign Out'),
                   ),
                 ],
               ),

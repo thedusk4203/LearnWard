@@ -284,13 +284,48 @@ final authSessionPortProvider = Provider<AuthSessionPort>((ref) {
   final config = ref.watch(appConfigProvider);
   final client = ref.watch(supabaseClientProvider);
   if (client != null) {
-    return SupabaseAuthSessionAdapter(client);
+    final adapter = SupabaseAuthSessionAdapter(client);
+    ref.onDispose(adapter.dispose);
+    return adapter;
   }
   if (config.canUseLocalDemoRepositories) {
     final currentUserId = ref.watch(currentUserIdProvider);
-    return InMemoryAuthSessionPort(activeUserId: currentUserId);
+    final port = InMemoryAuthSessionPort(activeUserId: currentUserId);
+    ref.onDispose(port.dispose);
+    return port;
   }
   throw MissingSupabaseConfigurationException(config.environment);
+});
+
+/// Restricted shell sign-out handler (`R40-03`).
+///
+/// Invokes Supabase Auth sign-out (or local demo sign-out) without deleting
+/// unresolved local containment locks, sessions, PIN metadata, or queued work.
+final restrictedShellSignOutProvider = Provider<Future<void> Function()>((ref) {
+  final client = ref.watch(supabaseClientProvider);
+  final authPort = ref.watch(authSessionPortProvider);
+  return () async {
+    if (client != null) {
+      try {
+        await client.auth.signOut();
+      } catch (_) {
+        // Offline Supabase signOut clears local session state first before
+        // attempting server revocation. Allow only if local session is cleared.
+        final remainingActor = await authPort.validateForMutation();
+        if (remainingActor != null || client.auth.currentSession != null) {
+          rethrow;
+        }
+      }
+      return;
+    }
+    if (authPort is InMemoryAuthSessionPort) {
+      authPort.signOut();
+      return;
+    }
+    throw StateError(
+      'Cannot sign out from restricted shell without an active Supabase client or local auth session port.',
+    );
+  };
 });
 
 /// Recovery authorization port provider.
@@ -409,35 +444,142 @@ class ActiveChildModeNotifier extends Notifier<ChildProfile?> {
     String? actorUserId,
     PersistedChildModeKind modeKind = PersistedChildModeKind.sharedDeviceAdult,
   }) async {
-    var resolvedActorId = actorUserId?.trim();
-    if (resolvedActorId == null || resolvedActorId.isEmpty) {
-      final actor = await ref
-          .read(authSessionPortProvider)
-          .validateForMutation();
-      resolvedActorId = actor?.userId.trim();
+    if (modeKind != PersistedChildModeKind.sharedDeviceAdult) {
+      throw StateError(
+        'Cannot enter Child Mode with modeKind=${modeKind.name}: interactive selection requires shared_device_adult.',
+      );
     }
-    if (resolvedActorId == null || resolvedActorId.isEmpty) {
+
+    final authPort = ref.read(authSessionPortProvider);
+    final actor = await authPort.validateForMutation();
+    final nowUtc = ref.read(appClockProvider)();
+    if (actor == null ||
+        !actor.isValidAt(nowUtc) ||
+        actor.userId.trim().isEmpty ||
+        actor.sessionGeneration.trim().isEmpty) {
       throw StateError(
         'Cannot enter Child Mode without a validated authenticated actor.',
       );
     }
+    if (actor.isAnonymous || actor.role == 'child') {
+      throw StateError(
+        'Cannot enter Child Mode from an anonymous or paired-child session.',
+      );
+    }
 
-    final nowUtc = ref.read(appClockProvider)();
+    final resolvedActorId = actor.userId.trim();
+    if (actorUserId != null && actorUserId.trim() != resolvedActorId) {
+      throw StateError(
+        'Cannot enter Child Mode: supplied actorUserId does not match the validated session.',
+      );
+    }
+
+    final capturedGeneration = actor.sessionGeneration;
+    if (authPort.currentSessionGeneration != capturedGeneration) {
+      throw StateError(
+        'Cannot enter Child Mode: auth session generation changed.',
+      );
+    }
+
+    final store = ref.read(localMetadataStoreProvider);
+    final existingLock = await store.readMetadata(
+      ColdStartContainmentNotifier.containmentRecoveryLockV1Key,
+    );
+    if (existingLock != null) {
+      throw StateError(
+        'Cannot enter Child Mode while containment_recovery_lock_v1 is active.',
+      );
+    }
+    final existingSession = await store.readMetadata(activeSessionKey);
+    if (existingSession != null) {
+      throw StateError(
+        'Cannot enter Child Mode while active_child_session already exists.',
+      );
+    }
+
+    final verifier = ref.read(containmentAuthorizationVerifierProvider);
+    final outcome = await verifier.verifySession(
+      context: actor,
+      preferredFamilyId: child.familyId,
+      targetFamilyId: child.familyId,
+      targetChildId: child.id,
+    );
+
+    if (authPort.currentSessionGeneration != capturedGeneration) {
+      throw StateError(
+        'Cannot enter Child Mode: auth session generation changed during verification.',
+      );
+    }
+
+    final revalidatedActor = await authPort.validateForMutation();
+    final postVerifyUtc = ref.read(appClockProvider)();
+    if (revalidatedActor == null ||
+        !revalidatedActor.isValidAt(postVerifyUtc) ||
+        revalidatedActor.userId.trim() != resolvedActorId ||
+        revalidatedActor.sessionGeneration != capturedGeneration ||
+        revalidatedActor.isAnonymous ||
+        revalidatedActor.role == 'child') {
+      throw StateError(
+        'Cannot enter Child Mode: validated actor context is no longer active.',
+      );
+    }
+
+    if (outcome is! AuthorizedActiveAdult ||
+        !outcome.verifiedRolesByFamilyId.containsKey(child.familyId.value) ||
+        outcome.verifiedFamily.id != child.familyId ||
+        outcome.verifiedChild?.id != child.id ||
+        outcome.verifiedChild?.familyId != child.familyId) {
+      throw StateError(
+        'Cannot enter Child Mode without positive active adult authorization ($outcome).',
+      );
+    }
+
+    final verifiedChild = outcome.verifiedChild!;
+    final persistedAtUtc = ref.read(appClockProvider)();
     final envelope = PersistedChildModeSession(
       modeKind: modeKind,
       actorUserId: resolvedActorId,
       familyId: child.familyId,
       childId: child.id,
-      childProfileSnapshot: child,
-      persistedAtUtc: nowUtc,
+      childProfileSnapshot: verifiedChild,
+      persistedAtUtc: persistedAtUtc,
     );
-    final store = ref.read(localMetadataStoreProvider);
-    await store.writeMetadata(
-      key: activeSessionKey,
-      value: envelope.toJsonString(),
-      updatedAt: nowUtc,
+
+    final committed = await store.compareAndSwapMetadataBatch(
+      expectedValues: const {
+        activeSessionKey: null,
+        ColdStartContainmentNotifier.containmentRecoveryLockV1Key: null,
+      },
+      mutations: [
+        MetadataMutation.upsert(
+          key: activeSessionKey,
+          value: envelope.toJsonString(),
+          updatedAt: persistedAtUtc,
+        ),
+      ],
+      preCommitGuard: () {
+        if (!ref.mounted) {
+          return false;
+        }
+        if (authPort.currentSessionGeneration != capturedGeneration) {
+          return false;
+        }
+        return actor.isValidAt(ref.read(appClockProvider)());
+      },
     );
-    state = child;
+    if (!committed) {
+      throw StateError(
+        'Cannot enter Child Mode: session fence invalidated or containment lock/session mutated before commit.',
+      );
+    }
+    if (!ref.mounted ||
+        authPort.currentSessionGeneration != capturedGeneration) {
+      throw StateError(
+        'Cannot enter Child Mode: session invalidated around commit.',
+      );
+    }
+
+    state = verifiedChild;
   }
 
   Future<void> exitChildMode() async {
