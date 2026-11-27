@@ -2710,6 +2710,984 @@ void main() {
       expect(generationEvents, equals(1));
     });
   });
+
+  group('R40-05: Actor-Bound Pending Created Family & Zero Cross-Account Leakage', () {
+    testWidgets(
+      'direct A -> B session switch after Actor A verification timeout hides Family_A completely from Actor B and lets Actor B create Family_B',
+      (tester) async {
+        final fakeAuth = FakeAuthSessionPort(
+          activeUserId: 'adult-a',
+          sessionGeneration: 'gen-a-1',
+        );
+        final store = InMemoryLocalMetadataStore();
+        final familyA = Family(
+          id: FamilyId('fam-secret-a-r4005'),
+          name: 'Secret Family A',
+          timezone: 'UTC',
+          locale: 'en_US',
+          createdByUserId: 'adult-a',
+          createdAt: nowUtc,
+        );
+        final familyB = Family(
+          id: FamilyId('fam-secret-b-r4005'),
+          name: 'Fresh Family B',
+          timezone: 'UTC',
+          locale: 'en_US',
+          createdByUserId: 'adult-b',
+          createdAt: nowUtc,
+        );
+
+        final createdByActorCalls = <String, int>{};
+        final recordingRepo = _RecordingCreateFamilyRepository(
+          onCreate: (name, timezone, locale) async {
+            final currentActor = (await fakeAuth.validateForMutation())!.userId;
+            createdByActorCalls[currentActor] =
+                (createdByActorCalls[currentActor] ?? 0) + 1;
+            return currentActor == 'adult-a' ? familyA : familyB;
+          },
+        );
+
+        var simulateActorATimeout = false;
+        final verifier = FakeContainmentAuthorizationVerifier(
+          onVerify: (call) async {
+            if (call.context.userId == 'adult-a') {
+              if ((createdByActorCalls['adult-a'] ?? 0) == 0) {
+                return const NoActiveFamilyMembershipObserved();
+              }
+              if (simulateActorATimeout) {
+                return const SessionAuthorizationUnverified(
+                  reason: 'post_create_timeout_for_a',
+                );
+              }
+              return AuthorizedActiveAdult(
+                verifiedRole: VerifiedAdultRole.owner,
+                verifiedFamily: familyA,
+                verifiedFamilies: [familyA],
+                verifiedRolesByFamilyId: {
+                  familyA.id.value: VerifiedAdultRole.owner,
+                },
+              );
+            }
+            if ((createdByActorCalls['adult-b'] ?? 0) == 0) {
+              return const NoActiveFamilyMembershipObserved();
+            }
+            return AuthorizedActiveAdult(
+              verifiedRole: VerifiedAdultRole.owner,
+              verifiedFamily: familyB,
+              verifiedFamilies: [familyB],
+              verifiedRolesByFamilyId: {
+                familyB.id.value: VerifiedAdultRole.owner,
+              },
+            );
+          },
+        );
+
+        late ProviderContainer container;
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              localMetadataStoreProvider.overrideWithValue(store),
+              authSessionPortProvider.overrideWithValue(fakeAuth),
+              containmentAuthorizationVerifierProvider.overrideWithValue(
+                verifier,
+              ),
+              familyRepositoryProvider.overrideWithValue(recordingRepo),
+              childProfileRepositoryProvider.overrideWithValue(
+                FakeChildProfileRepository(),
+              ),
+            ],
+            child: Consumer(
+              builder: (context, ref, _) {
+                container = ProviderScope.containerOf(context);
+                return const LearnWardApp();
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Actor A creates Family_A -> post-create verification times out
+        await tester.tap(find.byKey(const Key('create_family_button')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('family_name_field')),
+          'Secret Family A',
+        );
+        simulateActorATimeout = true;
+        await tester.tap(find.byKey(const Key('save_family_button')));
+        await tester.pumpAndSettle();
+
+        expect(createdByActorCalls['adult-a'], equals(1));
+        expect(container.read(activeFamilyProvider), isNull);
+        expect(
+          find.byKey(const Key('cold_start_authorization_unverified_shell')),
+          findsOneWidget,
+        );
+
+        // Direct session switch A -> B without intermediate signedOut event
+        fakeAuth.setSession(userId: 'adult-b', sessionGeneration: 'gen-b-1');
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('cold_start_no_active_family_shell')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Secret Family A'), findsNothing);
+        expect(
+          container
+              .read(coldStartContainmentProvider.notifier)
+              .pendingCreatedFamilyFor(
+                actorUserId: 'adult-b',
+                sessionGeneration: 'gen-b-1',
+              ),
+          isNull,
+        );
+        expect(
+          container
+              .read(coldStartContainmentProvider.notifier)
+              .pendingCreatedFamilyFor(
+                actorUserId: 'adult-a',
+                sessionGeneration: 'gen-a-1',
+              ),
+          isNull,
+        );
+
+        // Actor B opens Create Family -> blank form, zero Family_A PII
+        await tester.tap(find.byKey(const Key('create_family_button')));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Secret Family A'), findsNothing);
+        expect(
+          find.byKey(const Key('create_family_verification_pending_notice')),
+          findsNothing,
+        );
+        expect(find.text('Retry Verification'), findsNothing);
+        expect(find.text('Create Family'), findsWidgets);
+
+        // Actor B creates Family_B normally (zero accidental retry of A's RPC)
+        await tester.enterText(
+          find.byKey(const Key('family_name_field')),
+          'Fresh Family B',
+        );
+        await tester.tap(find.byKey(const Key('save_family_button')));
+        await tester.pumpAndSettle();
+
+        expect(createdByActorCalls['adult-a'], equals(1));
+        expect(createdByActorCalls['adult-b'], equals(1));
+        expect(container.read(activeFamilyProvider)?.id, equals(familyB.id));
+        expect(find.text('Fresh Family B'), findsOneWidget);
+        expect(find.textContaining('Secret Family A'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'direct A -> B switch while CreateFamilyScreen holds pending Family_A synchronously clears A screen and shows clean form for B',
+      (tester) async {
+        final fakeAuth = FakeAuthSessionPort(
+          activeUserId: 'adult-a',
+          sessionGeneration: 'gen-a-1',
+        );
+        final familyA = Family(
+          id: FamilyId('fam-a-lag'),
+          name: 'Confidential Alpha',
+          timezone: 'UTC',
+          locale: 'en_US',
+          createdByUserId: 'adult-a',
+          createdAt: nowUtc,
+        );
+        final recordingRepo = _RecordingCreateFamilyRepository(
+          familyToCreate: familyA,
+        );
+        final verifier = FakeContainmentAuthorizationVerifier(
+          defaultOutcome: const NoActiveFamilyMembershipObserved(),
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              localMetadataStoreProvider.overrideWithValue(
+                InMemoryLocalMetadataStore(),
+              ),
+              authSessionPortProvider.overrideWithValue(fakeAuth),
+              containmentAuthorizationVerifierProvider.overrideWithValue(
+                verifier,
+              ),
+              familyRepositoryProvider.overrideWithValue(recordingRepo),
+              childProfileRepositoryProvider.overrideWithValue(
+                FakeChildProfileRepository(),
+              ),
+            ],
+            child: const LearnWardApp(),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Actor A creates Family_A, verifier temporarily returns 0 rows
+        await tester.tap(find.byKey(const Key('create_family_button')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('family_name_field')),
+          'Confidential Alpha',
+        );
+        await tester.tap(find.byKey(const Key('save_family_button')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('create_family_verification_pending_notice')),
+          findsOneWidget,
+        );
+        expect(find.text('Retry Verification'), findsOneWidget);
+
+        // Direct switch A -> B where Actor B ALSO lands in NoActiveFamilyMembership
+        fakeAuth.setSession(userId: 'adult-b', sessionGeneration: 'gen-b-1');
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('cold_start_no_active_family_shell')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Confidential Alpha'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('create_family_button')));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('Confidential Alpha'), findsNothing);
+        expect(
+          find.byKey(const Key('create_family_verification_pending_notice')),
+          findsNothing,
+        );
+        expect(find.text('Retry Verification'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'suppresses stale verification and mid-RPC results across generation rotation and actor switch while preserving single-RPC retry for same actor',
+      (tester) async {
+        final fakeAuth = FakeAuthSessionPort(
+          activeUserId: 'adult-a',
+          sessionGeneration: 'gen-a-1',
+        );
+        final store = InMemoryLocalMetadataStore();
+        final familyA = Family(
+          id: FamilyId('fam-a-fence'),
+          name: 'Fenced Alpha Name',
+          timezone: 'UTC',
+          locale: 'en_US',
+          createdByUserId: 'adult-a',
+          createdAt: nowUtc,
+        );
+
+        // 1. Verify PendingCreatedFamilyRecord.toString() redacts family name
+        final recordPreview = PendingCreatedFamilyRecord(
+          family: familyA,
+          creatorActorUserId: 'adult-a',
+          createdInSessionGeneration: 'gen-a-1',
+          createdAtUtc: nowUtc,
+        );
+        expect(recordPreview.toString(), isNot(contains('Fenced Alpha Name')));
+
+        Completer<void>? rpcBarrier;
+        final rpcActorOrder = <String>[];
+        final repo = _RecordingCreateFamilyRepository(
+          onCreate: (name, tz, loc) async {
+            final activeBarrier = rpcBarrier;
+            if (activeBarrier != null && !activeBarrier.isCompleted) {
+              await activeBarrier.future;
+            }
+            rpcActorOrder.add(name);
+            return familyA;
+          },
+        );
+        Completer<void>? verifyBarrier;
+        var allowAAdult = false;
+        final verifier = FakeContainmentAuthorizationVerifier(
+          onVerify: (call) async {
+            final activeBarrier = verifyBarrier;
+            if (activeBarrier != null && !activeBarrier.isCompleted) {
+              await activeBarrier.future;
+            }
+            if (call.context.userId == 'adult-a' && allowAAdult) {
+              return AuthorizedActiveAdult(
+                verifiedRole: VerifiedAdultRole.owner,
+                verifiedFamily: familyA,
+                verifiedFamilies: [familyA],
+                verifiedRolesByFamilyId: {
+                  familyA.id.value: VerifiedAdultRole.owner,
+                },
+              );
+            }
+            return const NoActiveFamilyMembershipObserved();
+          },
+        );
+
+        late ProviderContainer container;
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              localMetadataStoreProvider.overrideWithValue(store),
+              authSessionPortProvider.overrideWithValue(fakeAuth),
+              containmentAuthorizationVerifierProvider.overrideWithValue(
+                verifier,
+              ),
+              familyRepositoryProvider.overrideWithValue(repo),
+              childProfileRepositoryProvider.overrideWithValue(
+                FakeChildProfileRepository(),
+              ),
+            ],
+            child: Consumer(
+              builder: (context, ref, _) {
+                container = ProviderScope.containerOf(context);
+                return const LearnWardApp();
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Actor switch mid-RPC suppresses stale RPC result & pending state
+        rpcBarrier = Completer<void>();
+        await tester.tap(find.byKey(const Key('create_family_button')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('family_name_field')),
+          'Fenced Alpha Name',
+        );
+        await tester.tap(find.byKey(const Key('save_family_button')));
+        await tester.pump();
+
+        fakeAuth.setSession(userId: 'adult-b', sessionGeneration: 'gen-b-1');
+        rpcBarrier.complete();
+        await tester.pumpAndSettle();
+
+        expect(container.read(activeFamilyProvider), isNull);
+        expect(
+          container
+              .read(coldStartContainmentProvider.notifier)
+              .pendingCreatedFamilyFor(
+                actorUserId: 'adult-b',
+                sessionGeneration: 'gen-b-1',
+              ),
+          isNull,
+        );
+        expect(find.textContaining('Fenced Alpha Name'), findsNothing);
+
+        // Reset back to Actor A (fresh gen-a-2): same actor retries after failure (1 RPC),
+        // then generation rotation synchronously clears pending record.
+        rpcBarrier = null;
+        repo.createFamilyCalls = 0;
+        fakeAuth.setSession(userId: 'adult-a', sessionGeneration: 'gen-a-2');
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('create_family_button')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('family_name_field')),
+          'Fenced Alpha Name',
+        );
+        await tester.tap(find.byKey(const Key('save_family_button')));
+        await tester.pumpAndSettle();
+        expect(repo.createFamilyCalls, equals(1));
+        expect(
+          container
+              .read(coldStartContainmentProvider.notifier)
+              .pendingCreatedFamilyFor(
+                actorUserId: 'adult-a',
+                sessionGeneration: 'gen-a-2',
+              )
+              ?.family
+              .id,
+          equals(familyA.id),
+        );
+
+        // Generation rotation on same actor invalidates pendingCreatedFamilyFor synchronously
+        fakeAuth.setSession(userId: 'adult-a', sessionGeneration: 'gen-a-3');
+        expect(
+          container
+              .read(coldStartContainmentProvider.notifier)
+              .pendingCreatedFamilyFor(
+                actorUserId: 'adult-a',
+                sessionGeneration: 'gen-a-2',
+              ),
+          isNull,
+        );
+        await tester.pumpAndSettle();
+        expect(
+          container
+              .read(coldStartContainmentProvider.notifier)
+              .pendingCreatedFamilyFor(
+                actorUserId: 'adult-a',
+                sessionGeneration: 'gen-a-3',
+              ),
+          isNull,
+        );
+
+        // Fresh gen-a-4: actor switch mid-verification suppresses stale AuthorizedActiveAdult(Family_A)
+        repo.createFamilyCalls = 0;
+        allowAAdult = false;
+        fakeAuth.setSession(userId: 'adult-a', sessionGeneration: 'gen-a-4');
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('create_family_button')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('family_name_field')),
+          'Fenced Alpha Name',
+        );
+
+        verifyBarrier = Completer<void>();
+        allowAAdult = true;
+        await tester.tap(find.byKey(const Key('save_family_button')));
+        await tester.pump();
+        await tester.pump();
+
+        fakeAuth.setSession(userId: 'adult-c', sessionGeneration: 'gen-c-1');
+        verifyBarrier.complete();
+        await tester.pumpAndSettle();
+
+        expect(container.read(activeFamilyProvider), isNull);
+        expect(find.textContaining('Fenced Alpha Name'), findsNothing);
+        expect(
+          container.read(coldStartContainmentProvider).actorContext?.userId,
+          equals('adult-c'),
+        );
+        expect(
+          await store.readMetadata(ActiveChildModeNotifier.activeSessionKey),
+          isNull,
+        );
+      },
+    );
+
+    test('SQLite drafts, commands, PIN, and photo bytes stay intact when pending family is invalidated on direct A -> B switch', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'learnward_r40_05_sql_',
+      );
+      addTearDown(() async {
+        if (tempDir.existsSync()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final dbFile = File(p.join(tempDir.path, 'r40_05.sqlite'));
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+
+      final evidenceFile = File(p.join(tempDir.path, 'evidence_r40_05.jpg'));
+      final photoBytes = <int>[0xFF, 0xD8, 0xFF, 0xE0, 9, 8, 7, 6, 0xD9];
+      await evidenceFile.writeAsBytes(photoBytes, flush: true);
+      final expectedDigest = sha256.convert(photoBytes).toString();
+
+      await db.saveLocalDraft(
+        LocalAssessmentDraft(
+          localDraftId: 'draft-r40-05',
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          createCommandId: 'cmd-r4005-create',
+          submitCommandId: 'cmd-r4005-submit',
+          subjectKey: SubjectKey.math,
+          subject: 'Math',
+          title: 'Protected Local Draft',
+          assessmentType: 'quiz',
+          difficulty: 'normal',
+          rawScore: 10,
+          maxScore: 10,
+          localCompressedPhotoPath: evidenceFile.path,
+          sha256Checksum: expectedDigest,
+          occurredAt: nowUtc,
+          updatedAt: nowUtc,
+          actorUserId: 'adult-old',
+          actorRole: 'owner',
+        ),
+      );
+      await db.registerFreshCommand(
+        command: PendingRewardCommand(
+          operation: RewardCommandOperation.spinWheel,
+          commandId: 'cmd-r4005-spin',
+          familyId: testFamily.id.value,
+          childId: testChild.id.value,
+          createdAt: nowUtc,
+          actorUserId: 'adult-old',
+          actorRole: 'owner',
+        ),
+      );
+
+      final fakeAuth = FakeAuthSessionPort(
+        activeUserId: 'adult-a',
+        sessionGeneration: 'gen-a-1',
+      );
+      final familyA = Family(
+        id: FamilyId('fam-r4005-a'),
+        name: 'Alpha Private Name',
+        timezone: 'UTC',
+        locale: 'en_US',
+        createdByUserId: 'adult-a',
+        createdAt: nowUtc,
+      );
+
+      final container = ProviderContainer(
+        overrides: [
+          localMetadataStoreProvider.overrideWithValue(db),
+          authSessionPortProvider.overrideWithValue(fakeAuth),
+          containmentAuthorizationVerifierProvider.overrideWithValue(
+            FakeContainmentAuthorizationVerifier(
+              defaultOutcome: const NoActiveFamilyMembershipObserved(),
+            ),
+          ),
+          parentGateServiceProvider.overrideWithValue(
+            ParentGateService(
+              db,
+              clock: FixedClock(nowUtc),
+              minIterations: 1000,
+              configuredIterations: 1000,
+              runInIsolate: false,
+            ),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await container.read(coldStartContainmentProvider.notifier).rehydrate();
+      final confirmed = await container
+          .read(coldStartContainmentProvider.notifier)
+          .confirmCreatedFamily(
+            familyA,
+            creatorActorUserId: 'adult-a',
+            sessionGeneration: 'gen-a-1',
+          );
+      expect(confirmed, isFalse);
+      expect(
+        container
+            .read(coldStartContainmentProvider.notifier)
+            .pendingCreatedFamilyFor(
+              actorUserId: 'adult-a',
+              sessionGeneration: 'gen-a-1',
+            )
+            ?.family
+            .id,
+        equals(familyA.id),
+      );
+
+      // Direct switch A -> B invalidates pending state without touching SQLite
+      fakeAuth.setSession(userId: 'adult-b', sessionGeneration: 'gen-b-1');
+      await container.read(coldStartContainmentProvider.notifier).rehydrate();
+
+      expect(
+        container
+            .read(coldStartContainmentProvider.notifier)
+            .pendingCreatedFamilyFor(
+              actorUserId: 'adult-b',
+              sessionGeneration: 'gen-b-1',
+            ),
+        isNull,
+      );
+      expect(
+        container
+            .read(coldStartContainmentProvider.notifier)
+            .pendingCreatedFamilyFor(
+              actorUserId: 'adult-a',
+              sessionGeneration: 'gen-a-1',
+            ),
+        isNull,
+      );
+      expect(await db.getLocalDraft('draft-r40-05'), isNotNull);
+      expect(await db.getPendingCommand('cmd-r4005-spin'), isNotNull);
+      expect(
+        sha256.convert(await evidenceFile.readAsBytes()).toString(),
+        equals(expectedDigest),
+      );
+    });
+  });
+
+  group(
+    'R40-06: Accurate Invited, Revoked & Malformed Membership Classification',
+    () {
+      late _ConfigurablePostgrestHttpClient mockHttp;
+      late SupabaseClient supabaseClient;
+      late SupabaseContainmentAuthorizationVerifier verifier;
+
+      setUp(() {
+        mockHttp = _ConfigurablePostgrestHttpClient();
+        supabaseClient = SupabaseClient(
+          'https://test.supabase.co',
+          'anon-key',
+          httpClient: mockHttp,
+          authOptions: const FlutterAuthClientOptions(
+            autoRefreshToken: false,
+            detectSessionInUri: false,
+            localStorage: EmptyLocalStorage(),
+          ),
+        );
+        verifier = SupabaseContainmentAuthorizationVerifier(
+          supabaseClient,
+          clock: FixedClock(nowUtc),
+          timeout: const Duration(milliseconds: 250),
+        );
+      });
+
+      tearDown(() async {
+        await supabaseClient.dispose();
+      });
+
+      ValidatedActorContext adultCtx([String userId = 'adult-r4006']) =>
+          ValidatedActorContext(
+            userId: userId,
+            sessionGeneration: 'gen-$userId',
+            observedAt: nowUtc,
+          );
+
+      test('classifies invited, revoked, malformed/contradictory, active, clean zero-row, 42501, and transport failures accurately at request level', () async {
+        // 1. Invited parent / owner membership -> SessionAuthorizationUnverified (NOT ConfirmedAdultMembershipRevoked)
+        for (final role in const ['parent', 'owner']) {
+          mockHttp.setRows('child_device_grants', const []);
+          mockHttp.setRows('family_memberships', [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': role,
+              'status': 'invited',
+              'joined_at': nowUtc.toIso8601String(),
+              'revoked_at': null,
+            },
+          ]);
+          final invitedOutcome = await verifier.verifySession(
+            context: adultCtx(),
+          );
+          expect(invitedOutcome, isA<SessionAuthorizationUnverified>());
+          final unverified = invitedOutcome as SessionAuthorizationUnverified;
+          expect(unverified.diagnosticCode, equals('membership_invited'));
+          expect(unverified.allowsOfflineChildContainment, isFalse);
+          expect(invitedOutcome, isNot(isA<ConfirmedAdultMembershipRevoked>()));
+        }
+
+        // 2. Explicit revoked parent / owner -> ConfirmedAdultMembershipRevoked
+        for (final revokedAt in <String?>[null, nowUtc.toIso8601String()]) {
+          mockHttp.setRows('child_device_grants', const []);
+          mockHttp.setRows('family_memberships', [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': 'parent',
+              'status': 'revoked',
+              'joined_at': nowUtc.toIso8601String(),
+              'revoked_at': revokedAt,
+            },
+          ]);
+          expect(
+            await verifier.verifySession(context: adultCtx()),
+            isA<ConfirmedAdultMembershipRevoked>(),
+          );
+        }
+
+        // 3. Malformed, unsupported, contradictory, duplicate, or cross-actor rows -> SessionAuthorizationUnverified (membership_malformed)
+        final malformedPayloads = <List<Map<String, dynamic>>>[
+          // Unsupported status
+          [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': 'parent',
+              'status': 'pending',
+              'revoked_at': null,
+            },
+          ],
+          // Null status
+          [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': 'owner',
+              'status': null,
+              'revoked_at': null,
+            },
+          ],
+          // Unsupported role
+          [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': 'child',
+              'status': 'active',
+              'revoked_at': null,
+            },
+          ],
+          // Blank family_id
+          [
+            {
+              'family_id': '   ',
+              'auth_user_id': 'adult-r4006',
+              'role': 'parent',
+              'status': 'active',
+              'revoked_at': null,
+            },
+          ],
+          // Contradictory active + non-null revoked_at
+          [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': 'owner',
+              'status': 'active',
+              'revoked_at': nowUtc.toIso8601String(),
+            },
+          ],
+          // Contradictory invited + non-null revoked_at
+          [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': 'parent',
+              'status': 'invited',
+              'revoked_at': nowUtc.toIso8601String(),
+            },
+          ],
+          // Invalid non-ISO revoked_at
+          [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': 'parent',
+              'status': 'revoked',
+              'revoked_at': 'not-a-timestamp',
+            },
+          ],
+          // Cross-actor row leaked into response
+          [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'different-adult',
+              'role': 'owner',
+              'status': 'active',
+              'revoked_at': null,
+            },
+          ],
+          // Duplicate family_id for same actor
+          [
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': 'owner',
+              'status': 'active',
+              'revoked_at': null,
+            },
+            {
+              'family_id': testFamily.id.value,
+              'auth_user_id': 'adult-r4006',
+              'role': 'parent',
+              'status': 'revoked',
+              'revoked_at': null,
+            },
+          ],
+        ];
+
+        for (final rows in malformedPayloads) {
+          mockHttp.setRows('child_device_grants', const []);
+          mockHttp.setRows('family_memberships', rows);
+          final outcome = await verifier.verifySession(context: adultCtx());
+          expect(outcome, isA<SessionAuthorizationUnverified>());
+          final unverified = outcome as SessionAuthorizationUnverified;
+          expect(unverified.diagnosticCode, equals('membership_malformed'));
+          expect(unverified.allowsOfflineChildContainment, isFalse);
+          expect(outcome, isNot(isA<ConfirmedAdultMembershipRevoked>()));
+          expect(outcome, isNot(isA<AuthorizedActiveAdult>()));
+        }
+
+        // 4. Clean mixed rows: one active + one invited/revoked -> AuthorizedActiveAdult scoped ONLY to active family
+        mockHttp.setRows('child_device_grants', const []);
+        mockHttp.setRows('family_memberships', [
+          {
+            'family_id': testFamily.id.value,
+            'auth_user_id': 'adult-r4006',
+            'role': 'parent',
+            'status': 'active',
+            'revoked_at': null,
+          },
+          {
+            'family_id': testFamilyB.id.value,
+            'auth_user_id': 'adult-r4006',
+            'role': 'parent',
+            'status': 'invited',
+            'revoked_at': null,
+          },
+        ]);
+        mockHttp.setRows('families', [familyRow(testFamily)]);
+        final activeOutcome = await verifier.verifySession(context: adultCtx());
+        expect(activeOutcome, isA<AuthorizedActiveAdult>());
+        final authorized = activeOutcome as AuthorizedActiveAdult;
+        expect(authorized.verifiedRole, equals(VerifiedAdultRole.parent));
+        expect(authorized.verifiedFamily.id, equals(testFamily.id));
+        expect(
+          authorized.verifiedFamilies.map((f) => f.id).toList(),
+          equals([testFamily.id]),
+        );
+
+        // 5. Clean HTTP 200 zero rows -> NoActiveFamilyMembershipObserved
+        mockHttp.setRows('child_device_grants', const []);
+        mockHttp.setRows('family_memberships', const []);
+        expect(
+          await verifier.verifySession(context: adultCtx()),
+          isA<NoActiveFamilyMembershipObserved>(),
+        );
+
+        // 6. 42501 and transport failures preserve offline containment eligibility
+        mockHttp.set42501('family_memberships');
+        final denied42501 = await verifier.verifySession(context: adultCtx());
+        expect(denied42501, isA<SessionAuthorizationUnverified>());
+        expect(
+          (denied42501 as SessionAuthorizationUnverified).diagnosticCode,
+          '42501',
+        );
+        expect(denied42501.allowsOfflineChildContainment, isTrue);
+
+        mockHttp.repliesByTable.clear();
+        mockHttp.networkErrorTables.add('family_memberships');
+        final transportFail = await verifier.verifySession(context: adultCtx());
+        expect(transportFail, isA<SessionAuthorizationUnverified>());
+        expect(
+          (transportFail as SessionAuthorizationUnverified)
+              .allowsOfflineChildContainment,
+          isTrue,
+        );
+      });
+
+      test('InMemoryContainmentAuthorizationVerifier and resolveColdStartContainmentState fail closed on invited & malformed rows', () async {
+        final explicitRepo = _ExplicitMembershipFamilyRepository(
+          currentUserId: 'adult-invited',
+          families: [testFamily],
+          memberships: [
+            FamilyMembership(
+              familyId: testFamily.id,
+              authUserId: 'adult-invited',
+              role: FamilyRole.parent,
+              status: MembershipStatus.invited,
+              joinedAt: nowUtc,
+            ),
+            FamilyMembership(
+              familyId: testFamily.id,
+              authUserId: 'adult-contradictory',
+              role: FamilyRole.owner,
+              status: MembershipStatus.active,
+              joinedAt: nowUtc,
+              revokedAt: nowUtc,
+            ),
+            FamilyMembership(
+              familyId: testFamily.id,
+              authUserId: 'adult-revoked',
+              role: FamilyRole.parent,
+              status: MembershipStatus.revoked,
+              joinedAt: nowUtc,
+              revokedAt: nowUtc,
+            ),
+          ],
+        );
+        final inMemVerifier = InMemoryContainmentAuthorizationVerifier(
+          familyRepository: explicitRepo,
+          childProfileRepository: FakeChildProfileRepository(),
+          clock: FixedClock(nowUtc),
+        );
+
+        final outcome = await inMemVerifier.verifySession(
+          context: adultCtx('adult-invited'),
+        );
+        expect(outcome, isA<SessionAuthorizationUnverified>());
+        final unverified = outcome as SessionAuthorizationUnverified;
+        expect(unverified.diagnosticCode, equals('membership_invited'));
+        expect(unverified.allowsOfflineChildContainment, isFalse);
+
+        explicitRepo.currentUserId = 'adult-contradictory';
+        final contradictoryOutcome = await inMemVerifier.verifySession(
+          context: adultCtx('adult-contradictory'),
+        );
+        expect(contradictoryOutcome, isA<SessionAuthorizationUnverified>());
+        expect(
+          (contradictoryOutcome as SessionAuthorizationUnverified)
+              .diagnosticCode,
+          equals('membership_malformed'),
+        );
+        expect(contradictoryOutcome.allowsOfflineChildContainment, isFalse);
+
+        explicitRepo.currentUserId = 'adult-revoked';
+        expect(
+          await inMemVerifier.verifySession(context: adultCtx('adult-revoked')),
+          isA<ConfirmedAdultMembershipRevoked>(),
+        );
+
+        // Without persisted child session -> authorizationUnverified (not adultAccessRestricted)
+        final resolvedNoSession = resolveColdStartContainmentState(
+          actorContext: adultCtx('adult-invited'),
+          persistedSessionResult: const AbsentPersistedChildModeSession(),
+          recoveryLockResult: const AbsentContainmentRecoveryLock(),
+          verificationOutcome: outcome,
+        );
+        expect(
+          resolvedNoSession.status,
+          ColdStartContainmentStatus.authorizationUnverified,
+        );
+
+        // With persisted child session + valid PIN -> containmentLocked (NEVER offlineContainedChildMode)
+        final v2Raw = PersistedChildModeSession(
+          modeKind: PersistedChildModeKind.sharedDeviceAdult,
+          actorUserId: 'adult-invited',
+          familyId: testFamily.id,
+          childId: testChild.id,
+          childProfileSnapshot: testChild,
+          persistedAtUtc: nowUtc,
+        ).toJsonString();
+        final resolvedWithSession = resolveColdStartContainmentState(
+          actorContext: adultCtx('adult-invited'),
+          persistedSessionResult: PersistedChildModeSession.tryParse(v2Raw),
+          recoveryLockResult: const AbsentContainmentRecoveryLock(),
+          verificationOutcome: outcome,
+          parentGateCredentialStatus: ParentGateCredentialStatus.validV2,
+        );
+        expect(
+          resolvedWithSession.status,
+          ColdStartContainmentStatus.containmentLocked,
+        );
+      });
+
+      testWidgets(
+        'renders Pending Family Invitation shell for invited membership without granting ParentMode',
+        (tester) async {
+          final fakeAuth = FakeAuthSessionPort(
+            activeUserId: 'adult-invited-ui',
+            sessionGeneration: 'gen-invited-1',
+          );
+          final verifier = FakeContainmentAuthorizationVerifier(
+            defaultOutcome: const SessionAuthorizationUnverified(
+              reason: 'adult_membership_invited_not_active',
+              diagnosticCode: 'membership_invited',
+              allowsOfflineChildContainment: false,
+            ),
+          );
+
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                localMetadataStoreProvider.overrideWithValue(
+                  InMemoryLocalMetadataStore(),
+                ),
+                authSessionPortProvider.overrideWithValue(fakeAuth),
+                containmentAuthorizationVerifierProvider.overrideWithValue(
+                  verifier,
+                ),
+              ],
+              child: const LearnWardApp(),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          expect(
+            find.byKey(const Key('cold_start_authorization_unverified_shell')),
+            findsOneWidget,
+          );
+          expect(find.text('Pending Family Invitation'), findsOneWidget);
+          expect(
+            find.byKey(const Key('cold_start_retry_button')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('cold_start_sign_out_button')),
+            findsOneWidget,
+          );
+        },
+      );
+    },
+  );
 }
 
 class _ExpirableAuthSessionPort implements AuthSessionPort {
@@ -2774,11 +3752,14 @@ class _RecordingCreateFamilyRepository implements FamilyRepository {
     this.familyToCreate,
     this.createBarrier,
     this.createError,
+    this.onCreate,
   });
 
   final Family? familyToCreate;
   final Completer<void>? createBarrier;
   final Object? createError;
+  final Future<Family> Function(String name, String timezone, String locale)?
+  onCreate;
   final List<Family> _createdFamilies = [];
   int createFamilyCalls = 0;
 
@@ -2795,7 +3776,9 @@ class _RecordingCreateFamilyRepository implements FamilyRepository {
     if (createError != null) {
       throw createError!;
     }
-    final family = familyToCreate!;
+    final family = onCreate != null
+        ? await onCreate!(name, timezone, locale)
+        : familyToCreate!;
     _createdFamilies.add(family);
     return family;
   }
@@ -2889,4 +3872,35 @@ class _SpyAuthHttpClient extends http.BaseClient {
       headers: {'content-type': 'application/json'},
     );
   }
+}
+
+class _ExplicitMembershipFamilyRepository implements FamilyRepository {
+  _ExplicitMembershipFamilyRepository({
+    required this.currentUserId,
+    required this.families,
+    required this.memberships,
+  });
+
+  String currentUserId;
+  final List<Family> families;
+  final List<FamilyMembership> memberships;
+
+  @override
+  Future<Family> createFamily({
+    required String name,
+    required String timezone,
+    required String locale,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<FamilyMembership?> getMyMembership(FamilyId familyId) async {
+    return memberships
+        .where((m) => m.familyId == familyId && m.authUserId == currentUserId)
+        .firstOrNull;
+  }
+
+  @override
+  Future<List<Family>> listMyFamilies() async => families;
 }

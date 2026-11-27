@@ -11,6 +11,53 @@ import '../../features/family/presentation/create_family_screen.dart';
 import '../../features/shared_device/domain/parent_gate_models.dart';
 import 'app_providers.dart';
 
+/// Actor-bound in-memory record for a newly created family awaiting positive
+/// active adult verification (`R40-05`).
+///
+/// Bound strictly to the validated creator `actorUserId` and auth
+/// `sessionGeneration`. Never persisted into cross-account local metadata, and
+/// redacted in [toString] so `family.name` never leaks to logs.
+final class PendingCreatedFamilyRecord {
+  const PendingCreatedFamilyRecord({
+    required this.family,
+    required this.creatorActorUserId,
+    required this.createdInSessionGeneration,
+    required this.createdAtUtc,
+  });
+
+  final Family family;
+  final String creatorActorUserId;
+  final String createdInSessionGeneration;
+  final DateTime createdAtUtc;
+
+  bool matchesActor({
+    required String? actorUserId,
+    required String? sessionGeneration,
+  }) {
+    final trimmedActor = actorUserId?.trim();
+    final trimmedGeneration = sessionGeneration?.trim();
+    final boundCreator = creatorActorUserId.trim();
+    final boundGeneration = createdInSessionGeneration.trim();
+    if (trimmedActor == null ||
+        trimmedActor.isEmpty ||
+        trimmedGeneration == null ||
+        trimmedGeneration.isEmpty ||
+        boundCreator.isEmpty ||
+        boundGeneration.isEmpty) {
+      return false;
+    }
+    return trimmedActor == boundCreator &&
+        trimmedGeneration == boundGeneration &&
+        family.createdByUserId.trim() == boundCreator;
+  }
+
+  @override
+  String toString() =>
+      'PendingCreatedFamilyRecord(familyId: ${family.id.value}, '
+      'creatorActorUserId: $creatorActorUserId, '
+      'createdInSessionGeneration: $createdInSessionGeneration)';
+}
+
 /// Fail-closed cold-start containment state resolved before mounting protected routes.
 enum ColdStartContainmentStatus {
   hydrating,
@@ -260,8 +307,12 @@ ColdStartContainmentState resolveColdStartContainmentState({
         diagnosticReason: reason,
       );
 
-    case SessionAuthorizationUnverified(:final reason):
-      if (validV2 != null &&
+    case SessionAuthorizationUnverified(
+      :final reason,
+      :final allowsOfflineChildContainment,
+    ):
+      if (allowsOfflineChildContainment &&
+          validV2 != null &&
           validV2.modeKind == PersistedChildModeKind.sharedDeviceAdult &&
           hasValidPinCredential) {
         return ColdStartContainmentState(
@@ -281,8 +332,9 @@ ColdStartContainmentState resolveColdStartContainmentState({
           verificationOutcome: verificationOutcome,
           persistedSessionResult: persistedSessionResult,
           recoveryLockResult: recoveryLockResult,
-          diagnosticReason:
-              'unverified_session_with_child_envelope_invalid_pin',
+          diagnosticReason: allowsOfflineChildContainment
+              ? 'unverified_session_with_child_envelope_invalid_pin'
+              : 'non_active_or_malformed_membership_with_child_session',
         );
       }
       return ColdStartContainmentState(
@@ -307,23 +359,81 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
   bool _rehydrateRunning = false;
   bool _rehydrateNeedsRerun = false;
   bool _pendingHideHydrating = false;
-  Family? _pendingCreatedFamily;
+  PendingCreatedFamilyRecord? _pendingCreatedFamily;
+  String? _lastVerifiedActorUserId;
   Completer<void>? _rehydrateDoneCompleter;
   bool _restoredFromPersistedBootstrap = false;
   StreamSubscription<String?>? _sessionGenSub;
 
-  /// Newly created family awaiting positive adult verification (`R40-01`).
-  Family? get pendingCreatedFamily => _pendingCreatedFamily;
+  /// Returns the pending created family record ONLY when [actorUserId] and
+  /// [sessionGeneration] match both the bound record and live session generation.
+  PendingCreatedFamilyRecord? pendingCreatedFamilyFor({
+    required String? actorUserId,
+    required String? sessionGeneration,
+  }) {
+    final pending = _pendingCreatedFamily;
+    if (pending == null) {
+      return null;
+    }
+    final liveGen = ref.read(authSessionPortProvider).currentSessionGeneration;
+    if (liveGen == null || liveGen.trim() != sessionGeneration?.trim()) {
+      return null;
+    }
+    if (!pending.matchesActor(
+      actorUserId: actorUserId,
+      sessionGeneration: sessionGeneration,
+    )) {
+      return null;
+    }
+    return pending;
+  }
+
+  void _invalidatePendingOnGenerationChange(String? nextGeneration) {
+    final pending = _pendingCreatedFamily;
+    if (pending == null) {
+      return;
+    }
+    if (nextGeneration == null ||
+        nextGeneration.trim() != pending.createdInSessionGeneration.trim()) {
+      _pendingCreatedFamily = null;
+    }
+  }
+
+  void _invalidatePendingOnAuthStateChange(AuthState? authState) {
+    final pending = _pendingCreatedFamily;
+    if (pending == null) {
+      return;
+    }
+    final nextUserId = authState?.session?.user.id.trim();
+    if (authState == null ||
+        authState.event == AuthChangeEvent.signedOut ||
+        authState.session == null ||
+        nextUserId == null ||
+        nextUserId != pending.creatorActorUserId.trim()) {
+      _pendingCreatedFamily = null;
+    }
+  }
 
   @override
   ColdStartContainmentState build() {
     final authPort = ref.watch(authSessionPortProvider);
     _sessionGenSub?.cancel();
     _sessionGenSub = authPort.sessionGenerationStream.listen(
-      (_) => _scheduleRehydrate(),
-      onError: (_) => _scheduleRehydrate(),
+      (nextGeneration) {
+        _invalidatePendingOnGenerationChange(nextGeneration);
+        _scheduleRehydrate();
+      },
+      onError: (_) {
+        _pendingCreatedFamily = null;
+        _scheduleRehydrate();
+      },
     );
-    ref.listen<AsyncValue<AuthState>>(authStateProvider, (_, _) {
+    ref.listen<AsyncValue<AuthState>>(authStateProvider, (_, next) {
+      if (next.hasValue) {
+        _invalidatePendingOnAuthStateChange(next.value);
+      } else if (next.hasError) {
+        _pendingCreatedFamily = null;
+      }
       _scheduleRehydrate();
     });
     ref.onDispose(() {
@@ -331,6 +441,7 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
       _rehydrateNeedsRerun = false;
       _pendingHideHydrating = false;
       _pendingCreatedFamily = null;
+      _lastVerifiedActorUserId = null;
       final pendingCompleter = _rehydrateDoneCompleter;
       _rehydrateDoneCompleter = null;
       if (pendingCompleter != null && !pendingCompleter.isCompleted) {
@@ -361,19 +472,61 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
   }
 
   /// Verifies newly created family membership with [ContainmentAuthorizationVerifier]
-  /// before allowing entry into `ParentMode` (`R40-01`).
+  /// before allowing entry into `ParentMode` (`R40-01`, `R40-05`).
   ///
-  /// Keeps the current restricted navigator mounted during verification so a
-  /// transient verification failure does not discard [CreateFamilyScreen] and
-  /// cause duplicate `create_family` RPC submissions. Returns `true` only when
-  /// positive active adult membership for [createdFamily] is confirmed and
-  /// [ColdStartContainmentStatus.verifiedParentMode] is entered.
-  Future<bool> confirmCreatedFamily(Family createdFamily) async {
+  /// Binds the pending created family strictly to [creatorActorUserId] and
+  /// [sessionGeneration]. Keeps the current restricted navigator mounted during
+  /// verification for the SAME eligible actor/session so transient verification
+  /// failure avoids duplicate `create_family` RPC submissions. Returns `true`
+  /// only when live actor/generation remain unchanged and positive active adult
+  /// membership for [createdFamily] is confirmed.
+  Future<bool> confirmCreatedFamily(
+    Family createdFamily, {
+    required String creatorActorUserId,
+    required String sessionGeneration,
+  }) async {
     if (!ref.mounted) return false;
-    _pendingCreatedFamily = createdFamily;
+    final trimmedActor = creatorActorUserId.trim();
+    final trimmedGeneration = sessionGeneration.trim();
+    if (trimmedActor.isEmpty ||
+        trimmedGeneration.isEmpty ||
+        createdFamily.createdByUserId.trim() != trimmedActor) {
+      return false;
+    }
+
+    final authPort = ref.read(authSessionPortProvider);
+    if (authPort.currentSessionGeneration != trimmedGeneration) {
+      _invalidatePendingOnGenerationChange(authPort.currentSessionGeneration);
+      return false;
+    }
+
+    final liveActor = await authPort.validateForMutation();
+    if (!ref.mounted) return false;
+    final nowUtc = ref.read(appClockProvider)();
+    if (liveActor == null ||
+        !liveActor.isValidAt(nowUtc) ||
+        liveActor.isAnonymous ||
+        liveActor.role == 'child' ||
+        liveActor.userId.trim() != trimmedActor ||
+        liveActor.sessionGeneration != trimmedGeneration ||
+        authPort.currentSessionGeneration != trimmedGeneration) {
+      _pendingCreatedFamily = null;
+      return false;
+    }
+
+    _pendingCreatedFamily = PendingCreatedFamilyRecord(
+      family: createdFamily,
+      creatorActorUserId: trimmedActor,
+      createdInSessionGeneration: trimmedGeneration,
+      createdAtUtc: nowUtc,
+    );
     await _runRehydrate(showHydrating: false);
     if (!ref.mounted) return false;
-    return state.status == ColdStartContainmentStatus.verifiedParentMode &&
+
+    return authPort.currentSessionGeneration == trimmedGeneration &&
+        state.actorContext?.userId.trim() == trimmedActor &&
+        state.actorContext?.sessionGeneration == trimmedGeneration &&
+        state.status == ColdStartContainmentStatus.verifiedParentMode &&
         state.verifiedFamily?.id == createdFamily.id;
   }
 
@@ -386,6 +539,7 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
   Future<void> signOutFromRestrictedShell() async {
     if (!ref.mounted) return;
     _pendingCreatedFamily = null;
+    _lastVerifiedActorUserId = null;
     _clearInMemoryProtectedState();
     await ref.read(restrictedShellSignOutProvider)();
     if (!ref.mounted) return;
@@ -453,6 +607,7 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
     final nowUtc = ref.read(appClockProvider)();
     if (actor == null || !actor.isValidAt(nowUtc)) {
       _pendingCreatedFamily = null;
+      _lastVerifiedActorUserId = null;
       _clearInMemoryProtectedState();
       state = ColdStartContainmentState(
         status: ColdStartContainmentStatus.unauthenticated,
@@ -463,11 +618,24 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
       return;
     }
 
+    if (_lastVerifiedActorUserId != null &&
+        _lastVerifiedActorUserId != actor.userId) {
+      _pendingCreatedFamily = null;
+      _clearInMemoryProtectedState();
+    }
+    if (_pendingCreatedFamily != null &&
+        !_pendingCreatedFamily!.matchesActor(
+          actorUserId: actor.userId,
+          sessionGeneration: actor.sessionGeneration,
+        )) {
+      _pendingCreatedFamily = null;
+    }
+
     final validV2 = parsedSession is ValidPersistedChildModeSessionV2
         ? parsedSession.session
         : null;
     final preferredFamilyId =
-        _pendingCreatedFamily?.id ?? ref.read(activeFamilyProvider)?.id;
+        _pendingCreatedFamily?.family.id ?? ref.read(activeFamilyProvider)?.id;
     final verifier = ref.read(containmentAuthorizationVerifierProvider);
     final outcome = await verifier.verifySession(
       context: actor,
@@ -476,9 +644,17 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
     );
     if (!ref.mounted || _rehydrateNeedsRerun) return;
 
-    // Ensure auth session generation did not invalidate/rotate mid-verification.
-    if (authPort.currentSessionGeneration != actor.sessionGeneration) {
+    // Ensure auth session generation or actor did not rotate/switch mid-verification.
+    final postVerifyActor = await authPort.validateForMutation();
+    if (!ref.mounted || _rehydrateNeedsRerun) return;
+    final postVerifyUtc = ref.read(appClockProvider)();
+    if (authPort.currentSessionGeneration != actor.sessionGeneration ||
+        postVerifyActor == null ||
+        !postVerifyActor.isValidAt(postVerifyUtc) ||
+        postVerifyActor.userId != actor.userId ||
+        postVerifyActor.sessionGeneration != actor.sessionGeneration) {
       _pendingCreatedFamily = null;
+      _lastVerifiedActorUserId = null;
       _clearInMemoryProtectedState();
       state = ColdStartContainmentState(
         status: ColdStartContainmentStatus.unauthenticated,
@@ -508,11 +684,22 @@ class ColdStartContainmentNotifier extends Notifier<ColdStartContainmentState> {
       parentGateCredentialStatus: pinStatus,
     );
 
+    _lastVerifiedActorUserId = actor.userId;
+
     final confirmedPendingFamily =
         _pendingCreatedFamily != null &&
+        _pendingCreatedFamily!.matchesActor(
+          actorUserId: actor.userId,
+          sessionGeneration: actor.sessionGeneration,
+        ) &&
         resolved.status == ColdStartContainmentStatus.verifiedParentMode &&
-        resolved.verifiedFamily?.id == _pendingCreatedFamily!.id;
-    if (confirmedPendingFamily) {
+        resolved.verifiedFamily?.id == _pendingCreatedFamily!.family.id;
+    if (confirmedPendingFamily ||
+        resolved.status == ColdStartContainmentStatus.adultAccessRestricted ||
+        resolved.status == ColdStartContainmentStatus.pairedChildRevoked ||
+        resolved.status == ColdStartContainmentStatus.pairedChildUnverified ||
+        resolved.status == ColdStartContainmentStatus.containmentLocked ||
+        resolved.status == ColdStartContainmentStatus.unauthenticated) {
       _pendingCreatedFamily = null;
     }
 
@@ -672,12 +859,25 @@ class _ColdStartRestrictedShellState extends State<ColdStartRestrictedShell> {
             title: 'Child Device Verification Unavailable',
             message: 'Unable to verify this device grant right now. Check your connection and retry.',
           ),
-          ColdStartContainmentStatus.authorizationUnverified => (
-            key: const Key('cold_start_authorization_unverified_shell'),
-            icon: Icons.cloud_off_outlined,
-            title: 'Verification Unavailable',
-            message: 'Unable to verify your family access with the server right now. Check your connection and retry.',
-          ),
+          ColdStartContainmentStatus.authorizationUnverified =>
+            widget.containmentState.verificationOutcome
+                        is SessionAuthorizationUnverified &&
+                    (widget.containmentState.verificationOutcome!
+                                as SessionAuthorizationUnverified)
+                            .diagnosticCode ==
+                        'membership_invited'
+                ? (
+                    key: const Key('cold_start_authorization_unverified_shell'),
+                    icon: Icons.mark_email_unread_outlined,
+                    title: 'Pending Family Invitation',
+                    message: 'Your family invitation is not active yet. Retry verification once it has been activated, or sign out to switch accounts.',
+                  )
+                : (
+                    key: const Key('cold_start_authorization_unverified_shell'),
+                    icon: Icons.cloud_off_outlined,
+                    title: 'Verification Unavailable',
+                    message: 'Unable to verify your family access with the server right now. Check your connection and retry.',
+                  ),
           ColdStartContainmentStatus.adultAccessRestricted => (
             key: const Key('cold_start_adult_access_restricted_shell'),
             icon: Icons.gpp_maybe_outlined,

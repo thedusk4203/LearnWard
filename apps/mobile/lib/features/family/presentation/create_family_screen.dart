@@ -1,11 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_design_system/learnward_design_system.dart';
-import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
+import '../../../app/bootstrap/cold_start_containment_bootstrap.dart';
 import '../../../app/routing/app_routes.dart';
 
 /// Screen for creating a household family tenancy unit.
@@ -26,28 +28,90 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
   final _formKey = GlobalKey<FormState>();
 
   bool _isLoading = false;
-  Family? _createdFamily;
+  PendingCreatedFamilyRecord? _pendingRecord;
   String? _errorMessage;
   String? _verificationNotice;
+  StreamSubscription<String?>? _sessionGenSub;
 
   @override
   void initState() {
     super.initState();
-    final pendingFamily = ref
-        .read(coldStartContainmentProvider.notifier)
-        .pendingCreatedFamily;
-    if (pendingFamily != null) {
-      _createdFamily = pendingFamily;
-      _nameController.text = pendingFamily.name;
-      _timezoneController.text = pendingFamily.timezone;
-      _localeController.text = pendingFamily.locale;
-      _verificationNotice =
-          'Family "${pendingFamily.name}" was already created. Tap Retry Verification to check active membership without recreating it.';
+    final authPort = ref.read(authSessionPortProvider);
+    _sessionGenSub = authPort.sessionGenerationStream.listen((nextGeneration) {
+      final pending = _pendingRecord;
+      if (pending == null) return;
+      if (nextGeneration == null ||
+          nextGeneration.trim() != pending.createdInSessionGeneration.trim()) {
+        if (mounted) {
+          setState(_clearPendingState);
+        } else {
+          _clearPendingState();
+        }
+      }
+    });
+
+    final coldStart = ref.read(coldStartContainmentProvider);
+    final actor = coldStart.actorContext;
+    final liveGen = authPort.currentSessionGeneration;
+    final nowUtc = ref.read(appClockProvider)();
+    if (actor != null &&
+        !actor.isAnonymous &&
+        actor.role != 'child' &&
+        actor.isValidAt(nowUtc) &&
+        liveGen != null &&
+        actor.sessionGeneration == liveGen) {
+      final pendingRecord = ref
+          .read(coldStartContainmentProvider.notifier)
+          .pendingCreatedFamilyFor(
+            actorUserId: actor.userId,
+            sessionGeneration: liveGen,
+          );
+      if (pendingRecord != null) {
+        _pendingRecord = pendingRecord;
+        _nameController.text = pendingRecord.family.name;
+        _timezoneController.text = pendingRecord.family.timezone;
+        _localeController.text = pendingRecord.family.locale;
+        _verificationNotice =
+            'Family "${pendingRecord.family.name}" was already created. Tap Retry Verification to check active membership without recreating it.';
+        Future.microtask(_revalidateMountedPendingActor);
+      }
+    }
+  }
+
+  void _clearPendingState() {
+    _pendingRecord = null;
+    _nameController.clear();
+    _timezoneController.text = 'UTC';
+    _localeController.text = 'en_US';
+    _errorMessage = null;
+    _verificationNotice = null;
+  }
+
+  Future<void> _revalidateMountedPendingActor() async {
+    final pending = _pendingRecord;
+    if (!mounted || pending == null) return;
+    final authPort = ref.read(authSessionPortProvider);
+    final liveActor = await authPort.validateForMutation();
+    if (!mounted) return;
+    final nowUtc = ref.read(appClockProvider)();
+    if (liveActor == null ||
+        !liveActor.isValidAt(nowUtc) ||
+        liveActor.isAnonymous ||
+        liveActor.role == 'child' ||
+        authPort.currentSessionGeneration !=
+            pending.createdInSessionGeneration ||
+        !pending.matchesActor(
+          actorUserId: liveActor.userId,
+          sessionGeneration: liveActor.sessionGeneration,
+        )) {
+      setState(_clearPendingState);
     }
   }
 
   @override
   void dispose() {
+    _sessionGenSub?.cancel();
+    _sessionGenSub = null;
     _nameController.dispose();
     _timezoneController.dispose();
     _localeController.dispose();
@@ -56,7 +120,37 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
 
   Future<void> _submit() async {
     if (_isLoading) return;
-    if (_createdFamily == null && !_formKey.currentState!.validate()) return;
+
+    final authPort = ref.read(authSessionPortProvider);
+    final liveActor = await authPort.validateForMutation();
+    if (!mounted) return;
+    final nowUtc = ref.read(appClockProvider)();
+    if (liveActor == null ||
+        !liveActor.isValidAt(nowUtc) ||
+        liveActor.isAnonymous ||
+        liveActor.role == 'child' ||
+        liveActor.userId.trim().isEmpty ||
+        liveActor.sessionGeneration.trim().isEmpty ||
+        authPort.currentSessionGeneration != liveActor.sessionGeneration) {
+      setState(() {
+        _clearPendingState();
+        _errorMessage = 'Your session is no longer active. Please sign in again to create a family.';
+      });
+      return;
+    }
+
+    if (_pendingRecord != null &&
+        !_pendingRecord!.matchesActor(
+          actorUserId: liveActor.userId,
+          sessionGeneration: liveActor.sessionGeneration,
+        )) {
+      setState(_clearPendingState);
+    }
+
+    if (_pendingRecord == null && !_formKey.currentState!.validate()) return;
+
+    final capturedActorId = liveActor.userId.trim();
+    final capturedGeneration = liveActor.sessionGeneration;
 
     setState(() {
       _isLoading = true;
@@ -65,23 +159,47 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
     });
 
     try {
-      var family = _createdFamily;
-      if (family == null) {
+      var record = _pendingRecord;
+      if (record == null) {
         try {
           final repo = ref.read(familyRepositoryProvider);
           final createFamily = CreateFamily(repo);
 
-          family = await createFamily(
+          final createdFamily = await createFamily(
             name: _nameController.text.trim(),
             timezone: _timezoneController.text.trim(),
             locale: _localeController.text.trim(),
           );
+
+          final postRpcActor = await authPort.validateForMutation();
+          final postRpcUtc = ref.read(appClockProvider)();
+          if (!mounted ||
+              authPort.currentSessionGeneration != capturedGeneration ||
+              postRpcActor == null ||
+              !postRpcActor.isValidAt(postRpcUtc) ||
+              postRpcActor.isAnonymous ||
+              postRpcActor.role == 'child' ||
+              postRpcActor.userId.trim() != capturedActorId ||
+              postRpcActor.sessionGeneration != capturedGeneration ||
+              createdFamily.createdByUserId.trim() != capturedActorId) {
+            if (mounted) {
+              setState(_clearPendingState);
+            }
+            return;
+          }
+
+          record = PendingCreatedFamilyRecord(
+            family: createdFamily,
+            creatorActorUserId: capturedActorId,
+            createdInSessionGeneration: capturedGeneration,
+            createdAtUtc: postRpcUtc,
+          );
           if (mounted) {
             setState(() {
-              _createdFamily = family;
+              _pendingRecord = record;
             });
           } else {
-            _createdFamily = family;
+            _pendingRecord = record;
           }
         } catch (e) {
           if (mounted) {
@@ -100,32 +218,57 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
       try {
         verified = await ref
             .read(coldStartContainmentProvider.notifier)
-            .confirmCreatedFamily(family);
+            .confirmCreatedFamily(
+              record.family,
+              creatorActorUserId: record.creatorActorUserId,
+              sessionGeneration: record.createdInSessionGeneration,
+            );
       } catch (_) {
-        if (mounted) {
-          setState(() {
-            _verificationNotice =
-                'Family "${family!.name}" was created, but membership verification did not complete right now. Tap Retry Verification to continue without recreating the family.';
-          });
+        if (!mounted) return;
+        final currentActor = ref
+            .read(coldStartContainmentProvider)
+            .actorContext;
+        if (authPort.currentSessionGeneration !=
+                record.createdInSessionGeneration ||
+            currentActor == null ||
+            !record.matchesActor(
+              actorUserId: currentActor.userId,
+              sessionGeneration: currentActor.sessionGeneration,
+            )) {
+          setState(_clearPendingState);
+          return;
         }
+        setState(() {
+          _verificationNotice =
+              'Family "${record!.family.name}" was created, but membership verification did not complete right now. Tap Retry Verification to continue without recreating the family.';
+        });
+        return;
+      }
+
+      if (!mounted) return;
+      final currentActor = ref.read(coldStartContainmentProvider).actorContext;
+      if (authPort.currentSessionGeneration !=
+              record.createdInSessionGeneration ||
+          currentActor == null ||
+          !record.matchesActor(
+            actorUserId: currentActor.userId,
+            sessionGeneration: currentActor.sessionGeneration,
+          )) {
+        setState(_clearPendingState);
         return;
       }
 
       if (!verified) {
-        if (mounted) {
-          setState(() {
-            _verificationNotice =
-                'Family "${family!.name}" was created, but active membership verification has not confirmed Parent Mode yet. Tap Retry Verification to check access again.';
-          });
-        }
+        setState(() {
+          _verificationNotice =
+              'Family "${record!.family.name}" was created, but active membership verification has not confirmed Parent Mode yet. Tap Retry Verification to check access again.';
+        });
         return;
       }
 
-      if (mounted) {
-        final router = GoRouter.maybeOf(context);
-        if (router != null) {
-          router.go(AppRoutes.parentHome);
-        }
+      final router = GoRouter.maybeOf(context);
+      if (router != null) {
+        router.go(AppRoutes.parentHome);
       }
     } finally {
       if (mounted) {
@@ -139,6 +282,23 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    ref.listen<ColdStartContainmentState>(coldStartContainmentProvider, (
+      previous,
+      next,
+    ) {
+      final pending = _pendingRecord;
+      if (pending == null) return;
+      final nextActor = next.actorContext;
+      if (nextActor == null ||
+          nextActor.isAnonymous ||
+          nextActor.role == 'child' ||
+          !pending.matchesActor(
+            actorUserId: nextActor.userId,
+            sessionGeneration: nextActor.sessionGeneration,
+          )) {
+        setState(_clearPendingState);
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(title: const Text('Create Family')),
@@ -168,7 +328,7 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
                     TextFormField(
                       key: const Key('family_name_field'),
                       controller: _nameController,
-                      enabled: !_isLoading && _createdFamily == null,
+                      enabled: !_isLoading && _pendingRecord == null,
                       decoration: const InputDecoration(
                         labelText: 'Family Name',
                         hintText: 'e.g. The Miller Family',
@@ -188,7 +348,7 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
                     TextFormField(
                       key: const Key('family_timezone_field'),
                       controller: _timezoneController,
-                      enabled: !_isLoading && _createdFamily == null,
+                      enabled: !_isLoading && _pendingRecord == null,
                       decoration: const InputDecoration(
                         labelText: 'Timezone',
                         hintText: 'UTC',
@@ -205,7 +365,7 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
                     TextFormField(
                       key: const Key('family_locale_field'),
                       controller: _localeController,
-                      enabled: !_isLoading && _createdFamily == null,
+                      enabled: !_isLoading && _pendingRecord == null,
                       decoration: const InputDecoration(
                         labelText: 'Locale',
                         hintText: 'en_US',
@@ -250,7 +410,7 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : Text(
-                              _createdFamily == null
+                              _pendingRecord == null
                                   ? 'Create Family'
                                   : 'Retry Verification',
                             ),

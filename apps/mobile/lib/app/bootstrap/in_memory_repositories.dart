@@ -3101,7 +3101,9 @@ final class InMemoryContainmentAuthorizationVerifier
 
     final verifiedFamilies = <Family>[];
     final verifiedRolesByFamilyId = <String, VerifiedAdultRole>{};
-    var sawNonActiveOrNonAdultMembership = false;
+    var sawConfirmedRevoked = false;
+    var sawInvited = false;
+    var sawMalformedOrContradictory = false;
 
     for (final family in families) {
       final membership = await _familyRepository.getMyMembership(family.id);
@@ -3114,18 +3116,48 @@ final class InMemoryContainmentAuthorizationVerifier
         continue;
       }
       final role = VerifiedAdultRole.tryFromWire(membership.role.wireName);
-      if (membership.isActive && role != null) {
-        verifiedFamilies.add(family);
-        verifiedRolesByFamilyId[family.id.value] = role;
-      } else {
-        sawNonActiveOrNonAdultMembership = true;
+      if (role == null) {
+        sawMalformedOrContradictory = true;
+        continue;
+      }
+      switch (membership.status) {
+        case MembershipStatus.active:
+          if (membership.revokedAt != null) {
+            sawMalformedOrContradictory = true;
+          } else {
+            verifiedFamilies.add(family);
+            verifiedRolesByFamilyId[family.id.value] = role;
+          }
+        case MembershipStatus.invited:
+          if (membership.revokedAt != null) {
+            sawMalformedOrContradictory = true;
+          } else {
+            sawInvited = true;
+          }
+        case MembershipStatus.revoked:
+          sawConfirmedRevoked = true;
       }
     }
 
+    if (sawMalformedOrContradictory) {
+      return const SessionAuthorizationUnverified(
+        reason: 'membership_row_malformed_or_contradictory',
+        diagnosticCode: 'membership_malformed',
+        allowsOfflineChildContainment: false,
+      );
+    }
+
     if (verifiedFamilies.isEmpty) {
-      if (sawNonActiveOrNonAdultMembership) {
+      if (sawInvited) {
+        return const SessionAuthorizationUnverified(
+          reason: 'adult_membership_invited_not_active',
+          diagnosticCode: 'membership_invited',
+          allowsOfflineChildContainment: false,
+        );
+      }
+      if (sawConfirmedRevoked) {
         return const ConfirmedAdultMembershipRevoked(
-          reason: 'adult_membership_revoked_or_non_adult',
+          reason: 'adult_membership_revoked',
         );
       }
       return const NoActiveFamilyMembershipObserved();

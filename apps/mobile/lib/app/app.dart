@@ -46,8 +46,12 @@ class LearnWardApp extends ConsumerWidget {
     }
 
     if (!coldStart.allowsProtectedUi) {
+      final actorKey = coldStart.actorContext?.userId ?? 'none';
+      final generationKey = coldStart.actorContext?.sessionGeneration ?? 'none';
       return MaterialApp(
-        key: ValueKey('restricted_${coldStart.status.name}'),
+        key: ValueKey(
+          'restricted_${coldStart.status.name}_${actorKey}_$generationKey',
+        ),
         title: 'LearnWard',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,

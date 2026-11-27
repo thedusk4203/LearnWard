@@ -137,8 +137,8 @@ final class PairedChildUnverified extends ContainmentVerificationOutcome {
       '${diagnosticCode != null ? ', diagnosticCode: $diagnosticCode' : ''})';
 }
 
-/// 7. Explicit non-active (`status != 'active'`) or non-adult `family_memberships`
-/// row positively observed (never inferred from RLS 0 rows).
+/// 7. Explicit `status == 'revoked'` `family_memberships` row positively
+/// observed (never inferred from RLS 0 rows, `invited`, or malformed rows).
 final class ConfirmedAdultMembershipRevoked
     extends ContainmentVerificationOutcome {
   const ConfirmedAdultMembershipRevoked({required this.reason});
@@ -149,22 +149,26 @@ final class ConfirmedAdultMembershipRevoked
   String toString() => 'ConfirmedAdultMembershipRevoked(reason: $reason)';
 }
 
-/// 8. Transport error, timeout, stale actor context, or uncertain `42501`
-/// preventing positive verification for a non-paired-child session.
+/// 8. Transport error, timeout, stale actor context, uncertain `42501`, or
+/// non-active `invited` / malformed membership data preventing positive
+/// verification for a non-paired-child session.
 final class SessionAuthorizationUnverified
     extends ContainmentVerificationOutcome {
   const SessionAuthorizationUnverified({
     required this.reason,
     this.diagnosticCode,
+    this.allowsOfflineChildContainment = true,
   });
 
   final String reason;
   final String? diagnosticCode;
+  final bool allowsOfflineChildContainment;
 
   @override
   String toString() =>
       'SessionAuthorizationUnverified(reason: $reason'
-      '${diagnosticCode != null ? ', diagnosticCode: $diagnosticCode' : ''})';
+      '${diagnosticCode != null ? ', diagnosticCode: $diagnosticCode' : ''}'
+      '${allowsOfflineChildContainment ? '' : ', allowsOfflineChildContainment: false'})';
 }
 
 /// Read-only authorization verifier separating Supabase Auth identity hints from

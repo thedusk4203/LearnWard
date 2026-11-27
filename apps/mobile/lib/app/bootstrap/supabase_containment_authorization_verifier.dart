@@ -53,6 +53,7 @@ final class SupabaseContainmentAuthorizationVerifier
         !context.isValidAt(nowUtc)) {
       return const SessionAuthorizationUnverified(
         reason: 'stale_or_invalid_actor_context',
+        allowsOfflineChildContainment: false,
       );
     }
 
@@ -170,11 +171,11 @@ final class SupabaseContainmentAuthorizationVerifier
       if (parsedMemberships == null) {
         return const SessionAuthorizationUnverified(
           reason: 'membership_response_not_list',
+          diagnosticCode: 'membership_malformed',
+          allowsOfflineChildContainment: false,
         );
       }
-      membershipRows = parsedMemberships
-          .where((row) => row['auth_user_id'] == context.userId)
-          .toList(growable: false);
+      membershipRows = parsedMemberships;
     } on PostgrestException catch (e) {
       if (e.code == '42501') {
         return const SessionAuthorizationUnverified(
@@ -203,21 +204,100 @@ final class SupabaseContainmentAuthorizationVerifier
     }
 
     final verifiedRolesByFamilyId = <String, VerifiedAdultRole>{};
+    final seenFamilyIds = <String>{};
+    var sawConfirmedRevoked = false;
+    var sawInvited = false;
+    var sawMalformedOrContradictory = false;
+
     for (final row in membershipRows) {
-      final status = row['status'] as String?;
-      final role = VerifiedAdultRole.tryFromWire(row['role'] as String?);
-      final familyIdRaw = row['family_id'] as String?;
-      if (status == 'active' &&
-          role != null &&
-          familyIdRaw != null &&
-          familyIdRaw.trim().isNotEmpty) {
-        verifiedRolesByFamilyId[familyIdRaw.trim()] = role;
+      final rowActorRaw = row['auth_user_id'];
+      if (rowActorRaw is! String || rowActorRaw != context.userId) {
+        return const SessionAuthorizationUnverified(
+          reason: 'membership_row_actor_mismatch',
+          diagnosticCode: 'membership_malformed',
+          allowsOfflineChildContainment: false,
+        );
+      }
+
+      final familyIdRaw = row['family_id'];
+      final statusRaw = row['status'];
+      final roleRaw = row['role'];
+      final role = roleRaw is String
+          ? VerifiedAdultRole.tryFromWire(roleRaw)
+          : null;
+      if (familyIdRaw is! String ||
+          familyIdRaw.trim().isEmpty ||
+          statusRaw is! String ||
+          role == null) {
+        sawMalformedOrContradictory = true;
+        continue;
+      }
+
+      final familyId = familyIdRaw.trim();
+      if (!seenFamilyIds.add(familyId)) {
+        sawMalformedOrContradictory = true;
+        continue;
+      }
+
+      final revokedAtRaw = row['revoked_at'];
+      DateTime? parsedRevokedAt;
+      if (revokedAtRaw != null) {
+        if (revokedAtRaw is! String) {
+          sawMalformedOrContradictory = true;
+          continue;
+        }
+        parsedRevokedAt = DateTime.tryParse(revokedAtRaw);
+        if (parsedRevokedAt == null) {
+          sawMalformedOrContradictory = true;
+          continue;
+        }
+      }
+
+      switch (statusRaw) {
+        case 'active':
+          if (revokedAtRaw != null) {
+            sawMalformedOrContradictory = true;
+          } else {
+            verifiedRolesByFamilyId[familyId] = role;
+          }
+        case 'invited':
+          if (revokedAtRaw != null) {
+            sawMalformedOrContradictory = true;
+          } else {
+            sawInvited = true;
+          }
+        case 'revoked':
+          sawConfirmedRevoked = true;
+        default:
+          sawMalformedOrContradictory = true;
       }
     }
 
+    if (sawMalformedOrContradictory) {
+      return const SessionAuthorizationUnverified(
+        reason: 'membership_row_malformed_or_contradictory',
+        diagnosticCode: 'membership_malformed',
+        allowsOfflineChildContainment: false,
+      );
+    }
+
     if (verifiedRolesByFamilyId.isEmpty) {
-      return const ConfirmedAdultMembershipRevoked(
-        reason: 'adult_membership_revoked_or_non_adult',
+      if (sawInvited) {
+        return const SessionAuthorizationUnverified(
+          reason: 'adult_membership_invited_not_active',
+          diagnosticCode: 'membership_invited',
+          allowsOfflineChildContainment: false,
+        );
+      }
+      if (sawConfirmedRevoked) {
+        return const ConfirmedAdultMembershipRevoked(
+          reason: 'adult_membership_revoked',
+        );
+      }
+      return const SessionAuthorizationUnverified(
+        reason: 'membership_row_malformed_or_contradictory',
+        diagnosticCode: 'membership_malformed',
+        allowsOfflineChildContainment: false,
       );
     }
 
@@ -237,6 +317,8 @@ final class SupabaseContainmentAuthorizationVerifier
       if (familyRows == null) {
         return const SessionAuthorizationUnverified(
           reason: 'families_response_not_list',
+          diagnosticCode: 'families_malformed',
+          allowsOfflineChildContainment: false,
         );
       }
       verifiedFamilies = familyRows
@@ -269,6 +351,7 @@ final class SupabaseContainmentAuthorizationVerifier
     if (verifiedFamilies.isEmpty) {
       return const SessionAuthorizationUnverified(
         reason: 'verified_family_row_missing_or_archived',
+        allowsOfflineChildContainment: false,
       );
     }
 
