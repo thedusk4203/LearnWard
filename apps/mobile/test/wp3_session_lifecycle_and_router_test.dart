@@ -1661,23 +1661,34 @@ void main() {
       await ctrl.rehydrate();
       await ctrl.enterChildMode(childA);
 
-      // Offline verifier prevents Exit Path A unlock even with correct PIN and reverts speculative increment.
+      // Offline valid v2 PIN unlock clears active_child_session into AuthorizationUnverified (NEVER ParentMode).
       verifier.defaultOutcome = const SessionAuthorizationUnverified(
         reason: 'offline',
         allowsOfflineChildContainment: true,
       );
       final offlineRes = await ctrl.submitParentGateUnlock('4829');
+      expect(offlineRes.isAuthorizedToExitChildMode, isTrue);
       expect(
-        offlineRes.outcome,
-        PinVerificationOutcome.pinMatchedAuthorizationRequired,
+        container.read(sessionContainmentProvider).status,
+        ColdStartContainmentStatus.authorizationUnverified,
       );
-      expect(offlineRes.failedAttempts, equals(0));
+      expect(container.read(activeFamilyProvider), isNull);
       expect(
         await store.readMetadata(ActiveChildModeNotifier.activeSessionKey),
-        isNotNull,
+        isNull,
       );
 
-      // Revoked membership observed at Step 4 also rejects unlock safely.
+      // Revoked membership in Child Mode still blocks Exit Path A and preserves active_child_session.
+      verifier.defaultOutcome = AuthorizedActiveAdult(
+        verifiedRole: VerifiedAdultRole.owner,
+        verifiedFamily: familyA,
+        verifiedFamilies: [familyA],
+        verifiedRolesByFamilyId: {familyA.id.value: VerifiedAdultRole.owner},
+        verifiedChild: childA,
+      );
+      await ctrl.rehydrate();
+      await ctrl.enterChildMode(childA);
+
       verifier.defaultOutcome = const ConfirmedAdultMembershipRevoked(
         reason: 'revoked',
       );
@@ -2670,15 +2681,29 @@ void main() {
         equals(persistedChild),
       );
 
-      // 5. Canonical Exit Path A requires valid PIN and positive adult authorization
+      // 5. Canonical Exit Path A rejects revoked adult membership, moves valid v2 offline unlock to authorizationUnverified (never parentMode), and unlocks online to parentMode
+      verifier.defaultOutcome = const ConfirmedAdultMembershipRevoked(
+        reason: 'revoked',
+      );
+      final revokedUnlock = await ctrl.submitParentGateUnlock('4829');
+      expect(revokedUnlock.isAuthorizedToExitChildMode, isFalse);
+      expect(
+        await store.readMetadata(ActiveChildModeNotifier.activeSessionKey),
+        isNotNull,
+      );
+
       verifier.defaultOutcome = const SessionAuthorizationUnverified(
         reason: 'offline',
       );
       final offlineUnlock = await ctrl.submitParentGateUnlock('4829');
-      expect(offlineUnlock.isAuthorizedToExitChildMode, isFalse);
+      expect(offlineUnlock.isAuthorizedToExitChildMode, isTrue);
+      expect(
+        container.read(sessionContainmentProvider).status,
+        ColdStartContainmentStatus.authorizationUnverified,
+      );
       expect(
         await store.readMetadata(ActiveChildModeNotifier.activeSessionKey),
-        isNotNull,
+        isNull,
       );
 
       verifier.defaultOutcome = AuthorizedActiveAdult(
@@ -2688,6 +2713,8 @@ void main() {
         verifiedRolesByFamilyId: {familyA.id.value: VerifiedAdultRole.owner},
         verifiedChild: childA,
       );
+      await ctrl.rehydrate();
+      await ctrl.enterChildMode(childA);
       final onlineUnlock = await ctrl.submitParentGateUnlock('4829');
       expect(onlineUnlock.isAuthorizedToExitChildMode, isTrue);
       expect(

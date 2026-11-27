@@ -457,6 +457,22 @@ ColdStartContainmentState resolveColdStartContainmentState({
 
   switch (verificationOutcome) {
     case AuthorizedActiveAdult(:final verifiedFamily, :final verifiedChild):
+      if (actorContext.isAnonymous || actorContext.role == 'child') {
+        return ColdStartContainmentState(
+          status: ColdStartContainmentStatus.pairedChildUnverified,
+          actorContext: actorContext,
+          verificationOutcome: verificationOutcome,
+          persistedSessionResult: persistedSessionResult,
+          recoveryLockResult: recoveryLockResult,
+          parentGateCredentialStatus: parentGateCredentialStatus,
+          pinOwnerFamilyId: pinOwnerFamilyId,
+          containmentFence: containmentFence,
+          lastRecoveryAudit: lastRecoveryAudit,
+          sessionScopeEpoch: sessionScopeEpoch,
+          isPostSignOutFreshAdultAuth: isPostSignOutFreshAdultAuth,
+          diagnosticReason: 'anonymous_or_child_actor_cannot_enter_adult_flow',
+        );
+      }
       if (validV2 != null) {
         final pinMatchesFamily =
             parentGateCredentialStatus != ParentGateCredentialStatus.validV2 ||
@@ -545,6 +561,22 @@ ColdStartContainmentState resolveColdStartContainmentState({
       );
 
     case NoActiveFamilyMembershipObserved():
+      if (actorContext.isAnonymous || actorContext.role == 'child') {
+        return ColdStartContainmentState(
+          status: ColdStartContainmentStatus.pairedChildUnverified,
+          actorContext: actorContext,
+          verificationOutcome: verificationOutcome,
+          persistedSessionResult: persistedSessionResult,
+          recoveryLockResult: recoveryLockResult,
+          parentGateCredentialStatus: parentGateCredentialStatus,
+          pinOwnerFamilyId: pinOwnerFamilyId,
+          containmentFence: containmentFence,
+          lastRecoveryAudit: lastRecoveryAudit,
+          sessionScopeEpoch: sessionScopeEpoch,
+          isPostSignOutFreshAdultAuth: isPostSignOutFreshAdultAuth,
+          diagnosticReason: 'anonymous_or_child_actor_cannot_enter_adult_flow',
+        );
+      }
       if (validV2 != null) {
         return ColdStartContainmentState(
           status: ColdStartContainmentStatus.containmentLocked,
@@ -1029,6 +1061,39 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
         reason: 'sync_actor_switched',
       );
     }
+  }
+
+  /// Synchronously (`0 await`) transitions the controller into a fail-closed
+  /// containment state upon child archival, grant revocation, or server
+  /// containment downgrade, then enqueues `_persistFenceTransition()` in
+  /// `_ContainmentArbiter` (`C0-33`, `C0-37(d)`, `WP4-DEF-03`).
+  void applyContainmentInvalidation({
+    required ColdStartContainmentStatus targetStatus,
+    ContainmentVerificationOutcome? verificationOutcome,
+    required String reason,
+  }) {
+    if (!ref.mounted) return;
+    _containmentEpoch++;
+    _sessionScopeEpoch++;
+    _sessionGenerationOrdinal++;
+    _pendingCreatedFamily = null;
+    _preferredFamilyOverride = null;
+    _clearInMemoryProtectedState();
+    state = ColdStartContainmentState(
+      status: targetStatus,
+      actorContext: state.actorContext,
+      verificationOutcome: verificationOutcome ?? state.verificationOutcome,
+      persistedSessionResult: state.persistedSessionResult,
+      recoveryLockResult: state.recoveryLockResult,
+      parentGateCredentialStatus: state.parentGateCredentialStatus,
+      pinOwnerFamilyId: state.pinOwnerFamilyId,
+      containmentFence: state.containmentFence,
+      lastRecoveryAudit: state.lastRecoveryAudit,
+      sessionScopeEpoch: _sessionScopeEpoch,
+      isPostSignOutFreshAdultAuth: state.isPostSignOutFreshAdultAuth,
+      diagnosticReason: reason,
+    );
+    unawaited(_persistFenceTransition());
   }
 
   @override
@@ -1522,6 +1587,7 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     var liveHasAuthorizedExitContext = false;
     var shouldScheduleRevokedRefresh = false;
     AuthorizedActiveAdult? liveAdultOutcome;
+    SessionAuthorizationUnverified? offlineUnverifiedExitOutcome;
 
     if (stagedAttempt.pinMatched &&
         _isFenceStillValid(
@@ -1571,6 +1637,25 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
             } else {
               shouldScheduleRevokedRefresh = true;
             }
+          } else if (outcome is SessionAuthorizationUnverified) {
+            // C0-09 / C0-I05 (`WP4-DEF-01`): Valid shared-device v2 PIN unlock
+            // while transiently offline atomically clears child session and lands
+            // strictly in data-free `AuthorizationUnverified` (never `ParentMode`).
+            final validOfflineSameActor =
+                stagedAttempt.credentialStatus ==
+                    ParentGateCredentialStatus.validV2 &&
+                rawLockInitial == null &&
+                validChildV2 != null &&
+                validChildV2.modeKind ==
+                    PersistedChildModeKind.sharedDeviceAdult &&
+                validChildV2.actorUserId == capturedActorId &&
+                (initialCred.v2!.ownerFamilyId == null ||
+                    initialCred.v2!.ownerFamilyId ==
+                        validChildV2.familyId.value);
+            if (validOfflineSameActor) {
+              liveHasAuthorizedExitContext = true;
+              offlineUnverifiedExitOutcome = outcome;
+            }
           } else if (outcome is ConfirmedAdultMembershipRevoked ||
               outcome is NoActiveFamilyMembershipObserved) {
             shouldScheduleRevokedRefresh = true;
@@ -1582,6 +1667,7 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     // Legacy v1 & unbound provenance guard (`D1.6`): fail closed when target
     // ownership is unresolvable without a verified hinted family.
     if (liveHasAuthorizedExitContext &&
+        offlineUnverifiedExitOutcome == null &&
         (stagedAttempt.credentialStatus ==
                 ParentGateCredentialStatus.legacyV1 ||
             targetFamilyId == null)) {
@@ -1649,6 +1735,7 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     late PinVerificationResult finalResult;
     ContainmentFenceV1? committedFence;
     var postCommitEpoch = capturedEpoch;
+    var invalidatedDuringCommit = false;
 
     await _arbiter.run(() async {
       if (!_isFenceStillValid(
@@ -1710,8 +1797,16 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
       if (finalResult.outcome == PinVerificationOutcome.staleFence) {
         await gateService.abortFencedAttempt(stagedAttempt.attemptId);
       } else if (finalResult.isAuthorizedToExitChildMode) {
-        _containmentEpoch++;
-        postCommitEpoch = _containmentEpoch;
+        if (!_isFenceStillValid(
+          capturedEpoch: capturedEpoch,
+          capturedGeneration: capturedGeneration,
+          capturedActorId: capturedActorId,
+        )) {
+          invalidatedDuringCommit = true;
+        } else {
+          _containmentEpoch++;
+          postCommitEpoch = _containmentEpoch;
+        }
       }
     });
 
@@ -1724,12 +1819,15 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     if (!finalResult.isAuthorizedToExitChildMode) {
       return finalResult;
     }
-    if (!_isFenceStillValid(
-      capturedEpoch: postCommitEpoch,
-      capturedGeneration: capturedGeneration,
-      capturedActorId: capturedActorId,
-    )) {
-      if (!_isFailClosedMasked) {
+    if (invalidatedDuringCommit ||
+        !_isFenceStillValid(
+          capturedEpoch: postCommitEpoch,
+          capturedGeneration: capturedGeneration,
+          capturedActorId: capturedActorId,
+        )) {
+      if (!_isFailClosedMasked &&
+          (state.allowsProtectedUi ||
+              state.status == ColdStartContainmentStatus.hydrating)) {
         _engageSyncFailClosedMask(
           toUnauthenticated: authPort.currentSessionGeneration == null,
           reason: 'barrier2_post_commit_mask',
@@ -1741,6 +1839,45 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
         failedAttempts: 0,
         message: 'Session invalidated while unlock commit completed.',
       );
+    }
+
+    if (offlineUnverifiedExitOutcome != null) {
+      _restoredFromPersistedBootstrap = false;
+      _preferredFamilyOverride = null;
+      _sessionScopeEpoch++;
+
+      ref.read(activeChildModeProvider.notifier).restoreVerifiedChild(null);
+      ref.read(activeFamilyProvider.notifier).selectFamily(null);
+
+      final postCred = await gateService.inspectCredential();
+      if (!_isFenceStillValid(
+        capturedEpoch: postCommitEpoch,
+        capturedGeneration: capturedGeneration,
+        capturedActorId: capturedActorId,
+      )) {
+        return PinVerificationResult(
+          outcome: PinVerificationOutcome.staleFence,
+          attemptId: stagedAttempt.attemptId,
+          failedAttempts: 0,
+          message: 'Session invalidated after unlock commit.',
+        );
+      }
+
+      state = ColdStartContainmentState(
+        status: ColdStartContainmentStatus.authorizationUnverified,
+        actorContext: initialActor,
+        verificationOutcome: offlineUnverifiedExitOutcome,
+        persistedSessionResult: const AbsentPersistedChildModeSession(),
+        recoveryLockResult: const AbsentContainmentRecoveryLock(),
+        parentGateCredentialStatus: postCred.status,
+        pinOwnerFamilyId: postCred.v2?.ownerFamilyId,
+        containmentFence: committedFence,
+        lastRecoveryAudit: state.lastRecoveryAudit,
+        sessionScopeEpoch: _sessionScopeEpoch,
+        isPostSignOutFreshAdultAuth: state.isPostSignOutFreshAdultAuth,
+        diagnosticReason: 'offline_pin_exit_pending_adult_verification',
+      );
+      return finalResult;
     }
 
     final adultOutcome = liveAdultOutcome!;
@@ -1894,8 +2031,24 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     final material = await gateService.derivePinMaterial(newPin);
     final prepared = await _prepareVerifiedParentAction(gateService);
 
+    bool isSetupStillFenced(int expectedEpoch) =>
+        _isFenceStillValid(
+          capturedEpoch: expectedEpoch,
+          capturedGeneration: prepared.actor.sessionGeneration,
+          capturedActorId: prepared.actor.userId,
+        ) &&
+        state.status == ColdStartContainmentStatus.verifiedParentMode &&
+        state.verifiedFamily?.id.value == prepared.targetFamilyId;
+
     late ParentGateCredentialV2 created;
+    var postCommitEpoch = prepared.capturedEpoch;
+    var invalidatedDuringCommit = false;
     await _arbiter.run(() async {
+      if (!isSetupStillFenced(prepared.capturedEpoch)) {
+        throw ParentGateFencedOperationException(
+          'Initial PIN setup aborted due to concurrent session or family transition.',
+        );
+      }
       created = await gateService.setPin(
         newPin,
         ownerFamilyId: prepared.targetFamilyId,
@@ -1906,51 +2059,73 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
             .toList(growable: false),
         fence: prepared.fence,
         preDerivedMaterial: material,
-        preCommitGuard: () => _isFenceStillValid(
-          capturedEpoch: prepared.capturedEpoch,
-          capturedGeneration: prepared.actor.sessionGeneration,
-          capturedActorId: prepared.actor.userId,
-        ),
+        preCommitGuard: () => isSetupStillFenced(prepared.capturedEpoch),
         onBeforePreCommitGuard: onBeforePreCommitGuard,
         onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
       );
+      if (!isSetupStillFenced(prepared.capturedEpoch)) {
+        invalidatedDuringCommit = true;
+      } else {
+        _containmentEpoch++;
+        postCommitEpoch = _containmentEpoch;
+      }
     });
 
-    if (_isFenceStillValid(
-      capturedEpoch: prepared.capturedEpoch,
-      capturedGeneration: prepared.actor.sessionGeneration,
-      capturedActorId: prepared.actor.userId,
-    )) {
-      state = state.copyWith(
-        parentGateCredentialStatus: ParentGateCredentialStatus.validV2,
-        pinOwnerFamilyId: created.ownerFamilyId,
-        needsPinReconfigurationAfterRecovery: false,
+    if (invalidatedDuringCommit || !isSetupStillFenced(postCommitEpoch)) {
+      throw ParentGateFencedOperationException(
+        'Initial PIN setup suppressed: session or family changed during commit.',
       );
     }
+    state = state.copyWith(
+      parentGateCredentialStatus: ParentGateCredentialStatus.validV2,
+      pinOwnerFamilyId: created.ownerFamilyId,
+      needsPinReconfigurationAfterRecovery: false,
+    );
     return created;
   }
 
-  /// Authenticated Parent PIN change requiring valid current PIN + active adult check (`D1.5`).
+  /// Authenticated Parent PIN change requiring valid current PIN + active adult check (`D1.5`, `C0-32`, `C0-37`, `WP4-DEF-02`).
   Future<PinVerificationResult> submitParentPinChange({
     required String currentPin,
     required String newPin,
+    Future<void> Function()? onBeforePhase1PreCommitGuard,
+    Future<void> Function(StagedPinVerificationAttempt attempt)?
+    onAfterKdfBeforeFinalize,
+    Future<void> Function()? onBeforeFinalizePreCommitGuard,
+    Future<void> Function()? onAfterFinalizeGuardBeforeCommit,
   }) async {
     final gateService = ref.read(parentGateServiceProvider);
     final newMaterial = await gateService.derivePinMaterial(newPin);
     final prepared = await _prepareVerifiedParentAction(gateService);
 
+    bool isChangeStillFenced(int expectedEpoch) =>
+        _isFenceStillValid(
+          capturedEpoch: expectedEpoch,
+          capturedGeneration: prepared.actor.sessionGeneration,
+          capturedActorId: prepared.actor.userId,
+        ) &&
+        state.status == ColdStartContainmentStatus.verifiedParentMode &&
+        state.verifiedFamily?.id.value == prepared.targetFamilyId;
+
     late PinAttemptReservationResult reservation;
     await _arbiter.run(() async {
+      if (!isChangeStillFenced(prepared.capturedEpoch)) {
+        reservation = const PinAttemptReservationResult.rejected(
+          PinVerificationResult(
+            outcome: PinVerificationOutcome.staleFence,
+            failedAttempts: 0,
+            message: 'Session or family changed before PIN verification.',
+          ),
+        );
+        return;
+      }
       reservation = await gateService.reserveVerificationAttempt(
         enteredPin: currentPin,
         actorFamilyId: prepared.targetFamilyId,
         actorUserId: prepared.actor.userId,
         fence: prepared.fence,
-        preCommitGuard: () => _isFenceStillValid(
-          capturedEpoch: prepared.capturedEpoch,
-          capturedGeneration: prepared.actor.sessionGeneration,
-          capturedActorId: prepared.actor.userId,
-        ),
+        preCommitGuard: () => isChangeStillFenced(prepared.capturedEpoch),
+        onBeforePreCommitGuard: onBeforePhase1PreCommitGuard,
       );
     });
 
@@ -1966,31 +2141,45 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
       reserved: reservation.reservation!,
       hasPositiveServerAdultVerification: true,
       verifiedActiveAdultFamilyIds: verifiedIds,
+      onAfterKdfBeforeFinalize: onAfterKdfBeforeFinalize,
     );
 
     final authPort = ref.read(authSessionPortProvider);
     final liveActor = await authPort.validateForMutation();
+    final nowUtc = ref.read(appClockProvider)();
     final stillAuthorized =
         liveActor != null &&
+        liveActor.isValidAt(nowUtc) &&
+        !liveActor.isAnonymous &&
+        liveActor.role != 'child' &&
         liveActor.userId == prepared.actor.userId &&
         liveActor.sessionGeneration == prepared.actor.sessionGeneration &&
-        _isFenceStillValid(
-          capturedEpoch: prepared.capturedEpoch,
-          capturedGeneration: prepared.actor.sessionGeneration,
-          capturedActorId: prepared.actor.userId,
-        );
+        isChangeStillFenced(prepared.capturedEpoch);
 
     late PinVerificationResult result;
+    var postCommitEpoch = prepared.capturedEpoch;
+    var invalidatedDuringCommit = false;
+    final parsedFenceInitial = ContainmentFenceV1.tryParse(prepared.rawFence);
+
     await _arbiter.run(() async {
+      if (!isChangeStillFenced(prepared.capturedEpoch)) {
+        await gateService.abortFencedAttempt(staged.attemptId);
+        result = PinVerificationResult(
+          outcome: PinVerificationOutcome.staleFence,
+          attemptId: staged.attemptId,
+          failedAttempts: 0,
+          message: 'PIN update aborted due to concurrent session or family transition.',
+        );
+        return;
+      }
+
       result = await gateService.completeStagedVerification(
         attempt: staged,
         hasAuthorizedExitContextOverride: stillAuthorized,
-        preCommitGuard: () => _isFenceStillValid(
-          capturedEpoch: prepared.capturedEpoch,
-          capturedGeneration: prepared.actor.sessionGeneration,
-          capturedActorId: prepared.actor.userId,
-        ),
-        additionalMutationsBuilder: (nowUtc) {
+        preCommitGuard: () => isChangeStillFenced(prepared.capturedEpoch),
+        onBeforePreCommitGuard: onBeforeFinalizePreCommitGuard,
+        onAfterGuardBeforeCommit: onAfterFinalizeGuardBeforeCommit,
+        additionalMutationsBuilder: (commitUtc) {
           final nextRev = staged.reservedCredentialRevision + 1;
           final nextCred = ParentGateCredentialV2(
             version: 2,
@@ -2002,13 +2191,26 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
             ownerFamilyId: prepared.targetFamilyId,
             configuredByActorUserId: prepared.actor.userId,
             credentialRevision: nextRev,
-            updatedAtUtc: nowUtc,
+            updatedAtUtc: commitUtc,
+          );
+          final nextFence = ContainmentFenceV1(
+            version: 1,
+            fenceEpoch: (parsedFenceInitial?.fenceEpoch ?? 0) + 1,
+            actorUserId: prepared.actor.userId,
+            sessionGeneration: _sessionGenerationOrdinal,
+            lockState: ContainmentFenceLockState.none,
+            updatedAtUtc: commitUtc,
           );
           return [
             MetadataMutation.upsert(
               key: ParentGateService.credentialV2Key,
               value: nextCred.toJsonString(),
-              updatedAt: nowUtc,
+              updatedAt: commitUtc,
+            ),
+            MetadataMutation.upsert(
+              key: ParentGateService.containmentFenceV1Key,
+              value: nextFence.toJsonString(),
+              updatedAt: commitUtc,
             ),
             if (staged.legacyV1HashRaw != null)
               const MetadataMutation.delete(key: ParentGateService.pinHashKey),
@@ -2017,14 +2219,32 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
           ];
         },
       );
+
+      if (result.outcome == PinVerificationOutcome.staleFence) {
+        await gateService.abortFencedAttempt(staged.attemptId);
+      } else if (result.isVerified) {
+        if (!isChangeStillFenced(prepared.capturedEpoch)) {
+          invalidatedDuringCommit = true;
+        } else {
+          _containmentEpoch++;
+          postCommitEpoch = _containmentEpoch;
+        }
+      }
     });
 
     if (result.isVerified &&
-        _isFenceStillValid(
-          capturedEpoch: prepared.capturedEpoch,
-          capturedGeneration: prepared.actor.sessionGeneration,
-          capturedActorId: prepared.actor.userId,
-        )) {
+        (invalidatedDuringCommit || !isChangeStillFenced(postCommitEpoch))) {
+      return PinVerificationResult(
+        outcome: PinVerificationOutcome.staleFence,
+        attemptId: staged.attemptId,
+        failedAttempts: 0,
+        message: 'Session or family changed while PIN update committed.',
+      );
+    }
+
+    if (result.isVerified &&
+        !invalidatedDuringCommit &&
+        isChangeStillFenced(postCommitEpoch)) {
       state = state.copyWith(
         parentGateCredentialStatus: ParentGateCredentialStatus.validV2,
         pinOwnerFamilyId: prepared.targetFamilyId,
@@ -2034,16 +2254,39 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     return result;
   }
 
-  /// Reassigns cross-household Parent PIN after explicit Parent Mode confirmation (`C0-27`, `D1.5`).
+  /// Reassigns cross-household Parent PIN after explicit Parent Mode confirmation (`C0-27`, `C0-32`, `D1.5`, `WP4-DEF-02`).
   Future<ParentGateCredentialV2> submitCrossFamilyPinReassignment({
     required String newPin,
+    Future<void> Function()? onAfterKdfBeforeCommit,
+    Future<void> Function()? onBeforePreCommitGuard,
+    Future<void> Function()? onAfterGuardBeforeCommit,
   }) async {
     final gateService = ref.read(parentGateServiceProvider);
     final material = await gateService.derivePinMaterial(newPin);
     final prepared = await _prepareVerifiedParentAction(gateService);
 
+    bool isReassignStillFenced(int expectedEpoch) =>
+        _isFenceStillValid(
+          capturedEpoch: expectedEpoch,
+          capturedGeneration: prepared.actor.sessionGeneration,
+          capturedActorId: prepared.actor.userId,
+        ) &&
+        state.status == ColdStartContainmentStatus.verifiedParentMode &&
+        state.verifiedFamily?.id.value == prepared.targetFamilyId;
+
+    if (onAfterKdfBeforeCommit != null) {
+      await onAfterKdfBeforeCommit();
+    }
+
     late ParentGateCredentialV2 updated;
+    var postCommitEpoch = prepared.capturedEpoch;
+    var invalidatedDuringCommit = false;
     await _arbiter.run(() async {
+      if (!isReassignStillFenced(prepared.capturedEpoch)) {
+        throw ParentGateFencedOperationException(
+          'Cross-family PIN reassignment aborted due to concurrent session or family change.',
+        );
+      }
       updated = await gateService.reassignCrossFamilyPin(
         newPin: newPin,
         targetFamilyId: prepared.targetFamilyId,
@@ -2054,23 +2297,27 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
             .toList(growable: false),
         fence: prepared.fence,
         preDerivedMaterial: material,
-        preCommitGuard: () => _isFenceStillValid(
-          capturedEpoch: prepared.capturedEpoch,
-          capturedGeneration: prepared.actor.sessionGeneration,
-          capturedActorId: prepared.actor.userId,
-        ),
+        preCommitGuard: () => isReassignStillFenced(prepared.capturedEpoch),
+        onBeforePreCommitGuard: onBeforePreCommitGuard,
+        onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
       );
+      if (!isReassignStillFenced(prepared.capturedEpoch)) {
+        invalidatedDuringCommit = true;
+      } else {
+        _containmentEpoch++;
+        postCommitEpoch = _containmentEpoch;
+      }
     });
 
-    if (_isFenceStillValid(
-      capturedEpoch: prepared.capturedEpoch,
-      capturedGeneration: prepared.actor.sessionGeneration,
-      capturedActorId: prepared.actor.userId,
-    )) {
+    if (!invalidatedDuringCommit && isReassignStillFenced(postCommitEpoch)) {
       state = state.copyWith(
         parentGateCredentialStatus: ParentGateCredentialStatus.validV2,
         pinOwnerFamilyId: updated.ownerFamilyId,
         needsPinReconfigurationAfterRecovery: false,
+      );
+    } else {
+      throw ParentGateFencedOperationException(
+        'Cross-family PIN reassignment suppressed: session or family changed during commit.',
       );
     }
     return updated;
@@ -3090,12 +3337,6 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
       _pendingCreatedFamily = null;
     }
 
-    // Pause mismatched-actor active reward commands via non-dispatch SQLite CAS (`C0-34`).
-    await _arbiter.run(() async {
-      await _pauseMismatchedActorRewardCommands(actor);
-    });
-    if (!ref.mounted || _rehydrateNeedsRerun) return;
-
     final validV2 = parsedSession is ValidPersistedChildModeSessionV2
         ? parsedSession.session
         : null;
@@ -3184,6 +3425,45 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
       pinOwnerFamilyId: credInspection.v2?.ownerFamilyId,
     );
 
+    // Synchronously bump _containmentEpoch & clear protected state on any
+    // containment downgrade BEFORE entering _arbiter (`WP4-DEF-03`).
+    if (autoUnlockFamilyId == null && state.allowsProtectedUi) {
+      final preliminaryDowngrade = resolveColdStartContainmentState(
+        actorContext: actor,
+        persistedSessionResult: parsedSession,
+        recoveryLockResult: parsedLock,
+        verificationOutcome: outcome,
+        parentGateCredentialStatus: credInspection.status,
+        pinOwnerFamilyId: credInspection.v2?.ownerFamilyId,
+        legacyOwnershipResolution: legacyResolution,
+        containmentFence: parsedFence,
+        lastRecoveryAudit: parsedAudit,
+        sessionScopeEpoch: _sessionScopeEpoch,
+        isPostSignOutFreshAdultAuth: isFreshPostSignOutAuth,
+      );
+      if (preliminaryDowngrade.status ==
+              ColdStartContainmentStatus.containmentLocked ||
+          preliminaryDowngrade.status ==
+              ColdStartContainmentStatus.pairedChildRevoked ||
+          preliminaryDowngrade.status ==
+              ColdStartContainmentStatus.adultAccessRestricted ||
+          preliminaryDowngrade.status ==
+              ColdStartContainmentStatus.pairedChildUnverified) {
+        _containmentEpoch++;
+        _sessionScopeEpoch++;
+        _clearInMemoryProtectedState();
+        state = preliminaryDowngrade.copyWith(
+          sessionScopeEpoch: _sessionScopeEpoch,
+        );
+      }
+    }
+
+    // Pause mismatched-actor active reward commands via non-dispatch SQLite CAS (`C0-34`).
+    await _arbiter.run(() async {
+      await _pauseMismatchedActorRewardCommands(actor);
+    });
+    if (!ref.mounted || _rehydrateNeedsRerun) return;
+
     var effectiveSessionResult = parsedSession;
     var effectiveLockResult = parsedLock;
     var effectiveFence = parsedFence;
@@ -3196,6 +3476,10 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
       ContainmentFenceV1? nextFence;
 
       await _arbiter.run(() async {
+        final liveRawFence = await store.readMetadata(
+          ParentGateService.containmentFenceV1Key,
+        );
+        final liveParsedFence = ContainmentFenceV1.tryParse(liveRawFence);
         final rawLockout = await store.readMetadata(
           ParentGateService.lockoutV1Key,
         );
@@ -3205,11 +3489,12 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
         final commitUtc = ref.read(appClockProvider)();
         nextFence = ContainmentFenceV1(
           version: 1,
-          fenceEpoch: (parsedFence?.fenceEpoch ?? 0) + 1,
+          fenceEpoch: (liveParsedFence?.fenceEpoch ?? 0) + 1,
           actorUserId: actor.userId,
           sessionGeneration:
-              (parsedFence?.sessionGeneration ?? 0) > _sessionGenerationOrdinal
-              ? parsedFence!.sessionGeneration
+              (liveParsedFence?.sessionGeneration ?? 0) >
+                  _sessionGenerationOrdinal
+              ? liveParsedFence!.sessionGeneration
               : _sessionGenerationOrdinal,
           lockState: ContainmentFenceLockState.none,
           updatedAtUtc: commitUtc,
@@ -3253,7 +3538,7 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
           expectedValues: {
             ActiveChildModeNotifier.activeSessionKey: rawChild,
             containmentRecoveryLockV1Key: rawLock,
-            ParentGateService.containmentFenceV1Key: rawFence,
+            ParentGateService.containmentFenceV1Key: liveRawFence,
             ParentGateService.lockoutV1Key: ?rawLockout,
           },
           mutations: mutations,
