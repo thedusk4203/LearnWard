@@ -1864,9 +1864,33 @@ void main() {
     );
   });
 
-  group('R40-02: Hardened ActiveChildModeNotifier.selectChild', () {
-    test('rejects actor mismatch even when actorUserId is provided, plus unauthenticated, expired, anonymous, and paired-child actors', () async {
+  group('R40-02 & R41-02: Canonical enterChildMode & Retired selectChild', () {
+    ParentGateCredentialV2 buildValidPinCred({
+      required String ownerFamilyId,
+      required String actorUserId,
+    }) => ParentGateCredentialV2(
+      version: 2,
+      kdf: ParentGateCrypto.kdfAlgorithmId,
+      iterations: ParentGateCrypto.productionMinIterations,
+      keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
+      saltHex: List.filled(32, 'a').join(),
+      hashHex: List.filled(64, 'b').join(),
+      ownerFamilyId: ownerFamilyId,
+      configuredByActorUserId: actorUserId,
+      credentialRevision: 1,
+      updatedAtUtc: nowUtc,
+    );
+
+    test('retires direct selectChild and rejects unauthenticated, expired, anonymous, and paired-child actors via canonical enterChildMode', () async {
       final store = InMemoryLocalMetadataStore();
+      await store.writeMetadata(
+        key: ParentGateService.credentialV2Key,
+        value: buildValidPinCred(
+          ownerFamilyId: testFamily.id.value,
+          actorUserId: 'adult-a',
+        ).toJsonString(),
+        updatedAt: nowUtc,
+      );
       final verifier = FakeContainmentAuthorizationVerifier(
         defaultOutcome: AuthorizedActiveAdult(
           verifiedRole: VerifiedAdultRole.owner,
@@ -1879,7 +1903,7 @@ void main() {
         ),
       );
 
-      // 1. actorUserId mismatch against validated actor
+      // 1. Direct legacy selectChild is retired (throws UnsupportedError, writes nothing)
       final validAuth = FakeAuthSessionPort(
         activeUserId: 'adult-a',
         sessionGeneration: 'gen-a-1',
@@ -1895,8 +1919,9 @@ void main() {
       await expectLater(
         () => c1
             .read(activeChildModeProvider.notifier)
+            // ignore: deprecated_member_use_from_same_package
             .selectChild(testChild, actorUserId: 'adult-spoofed'),
-        throwsStateError,
+        throwsUnsupportedError,
       );
       expect(c1.read(activeChildModeProvider), isNull);
       expect(
@@ -1904,7 +1929,7 @@ void main() {
         isNull,
       );
 
-      // 2. Unauthenticated actor
+      // 2. Unauthenticated actor rejected by enterChildMode
       final unauth = FakeAuthSessionPort(activeUserId: null);
       final c2 = ProviderContainer(
         overrides: [
@@ -1916,8 +1941,8 @@ void main() {
       addTearDown(c2.dispose);
       await expectLater(
         () => c2
-            .read(activeChildModeProvider.notifier)
-            .selectChild(testChild, actorUserId: 'adult-a'),
+            .read(sessionContainmentProvider.notifier)
+            .enterChildMode(testChild),
         throwsStateError,
       );
       expect(
@@ -1925,7 +1950,7 @@ void main() {
         isNull,
       );
 
-      // 3. Expired actor context
+      // 3. Expired actor context rejected by enterChildMode
       final expiredAuth = _ExpirableAuthSessionPort(
         context: ValidatedActorContext(
           userId: 'adult-a',
@@ -1944,11 +1969,13 @@ void main() {
       );
       addTearDown(c3.dispose);
       await expectLater(
-        () => c3.read(activeChildModeProvider.notifier).selectChild(testChild),
+        () => c3
+            .read(sessionContainmentProvider.notifier)
+            .enterChildMode(testChild),
         throwsStateError,
       );
 
-      // 4. Anonymous or child-role actor
+      // 4. Anonymous or child-role actor rejected by enterChildMode
       final anonAuth = FakeAuthSessionPort(
         activeUserId: 'anon-1',
         sessionGeneration: 'gen-anon',
@@ -1963,7 +1990,9 @@ void main() {
       );
       addTearDown(c4.dispose);
       await expectLater(
-        () => c4.read(activeChildModeProvider.notifier).selectChild(testChild),
+        () => c4
+            .read(sessionContainmentProvider.notifier)
+            .enterChildMode(testChild),
         throwsStateError,
       );
 
@@ -1981,7 +2010,9 @@ void main() {
       );
       addTearDown(c5.dispose);
       await expectLater(
-        () => c5.read(activeChildModeProvider.notifier).selectChild(testChild),
+        () => c5
+            .read(sessionContainmentProvider.notifier)
+            .enterChildMode(testChild),
         throwsStateError,
       );
       expect(
@@ -1992,6 +2023,14 @@ void main() {
 
     test('rejects non-adult, revoked, unverified, or child-unavailable outcomes and preserves existing lock/session records', () async {
       final store = InMemoryLocalMetadataStore();
+      await store.writeMetadata(
+        key: ParentGateService.credentialV2Key,
+        value: buildValidPinCred(
+          ownerFamilyId: testFamily.id.value,
+          actorUserId: 'adult-a',
+        ).toJsonString(),
+        updatedAt: nowUtc,
+      );
       final fakeAuth = FakeAuthSessionPort(
         activeUserId: 'adult-a',
         sessionGeneration: 'gen-a-1',
@@ -2001,11 +2040,21 @@ void main() {
       final container = ProviderContainer(
         overrides: [
           localMetadataStoreProvider.overrideWithValue(store),
+          parentGateServiceProvider.overrideWithValue(
+            ParentGateService(
+              store,
+              clock: FixedClock(nowUtc),
+              minIterations: 1000,
+              configuredIterations: 1000,
+              runInIsolate: false,
+            ),
+          ),
           authSessionPortProvider.overrideWithValue(fakeAuth),
           containmentAuthorizationVerifierProvider.overrideWithValue(verifier),
         ],
       );
       addTearDown(container.dispose);
+      await container.read(sessionContainmentProvider.notifier).rehydrate();
 
       for (final rejectedOutcome in <ContainmentVerificationOutcome>[
         const NoActiveFamilyMembershipObserved(),
@@ -2031,8 +2080,8 @@ void main() {
         verifier.defaultOutcome = rejectedOutcome;
         await expectLater(
           () => container
-              .read(activeChildModeProvider.notifier)
-              .selectChild(testChild),
+              .read(sessionContainmentProvider.notifier)
+              .enterChildMode(testChild),
           throwsStateError,
         );
         expect(container.read(activeChildModeProvider), isNull);
@@ -2058,8 +2107,8 @@ void main() {
       );
       await expectLater(
         () => container
-            .read(activeChildModeProvider.notifier)
-            .selectChild(testChild),
+            .read(sessionContainmentProvider.notifier)
+            .enterChildMode(testChild),
         throwsStateError,
       );
       expect(
@@ -2076,13 +2125,20 @@ void main() {
 
     test('fences mid-flight session rotation during verification and commits v2 session when valid adult authorization holds', () async {
       final store = InMemoryLocalMetadataStore();
+      await store.writeMetadata(
+        key: ParentGateService.credentialV2Key,
+        value: buildValidPinCred(
+          ownerFamilyId: testFamily.id.value,
+          actorUserId: 'adult-a',
+        ).toJsonString(),
+        updatedAt: nowUtc,
+      );
       final fakeAuth = FakeAuthSessionPort(
         activeUserId: 'adult-a',
         sessionGeneration: 'gen-a-1',
       );
       final barrier = Completer<void>();
       final verifier = FakeContainmentAuthorizationVerifier(
-        barrier: barrier,
         defaultOutcome: AuthorizedActiveAdult(
           verifiedRole: VerifiedAdultRole.owner,
           verifiedFamily: testFamily,
@@ -2097,15 +2153,25 @@ void main() {
       final container = ProviderContainer(
         overrides: [
           localMetadataStoreProvider.overrideWithValue(store),
+          parentGateServiceProvider.overrideWithValue(
+            ParentGateService(
+              store,
+              clock: FixedClock(nowUtc),
+              minIterations: 1000,
+              configuredIterations: 1000,
+              runInIsolate: false,
+            ),
+          ),
           authSessionPortProvider.overrideWithValue(fakeAuth),
           containmentAuthorizationVerifierProvider.overrideWithValue(verifier),
         ],
       );
       addTearDown(container.dispose);
+      final controller = container.read(sessionContainmentProvider.notifier);
+      await controller.rehydrate();
 
-      final future = container
-          .read(activeChildModeProvider.notifier)
-          .selectChild(testChild, actorUserId: 'adult-a');
+      verifier.barrier = barrier;
+      final future = controller.enterChildMode(testChild);
       await Future<void>.delayed(Duration.zero);
 
       // Rotate auth generation while verifySession is awaiting response
@@ -2122,9 +2188,8 @@ void main() {
       // Valid unrotated adult succeeds
       verifier.barrier = null;
       fakeAuth.setSession(userId: 'adult-a', sessionGeneration: 'gen-a-2');
-      await container
-          .read(activeChildModeProvider.notifier)
-          .selectChild(testChild, actorUserId: 'adult-a');
+      await controller.rehydrate();
+      await controller.enterChildMode(testChild);
       expect(container.read(activeChildModeProvider), equals(testChild));
       final saved = await store.readMetadata(
         ActiveChildModeNotifier.activeSessionKey,
@@ -2140,14 +2205,29 @@ void main() {
 
     test('aborts atomic CAS commit when preCommitGuard observes session rotation inside transaction barrier', () async {
       final backingStore = InMemoryLocalMetadataStore();
+      await backingStore.writeMetadata(
+        key: ParentGateService.credentialV2Key,
+        value: buildValidPinCred(
+          ownerFamilyId: testFamily.id.value,
+          actorUserId: 'adult-a',
+        ).toJsonString(),
+        updatedAt: nowUtc,
+      );
       final fakeAuth = FakeAuthSessionPort(
         activeUserId: 'adult-a',
         sessionGeneration: 'gen-a-1',
       );
+      var guardTriggered = false;
       final interceptingStore = _PreGuardMutatingMetadataStore(
         backingStore,
         onBeforeGuard: () {
-          fakeAuth.setSession(userId: 'adult-a', sessionGeneration: 'gen-a-2');
+          if (!guardTriggered) {
+            guardTriggered = true;
+            fakeAuth.setSession(
+              userId: 'adult-a',
+              sessionGeneration: 'gen-a-2',
+            );
+          }
         },
       );
       final verifier = FakeContainmentAuthorizationVerifier(
@@ -2165,16 +2245,25 @@ void main() {
       final container = ProviderContainer(
         overrides: [
           localMetadataStoreProvider.overrideWithValue(interceptingStore),
+          parentGateServiceProvider.overrideWithValue(
+            ParentGateService(
+              interceptingStore,
+              clock: FixedClock(nowUtc),
+              minIterations: 1000,
+              configuredIterations: 1000,
+              runInIsolate: false,
+            ),
+          ),
           authSessionPortProvider.overrideWithValue(fakeAuth),
           containmentAuthorizationVerifierProvider.overrideWithValue(verifier),
         ],
       );
       addTearDown(container.dispose);
+      final controller = container.read(sessionContainmentProvider.notifier);
+      await controller.rehydrate();
 
       await expectLater(
-        () => container
-            .read(activeChildModeProvider.notifier)
-            .selectChild(testChild, actorUserId: 'adult-a'),
+        () => controller.enterChildMode(testChild),
         throwsStateError,
       );
       expect(container.read(activeChildModeProvider), isNull);

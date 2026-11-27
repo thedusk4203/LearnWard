@@ -8,6 +8,7 @@ import 'package:learnward_design_system/learnward_design_system.dart';
 import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
+import '../../../app/bootstrap/cold_start_containment_bootstrap.dart';
 import '../../../app/routing/app_routes.dart';
 import '../../shared_device/domain/parent_gate_models.dart';
 import '../../shared_device/presentation/parent_pin_settings_dialog.dart';
@@ -253,7 +254,20 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
               icon: const Icon(Icons.swap_horiz),
               tooltip: 'Switch Family',
               onSelected: (selected) async {
-                await controller.switchActiveFamily(selected);
+                try {
+                  await controller.switchActiveFamily(selected);
+                } catch (e) {
+                  if (!context.mounted) return;
+                  final current = ref.read(coldStartContainmentProvider);
+                  if (current.status ==
+                      ColdStartContainmentStatus.verifiedParentMode) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Unable to switch family right now: $e'),
+                      ),
+                    );
+                  }
+                }
               },
               itemBuilder: (context) => verifiedFamilies
                   .map(
@@ -281,7 +295,17 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
             icon: const Icon(Icons.logout),
             tooltip: 'Sign Out',
             onPressed: () async {
-              await controller.signOutNormal();
+              try {
+                await controller.signOutNormal();
+              } catch (e) {
+                if (!context.mounted) return;
+                final current = ref.read(coldStartContainmentProvider);
+                if (current.allowsProtectedUi) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Unable to complete sign out: $e')),
+                  );
+                }
+              }
             },
           ),
         ],

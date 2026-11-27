@@ -628,170 +628,52 @@ final activeFamilyProvider = NotifierProvider<ActiveFamilyNotifier, Family?>(
   ActiveFamilyNotifier.new,
 );
 
-/// Notifier managing verified active child mode state and v2 persistence.
+/// Notifier managing verified active child mode state projection.
 ///
-/// Cold start NEVER blindly restores unverified persisted child sessions;
-/// [ColdStartContainmentNotifier] hydrates verified sessions asynchronously.
+/// [SessionLifecycleController] (`coldStartContainmentProvider`) is the sole
+/// production authority for creating or clearing `active_child_session`. This
+/// notifier performs zero metadata writes/deletes and only holds verified
+/// in-memory state (`restoreVerifiedChild`) for controller & test-fixture use.
 class ActiveChildModeNotifier extends Notifier<ChildProfile?> {
   static const activeSessionKey = 'active_child_session';
 
   @override
   ChildProfile? build() => null;
 
-  /// Populates in-memory Child Mode state only after verified cold-start checks.
+  /// Populates in-memory Child Mode state only after verified controller checks
+  /// (or inside scoped test harnesses). Never writes or deletes SQLite locks.
   void restoreVerifiedChild(ChildProfile? child) {
     state = child;
   }
 
+  /// Retired legacy mutator (`R41-02`). Always throws [UnsupportedError].
+  ///
+  /// Use `ref.read(sessionContainmentProvider.notifier).enterChildMode(child)`
+  /// instead.
+  @Deprecated('Use SessionLifecycleController.enterChildMode instead (R41-02).')
   Future<void> selectChild(
     ChildProfile child, {
     String? actorUserId,
     PersistedChildModeKind modeKind = PersistedChildModeKind.sharedDeviceAdult,
   }) async {
-    if (modeKind != PersistedChildModeKind.sharedDeviceAdult) {
-      throw StateError(
-        'Cannot enter Child Mode with modeKind=${modeKind.name}: interactive selection requires shared_device_adult.',
-      );
-    }
-
-    final authPort = ref.read(authSessionPortProvider);
-    final actor = await authPort.validateForMutation();
-    final nowUtc = ref.read(appClockProvider)();
-    if (actor == null ||
-        !actor.isValidAt(nowUtc) ||
-        actor.userId.trim().isEmpty ||
-        actor.sessionGeneration.trim().isEmpty) {
-      throw StateError(
-        'Cannot enter Child Mode without a validated authenticated actor.',
-      );
-    }
-    if (actor.isAnonymous || actor.role == 'child') {
-      throw StateError(
-        'Cannot enter Child Mode from an anonymous or paired-child session.',
-      );
-    }
-
-    final resolvedActorId = actor.userId.trim();
-    if (actorUserId != null && actorUserId.trim() != resolvedActorId) {
-      throw StateError(
-        'Cannot enter Child Mode: supplied actorUserId does not match the validated session.',
-      );
-    }
-
-    final capturedGeneration = actor.sessionGeneration;
-    if (authPort.currentSessionGeneration != capturedGeneration) {
-      throw StateError(
-        'Cannot enter Child Mode: auth session generation changed.',
-      );
-    }
-
-    final store = ref.read(localMetadataStoreProvider);
-    final existingLock = await store.readMetadata(
-      ColdStartContainmentNotifier.containmentRecoveryLockV1Key,
+    throw UnsupportedError(
+      'ActiveChildModeNotifier.selectChild is retired (R41-02). '
+      'Use SessionLifecycleController.enterChildMode via sessionContainmentProvider instead.',
     );
-    if (existingLock != null) {
-      throw StateError(
-        'Cannot enter Child Mode while containment_recovery_lock_v1 is active.',
-      );
-    }
-    final existingSession = await store.readMetadata(activeSessionKey);
-    if (existingSession != null) {
-      throw StateError(
-        'Cannot enter Child Mode while active_child_session already exists.',
-      );
-    }
-
-    final verifier = ref.read(containmentAuthorizationVerifierProvider);
-    final outcome = await verifier.verifySession(
-      context: actor,
-      preferredFamilyId: child.familyId,
-      targetFamilyId: child.familyId,
-      targetChildId: child.id,
-    );
-
-    if (authPort.currentSessionGeneration != capturedGeneration) {
-      throw StateError(
-        'Cannot enter Child Mode: auth session generation changed during verification.',
-      );
-    }
-
-    final revalidatedActor = await authPort.validateForMutation();
-    final postVerifyUtc = ref.read(appClockProvider)();
-    if (revalidatedActor == null ||
-        !revalidatedActor.isValidAt(postVerifyUtc) ||
-        revalidatedActor.userId.trim() != resolvedActorId ||
-        revalidatedActor.sessionGeneration != capturedGeneration ||
-        revalidatedActor.isAnonymous ||
-        revalidatedActor.role == 'child') {
-      throw StateError(
-        'Cannot enter Child Mode: validated actor context is no longer active.',
-      );
-    }
-
-    if (outcome is! AuthorizedActiveAdult ||
-        !outcome.verifiedRolesByFamilyId.containsKey(child.familyId.value) ||
-        outcome.verifiedFamily.id != child.familyId ||
-        outcome.verifiedChild?.id != child.id ||
-        outcome.verifiedChild?.familyId != child.familyId) {
-      throw StateError(
-        'Cannot enter Child Mode without positive active adult authorization ($outcome).',
-      );
-    }
-
-    final verifiedChild = outcome.verifiedChild!;
-    final persistedAtUtc = ref.read(appClockProvider)();
-    final envelope = PersistedChildModeSession(
-      modeKind: modeKind,
-      actorUserId: resolvedActorId,
-      familyId: child.familyId,
-      childId: child.id,
-      childProfileSnapshot: verifiedChild,
-      persistedAtUtc: persistedAtUtc,
-    );
-
-    final committed = await store.compareAndSwapMetadataBatch(
-      expectedValues: const {
-        activeSessionKey: null,
-        ColdStartContainmentNotifier.containmentRecoveryLockV1Key: null,
-      },
-      mutations: [
-        MetadataMutation.upsert(
-          key: activeSessionKey,
-          value: envelope.toJsonString(),
-          updatedAt: persistedAtUtc,
-        ),
-      ],
-      preCommitGuard: () {
-        if (!ref.mounted) {
-          return false;
-        }
-        if (authPort.currentSessionGeneration != capturedGeneration) {
-          return false;
-        }
-        return actor.isValidAt(ref.read(appClockProvider)());
-      },
-    );
-    if (!committed) {
-      throw StateError(
-        'Cannot enter Child Mode: session fence invalidated or containment lock/session mutated before commit.',
-      );
-    }
-    if (!ref.mounted ||
-        authPort.currentSessionGeneration != capturedGeneration) {
-      throw StateError(
-        'Cannot enter Child Mode: session invalidated around commit.',
-      );
-    }
-
-    state = verifiedChild;
   }
 
+  /// Retired legacy mutator (`R41-02`). Always throws [UnsupportedError].
+  ///
+  /// Use `ref.read(sessionContainmentProvider.notifier).submitParentGateUnlock(pin)`
+  /// instead.
+  @Deprecated(
+    'Use SessionLifecycleController.submitParentGateUnlock instead (R41-02).',
+  )
   Future<void> exitChildMode() async {
-    state = null;
-    final store = ref.read(localMetadataStoreProvider);
-    await store.applyMetadataBatch([
-      const MetadataMutation.delete(key: activeSessionKey),
-    ]);
+    throw UnsupportedError(
+      'ActiveChildModeNotifier.exitChildMode is retired (R41-02). '
+      'Use SessionLifecycleController.submitParentGateUnlock via sessionContainmentProvider instead.',
+    );
   }
 }
 

@@ -1158,6 +1158,11 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     if (!ref.mounted) {
       throw StateError('Lifecycle controller is disposed.');
     }
+    if (_isFailClosedMasked) {
+      throw StateError(
+        'Cannot enter Child Mode while fail-closed session mask is active.',
+      );
+    }
     final authPort = ref.read(authSessionPortProvider);
     final actor = await authPort.validateForMutation();
     final nowUtc = ref.read(appClockProvider)();
@@ -1253,6 +1258,22 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
       }
 
       final store = ref.read(localMetadataStoreProvider);
+      final existingSession = await store.readMetadata(
+        ActiveChildModeNotifier.activeSessionKey,
+      );
+      if (existingSession != null) {
+        throw StateError(
+          'Cannot enter Child Mode while active_child_session already exists.',
+        );
+      }
+      final existingLock = await store.readMetadata(
+        containmentRecoveryLockV1Key,
+      );
+      if (existingLock != null) {
+        throw StateError(
+          'Cannot enter Child Mode while containment_recovery_lock_v1 is active.',
+        );
+      }
       final rawFence = await store.readMetadata(
         ParentGateService.containmentFenceV1Key,
       );
@@ -2298,8 +2319,13 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
   /// Switches the active household among the authenticated adult's verified
   /// families (`ParentMode` ONLY; increments `sessionScopeEpoch` so all screen
   /// caches rebuild cleanly).
-  Future<void> switchActiveFamily(Family targetFamily) async {
+  Future<void> switchActiveFamily(
+    Family targetFamily, {
+    Future<void> Function()? onBeforePreCommitGuard,
+    Future<void> Function()? onAfterGuardBeforeCommit,
+  }) async {
     if (!ref.mounted ||
+        _isFailClosedMasked ||
         state.status != ColdStartContainmentStatus.verifiedParentMode) {
       throw StateError(
         'Switching families is permitted only in verified Parent Mode.',
@@ -2310,49 +2336,139 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
         'Selected family is not among positively verified active adult memberships.',
       );
     }
-    final actor = state.actorContext;
-    if (actor == null) {
-      throw StateError('Missing actor context during family switch.');
+    final stateActor = state.actorContext;
+    if (stateActor == null ||
+        stateActor.isAnonymous ||
+        stateActor.role == 'child' ||
+        stateActor.userId.trim().isEmpty ||
+        stateActor.sessionGeneration.trim().isEmpty) {
+      throw StateError(
+        'Missing verified adult actor context during family switch.',
+      );
+    }
+
+    final capturedEpoch = _containmentEpoch;
+    final capturedActorId = stateActor.userId.trim();
+    final capturedGeneration = stateActor.sessionGeneration.trim();
+
+    final authPort = ref.read(authSessionPortProvider);
+    final liveActor = await authPort.validateForMutation();
+    final nowUtc = ref.read(appClockProvider)();
+    if (!ref.mounted ||
+        liveActor == null ||
+        !liveActor.isValidAt(nowUtc) ||
+        liveActor.isAnonymous ||
+        liveActor.role == 'child' ||
+        liveActor.userId.trim() != capturedActorId ||
+        liveActor.sessionGeneration.trim() != capturedGeneration ||
+        !_isFenceStillValid(
+          capturedEpoch: capturedEpoch,
+          capturedGeneration: capturedGeneration,
+          capturedActorId: capturedActorId,
+        ) ||
+        state.status != ColdStartContainmentStatus.verifiedParentMode ||
+        !state.verifiedFamilies.any((f) => f.id == targetFamily.id)) {
+      throw StateError(
+        'Family switch rejected: active adult session is no longer eligible.',
+      );
     }
 
     await _arbiter.run(() async {
+      if (!ref.mounted ||
+          !_isFenceStillValid(
+            capturedEpoch: capturedEpoch,
+            capturedGeneration: capturedGeneration,
+            capturedActorId: capturedActorId,
+          ) ||
+          state.status != ColdStartContainmentStatus.verifiedParentMode ||
+          !state.verifiedFamilies.any((f) => f.id == targetFamily.id)) {
+        throw StateError(
+          'Family switch rejected: session invalidated before commit.',
+        );
+      }
+
       final store = ref.read(localMetadataStoreProvider);
+      final rawChild = await store.readMetadata(
+        ActiveChildModeNotifier.activeSessionKey,
+      );
+      final rawLock = await store.readMetadata(containmentRecoveryLockV1Key);
+      if (rawChild != null || rawLock != null) {
+        throw StateError(
+          'Cannot switch active family while a child session or containment lock is present.',
+        );
+      }
       final rawFence = await store.readMetadata(
         ParentGateService.containmentFenceV1Key,
       );
       final parsedFence = ContainmentFenceV1.tryParse(rawFence);
-      final nowUtc = ref.read(appClockProvider)();
+      final commitUtc = ref.read(appClockProvider)();
       final nextFence = ContainmentFenceV1(
         version: 1,
         fenceEpoch: (parsedFence?.fenceEpoch ?? 0) + 1,
-        actorUserId: actor.userId,
+        actorUserId: capturedActorId,
         sessionGeneration:
             (parsedFence?.sessionGeneration ?? 0) > _sessionGenerationOrdinal
             ? parsedFence!.sessionGeneration
             : _sessionGenerationOrdinal,
         lockState: ContainmentFenceLockState.none,
-        updatedAtUtc: nowUtc,
+        updatedAtUtc: commitUtc,
       );
-      await store.compareAndSwapMetadataBatch(
-        expectedValues: {ParentGateService.containmentFenceV1Key: rawFence},
+
+      final committed = await store.compareAndSwapMetadataBatch(
+        expectedValues: {
+          ParentGateService.containmentFenceV1Key: rawFence,
+          ActiveChildModeNotifier.activeSessionKey: null,
+          containmentRecoveryLockV1Key: null,
+        },
         mutations: [
           MetadataMutation.upsert(
             key: ParentGateService.containmentFenceV1Key,
             value: nextFence.toJsonString(),
-            updatedAt: nowUtc,
+            updatedAt: commitUtc,
           ),
         ],
+        preCommitGuard: () =>
+            ref.mounted &&
+            _isFenceStillValid(
+              capturedEpoch: capturedEpoch,
+              capturedGeneration: capturedGeneration,
+              capturedActorId: capturedActorId,
+            ) &&
+            state.status == ColdStartContainmentStatus.verifiedParentMode &&
+            state.verifiedFamilies.any((f) => f.id == targetFamily.id),
+        onBeforePreCommitGuard: onBeforePreCommitGuard,
+        onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
+      );
+
+      if (!committed) {
+        throw StateError(
+          'Family switch rejected: CAS conflict or pre-commit fence invalidated.',
+        );
+      }
+
+      if (!ref.mounted ||
+          !_isFenceStillValid(
+            capturedEpoch: capturedEpoch,
+            capturedGeneration: capturedGeneration,
+            capturedActorId: capturedActorId,
+          ) ||
+          state.status != ColdStartContainmentStatus.verifiedParentMode ||
+          !state.verifiedFamilies.any((f) => f.id == targetFamily.id)) {
+        throw StateError(
+          'Family switch suppressed: concurrent session transition invalidated commit fence.',
+        );
+      }
+
+      _containmentEpoch++;
+      _preferredFamilyOverride = targetFamily;
+      _sessionScopeEpoch++;
+      ref.read(activeFamilyProvider.notifier).selectFamily(targetFamily);
+      state = state.copyWith(
+        verifiedFamily: targetFamily,
+        containmentFence: nextFence,
+        sessionScopeEpoch: _sessionScopeEpoch,
       );
     });
-
-    if (!ref.mounted) return;
-    _preferredFamilyOverride = targetFamily;
-    _sessionScopeEpoch++;
-    ref.read(activeFamilyProvider.notifier).selectFamily(targetFamily);
-    state = state.copyWith(
-      verifiedFamily: targetFamily,
-      sessionScopeEpoch: _sessionScopeEpoch,
-    );
   }
 
   /// Flow A — Normal Adult Sign Out (`D4`, `R38-08`).
@@ -2361,19 +2477,73 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
   /// `containment_recovery_lock_v1` / unresolved `active_child_session` lock exists.
   /// Advances `containment_fence_v1`, clears in-memory caches, preserves PIN /
   /// lockout / drafts / reward commands / photos, and signs out cleanly.
-  Future<void> signOutNormal() async {
+  Future<void> signOutNormal({
+    Future<void> Function()? onBeforePreCommitGuard,
+    Future<void> Function()? onAfterGuardBeforeCommit,
+  }) async {
     if (!ref.mounted) return;
+    if (_isFailClosedMasked) {
+      throw StateError(
+        'Normal sign out blocked while fail-closed session mask is active.',
+      );
+    }
     if (state.isActiveChildMode ||
-        state.status == ColdStartContainmentStatus.containmentLocked) {
+        state.status == ColdStartContainmentStatus.containmentLocked ||
+        state.isHydrating ||
+        state.status == ColdStartContainmentStatus.unauthenticated) {
       throw StateError(
         'Normal sign out is forbidden during active Child Mode or locked containment.',
       );
     }
 
-    final currentGen = ref
-        .read(authSessionPortProvider)
-        .currentSessionGeneration;
+    final capturedEpoch = _containmentEpoch;
+    final authPort = ref.read(authSessionPortProvider);
+    final initialActor = await authPort.validateForMutation();
+    final nowUtc = ref.read(appClockProvider)();
+    if (!ref.mounted) return;
+    if (initialActor == null ||
+        !initialActor.isValidAt(nowUtc) ||
+        initialActor.userId.trim().isEmpty ||
+        initialActor.sessionGeneration.trim().isEmpty) {
+      throw StateError(
+        'Normal sign out rejected: no valid active auth session.',
+      );
+    }
+
+    final capturedActorId = initialActor.userId.trim();
+    final capturedGeneration = initialActor.sessionGeneration.trim();
+    if (!_isFenceStillValid(
+          capturedEpoch: capturedEpoch,
+          capturedGeneration: capturedGeneration,
+          capturedActorId: capturedActorId,
+        ) ||
+        state.isActiveChildMode ||
+        state.status == ColdStartContainmentStatus.containmentLocked ||
+        state.isHydrating ||
+        state.status == ColdStartContainmentStatus.unauthenticated) {
+      throw StateError(
+        'Normal sign out rejected: session transitioned before admission.',
+      );
+    }
+
+    late final int postMaskEpoch;
+
     await _arbiter.run(() async {
+      if (!ref.mounted ||
+          !_isFenceStillValid(
+            capturedEpoch: capturedEpoch,
+            capturedGeneration: capturedGeneration,
+            capturedActorId: capturedActorId,
+          ) ||
+          state.isActiveChildMode ||
+          state.status == ColdStartContainmentStatus.containmentLocked ||
+          state.isHydrating ||
+          state.status == ColdStartContainmentStatus.unauthenticated) {
+        throw StateError(
+          'Normal sign out rejected: session invalidated before commit.',
+        );
+      }
+
       final store = ref.read(localMetadataStoreProvider);
       final rawLock = await store.readMetadata(containmentRecoveryLockV1Key);
       final rawChild = await store.readMetadata(
@@ -2400,14 +2570,13 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
           parsedFence?.lockState ==
               ContainmentFenceLockState.recoveryReauthPending ||
           (rawChild != null &&
-              state.status != ColdStartContainmentStatus.verifiedParentMode &&
               !(isPairedSessionOnly && hasPairedChildEnvelope))) {
         throw StateError(
           'Cannot perform normal sign out while an unresolved containment lock exists.',
         );
       }
 
-      final nowUtc = ref.read(appClockProvider)();
+      final commitUtc = ref.read(appClockProvider)();
       final nextFence = ContainmentFenceV1(
         version: 1,
         fenceEpoch: (parsedFence?.fenceEpoch ?? 0) + 1,
@@ -2417,10 +2586,10 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
             ? parsedFence!.sessionGeneration
             : _sessionGenerationOrdinal,
         lockState: ContainmentFenceLockState.none,
-        updatedAtUtc: nowUtc,
+        updatedAtUtc: commitUtc,
       );
 
-      await store.compareAndSwapMetadataBatch(
+      final committed = await store.compareAndSwapMetadataBatch(
         expectedValues: {
           ParentGateService.containmentFenceV1Key: rawFence,
           ActiveChildModeNotifier.activeSessionKey: rawChild,
@@ -2430,24 +2599,74 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
           MetadataMutation.upsert(
             key: ParentGateService.containmentFenceV1Key,
             value: nextFence.toJsonString(),
-            updatedAt: nowUtc,
+            updatedAt: commitUtc,
           ),
-          if (rawChild != null)
+          if (rawChild != null && isPairedSessionOnly && hasPairedChildEnvelope)
             const MetadataMutation.delete(
               key: ActiveChildModeNotifier.activeSessionKey,
             ),
         ],
+        preCommitGuard: () =>
+            ref.mounted &&
+            _isFenceStillValid(
+              capturedEpoch: capturedEpoch,
+              capturedGeneration: capturedGeneration,
+              capturedActorId: capturedActorId,
+            ) &&
+            !state.isActiveChildMode &&
+            state.status != ColdStartContainmentStatus.containmentLocked &&
+            !state.isHydrating &&
+            state.status != ColdStartContainmentStatus.unauthenticated,
+        onBeforePreCommitGuard: onBeforePreCommitGuard,
+        onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
       );
+
+      if (!committed) {
+        throw StateError(
+          'Normal sign out rejected: CAS conflict or pre-commit fence invalidated.',
+        );
+      }
+
+      if (!ref.mounted ||
+          !_isFenceStillValid(
+            capturedEpoch: capturedEpoch,
+            capturedGeneration: capturedGeneration,
+            capturedActorId: capturedActorId,
+          )) {
+        throw StateError(
+          'Normal sign out suppressed: concurrent session transition superseded operation.',
+        );
+      }
+
+      _lastSignedOutSessionGeneration = capturedGeneration;
+      _engageSyncFailClosedMask(
+        toUnauthenticated: true,
+        reason: 'normal_sign_out',
+        persistFence: false,
+      );
+      postMaskEpoch = _containmentEpoch;
     });
 
-    if (!ref.mounted) return;
-    _lastSignedOutSessionGeneration =
-        currentGen ?? _lastVerifiedSessionGeneration;
-    _engageSyncFailClosedMask(
-      toUnauthenticated: true,
-      reason: 'normal_sign_out',
-      persistFence: false,
-    );
+    if (!ref.mounted ||
+        _containmentEpoch != postMaskEpoch ||
+        authPort.currentSessionGeneration?.trim() != capturedGeneration) {
+      throw StateError(
+        'Normal sign out aborted before auth.signOut: concurrent session transition detected.',
+      );
+    }
+    final preSignOutActor = await authPort.validateForMutation();
+    if (!ref.mounted ||
+        _containmentEpoch != postMaskEpoch ||
+        authPort.currentSessionGeneration?.trim() != capturedGeneration ||
+        (preSignOutActor != null &&
+            (preSignOutActor.userId.trim() != capturedActorId ||
+                preSignOutActor.sessionGeneration.trim() !=
+                    capturedGeneration))) {
+      throw StateError(
+        'Normal sign out aborted before auth.signOut: actor switched concurrently.',
+      );
+    }
+
     await ref.read(restrictedShellSignOutProvider)();
     if (!ref.mounted) return;
     await _runRehydrate(showHydrating: false);
@@ -2461,18 +2680,65 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
   /// photos intact on disk.
   Future<void> signOutFromContainmentRecovery({
     ContainmentRecoveryReason? reason,
+    Future<void> Function()? onBeforePreCommitGuard,
+    Future<void> Function()? onAfterGuardBeforeCommit,
   }) async {
     if (!ref.mounted) return;
+    if (_isFailClosedMasked) {
+      throw StateError(
+        'Recovery sign out blocked while fail-closed session mask is active.',
+      );
+    }
+    if (state.status != ColdStartContainmentStatus.containmentLocked) {
+      throw StateError(
+        'Recovery sign out is permitted only in Containment Locked state.',
+      );
+    }
+
+    final capturedEpoch = _containmentEpoch;
     final gateService = ref.read(parentGateServiceProvider);
     final provenance = ref.read(legacyOutboxProvenanceSourceProvider);
-    final currentGen =
-        ref.read(authSessionPortProvider).currentSessionGeneration ??
-        state.actorContext?.sessionGeneration ??
-        _lastVerifiedSessionGeneration;
-    final currentActorId =
-        state.actorContext?.userId ?? _lastVerifiedActorUserId;
+    final authPort = ref.read(authSessionPortProvider);
+    final initialActor = await authPort.validateForMutation();
+    final nowUtc = ref.read(appClockProvider)();
+    if (!ref.mounted) return;
+    if (initialActor == null ||
+        !initialActor.isValidAt(nowUtc) ||
+        initialActor.userId.trim().isEmpty ||
+        initialActor.sessionGeneration.trim().isEmpty) {
+      throw StateError(
+        'Recovery sign out rejected: no valid active auth session.',
+      );
+    }
+
+    final capturedActorId = initialActor.userId.trim();
+    final capturedGeneration = initialActor.sessionGeneration.trim();
+    if (!_isFenceStillValid(
+          capturedEpoch: capturedEpoch,
+          capturedGeneration: capturedGeneration,
+          capturedActorId: capturedActorId,
+        ) ||
+        state.status != ColdStartContainmentStatus.containmentLocked) {
+      throw StateError(
+        'Recovery sign out rejected: session transitioned before admission.',
+      );
+    }
+
+    late final int postMaskEpoch;
 
     await _arbiter.run(() async {
+      if (!ref.mounted ||
+          !_isFenceStillValid(
+            capturedEpoch: capturedEpoch,
+            capturedGeneration: capturedGeneration,
+            capturedActorId: capturedActorId,
+          ) ||
+          state.status != ColdStartContainmentStatus.containmentLocked) {
+        throw StateError(
+          'Recovery sign out rejected: session invalidated before commit.',
+        );
+      }
+
       final store = ref.read(localMetadataStoreProvider);
       final rawChild = await store.readMetadata(
         ActiveChildModeNotifier.activeSessionKey,
@@ -2499,7 +2765,7 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
         legacyChildSessionRaw: rawChild,
       );
       final cred = await gateService.inspectCredential();
-      final nowUtc = ref.read(appClockProvider)();
+      final commitUtc = ref.read(appClockProvider)();
 
       final effectiveReason =
           reason ??
@@ -2509,12 +2775,12 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
                   parsedChild: parsedChild,
                   credStatus: cred.status,
                   outcome: state.verificationOutcome,
-                  actorUserId: currentActorId,
+                  actorUserId: capturedActorId,
                 ));
 
       late final ContainmentRecoveryOwnershipLevel ownershipLevel;
       String? requiredOwnerFamilyId;
-      String? originActorUserId = validV2?.actorUserId ?? currentActorId;
+      String? originActorUserId = validV2?.actorUserId;
 
       if (cred.status == ParentGateCredentialStatus.validV2 &&
           cred.v2?.ownerFamilyId != null) {
@@ -2536,6 +2802,7 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
         ownershipLevel = ContainmentRecoveryOwnershipLevel.unresolvable;
         requiredOwnerFamilyId = null;
       }
+      originActorUserId ??= capturedActorId;
 
       final recoveryLock = ContainmentRecoveryLockV1(
         version: 1,
@@ -2544,11 +2811,8 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
         requiredOwnerFamilyId: requiredOwnerFamilyId,
         unverifiedLegacyHintFamilyId: validV2?.familyId.value ?? hint?.familyId,
         originActorUserId: originActorUserId,
-        initiatedFromSessionGeneration:
-            (currentGen != null && currentGen.trim().isNotEmpty)
-            ? currentGen.trim()
-            : 'unverified-session',
-        initiatedAtUtc: nowUtc,
+        initiatedFromSessionGeneration: capturedGeneration,
+        initiatedAtUtc: commitUtc,
       );
 
       final nextFence = ContainmentFenceV1(
@@ -2560,11 +2824,11 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
             ? parsedFence!.sessionGeneration
             : _sessionGenerationOrdinal,
         lockState: ContainmentFenceLockState.recoveryReauthPending,
-        updatedAtUtc: nowUtc,
+        updatedAtUtc: commitUtc,
       );
 
       // Preserve any pre-existing persisted recovery lock byte-for-byte (`Fix 4`).
-      await store.compareAndSwapMetadataBatch(
+      final committed = await store.compareAndSwapMetadataBatch(
         expectedValues: {
           containmentRecoveryLockV1Key: rawLock,
           ParentGateService.containmentFenceV1Key: rawFence,
@@ -2575,24 +2839,75 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
             MetadataMutation.upsert(
               key: containmentRecoveryLockV1Key,
               value: recoveryLock.toJsonString(),
-              updatedAt: nowUtc,
+              updatedAt: commitUtc,
             ),
           MetadataMutation.upsert(
             key: ParentGateService.containmentFenceV1Key,
             value: nextFence.toJsonString(),
-            updatedAt: nowUtc,
+            updatedAt: commitUtc,
           ),
         ],
+        preCommitGuard: () =>
+            ref.mounted &&
+            _isFenceStillValid(
+              capturedEpoch: capturedEpoch,
+              capturedGeneration: capturedGeneration,
+              capturedActorId: capturedActorId,
+            ) &&
+            state.status == ColdStartContainmentStatus.containmentLocked,
+        onBeforePreCommitGuard: onBeforePreCommitGuard,
+        onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
       );
+
+      if (!committed) {
+        throw StateError(
+          'Recovery sign out rejected: containment recovery lock CAS failed or pre-commit fence invalidated.',
+        );
+      }
+
+      // Commit-wins durable lock retention (`R38-08` / `R41-01`): never delete or
+      // overwrite the committed recovery lock, but suppress `auth.signOut()` if
+      // an overlapping session transition occurred during commit.
+      if (!ref.mounted ||
+          !_isFenceStillValid(
+            capturedEpoch: capturedEpoch,
+            capturedGeneration: capturedGeneration,
+            capturedActorId: capturedActorId,
+          )) {
+        throw StateError(
+          'Recovery sign out lock persisted durably, but sign-out was suppressed due to concurrent session transition.',
+        );
+      }
+
+      _lastSignedOutSessionGeneration = capturedGeneration;
+      _engageSyncFailClosedMask(
+        toUnauthenticated: true,
+        reason: 'recovery_sign_out_exit_path_b',
+        persistFence: false,
+      );
+      postMaskEpoch = _containmentEpoch;
     });
 
-    if (!ref.mounted) return;
-    _lastSignedOutSessionGeneration = currentGen;
-    _engageSyncFailClosedMask(
-      toUnauthenticated: true,
-      reason: 'recovery_sign_out_exit_path_b',
-      persistFence: false,
-    );
+    if (!ref.mounted ||
+        _containmentEpoch != postMaskEpoch ||
+        authPort.currentSessionGeneration?.trim() != capturedGeneration) {
+      throw StateError(
+        'Recovery sign out aborted before auth.signOut: concurrent session transition detected.',
+      );
+    }
+    final preSignOutActor = await authPort.validateForMutation();
+    if (!ref.mounted ||
+        _containmentEpoch != postMaskEpoch ||
+        authPort.currentSessionGeneration?.trim() != capturedGeneration ||
+        (preSignOutActor != null &&
+            (preSignOutActor.userId.trim() != capturedActorId ||
+                preSignOutActor.sessionGeneration.trim() !=
+                    capturedGeneration))) {
+      throw StateError(
+        'Recovery sign out aborted before auth.signOut: actor switched concurrently.',
+      );
+    }
+
     await ref.read(restrictedShellSignOutProvider)();
     if (!ref.mounted) return;
     await _runRehydrate(showHydrating: false);

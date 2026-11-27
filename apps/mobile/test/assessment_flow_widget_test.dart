@@ -657,6 +657,7 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+        parentGateServiceProvider.overrideWithValue(gateService),
         authSessionPortProvider.overrideWithValue(fakeAuth),
         containmentAuthorizationVerifierProvider.overrideWithValue(
           FakeContainmentAuthorizationVerifier(
@@ -675,8 +676,9 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    final notifier = container.read(activeChildModeProvider.notifier);
-    await notifier.selectChild(childWithAvatar);
+    final controller = container.read(sessionContainmentProvider.notifier);
+    await controller.rehydrate();
+    await controller.enterChildMode(childWithAvatar);
 
     // Verify written JSON in metadata store is v2 and contains canonical avatar_key
     final savedJson = await fakeMetadataStore.readMetadata(
