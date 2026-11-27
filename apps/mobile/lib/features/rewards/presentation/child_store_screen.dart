@@ -35,8 +35,8 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
 
   Future<void> _loadData() async {
     final activeChild = ref.read(activeChildModeProvider);
-    final family = ref.read(activeFamilyProvider);
-    if (activeChild == null || family == null) return;
+    if (activeChild == null) return;
+    final familyId = ref.read(activeFamilyProvider)?.id ?? activeChild.familyId;
 
     setState(() {
       _isLoading = true;
@@ -50,13 +50,13 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
       final rewardRepo = ref.read(rewardRepositoryProvider);
       final listStore = ListStoreRewards(rewardRepo);
       final rewards = await listStore(
-        familyId: family.id,
+        familyId: familyId,
         childId: activeChild.id,
       );
 
       final commandStore = ref.read(pendingRewardCommandStoreProvider);
       final pendingCommands = await commandStore.listPendingCommands(
-        familyId: family.id.value,
+        familyId: familyId.value,
         childId: activeChild.id.value,
       );
       final pendingRedeems = pendingCommands
@@ -83,8 +83,8 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
 
   Future<void> _confirmAndRedeem(Reward reward) async {
     final activeChild = ref.read(activeChildModeProvider);
-    final family = ref.read(activeFamilyProvider);
-    if (activeChild == null || family == null) return;
+    if (activeChild == null) return;
+    final familyId = ref.read(activeFamilyProvider)?.id ?? activeChild.familyId;
 
     // Prevent double-tapping while one logical command is pending
     if (_inFlightRewardIds.contains(reward.id.value) ||
@@ -168,7 +168,7 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
           coordinator: coordinator,
         );
         await redeemUseCase(
-          familyId: family.id,
+          familyId: familyId,
           rewardId: reward.id,
           childId: activeChild.id,
         );
@@ -208,10 +208,10 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
 
   Future<void> _resolvePendingRedeem(PendingRewardCommand pending) async {
     final activeChild = ref.read(activeChildModeProvider);
-    final family = ref.read(activeFamilyProvider);
-    if (activeChild == null || family == null || pending.rewardId == null) {
+    if (activeChild == null || pending.rewardId == null) {
       return;
     }
+    final familyId = ref.read(activeFamilyProvider)?.id ?? activeChild.familyId;
 
     setState(() => _inFlightRewardIds.add(pending.rewardId!));
     try {
@@ -224,7 +224,7 @@ class _ChildStoreScreenState extends ConsumerState<ChildStoreScreen> {
       );
       await redeemUseCase(
         commandId: pending.commandId,
-        familyId: family.id,
+        familyId: familyId,
         rewardId: RewardId(pending.rewardId!),
         childId: activeChild.id,
       );

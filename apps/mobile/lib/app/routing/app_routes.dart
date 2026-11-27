@@ -13,6 +13,27 @@ abstract final class AppRoutes {
   static const String auth = '/auth';
   static const String authName = 'auth';
 
+  static const String containmentLoading = '/containment-loading';
+  static const String containmentLoadingName = 'containmentLoading';
+
+  static const String childRevoked = '/child/revoked';
+  static const String childRevokedName = 'childRevoked';
+
+  static const String childUnverified = '/child/unverified';
+  static const String childUnverifiedName = 'childUnverified';
+
+  static const String childContainmentLocked = '/child/containment-locked';
+  static const String childContainmentLockedName = 'childContainmentLocked';
+
+  static const String accountUnverified = '/account/unverified';
+  static const String accountUnverifiedName = 'accountUnverified';
+
+  static const String accountAccessRestricted = '/account/access-restricted';
+  static const String accountAccessRestrictedName = 'accountAccessRestricted';
+
+  static const String familyOnboarding = '/family/onboarding';
+  static const String familyOnboardingName = 'familyOnboarding';
+
   static const String createFamily = '/family/create';
   static const String createFamilyName = 'createFamily';
 

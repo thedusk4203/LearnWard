@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:learnward/app/bootstrap/app_providers.dart';
+import 'package:learnward/app/bootstrap/cold_start_containment_bootstrap.dart';
 import 'package:learnward/app/bootstrap/in_memory_repositories.dart';
 import 'package:learnward/features/assessments/presentation/add_assessment_screen.dart';
 import 'package:learnward/features/assessments/presentation/evidence_picker_service.dart';
@@ -32,6 +33,19 @@ class _PresetFamilyNotifier extends ActiveFamilyNotifier {
 
   @override
   Family? build() => _preset;
+}
+
+class _PresetContainmentNotifier extends ColdStartContainmentNotifier {
+  _PresetContainmentNotifier(this._family, this._child);
+  final Family _family;
+  final ChildProfile _child;
+
+  @override
+  ColdStartContainmentState build() => ColdStartContainmentState(
+    status: ColdStartContainmentStatus.verifiedChildMode,
+    verifiedFamily: _family,
+    verifiedChild: _child,
+  );
 }
 
 class FailingLocalDraftStore implements LocalDraftStore {
@@ -618,6 +632,9 @@ void main() {
           ),
           activeChildModeProvider.overrideWith(
             () => _PresetActiveChildNotifier(testChild),
+          ),
+          coldStartContainmentProvider.overrideWith(
+            () => _PresetContainmentNotifier(testFamily, testChild),
           ),
           if (customPicker != null)
             evidencePickerServiceProvider.overrideWithValue(customPicker),

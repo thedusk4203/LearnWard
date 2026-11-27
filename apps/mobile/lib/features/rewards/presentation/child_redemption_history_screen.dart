@@ -29,8 +29,8 @@ class _ChildRedemptionHistoryScreenState
 
   Future<void> _loadData() async {
     final activeChild = ref.read(activeChildModeProvider);
-    final family = ref.read(activeFamilyProvider);
-    if (activeChild == null || family == null) return;
+    if (activeChild == null) return;
+    final familyId = ref.read(activeFamilyProvider)?.id ?? activeChild.familyId;
 
     setState(() {
       _isLoading = true;
@@ -41,7 +41,7 @@ class _ChildRedemptionHistoryScreenState
       final rewardRepo = ref.read(rewardRepositoryProvider);
       final listRedemptions = ListRewardRedemptions(rewardRepo);
       final redemptions = await listRedemptions(
-        familyId: family.id,
+        familyId: familyId,
         childId: activeChild.id,
       );
 

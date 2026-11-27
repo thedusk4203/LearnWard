@@ -2251,10 +2251,13 @@ void main() {
         expect(find.text('Hi, Maya!'), findsOneWidget);
         await tester.tap(find.byKey(const Key('exit_child_mode_button')));
         await tester.pumpAndSettle();
-        expect(
-          find.byKey(const Key('parent_gate_restricted_notice')),
-          findsOneWidget,
+        await tester.enterText(
+          find.byKey(const Key('parent_gate_pin_field')),
+          '0000',
         );
+        await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('parent_gate_error')), findsOneWidget);
         await tester.tap(find.byKey(const Key('parent_gate_cancel_button')));
         await tester.pumpAndSettle();
         expect(find.text('Hi, Maya!'), findsOneWidget);

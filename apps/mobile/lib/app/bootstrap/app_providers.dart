@@ -62,7 +62,11 @@ final localDraftStoreProvider = Provider<LocalDraftStore>((ref) {
   if (config.canUseLocalDemoRepositories) {
     return ref.watch(inMemoryLocalDraftStoreProvider);
   }
-  return ref.watch(databaseProvider);
+  final metadataStore = ref.watch(localMetadataStoreProvider);
+  if (metadataStore is AppDatabase) {
+    return metadataStore;
+  }
+  return ref.watch(inMemoryLocalDraftStoreProvider);
 });
 
 /// In-memory pending reward command store provider for testing/local demo.
@@ -79,8 +83,67 @@ final pendingRewardCommandStoreProvider = Provider<PendingRewardCommandStore>((
   if (config.canUseLocalDemoRepositories) {
     return ref.watch(inMemoryPendingRewardCommandStoreProvider);
   }
-  return ref.watch(databaseProvider);
+  final metadataStore = ref.watch(localMetadataStoreProvider);
+  if (metadataStore is AppDatabase) {
+    return metadataStore;
+  }
+  return ref.watch(inMemoryPendingRewardCommandStoreProvider);
 });
+
+final class _CombinedOutboxProvenanceSource
+    implements LegacyOutboxProvenanceSource {
+  const _CombinedOutboxProvenanceSource({this.draftSource, this.commandSource});
+
+  final LegacyOutboxProvenanceSource? draftSource;
+  final LegacyOutboxProvenanceSource? commandSource;
+
+  @override
+  Future<List<ActorBoundOutboxRecord>> listActorBoundRecords() async {
+    final records = <ActorBoundOutboxRecord>[];
+    if (draftSource != null) {
+      records.addAll(await draftSource!.listActorBoundRecords());
+    }
+    if (commandSource != null) {
+      records.addAll(await commandSource!.listActorBoundRecords());
+    }
+    return records;
+  }
+}
+
+/// Read-only local outbox provenance source for legacy Child Mode ownership
+/// resolution (`D1.6`, `WP3`).
+final legacyOutboxProvenanceSourceProvider =
+    Provider<LegacyOutboxProvenanceSource>((ref) {
+      final config = ref.watch(appConfigProvider);
+      if (!config.canUseLocalDemoRepositories) {
+        final metadataStore = ref.watch(localMetadataStoreProvider);
+        if (metadataStore is AppDatabase) {
+          return metadataStore;
+        }
+      }
+      final draftStore = ref.watch(localDraftStoreProvider);
+      final commandStore = ref.watch(pendingRewardCommandStoreProvider);
+      if (draftStore is LegacyOutboxProvenanceSource &&
+          commandStore is LegacyOutboxProvenanceSource &&
+          identical(draftStore, commandStore)) {
+        return draftStore as LegacyOutboxProvenanceSource;
+      }
+      if (draftStore is InMemoryLocalDraftStore &&
+          commandStore is InMemoryPendingRewardCommandStore) {
+        return CombinedInMemoryLegacyOutboxProvenanceSource(
+          draftStore: draftStore,
+          commandStore: commandStore,
+        );
+      }
+      return _CombinedOutboxProvenanceSource(
+        draftSource: draftStore is LegacyOutboxProvenanceSource
+            ? draftStore as LegacyOutboxProvenanceSource
+            : null,
+        commandSource: commandStore is LegacyOutboxProvenanceSource
+            ? commandStore as LegacyOutboxProvenanceSource
+            : null,
+      );
+    });
 
 /// Evidence picker service provider. Defaults to production native image_picker.
 final evidencePickerServiceProvider = Provider<EvidencePickerService>((ref) {
@@ -131,14 +194,151 @@ final authStateProvider = StreamProvider<AuthState>((ref) {
   return client.auth.onAuthStateChange;
 });
 
-/// Provider for the current user's ID, or null.
+/// Fail-closed snapshot combining live generation validation with bound actor identity (`WP3`).
+final class AuthSessionState {
+  const AuthSessionState({
+    this.actorUserId,
+    this.sessionGeneration,
+    this.isFailClosedInvalidated = false,
+  });
+
+  static const unauthenticated = AuthSessionState();
+
+  final String? actorUserId;
+  final String? sessionGeneration;
+  final bool isFailClosedInvalidated;
+
+  bool get isAuthenticated =>
+      !isFailClosedInvalidated &&
+      actorUserId != null &&
+      actorUserId!.trim().isNotEmpty &&
+      sessionGeneration != null &&
+      sessionGeneration!.trim().isNotEmpty;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AuthSessionState &&
+          actorUserId == other.actorUserId &&
+          sessionGeneration == other.sessionGeneration &&
+          isFailClosedInvalidated == other.isFailClosedInvalidated;
+
+  @override
+  int get hashCode =>
+      Object.hash(actorUserId, sessionGeneration, isFailClosedInvalidated);
+}
+
+/// Stream provider mirroring [AuthSessionPort.sessionGenerationStream] (`WP3`).
+final StreamProvider<String?> authSessionGenerationProvider =
+    StreamProvider<String?>((ref) {
+      final port = ref.watch(authSessionPortProvider);
+      return port.sessionGenerationStream;
+    });
+
+/// Authoritative fail-closed auth session state (`WP3`).
 ///
-/// Reactively watches [authStateProvider] and updates dynamically
-/// whenever an auth event occurs (sign in, sign out, token refresh).
-final currentUserIdProvider = Provider<String?>((ref) {
-  final authState = ref.watch(authStateProvider);
+/// Derives actor identity solely from validated live session state (never
+/// falling back to stale `client.auth.currentUser` after sign-out, expiry,
+/// or stream disruption).
+final Provider<AuthSessionState> authSessionStateProvider =
+    Provider<AuthSessionState>((ref) {
+      final client = ref.watch(supabaseClientProvider);
+      final authState = ref.watch(authStateProvider);
+      final authPort = ref.watch(authSessionPortProvider);
+      final genStream = ref.watch(authSessionGenerationProvider);
+
+      if (client != null) {
+        if (authState.hasError || genStream.hasError) {
+          return const AuthSessionState(isFailClosedInvalidated: true);
+        }
+        final data = authState.value;
+        if (data != null &&
+            (data.event == AuthChangeEvent.signedOut ||
+                data.session == null ||
+                data.session!.isExpired)) {
+          return const AuthSessionState(isFailClosedInvalidated: true);
+        }
+
+        final liveGeneration = authPort.currentSessionGeneration;
+        if (liveGeneration == null || liveGeneration.trim().isEmpty) {
+          return const AuthSessionState(isFailClosedInvalidated: true);
+        }
+
+        if (authPort is SupabaseAuthSessionAdapter) {
+          final boundUserId = authPort.currentBoundUserId;
+          if (boundUserId == null || boundUserId.trim().isEmpty) {
+            return const AuthSessionState(isFailClosedInvalidated: true);
+          }
+          if (data?.session != null && data!.session!.user.id != boundUserId) {
+            return const AuthSessionState(isFailClosedInvalidated: true);
+          }
+          return AuthSessionState(
+            actorUserId: boundUserId.trim(),
+            sessionGeneration: liveGeneration.trim(),
+          );
+        }
+
+        final streamUserId = data?.session?.user.id.trim();
+        if (streamUserId == null || streamUserId.isEmpty) {
+          return const AuthSessionState(isFailClosedInvalidated: true);
+        }
+        return AuthSessionState(
+          actorUserId: streamUserId,
+          sessionGeneration: liveGeneration.trim(),
+        );
+      }
+
+      if (authState.hasError || genStream.hasError) {
+        return const AuthSessionState(isFailClosedInvalidated: true);
+      }
+      final data = authState.value;
+      if (data != null &&
+          (data.event == AuthChangeEvent.signedOut ||
+              data.session == null ||
+              data.session!.isExpired)) {
+        return const AuthSessionState(isFailClosedInvalidated: true);
+      }
+      final liveGeneration =
+          genStream.value?.trim() ?? authPort.currentSessionGeneration?.trim();
+      final sessionUserId = data?.session?.user.id.trim();
+      if (liveGeneration == null ||
+          liveGeneration.isEmpty ||
+          sessionUserId == null ||
+          sessionUserId.isEmpty) {
+        return AuthSessionState(
+          isFailClosedInvalidated: genStream.hasError || authState.hasError,
+        );
+      }
+      return AuthSessionState(
+        actorUserId: sessionUserId,
+        sessionGeneration: liveGeneration,
+      );
+    });
+
+/// Provider for the current user's ID, or null (`WP3` fail-closed).
+///
+/// When Supabase is configured, derives exclusively from [authSessionStateProvider]
+/// (never reading unverified `client.auth.currentUser`). In local demo mode,
+/// derives from valid non-expired [authStateProvider] events only.
+final Provider<String?> currentUserIdProvider = Provider<String?>((ref) {
   final client = ref.watch(supabaseClientProvider);
-  return authState.value?.session?.user.id ?? client?.auth.currentUser?.id;
+  if (client != null) {
+    return ref.watch(authSessionStateProvider).actorUserId;
+  }
+  final authState = ref.watch(authStateProvider);
+  if (authState.hasError) {
+    return null;
+  }
+  final data = authState.value;
+  if (data == null || data.event == AuthChangeEvent.signedOut) {
+    return null;
+  }
+  final session = data.session;
+  if (session == null || session.isExpired) {
+    return null;
+  }
+  final uid = session.user.id.trim();
+  return uid.isEmpty ? null : uid;
 });
 
 /// Repository for family operations.
@@ -280,22 +480,23 @@ final learningRepositoryProvider = Provider<LearningRepository>((ref) {
 });
 
 /// Auth session port provider.
-final authSessionPortProvider = Provider<AuthSessionPort>((ref) {
-  final config = ref.watch(appConfigProvider);
-  final client = ref.watch(supabaseClientProvider);
-  if (client != null) {
-    final adapter = SupabaseAuthSessionAdapter(client);
-    ref.onDispose(adapter.dispose);
-    return adapter;
-  }
-  if (config.canUseLocalDemoRepositories) {
-    final currentUserId = ref.watch(currentUserIdProvider);
-    final port = InMemoryAuthSessionPort(activeUserId: currentUserId);
-    ref.onDispose(port.dispose);
-    return port;
-  }
-  throw MissingSupabaseConfigurationException(config.environment);
-});
+final Provider<AuthSessionPort> authSessionPortProvider =
+    Provider<AuthSessionPort>((ref) {
+      final config = ref.watch(appConfigProvider);
+      final client = ref.watch(supabaseClientProvider);
+      if (client != null) {
+        final adapter = SupabaseAuthSessionAdapter(client);
+        ref.onDispose(adapter.dispose);
+        return adapter;
+      }
+      if (config.canUseLocalDemoRepositories) {
+        final currentUserId = ref.watch(currentUserIdProvider);
+        final port = InMemoryAuthSessionPort(activeUserId: currentUserId);
+        ref.onDispose(port.dispose);
+        return port;
+      }
+      throw MissingSupabaseConfigurationException(config.environment);
+    });
 
 /// Restricted shell sign-out handler (`R40-03`).
 ///
@@ -367,6 +568,9 @@ final coldStartContainmentProvider =
       ColdStartContainmentNotifier.new,
     );
 
+/// Canonical WP3 alias referencing the single lifecycle controller [coldStartContainmentProvider].
+final sessionContainmentProvider = coldStartContainmentProvider;
+
 /// Shared recovery coordinator provider for Spin and Redeem operations.
 final recoveryCoordinatorProvider = Provider<RecoveryCoordinator>((ref) {
   final commandStore = ref.watch(pendingRewardCommandStoreProvider);
@@ -424,170 +628,52 @@ final activeFamilyProvider = NotifierProvider<ActiveFamilyNotifier, Family?>(
   ActiveFamilyNotifier.new,
 );
 
-/// Notifier managing verified active child mode state and v2 persistence.
+/// Notifier managing verified active child mode state projection.
 ///
-/// Cold start NEVER blindly restores unverified persisted child sessions;
-/// [ColdStartContainmentNotifier] hydrates verified sessions asynchronously.
+/// [SessionLifecycleController] (`coldStartContainmentProvider`) is the sole
+/// production authority for creating or clearing `active_child_session`. This
+/// notifier performs zero metadata writes/deletes and only holds verified
+/// in-memory state (`restoreVerifiedChild`) for controller & test-fixture use.
 class ActiveChildModeNotifier extends Notifier<ChildProfile?> {
   static const activeSessionKey = 'active_child_session';
 
   @override
   ChildProfile? build() => null;
 
-  /// Populates in-memory Child Mode state only after verified cold-start checks.
+  /// Populates in-memory Child Mode state only after verified controller checks
+  /// (or inside scoped test harnesses). Never writes or deletes SQLite locks.
   void restoreVerifiedChild(ChildProfile? child) {
     state = child;
   }
 
+  /// Retired legacy mutator (`R41-02`). Always throws [UnsupportedError].
+  ///
+  /// Use `ref.read(sessionContainmentProvider.notifier).enterChildMode(child)`
+  /// instead.
+  @Deprecated('Use SessionLifecycleController.enterChildMode instead (R41-02).')
   Future<void> selectChild(
     ChildProfile child, {
     String? actorUserId,
     PersistedChildModeKind modeKind = PersistedChildModeKind.sharedDeviceAdult,
   }) async {
-    if (modeKind != PersistedChildModeKind.sharedDeviceAdult) {
-      throw StateError(
-        'Cannot enter Child Mode with modeKind=${modeKind.name}: interactive selection requires shared_device_adult.',
-      );
-    }
-
-    final authPort = ref.read(authSessionPortProvider);
-    final actor = await authPort.validateForMutation();
-    final nowUtc = ref.read(appClockProvider)();
-    if (actor == null ||
-        !actor.isValidAt(nowUtc) ||
-        actor.userId.trim().isEmpty ||
-        actor.sessionGeneration.trim().isEmpty) {
-      throw StateError(
-        'Cannot enter Child Mode without a validated authenticated actor.',
-      );
-    }
-    if (actor.isAnonymous || actor.role == 'child') {
-      throw StateError(
-        'Cannot enter Child Mode from an anonymous or paired-child session.',
-      );
-    }
-
-    final resolvedActorId = actor.userId.trim();
-    if (actorUserId != null && actorUserId.trim() != resolvedActorId) {
-      throw StateError(
-        'Cannot enter Child Mode: supplied actorUserId does not match the validated session.',
-      );
-    }
-
-    final capturedGeneration = actor.sessionGeneration;
-    if (authPort.currentSessionGeneration != capturedGeneration) {
-      throw StateError(
-        'Cannot enter Child Mode: auth session generation changed.',
-      );
-    }
-
-    final store = ref.read(localMetadataStoreProvider);
-    final existingLock = await store.readMetadata(
-      ColdStartContainmentNotifier.containmentRecoveryLockV1Key,
+    throw UnsupportedError(
+      'ActiveChildModeNotifier.selectChild is retired (R41-02). '
+      'Use SessionLifecycleController.enterChildMode via sessionContainmentProvider instead.',
     );
-    if (existingLock != null) {
-      throw StateError(
-        'Cannot enter Child Mode while containment_recovery_lock_v1 is active.',
-      );
-    }
-    final existingSession = await store.readMetadata(activeSessionKey);
-    if (existingSession != null) {
-      throw StateError(
-        'Cannot enter Child Mode while active_child_session already exists.',
-      );
-    }
-
-    final verifier = ref.read(containmentAuthorizationVerifierProvider);
-    final outcome = await verifier.verifySession(
-      context: actor,
-      preferredFamilyId: child.familyId,
-      targetFamilyId: child.familyId,
-      targetChildId: child.id,
-    );
-
-    if (authPort.currentSessionGeneration != capturedGeneration) {
-      throw StateError(
-        'Cannot enter Child Mode: auth session generation changed during verification.',
-      );
-    }
-
-    final revalidatedActor = await authPort.validateForMutation();
-    final postVerifyUtc = ref.read(appClockProvider)();
-    if (revalidatedActor == null ||
-        !revalidatedActor.isValidAt(postVerifyUtc) ||
-        revalidatedActor.userId.trim() != resolvedActorId ||
-        revalidatedActor.sessionGeneration != capturedGeneration ||
-        revalidatedActor.isAnonymous ||
-        revalidatedActor.role == 'child') {
-      throw StateError(
-        'Cannot enter Child Mode: validated actor context is no longer active.',
-      );
-    }
-
-    if (outcome is! AuthorizedActiveAdult ||
-        !outcome.verifiedRolesByFamilyId.containsKey(child.familyId.value) ||
-        outcome.verifiedFamily.id != child.familyId ||
-        outcome.verifiedChild?.id != child.id ||
-        outcome.verifiedChild?.familyId != child.familyId) {
-      throw StateError(
-        'Cannot enter Child Mode without positive active adult authorization ($outcome).',
-      );
-    }
-
-    final verifiedChild = outcome.verifiedChild!;
-    final persistedAtUtc = ref.read(appClockProvider)();
-    final envelope = PersistedChildModeSession(
-      modeKind: modeKind,
-      actorUserId: resolvedActorId,
-      familyId: child.familyId,
-      childId: child.id,
-      childProfileSnapshot: verifiedChild,
-      persistedAtUtc: persistedAtUtc,
-    );
-
-    final committed = await store.compareAndSwapMetadataBatch(
-      expectedValues: const {
-        activeSessionKey: null,
-        ColdStartContainmentNotifier.containmentRecoveryLockV1Key: null,
-      },
-      mutations: [
-        MetadataMutation.upsert(
-          key: activeSessionKey,
-          value: envelope.toJsonString(),
-          updatedAt: persistedAtUtc,
-        ),
-      ],
-      preCommitGuard: () {
-        if (!ref.mounted) {
-          return false;
-        }
-        if (authPort.currentSessionGeneration != capturedGeneration) {
-          return false;
-        }
-        return actor.isValidAt(ref.read(appClockProvider)());
-      },
-    );
-    if (!committed) {
-      throw StateError(
-        'Cannot enter Child Mode: session fence invalidated or containment lock/session mutated before commit.',
-      );
-    }
-    if (!ref.mounted ||
-        authPort.currentSessionGeneration != capturedGeneration) {
-      throw StateError(
-        'Cannot enter Child Mode: session invalidated around commit.',
-      );
-    }
-
-    state = verifiedChild;
   }
 
+  /// Retired legacy mutator (`R41-02`). Always throws [UnsupportedError].
+  ///
+  /// Use `ref.read(sessionContainmentProvider.notifier).submitParentGateUnlock(pin)`
+  /// instead.
+  @Deprecated(
+    'Use SessionLifecycleController.submitParentGateUnlock instead (R41-02).',
+  )
   Future<void> exitChildMode() async {
-    state = null;
-    final store = ref.read(localMetadataStoreProvider);
-    await store.applyMetadataBatch([
-      const MetadataMutation.delete(key: activeSessionKey),
-    ]);
+    throw UnsupportedError(
+      'ActiveChildModeNotifier.exitChildMode is retired (R41-02). '
+      'Use SessionLifecycleController.submitParentGateUnlock via sessionContainmentProvider instead.',
+    );
   }
 }
 

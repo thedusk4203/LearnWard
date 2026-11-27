@@ -352,9 +352,9 @@ void main() {
         expect(container.read(activeFamilyProvider), isNull);
 
         // Entering Child Mode with activeChildModeProvider triggers drain for the child's family
-        await container
+        container
             .read(activeChildModeProvider.notifier)
-            .selectChild(childProfile);
+            .restoreVerifiedChild(childProfile);
         await Future<void>.delayed(const Duration(milliseconds: 50));
 
         // cmdChild was drained and completed via Child Mode family!

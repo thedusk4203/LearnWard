@@ -107,6 +107,12 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
   String? get currentSessionGeneration =>
       _isDisposed ? null : _currentGeneration;
 
+  /// Bound user ID matching [currentSessionGeneration], or null when invalidated (`WP3`).
+  String? get currentBoundUserId =>
+      (_isDisposed || _isStickyInvalid || _currentGeneration == null)
+      ? null
+      : _boundUserId;
+
   @override
   Stream<String?> get sessionGenerationStream => _controller.stream;
 
