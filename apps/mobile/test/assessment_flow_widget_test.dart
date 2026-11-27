@@ -11,6 +11,7 @@ import 'package:learnward/app/bootstrap/in_memory_repositories.dart';
 import 'package:learnward/features/assessments/presentation/add_assessment_screen.dart';
 import 'package:learnward/features/assessments/presentation/evidence_picker_service.dart';
 import 'package:learnward/features/assessments/services/local_evidence_file_store.dart';
+import 'package:learnward/features/shared_device/domain/parent_gate_service.dart';
 import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_data/learnward_data.dart';
 import 'package:learnward_domain/learnward_domain.dart';
@@ -237,8 +238,20 @@ void main() {
   );
 
   setUp(() {
-    fakeFamilyRepo = FakeFamilyRepository();
-    fakeChildRepo = FakeChildProfileRepository();
+    fakeFamilyRepo = FakeFamilyRepository(
+      currentUserId: 'local-parent-user',
+      families: [testFamily],
+      memberships: [
+        FamilyMembership(
+          familyId: testFamily.id,
+          authUserId: 'local-parent-user',
+          role: FamilyRole.owner,
+          status: MembershipStatus.active,
+          joinedAt: now,
+        ),
+      ],
+    );
+    fakeChildRepo = FakeChildProfileRepository(children: [testChild]);
     fakeAuth = FakeAuthSessionPort(
       activeUserId: 'local-parent-user',
       sessionGeneration: 'demo-generation-1',
@@ -250,12 +263,6 @@ void main() {
     fakeMetadataStore = InMemoryLocalMetadataStore();
     fakeEvidenceFileStore = FakeLocalEvidenceFileStore();
     fakeDraftStore = InMemoryLocalDraftStore();
-
-    fakeFamilyRepo.createFamily(
-      name: testFamily.name,
-      timezone: testFamily.timezone,
-      locale: testFamily.locale,
-    );
   });
 
   testWidgets(
@@ -585,53 +592,92 @@ void main() {
     );
   });
 
-  test(
-    'ActiveChildModeNotifier persists and restores canonical avatar_key',
-    () async {
-      final container = ProviderContainer(
-        overrides: [
-          localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
-        ],
-      );
-      addTearDown(container.dispose);
+  test('ActiveChildModeNotifier persists v2 envelope with canonical avatar_key and restores only via verified cold-start hydration', () async {
+    final childWithAvatar = ChildProfile(
+      id: ChildId('child-lion-1'),
+      familyId: testFamily.id,
+      displayName: 'Leo',
+      avatarKey: 'avatar-lion',
+      createdAt: now,
+    );
+    final gateService = ParentGateService(
+      fakeMetadataStore,
+      runInIsolate: false,
+    );
+    await gateService.setPin(
+      '8392',
+      ownerFamilyId: testFamily.id.value,
+      configuredByActorUserId: 'local-parent-user',
+      hasPositiveServerAdultVerification: true,
+      verifiedActiveAdultFamilyIds: [testFamily.id.value],
+      fence: ParentGateOperationFence(
+        actorUserId: 'local-parent-user',
+        sessionGeneration: 1,
+        containmentEpoch: 1,
+        expectedContainmentStatus: 'parent_mode',
+        verifiedFamilyId: testFamily.id.value,
+      ),
+    );
 
-      final childWithAvatar = ChildProfile(
-        id: ChildId('child-lion-1'),
-        familyId: testFamily.id,
-        displayName: 'Leo',
-        avatarKey: 'avatar-lion',
-        createdAt: now,
-      );
+    final container = ProviderContainer(
+      overrides: [
+        localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+        authSessionPortProvider.overrideWithValue(fakeAuth),
+        containmentAuthorizationVerifierProvider.overrideWithValue(
+          FakeContainmentAuthorizationVerifier(
+            defaultOutcome: AuthorizedActiveAdult(
+              verifiedRole: VerifiedAdultRole.owner,
+              verifiedFamily: testFamily,
+              verifiedFamilies: [testFamily],
+              verifiedRolesByFamilyId: {
+                testFamily.id.value: VerifiedAdultRole.owner,
+              },
+              verifiedChild: childWithAvatar,
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
 
-      final notifier = container.read(activeChildModeProvider.notifier);
-      await notifier.selectChild(childWithAvatar);
+    final notifier = container.read(activeChildModeProvider.notifier);
+    await notifier.selectChild(childWithAvatar);
 
-      // Verify written JSON in metadata store contains avatar_key
-      final savedJson = await fakeMetadataStore.readMetadata(
-        ActiveChildModeNotifier.activeSessionKey,
-      );
-      expect(savedJson, isNotNull);
-      expect(savedJson, contains('"avatar_key":"avatar-lion"'));
-      expect(savedJson, contains('"avatarKey":"avatar-lion"'));
+    // Verify written JSON in metadata store is v2 and contains canonical avatar_key
+    final savedJson = await fakeMetadataStore.readMetadata(
+      ActiveChildModeNotifier.activeSessionKey,
+    );
+    expect(savedJson, isNotNull);
+    expect(savedJson, contains('"version":2'));
+    expect(savedJson, contains('"avatar_key":"avatar-lion"'));
 
-      // Create a new container simulating app restart
-      final restartContainer = ProviderContainer(
-        overrides: [
-          localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
-        ],
-      );
-      addTearDown(restartContainer.dispose);
+    // Create a new container simulating app restart
+    final restartContainer = ProviderContainer(
+      overrides: [
+        localMetadataStoreProvider.overrideWithValue(fakeMetadataStore),
+        parentGateServiceProvider.overrideWithValue(gateService),
+        authSessionPortProvider.overrideWithValue(fakeAuth),
+        familyRepositoryProvider.overrideWithValue(fakeFamilyRepo),
+        childProfileRepositoryProvider.overrideWithValue(
+          FakeChildProfileRepository(children: [childWithAvatar]),
+        ),
+      ],
+    );
+    addTearDown(restartContainer.dispose);
 
-      // Read to trigger build and wait for async restore
-      restartContainer.read(activeChildModeProvider);
-      await pumpEventQueue();
+    // Fail-closed: raw read prior to hydration MUST NOT blindly restore child state
+    expect(restartContainer.read(activeChildModeProvider), isNull);
 
-      final restoredChild = restartContainer.read(activeChildModeProvider);
-      expect(restoredChild, isNotNull);
-      expect(restoredChild!.avatarKey, equals('avatar-lion'));
-      expect(restoredChild.displayName, equals('Leo'));
-    },
-  );
+    // Trigger verified cold-start hydration
+    restartContainer.read(coldStartContainmentProvider);
+    await pumpEventQueue();
+    await pumpEventQueue();
+
+    final restoredChild = restartContainer.read(activeChildModeProvider);
+    expect(restoredChild, isNotNull);
+    expect(restoredChild!.avatarKey, equals('avatar-lion'));
+    expect(restoredChild.displayName, equals('Leo'));
+  });
 
   testWidgets(
     'Child Mode: submission failure displays friendly error message',

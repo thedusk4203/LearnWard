@@ -1,6 +1,7 @@
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:learnward_application/learnward_application.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -34,6 +35,14 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
   String? _boundAccessToken;
   int _epoch = 0;
   bool _isStickyInvalid = false;
+  bool _isDisposed = false;
+
+  void _emitGeneration(String? generation) {
+    if (_isDisposed || _controller.isClosed) {
+      return;
+    }
+    _controller.add(generation);
+  }
 
   void _init() {
     final currentSession = _currentSessionProvider != null
@@ -56,6 +65,9 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
     final stream = _authStateStream ?? _client.auth.onAuthStateChange;
     _sub = stream.listen(
       (data) {
+        if (_isDisposed) {
+          return;
+        }
         final session = data.session;
         if (session == null ||
             data.event == AuthChangeEvent.signedOut ||
@@ -71,15 +83,18 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
           _boundAccessToken = session.accessToken;
           _currentGeneration = _buildGeneration(session.user.id, _epoch);
         }
-        _controller.add(_currentGeneration);
+        _emitGeneration(_currentGeneration);
       },
       onError: (Object _) {
+        if (_isDisposed) {
+          return;
+        }
         // Sticky fail-closed on auth stream errors, token refresh failures, or stream disruption:
         _isStickyInvalid = true;
         _boundUserId = null;
         _boundAccessToken = null;
         _currentGeneration = null;
-        _controller.add(null);
+        _emitGeneration(null);
       },
     );
   }
@@ -89,16 +104,17 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
   }
 
   @override
-  String? get currentSessionGeneration => _currentGeneration;
+  String? get currentSessionGeneration =>
+      _isDisposed ? null : _currentGeneration;
 
   @override
   Stream<String?> get sessionGenerationStream => _controller.stream;
 
   @override
   Future<ValidatedActorContext?> validateForMutation() async {
-    // If in a sticky invalid/uncertain state (auth stream error, sign out, or refresh failure),
-    // strictly fail closed. Never resurrect an invalidated session from cached memory.
-    if (_isStickyInvalid || _currentGeneration == null) {
+    // If disposed or in a sticky invalid/uncertain state, strictly fail closed.
+    // Never resurrect an invalidated session from cached memory or emit into a closed controller.
+    if (_isDisposed || _isStickyInvalid || _currentGeneration == null) {
       return null;
     }
 
@@ -106,12 +122,16 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
         ? _currentSessionProvider()
         : _client.auth.currentSession;
 
+    if (_isDisposed) {
+      return null;
+    }
+
     if (session == null || session.isExpired) {
       _isStickyInvalid = true;
       _boundUserId = null;
       _boundAccessToken = null;
       _currentGeneration = null;
-      _controller.add(null);
+      _emitGeneration(null);
       return null;
     }
 
@@ -122,21 +142,61 @@ final class SupabaseAuthSessionAdapter implements AuthSessionPort {
       _boundUserId = null;
       _boundAccessToken = null;
       _currentGeneration = null;
-      _controller.add(null);
+      _emitGeneration(null);
       return null;
     }
 
     final user = session.user;
+    final isAnonymous =
+        user.isAnonymous || _extractJwtIsAnonymousClaim(session.accessToken);
     return ValidatedActorContext(
       userId: user.id,
       sessionGeneration: _currentGeneration!,
       observedAt: _clock.now().toUtc(),
       role: user.appMetadata['role'] as String?,
+      isAnonymous: isAnonymous,
     );
   }
 
+  static bool _extractJwtIsAnonymousClaim(String accessToken) {
+    final parts = accessToken.split('.');
+    if (parts.length != 3) {
+      return false;
+    }
+    try {
+      final normalized = base64Url.normalize(parts[1]);
+      final payloadJson = utf8.decode(base64Url.decode(normalized));
+      final decoded = jsonDecode(payloadJson);
+      if (decoded is! Map<String, dynamic>) {
+        return false;
+      }
+      final claim = decoded['is_anonymous'];
+      if (claim is bool) {
+        return claim;
+      }
+      if (claim is String) {
+        return claim.trim().toLowerCase() == 'true';
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   void dispose() {
-    _sub?.cancel();
-    _controller.close();
+    if (_isDisposed) {
+      return;
+    }
+    _isDisposed = true;
+    _isStickyInvalid = true;
+    _boundUserId = null;
+    _boundAccessToken = null;
+    _currentGeneration = null;
+    final sub = _sub;
+    _sub = null;
+    sub?.cancel();
+    if (!_controller.isClosed) {
+      _controller.close();
+    }
   }
 }

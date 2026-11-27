@@ -95,6 +95,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          authSessionPortProvider.overrideWithValue(
+            FakeAuthSessionPort(activeUserId: 'user-1'),
+          ),
           localMetadataStoreProvider.overrideWithValue(fakeStore),
           parentGateServiceProvider.overrideWithValue(
             ParentGateService(fakeStore, runInIsolate: false),
@@ -171,6 +174,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          authSessionPortProvider.overrideWithValue(
+            FakeAuthSessionPort(activeUserId: 'user-1'),
+          ),
           localMetadataStoreProvider.overrideWithValue(fakeStore),
           parentGateServiceProvider.overrideWithValue(
             ParentGateService(fakeStore, runInIsolate: false),

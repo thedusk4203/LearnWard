@@ -4,6 +4,16 @@ import 'package:learnward_application/learnward_application.dart';
 
 import 'parent_gate_crypto.dart';
 
+export 'package:learnward_application/learnward_application.dart'
+    show
+        AbsentContainmentRecoveryLock,
+        ContainmentRecoveryLockParseResult,
+        ContainmentRecoveryLockV1,
+        ContainmentRecoveryOwnershipLevel,
+        ContainmentRecoveryReason,
+        MalformedContainmentRecoveryLock,
+        ValidContainmentRecoveryLockV1;
+
 /// Persisted `parent_gate_credential_v2` JSON payload.
 final class ParentGateCredentialV2 {
   const ParentGateCredentialV2({
@@ -419,111 +429,6 @@ final class ContainmentFenceV1 {
     'sessionGeneration': sessionGeneration,
     'lockState': lockState.wireValue,
     'updatedAtUtc': updatedAtUtc.toUtc().toIso8601String(),
-  };
-
-  String toJsonString() => jsonEncode(toJson());
-}
-
-/// Ownership classification recorded in `containment_recovery_lock_v1`.
-enum ContainmentRecoveryOwnershipLevel {
-  boundV2('bound_v2'),
-  corroboratedLegacy('corroborated_legacy'),
-  unresolvable('unresolvable');
-
-  const ContainmentRecoveryOwnershipLevel(this.wireValue);
-  final String wireValue;
-
-  static ContainmentRecoveryOwnershipLevel? tryFromWire(String? raw) {
-    for (final value in ContainmentRecoveryOwnershipLevel.values) {
-      if (value.wireValue == raw) {
-        return value;
-      }
-    }
-    return null;
-  }
-}
-
-/// Persisted `containment_recovery_lock_v1` payload (`D1.6`, `R38-08`, `R38-09`).
-final class ContainmentRecoveryLockV1 {
-  const ContainmentRecoveryLockV1({
-    required this.version,
-    required this.reason,
-    required this.ownershipLevel,
-    required this.initiatedFromSessionGeneration,
-    required this.initiatedAtUtc,
-    this.requiredOwnerFamilyId,
-    this.unverifiedLegacyHintFamilyId,
-    this.originActorUserId,
-  });
-
-  final int version;
-  final String reason;
-  final ContainmentRecoveryOwnershipLevel ownershipLevel;
-  final String? requiredOwnerFamilyId;
-  final String? unverifiedLegacyHintFamilyId;
-  final String? originActorUserId;
-  final int initiatedFromSessionGeneration;
-  final DateTime initiatedAtUtc;
-
-  static ContainmentRecoveryLockV1? tryParse(String? raw) {
-    if (raw == null || raw.trim().isEmpty) {
-      return null;
-    }
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map<String, dynamic>) {
-        return null;
-      }
-      final version = decoded['version'];
-      final reason = decoded['reason'];
-      final ownershipRaw = decoded['ownershipLevel'];
-      final requiredOwnerFamilyId = decoded['requiredOwnerFamilyId'];
-      final unverifiedLegacyHintFamilyId =
-          decoded['unverifiedLegacyHintFamilyId'];
-      final originActorUserId = decoded['originActorUserId'];
-      final sessionGen = decoded['initiatedFromSessionGeneration'];
-      final initiatedAtRaw = decoded['initiatedAtUtc'];
-
-      if (version != 1 ||
-          reason is! String ||
-          reason.isEmpty ||
-          ownershipRaw is! String ||
-          sessionGen is! int ||
-          sessionGen < 0 ||
-          initiatedAtRaw is! String) {
-        return null;
-      }
-      final ownershipLevel = ContainmentRecoveryOwnershipLevel.tryFromWire(
-        ownershipRaw,
-      );
-      final initiatedAtUtc = DateTime.tryParse(initiatedAtRaw)?.toUtc();
-      if (ownershipLevel == null || initiatedAtUtc == null) {
-        return null;
-      }
-      return ContainmentRecoveryLockV1(
-        version: version as int,
-        reason: reason,
-        ownershipLevel: ownershipLevel,
-        requiredOwnerFamilyId: requiredOwnerFamilyId as String?,
-        unverifiedLegacyHintFamilyId: unverifiedLegacyHintFamilyId as String?,
-        originActorUserId: originActorUserId as String?,
-        initiatedFromSessionGeneration: sessionGen,
-        initiatedAtUtc: initiatedAtUtc,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Map<String, dynamic> toJson() => {
-    'version': version,
-    'reason': reason,
-    'ownershipLevel': ownershipLevel.wireValue,
-    'requiredOwnerFamilyId': requiredOwnerFamilyId,
-    'unverifiedLegacyHintFamilyId': unverifiedLegacyHintFamilyId,
-    'originActorUserId': originActorUserId,
-    'initiatedFromSessionGeneration': initiatedFromSessionGeneration,
-    'initiatedAtUtc': initiatedAtUtc.toUtc().toIso8601String(),
   };
 
   String toJsonString() => jsonEncode(toJson());

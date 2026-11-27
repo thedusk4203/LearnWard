@@ -7,6 +7,7 @@ import 'package:learnward/app/app.dart';
 import 'package:learnward/app/bootstrap/app_config.dart';
 import 'package:learnward/app/bootstrap/app_providers.dart';
 import 'package:learnward/features/auth/presentation/auth_screen.dart';
+import 'package:learnward_application/learnward_application.dart';
 import 'package:learnward_test_support/learnward_test_support.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -17,6 +18,8 @@ void main() {
       (tester) async {
         final authController = StreamController<AuthState>.broadcast();
         addTearDown(authController.close);
+        final fakeAuth = FakeAuthSessionPort(activeUserId: null);
+        addTearDown(fakeAuth.dispose);
 
         const config = AppConfig(
           environment: AppEnvironment.staging,
@@ -34,6 +37,12 @@ void main() {
             overrides: [
               appConfigProvider.overrideWithValue(config),
               authStateProvider.overrideWith((ref) => authController.stream),
+              authSessionPortProvider.overrideWithValue(fakeAuth),
+              containmentAuthorizationVerifierProvider.overrideWithValue(
+                FakeContainmentAuthorizationVerifier(
+                  defaultOutcome: const NoActiveFamilyMembershipObserved(),
+                ),
+              ),
               localMetadataStoreProvider.overrideWithValue(
                 InMemoryLocalMetadataStore(),
               ),
@@ -45,6 +54,7 @@ void main() {
         );
 
         // 1. Initial state: unauthenticated
+        fakeAuth.signOut();
         authController.add(
           const AuthState(AuthChangeEvent.initialSession, null),
         );
@@ -65,15 +75,18 @@ void main() {
           accessToken: 'test-token',
           tokenType: 'bearer',
           user: user,
+          expiresIn: 3600,
         );
+        fakeAuth.setSession(userId: 'adult-123');
         authController.add(AuthState(AuthChangeEvent.signedIn, session));
         await tester.pumpAndSettle();
 
-        // Router automatically reacts: leaves /auth and routes to family home
+        // Fail-closed post-sign-in routing: neutral no-family onboarding shell (no Parent Mode)
         expect(find.byType(AuthScreen), findsNothing);
         expect(find.text('No Family Found'), findsOneWidget);
 
         // 3. Emit signed out event
+        fakeAuth.signOut();
         authController.add(const AuthState(AuthChangeEvent.signedOut, null));
         await tester.pumpAndSettle();
 
@@ -100,6 +113,9 @@ void main() {
           overrides: [
             appConfigProvider.overrideWithValue(config),
             authStateProvider.overrideWith((ref) => authController.stream),
+            authSessionPortProvider.overrideWithValue(
+              FakeAuthSessionPort(activeUserId: null),
+            ),
             localMetadataStoreProvider.overrideWithValue(
               InMemoryLocalMetadataStore(),
             ),
@@ -136,6 +152,9 @@ void main() {
             overrides: [
               appConfigProvider.overrideWithValue(config),
               authStateProvider.overrideWith((ref) => authController.stream),
+              authSessionPortProvider.overrideWithValue(
+                FakeAuthSessionPort(activeUserId: null),
+              ),
               localMetadataStoreProvider.overrideWithValue(
                 InMemoryLocalMetadataStore(),
               ),
@@ -171,6 +190,9 @@ void main() {
             overrides: [
               appConfigProvider.overrideWithValue(config),
               authStateProvider.overrideWith((ref) => authController.stream),
+              authSessionPortProvider.overrideWithValue(
+                FakeAuthSessionPort(activeUserId: null),
+              ),
               localMetadataStoreProvider.overrideWithValue(
                 InMemoryLocalMetadataStore(),
               ),

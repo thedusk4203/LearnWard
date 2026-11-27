@@ -291,6 +291,22 @@ void main() {
           ),
         ];
 
+        final famChild = Family(
+          id: FamilyId('fam-child-1'),
+          name: 'Child Family',
+          timezone: 'UTC',
+          locale: 'en_US',
+          createdByUserId: 'child-user-1',
+          createdAt: t0,
+        );
+        final childProfile = ChildProfile(
+          id: ChildId('child-1'),
+          familyId: FamilyId('fam-child-1'),
+          displayName: 'Kiddo',
+          avatarKey: 'avatar-1',
+          createdAt: DateTime.utc(2026, 11, 8),
+        );
+
         final container = ProviderContainer(
           overrides: [
             localMetadataStoreProvider.overrideWithValue(
@@ -298,6 +314,19 @@ void main() {
             ),
             pendingRewardCommandStoreProvider.overrideWithValue(fakeStore),
             authSessionPortProvider.overrideWithValue(fakeAuth),
+            containmentAuthorizationVerifierProvider.overrideWithValue(
+              FakeContainmentAuthorizationVerifier(
+                defaultOutcome: AuthorizedActiveAdult(
+                  verifiedRole: VerifiedAdultRole.owner,
+                  verifiedFamily: famChild,
+                  verifiedFamilies: [famChild],
+                  verifiedRolesByFamilyId: {
+                    famChild.id.value: VerifiedAdultRole.owner,
+                  },
+                  verifiedChild: childProfile,
+                ),
+              ),
+            ),
             wheelRepositoryProvider.overrideWithValue(
               FakeWheelRepository(initialRewards: sampleRewards),
             ),
@@ -323,13 +352,6 @@ void main() {
         expect(container.read(activeFamilyProvider), isNull);
 
         // Entering Child Mode with activeChildModeProvider triggers drain for the child's family
-        final childProfile = ChildProfile(
-          id: ChildId('child-1'),
-          familyId: FamilyId('fam-child-1'),
-          displayName: 'Kiddo',
-          avatarKey: 'avatar-1',
-          createdAt: DateTime.utc(2026, 11, 8),
-        );
         await container
             .read(activeChildModeProvider.notifier)
             .selectChild(childProfile);

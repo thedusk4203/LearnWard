@@ -10,6 +10,8 @@ export 'src/ports/canonical_evidence_snapshot.dart';
 export 'src/ports/child_profile_repository.dart';
 export 'src/ports/clock.dart';
 export 'src/ports/command_lifecycle_states.dart';
+export 'src/ports/containment_authorization_verifier.dart';
+export 'src/ports/containment_session_models.dart';
 export 'src/ports/draft_store_rules.dart';
 export 'src/ports/family_repository.dart';
 export 'src/ports/growth_repository.dart';

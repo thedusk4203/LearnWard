@@ -1591,9 +1591,9 @@ void main() {
           key: ParentGateService.containmentRecoveryLockV1Key,
           value: ContainmentRecoveryLockV1(
             version: 1,
-            reason: 'manual_recovery_required',
+            reason: ContainmentRecoveryReason.corruptPin,
             ownershipLevel: ContainmentRecoveryOwnershipLevel.unresolvable,
-            initiatedFromSessionGeneration: 1,
+            initiatedFromSessionGeneration: 'gen-1',
             initiatedAtUtc: t0,
           ).toJsonString(),
           updatedAt: t0,
@@ -2204,13 +2204,27 @@ void main() {
         expect(find.byKey(const Key('parent_gate_error')), findsOneWidget);
 
         // Part 3: Full ChildModeScreen flow stays on Child Mode and never navigates to /parent
+        await store.writeMetadata(
+          key: ActiveChildModeNotifier.activeSessionKey,
+          value: PersistedChildModeSession(
+            modeKind: PersistedChildModeKind.sharedDeviceAdult,
+            actorUserId: actorId,
+            familyId: family.id,
+            childId: child.id,
+            childProfileSnapshot: child,
+            persistedAtUtc: DateTime.utc(2026, 10, 31),
+          ).toJsonString(),
+          updatedAt: DateTime.utc(2026, 10, 31),
+        );
         await tester.pumpWidget(
           ProviderScope(
             key: UniqueKey(),
             overrides: [
+              authSessionPortProvider.overrideWithValue(
+                FakeAuthSessionPort(activeUserId: actorId),
+              ),
               localMetadataStoreProvider.overrideWithValue(store),
               parentGateServiceProvider.overrideWithValue(gateService),
-              initialChildModeSessionProvider.overrideWithValue(child),
               familyRepositoryProvider.overrideWithValue(
                 FakeFamilyRepository(
                   currentUserId: actorId,
