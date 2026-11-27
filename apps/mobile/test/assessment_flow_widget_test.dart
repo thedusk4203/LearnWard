@@ -265,9 +265,43 @@ void main() {
     fakeDraftStore = InMemoryLocalDraftStore();
   });
 
+  Future<void> seedVerifiedChildModeSession(
+    InMemoryLocalMetadataStore store,
+  ) async {
+    await store.writeMetadata(
+      key: ActiveChildModeNotifier.activeSessionKey,
+      value: PersistedChildModeSession(
+        modeKind: PersistedChildModeKind.sharedDeviceAdult,
+        actorUserId: 'local-parent-user',
+        familyId: testFamily.id,
+        childId: testChild.id,
+        childProfileSnapshot: testChild,
+        persistedAtUtc: now,
+      ).toJsonString(),
+      updatedAt: now,
+    );
+    await store.writeMetadata(
+      key: ParentGateService.credentialV2Key,
+      value: ParentGateCredentialV2(
+        version: 2,
+        kdf: ParentGateCrypto.kdfAlgorithmId,
+        iterations: ParentGateCrypto.productionMinIterations,
+        keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
+        saltHex: List.filled(32, 'a').join(),
+        hashHex: List.filled(64, 'b').join(),
+        ownerFamilyId: testFamily.id.value,
+        configuredByActorUserId: 'local-parent-user',
+        credentialRevision: 1,
+        updatedAtUtc: now,
+      ).toJsonString(),
+      updatedAt: now,
+    );
+  }
+
   testWidgets(
     'Child Mode: captures assessment, calculates normalized score, attaches evidence and submits',
     (tester) async {
+      await seedVerifiedChildModeSession(fakeMetadataStore);
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -510,6 +544,7 @@ void main() {
   testWidgets('Child Mode: reopens and edits an unsubmitted local draft', (
     tester,
   ) async {
+    await seedVerifiedChildModeSession(fakeMetadataStore);
     final preDraft = LocalAssessmentDraft(
       localDraftId: 'draft-offline-123',
       familyId: testFamily.id.value,
@@ -682,6 +717,7 @@ void main() {
   testWidgets(
     'Child Mode: submission failure displays friendly error message',
     (tester) async {
+      await seedVerifiedChildModeSession(fakeMetadataStore);
       final failingRepo = _FailingSubmitAssessmentRepository();
 
       await tester.pumpWidget(
@@ -803,6 +839,7 @@ void main() {
   testWidgets(
     'AddAssessment: generates distinct create/submit command IDs and reuses them on retry',
     (tester) async {
+      await seedVerifiedChildModeSession(fakeMetadataStore);
       final trackingRepo = _TrackingAssessmentRepository(
         activeActorIdProvider: () => fakeAuth.currentContext?.userId,
       );

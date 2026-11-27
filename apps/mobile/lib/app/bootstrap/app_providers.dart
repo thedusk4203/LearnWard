@@ -62,7 +62,11 @@ final localDraftStoreProvider = Provider<LocalDraftStore>((ref) {
   if (config.canUseLocalDemoRepositories) {
     return ref.watch(inMemoryLocalDraftStoreProvider);
   }
-  return ref.watch(databaseProvider);
+  final metadataStore = ref.watch(localMetadataStoreProvider);
+  if (metadataStore is AppDatabase) {
+    return metadataStore;
+  }
+  return ref.watch(inMemoryLocalDraftStoreProvider);
 });
 
 /// In-memory pending reward command store provider for testing/local demo.
@@ -79,8 +83,67 @@ final pendingRewardCommandStoreProvider = Provider<PendingRewardCommandStore>((
   if (config.canUseLocalDemoRepositories) {
     return ref.watch(inMemoryPendingRewardCommandStoreProvider);
   }
-  return ref.watch(databaseProvider);
+  final metadataStore = ref.watch(localMetadataStoreProvider);
+  if (metadataStore is AppDatabase) {
+    return metadataStore;
+  }
+  return ref.watch(inMemoryPendingRewardCommandStoreProvider);
 });
+
+final class _CombinedOutboxProvenanceSource
+    implements LegacyOutboxProvenanceSource {
+  const _CombinedOutboxProvenanceSource({this.draftSource, this.commandSource});
+
+  final LegacyOutboxProvenanceSource? draftSource;
+  final LegacyOutboxProvenanceSource? commandSource;
+
+  @override
+  Future<List<ActorBoundOutboxRecord>> listActorBoundRecords() async {
+    final records = <ActorBoundOutboxRecord>[];
+    if (draftSource != null) {
+      records.addAll(await draftSource!.listActorBoundRecords());
+    }
+    if (commandSource != null) {
+      records.addAll(await commandSource!.listActorBoundRecords());
+    }
+    return records;
+  }
+}
+
+/// Read-only local outbox provenance source for legacy Child Mode ownership
+/// resolution (`D1.6`, `WP3`).
+final legacyOutboxProvenanceSourceProvider =
+    Provider<LegacyOutboxProvenanceSource>((ref) {
+      final config = ref.watch(appConfigProvider);
+      if (!config.canUseLocalDemoRepositories) {
+        final metadataStore = ref.watch(localMetadataStoreProvider);
+        if (metadataStore is AppDatabase) {
+          return metadataStore;
+        }
+      }
+      final draftStore = ref.watch(localDraftStoreProvider);
+      final commandStore = ref.watch(pendingRewardCommandStoreProvider);
+      if (draftStore is LegacyOutboxProvenanceSource &&
+          commandStore is LegacyOutboxProvenanceSource &&
+          identical(draftStore, commandStore)) {
+        return draftStore as LegacyOutboxProvenanceSource;
+      }
+      if (draftStore is InMemoryLocalDraftStore &&
+          commandStore is InMemoryPendingRewardCommandStore) {
+        return CombinedInMemoryLegacyOutboxProvenanceSource(
+          draftStore: draftStore,
+          commandStore: commandStore,
+        );
+      }
+      return _CombinedOutboxProvenanceSource(
+        draftSource: draftStore is LegacyOutboxProvenanceSource
+            ? draftStore as LegacyOutboxProvenanceSource
+            : null,
+        commandSource: commandStore is LegacyOutboxProvenanceSource
+            ? commandStore as LegacyOutboxProvenanceSource
+            : null,
+      );
+    });
 
 /// Evidence picker service provider. Defaults to production native image_picker.
 final evidencePickerServiceProvider = Provider<EvidencePickerService>((ref) {
@@ -131,14 +194,151 @@ final authStateProvider = StreamProvider<AuthState>((ref) {
   return client.auth.onAuthStateChange;
 });
 
-/// Provider for the current user's ID, or null.
+/// Fail-closed snapshot combining live generation validation with bound actor identity (`WP3`).
+final class AuthSessionState {
+  const AuthSessionState({
+    this.actorUserId,
+    this.sessionGeneration,
+    this.isFailClosedInvalidated = false,
+  });
+
+  static const unauthenticated = AuthSessionState();
+
+  final String? actorUserId;
+  final String? sessionGeneration;
+  final bool isFailClosedInvalidated;
+
+  bool get isAuthenticated =>
+      !isFailClosedInvalidated &&
+      actorUserId != null &&
+      actorUserId!.trim().isNotEmpty &&
+      sessionGeneration != null &&
+      sessionGeneration!.trim().isNotEmpty;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AuthSessionState &&
+          actorUserId == other.actorUserId &&
+          sessionGeneration == other.sessionGeneration &&
+          isFailClosedInvalidated == other.isFailClosedInvalidated;
+
+  @override
+  int get hashCode =>
+      Object.hash(actorUserId, sessionGeneration, isFailClosedInvalidated);
+}
+
+/// Stream provider mirroring [AuthSessionPort.sessionGenerationStream] (`WP3`).
+final StreamProvider<String?> authSessionGenerationProvider =
+    StreamProvider<String?>((ref) {
+      final port = ref.watch(authSessionPortProvider);
+      return port.sessionGenerationStream;
+    });
+
+/// Authoritative fail-closed auth session state (`WP3`).
 ///
-/// Reactively watches [authStateProvider] and updates dynamically
-/// whenever an auth event occurs (sign in, sign out, token refresh).
-final currentUserIdProvider = Provider<String?>((ref) {
-  final authState = ref.watch(authStateProvider);
+/// Derives actor identity solely from validated live session state (never
+/// falling back to stale `client.auth.currentUser` after sign-out, expiry,
+/// or stream disruption).
+final Provider<AuthSessionState> authSessionStateProvider =
+    Provider<AuthSessionState>((ref) {
+      final client = ref.watch(supabaseClientProvider);
+      final authState = ref.watch(authStateProvider);
+      final authPort = ref.watch(authSessionPortProvider);
+      final genStream = ref.watch(authSessionGenerationProvider);
+
+      if (client != null) {
+        if (authState.hasError || genStream.hasError) {
+          return const AuthSessionState(isFailClosedInvalidated: true);
+        }
+        final data = authState.value;
+        if (data != null &&
+            (data.event == AuthChangeEvent.signedOut ||
+                data.session == null ||
+                data.session!.isExpired)) {
+          return const AuthSessionState(isFailClosedInvalidated: true);
+        }
+
+        final liveGeneration = authPort.currentSessionGeneration;
+        if (liveGeneration == null || liveGeneration.trim().isEmpty) {
+          return const AuthSessionState(isFailClosedInvalidated: true);
+        }
+
+        if (authPort is SupabaseAuthSessionAdapter) {
+          final boundUserId = authPort.currentBoundUserId;
+          if (boundUserId == null || boundUserId.trim().isEmpty) {
+            return const AuthSessionState(isFailClosedInvalidated: true);
+          }
+          if (data?.session != null && data!.session!.user.id != boundUserId) {
+            return const AuthSessionState(isFailClosedInvalidated: true);
+          }
+          return AuthSessionState(
+            actorUserId: boundUserId.trim(),
+            sessionGeneration: liveGeneration.trim(),
+          );
+        }
+
+        final streamUserId = data?.session?.user.id.trim();
+        if (streamUserId == null || streamUserId.isEmpty) {
+          return const AuthSessionState(isFailClosedInvalidated: true);
+        }
+        return AuthSessionState(
+          actorUserId: streamUserId,
+          sessionGeneration: liveGeneration.trim(),
+        );
+      }
+
+      if (authState.hasError || genStream.hasError) {
+        return const AuthSessionState(isFailClosedInvalidated: true);
+      }
+      final data = authState.value;
+      if (data != null &&
+          (data.event == AuthChangeEvent.signedOut ||
+              data.session == null ||
+              data.session!.isExpired)) {
+        return const AuthSessionState(isFailClosedInvalidated: true);
+      }
+      final liveGeneration =
+          genStream.value?.trim() ?? authPort.currentSessionGeneration?.trim();
+      final sessionUserId = data?.session?.user.id.trim();
+      if (liveGeneration == null ||
+          liveGeneration.isEmpty ||
+          sessionUserId == null ||
+          sessionUserId.isEmpty) {
+        return AuthSessionState(
+          isFailClosedInvalidated: genStream.hasError || authState.hasError,
+        );
+      }
+      return AuthSessionState(
+        actorUserId: sessionUserId,
+        sessionGeneration: liveGeneration,
+      );
+    });
+
+/// Provider for the current user's ID, or null (`WP3` fail-closed).
+///
+/// When Supabase is configured, derives exclusively from [authSessionStateProvider]
+/// (never reading unverified `client.auth.currentUser`). In local demo mode,
+/// derives from valid non-expired [authStateProvider] events only.
+final Provider<String?> currentUserIdProvider = Provider<String?>((ref) {
   final client = ref.watch(supabaseClientProvider);
-  return authState.value?.session?.user.id ?? client?.auth.currentUser?.id;
+  if (client != null) {
+    return ref.watch(authSessionStateProvider).actorUserId;
+  }
+  final authState = ref.watch(authStateProvider);
+  if (authState.hasError) {
+    return null;
+  }
+  final data = authState.value;
+  if (data == null || data.event == AuthChangeEvent.signedOut) {
+    return null;
+  }
+  final session = data.session;
+  if (session == null || session.isExpired) {
+    return null;
+  }
+  final uid = session.user.id.trim();
+  return uid.isEmpty ? null : uid;
 });
 
 /// Repository for family operations.
@@ -280,22 +480,23 @@ final learningRepositoryProvider = Provider<LearningRepository>((ref) {
 });
 
 /// Auth session port provider.
-final authSessionPortProvider = Provider<AuthSessionPort>((ref) {
-  final config = ref.watch(appConfigProvider);
-  final client = ref.watch(supabaseClientProvider);
-  if (client != null) {
-    final adapter = SupabaseAuthSessionAdapter(client);
-    ref.onDispose(adapter.dispose);
-    return adapter;
-  }
-  if (config.canUseLocalDemoRepositories) {
-    final currentUserId = ref.watch(currentUserIdProvider);
-    final port = InMemoryAuthSessionPort(activeUserId: currentUserId);
-    ref.onDispose(port.dispose);
-    return port;
-  }
-  throw MissingSupabaseConfigurationException(config.environment);
-});
+final Provider<AuthSessionPort> authSessionPortProvider =
+    Provider<AuthSessionPort>((ref) {
+      final config = ref.watch(appConfigProvider);
+      final client = ref.watch(supabaseClientProvider);
+      if (client != null) {
+        final adapter = SupabaseAuthSessionAdapter(client);
+        ref.onDispose(adapter.dispose);
+        return adapter;
+      }
+      if (config.canUseLocalDemoRepositories) {
+        final currentUserId = ref.watch(currentUserIdProvider);
+        final port = InMemoryAuthSessionPort(activeUserId: currentUserId);
+        ref.onDispose(port.dispose);
+        return port;
+      }
+      throw MissingSupabaseConfigurationException(config.environment);
+    });
 
 /// Restricted shell sign-out handler (`R40-03`).
 ///
@@ -366,6 +567,9 @@ final coldStartContainmentProvider =
     NotifierProvider<ColdStartContainmentNotifier, ColdStartContainmentState>(
       ColdStartContainmentNotifier.new,
     );
+
+/// Canonical WP3 alias referencing the single lifecycle controller [coldStartContainmentProvider].
+final sessionContainmentProvider = coldStartContainmentProvider;
 
 /// Shared recovery coordinator provider for Spin and Redeem operations.
 final recoveryCoordinatorProvider = Provider<RecoveryCoordinator>((ref) {

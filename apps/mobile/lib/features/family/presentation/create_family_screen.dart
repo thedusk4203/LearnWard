@@ -301,7 +301,27 @@ class _CreateFamilyScreenState extends ConsumerState<CreateFamilyScreen> {
     });
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Create Family')),
+      appBar: AppBar(
+        title: const Text('Create Family'),
+        leading: Navigator.of(context).canPop()
+            ? null
+            : (GoRouter.maybeOf(context) != null
+                  ? BackButton(
+                      onPressed: () {
+                        final status = ref
+                            .read(coldStartContainmentProvider)
+                            .status;
+                        GoRouter.of(context).go(
+                          status ==
+                                  ColdStartContainmentStatus
+                                      .noActiveFamilyMembership
+                              ? AppRoutes.familyOnboarding
+                              : AppRoutes.parentHome,
+                        );
+                      },
+                    )
+                  : null),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

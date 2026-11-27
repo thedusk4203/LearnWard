@@ -108,17 +108,10 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // PIN setup dialog presented in fail-closed restricted state (R39-04)
+        // PIN setup dialog presented wired to WP3 SessionLifecycleController (R39-04):
+        // Cancel stays in Parent Mode with zero PIN written; standalone null onSavePin stays fail-closed.
         expect(find.byType(ParentPinSetupDialog), findsOneWidget);
         expect(find.text('Set Parent PIN'), findsOneWidget);
-        expect(
-          find.byKey(const Key('parent_pin_setup_restricted_notice')),
-          findsOneWidget,
-        );
-        final submitButton = tester.widget<FilledButton>(
-          find.byKey(const Key('parent_pin_setup_submit')),
-        );
-        expect(submitButton.onPressed, isNull);
 
         // Cancel dialog -> stays in Parent Mode with zero PIN written
         await tester.tap(find.byKey(const Key('parent_pin_setup_cancel')));
@@ -264,18 +257,14 @@ void main() {
 
         await tester.tap(find.byKey(const Key('exit_child_mode_button')));
         await tester.pumpAndSettle();
-        expect(
-          find.byKey(const Key('parent_gate_restricted_notice')),
-          findsOneWidget,
+        // Wrong PIN 1234 fails closed via WP3 SessionLifecycleController
+        await tester.enterText(
+          find.byKey(const Key('parent_gate_pin_field')),
+          '1234',
         );
-        expect(
-          tester
-              .widget<FilledButton>(
-                find.byKey(const Key('parent_gate_verify_button')),
-              )
-              .onPressed,
-          isNull,
-        );
+        await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('parent_gate_error')), findsOneWidget);
         await tester.tap(find.byKey(const Key('parent_gate_cancel_button')));
         await tester.pumpAndSettle();
         expect(find.text('Hi, Leo!'), findsOneWidget);
@@ -397,13 +386,19 @@ void main() {
         expect(find.text('Hi, Leo!'), findsOneWidget);
         expect(find.text('The Smiths'), findsNothing);
 
-        // Exit Child Mode stays fail-closed while WP3 delegate is absent
+        // Exit Child Mode rejects wrong PIN and cancels cleanly
         await tester.tap(find.byKey(const Key('exit_child_mode_button')));
         await tester.pumpAndSettle();
-        expect(
-          find.byKey(const Key('parent_gate_restricted_notice')),
-          findsOneWidget,
+        await tester.enterText(
+          find.byKey(const Key('parent_gate_pin_field')),
+          '0000',
         );
+        await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('parent_gate_error')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('parent_gate_cancel_button')));
+        await tester.pumpAndSettle();
+        expect(find.text('Hi, Leo!'), findsOneWidget);
       },
     );
   });

@@ -98,6 +98,29 @@ class ParentGateService {
     return snapshot.v2?.ownerFamilyId;
   }
 
+  /// Derives PBKDF2 credential material OUTSIDE `_ContainmentArbiter` (`WP3`).
+  Future<PreDerivedPinMaterial> derivePinMaterial(String newPin) async {
+    if (!_pinRegex.hasMatch(newPin)) {
+      throw ArgumentError('Parent PIN must be exactly 4 digits');
+    }
+    final saltBytes = ParentGateCrypto.generateRandomBytes();
+    final saltHex = ParentGateCrypto.bytesToHex(saltBytes);
+    final derived = await ParentGateCrypto.pbkdf2HmacSha256(
+      password: utf8.encode(newPin),
+      salt: saltBytes,
+      iterations: configuredIterations,
+      keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
+      runInIsolate: runInIsolate,
+    );
+    return PreDerivedPinMaterial(
+      kdf: ParentGateCrypto.kdfAlgorithmId,
+      iterations: configuredIterations,
+      keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
+      saltHex: saltHex,
+      hashHex: ParentGateCrypto.bytesToHex(derived),
+    );
+  }
+
   /// Configures an initial 4-digit Parent PIN when no credential exists (`D1.5`, `R39-03`, `R39-04`).
   ///
   /// Strictly restricted to initial setup (`ParentGateCredentialStatus.missing`)
@@ -111,6 +134,7 @@ class ParentGateService {
     bool hasPositiveServerAdultVerification = false,
     List<String> verifiedActiveAdultFamilyIds = const [],
     ParentGateOperationFence? fence,
+    PreDerivedPinMaterial? preDerivedMaterial,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
@@ -132,6 +156,7 @@ class ParentGateService {
       configuredByActorUserId: configuredByActorUserId,
       mode: _CredentialWriteMode.initialSetupOnly,
       fence: fence,
+      preDerivedMaterial: preDerivedMaterial,
       preCommitGuard: preCommitGuard,
       onBeforePreCommitGuard: onBeforePreCommitGuard,
       onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
@@ -146,6 +171,7 @@ class ParentGateService {
     required bool hasPositiveServerAdultVerification,
     required List<String> verifiedActiveAdultFamilyIds,
     ParentGateOperationFence? fence,
+    PreDerivedPinMaterial? preDerivedMaterial,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
@@ -167,6 +193,7 @@ class ParentGateService {
       configuredByActorUserId: actorUserId,
       mode: _CredentialWriteMode.authorizedCrossFamilyReassignment,
       fence: fence,
+      preDerivedMaterial: preDerivedMaterial,
       preCommitGuard: preCommitGuard,
       onBeforePreCommitGuard: onBeforePreCommitGuard,
       onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
@@ -184,6 +211,7 @@ class ParentGateService {
     required bool hasPositiveServerAdultVerification,
     required List<String> verifiedActiveAdultFamilyIds,
     ParentGateOperationFence? fence,
+    PreDerivedPinMaterial? preDerivedMaterial,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
@@ -205,6 +233,7 @@ class ParentGateService {
       configuredByActorUserId: actorUserId,
       mode: _CredentialWriteMode.authorizedCorruptRecoveryOnly,
       fence: fence,
+      preDerivedMaterial: preDerivedMaterial,
       preCommitGuard: preCommitGuard,
       onBeforePreCommitGuard: onBeforePreCommitGuard,
       onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
@@ -220,6 +249,7 @@ class ParentGateService {
     bool hasPositiveServerAdultVerification = false,
     List<String> verifiedActiveAdultFamilyIds = const [],
     ParentGateOperationFence? fence,
+    PreDerivedPinMaterial? preDerivedMaterial,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePhase1PreCommitGuard,
     Future<void> Function()? onAfterPhase1GuardBeforeCommit,
@@ -239,16 +269,7 @@ class ParentGateService {
       actorUserId ?? fence?.actorUserId,
     );
 
-    final newSaltBytes = ParentGateCrypto.generateRandomBytes();
-    final newSaltHex = ParentGateCrypto.bytesToHex(newSaltBytes);
-    final newDerived = await ParentGateCrypto.pbkdf2HmacSha256(
-      password: utf8.encode(newPin),
-      salt: newSaltBytes,
-      iterations: configuredIterations,
-      keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
-      runInIsolate: runInIsolate,
-    );
-    final newHashHex = ParentGateCrypto.bytesToHex(newDerived);
+    final material = preDerivedMaterial ?? await derivePinMaterial(newPin);
 
     final snap = await _readCredentialSnapshot();
     final preservedFamilyId = normalizedFamilyId ?? snap.v2?.ownerFamilyId;
@@ -270,11 +291,11 @@ class ParentGateService {
         final nextRevision = (snap.v2?.credentialRevision ?? 1) + 1;
         final replacement = ParentGateCredentialV2(
           version: 2,
-          kdf: ParentGateCrypto.kdfAlgorithmId,
-          iterations: configuredIterations,
-          keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
-          saltHex: newSaltHex,
-          hashHex: newHashHex,
+          kdf: material.kdf,
+          iterations: material.iterations,
+          keyLengthBytes: material.keyLengthBytes,
+          saltHex: material.saltHex,
+          hashHex: material.hashHex,
           ownerFamilyId: preservedFamilyId,
           configuredByActorUserId: normalizedActorId,
           credentialRevision: nextRevision,
@@ -308,6 +329,7 @@ class ParentGateService {
     required bool hasPositiveServerAdultVerification,
     required List<String> verifiedActiveAdultFamilyIds,
     ParentGateOperationFence? fence,
+    PreDerivedPinMaterial? preDerivedMaterial,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
@@ -347,6 +369,7 @@ class ParentGateService {
       configuredByActorUserId: normalizedActorId,
       mode: _CredentialWriteMode.authorizedSameHouseholdOrUnownedReset,
       fence: fence,
+      preDerivedMaterial: preDerivedMaterial,
       preCommitGuard: preCommitGuard,
       onBeforePreCommitGuard: onBeforePreCommitGuard,
       onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
@@ -359,6 +382,7 @@ class ParentGateService {
     String? ownerFamilyId,
     String? configuredByActorUserId,
     ParentGateOperationFence? fence,
+    PreDerivedPinMaterial? preDerivedMaterial,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
@@ -369,16 +393,9 @@ class ParentGateService {
 
     final normalizedFamilyId = _normalizeOptionalId(ownerFamilyId);
     final normalizedActorId = _normalizeOptionalId(configuredByActorUserId);
-    final saltBytes = ParentGateCrypto.generateRandomBytes();
-    final saltHex = ParentGateCrypto.bytesToHex(saltBytes);
-    final derived = await ParentGateCrypto.pbkdf2HmacSha256(
-      password: utf8.encode(newPin),
-      salt: saltBytes,
-      iterations: configuredIterations,
-      keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
-      runInIsolate: runInIsolate,
-    );
-    final hashHex = ParentGateCrypto.bytesToHex(derived);
+    final material = preDerivedMaterial ?? await derivePinMaterial(newPin);
+    final saltHex = material.saltHex;
+    final hashHex = material.hashHex;
 
     for (var attempt = 0; attempt < _maxCasRetries; attempt++) {
       final snap = await _readCredentialSnapshot();
@@ -463,9 +480,9 @@ class ParentGateService {
       final nowUtc = _clock.now().toUtc();
       final nextCred = ParentGateCredentialV2(
         version: 2,
-        kdf: ParentGateCrypto.kdfAlgorithmId,
-        iterations: configuredIterations,
-        keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
+        kdf: material.kdf,
+        iterations: material.iterations,
+        keyLengthBytes: material.keyLengthBytes,
         saltHex: saltHex,
         hashHex: hashHex,
         ownerFamilyId: normalizedFamilyId,
@@ -610,22 +627,19 @@ class ParentGateService {
     );
   }
 
-  /// Phases 1 + 2: Pessimistically reserves the attempt BEFORE KDF execution,
-  /// evaluates PBKDF2-HMAC-SHA-256 (or legacy v1 digest + derived v2 upgrade
-  /// strictly when adult/actor/family/fence preconditions hold), and returns a
-  /// staged handle ready for fenced CAS finalization.
-  Future<StagedPinReservationResult> beginStagedVerification({
+  /// Phase 1 ONLY: Reserves a lockout attempt slot in SQLite CAS without KDF.
+  ///
+  /// Designed for `SessionLifecycleController` to acquire `_ContainmentArbiter`
+  /// only for fast SQLite reservation, then run [evaluateReservedAttempt] OUTSIDE
+  /// `_ContainmentArbiter`.
+  Future<PinAttemptReservationResult> reserveVerificationAttempt({
     required String enteredPin,
     String? actorFamilyId,
     String? actorUserId,
-    bool hasPositiveServerAdultVerification = false,
-    List<String> verifiedActiveAdultFamilyIds = const [],
     ParentGateOperationFence? fence,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
-    Future<void> Function(StagedPinVerificationAttempt attempt)?
-    onAfterKdfBeforeFinalize,
   }) async {
     final effectiveFamilyId = _normalizeOptionalId(
       actorFamilyId ?? fence?.verifiedFamilyId,
@@ -634,15 +648,9 @@ class ParentGateService {
       actorUserId ?? fence?.actorUserId,
     );
 
-    late _CredentialSnapshot credSnapshot;
-    late ParentGateLockoutV1 committedLockout;
-    late String committedLockoutRaw;
-    late String attemptId;
-    var reserved = false;
-
     for (var retry = 0; retry < _maxCasRetries; retry++) {
       if (preCommitGuard != null && !preCommitGuard()) {
-        return const StagedPinReservationResult.rejected(
+        return const PinAttemptReservationResult.rejected(
           PinVerificationResult(
             outcome: PinVerificationOutcome.staleFence,
             failedAttempts: 0,
@@ -651,9 +659,9 @@ class ParentGateService {
         );
       }
 
-      credSnapshot = await _readCredentialSnapshot();
+      final credSnapshot = await _readCredentialSnapshot();
       if (credSnapshot.status == ParentGateCredentialStatus.missing) {
-        return const StagedPinReservationResult.rejected(
+        return const PinAttemptReservationResult.rejected(
           PinVerificationResult(
             outcome: PinVerificationOutcome.credentialMissing,
             failedAttempts: 0,
@@ -662,7 +670,7 @@ class ParentGateService {
         );
       }
       if (credSnapshot.status == ParentGateCredentialStatus.corrupt) {
-        return const StagedPinReservationResult.rejected(
+        return const PinAttemptReservationResult.rejected(
           PinVerificationResult(
             outcome: PinVerificationOutcome.corruptCredential,
             failedAttempts: 0,
@@ -674,7 +682,7 @@ class ParentGateService {
       final credRevision = credSnapshot.v2?.credentialRevision ?? 1;
       if (fence?.expectedCredentialRevision != null &&
           credRevision != fence!.expectedCredentialRevision) {
-        return const StagedPinReservationResult.rejected(
+        return const PinAttemptReservationResult.rejected(
           PinVerificationResult(
             outcome: PinVerificationOutcome.staleCredentialRevision,
             failedAttempts: 0,
@@ -687,7 +695,7 @@ class ParentGateService {
       if (ownerFamilyId != null &&
           effectiveFamilyId != null &&
           ownerFamilyId != effectiveFamilyId) {
-        return const StagedPinReservationResult.rejected(
+        return const PinAttemptReservationResult.rejected(
           PinVerificationResult(
             outcome: PinVerificationOutcome.wrongFamilyOwner,
             failedAttempts: 0,
@@ -704,7 +712,7 @@ class ParentGateService {
               rawContainmentFence != fence!.expectedContainmentFenceRaw) ||
           (fence?.expectedChildSessionRaw != null &&
               rawChildSession != fence!.expectedChildSessionRaw)) {
-        return const StagedPinReservationResult.rejected(
+        return const PinAttemptReservationResult.rejected(
           PinVerificationResult(
             outcome: PinVerificationOutcome.staleFence,
             failedAttempts: 0,
@@ -722,7 +730,7 @@ class ParentGateService {
       } else {
         final parsed = ParentGateLockoutV1.tryParse(rawLockout);
         if (parsed == null) {
-          return const StagedPinReservationResult.rejected(
+          return const PinAttemptReservationResult.rejected(
             PinVerificationResult(
               outcome: PinVerificationOutcome.corruptCredential,
               failedAttempts: 0,
@@ -741,7 +749,7 @@ class ParentGateService {
         monoNow,
       );
       if (remaining > Duration.zero) {
-        return StagedPinReservationResult.rejected(
+        return PinAttemptReservationResult.rejected(
           PinVerificationResult(
             outcome: PinVerificationOutcome.lockedOut,
             failedAttempts: currentLockout.failedAttempts,
@@ -752,7 +760,7 @@ class ParentGateService {
       }
 
       if (!_pinRegex.hasMatch(enteredPin)) {
-        return StagedPinReservationResult.rejected(
+        return PinAttemptReservationResult.rejected(
           PinVerificationResult(
             outcome: PinVerificationOutcome.invalidFormat,
             failedAttempts: currentLockout.failedAttempts,
@@ -765,7 +773,7 @@ class ParentGateService {
           .where((r) => r.expiresAtUtc.isAfter(nowUtc))
           .toList(growable: false);
 
-      attemptId = ParentGateCrypto.generateRandomHex(16);
+      final attemptId = ParentGateCrypto.generateRandomHex(16);
       final nextFailures = currentLockout.failedAttempts + 1;
       final nextLockoutSeconds = _lockoutDurationSecondsForFailures(
         nextFailures,
@@ -820,8 +828,6 @@ class ParentGateService {
       );
 
       if (committed) {
-        committedLockout = nextLockout;
-        committedLockoutRaw = nextLockoutRaw;
         if (nextLockoutSeconds > 0) {
           _recordInProcessLockout(
             nextLockout,
@@ -829,12 +835,25 @@ class ParentGateService {
             monoNow,
           );
         }
-        reserved = true;
-        break;
+        return PinAttemptReservationResult.reserved(
+          ReservedPinAttempt(
+            attemptId: attemptId,
+            credentialStatus: credSnapshot.status,
+            reservedCredentialRevision: credRevision,
+            reservedLockoutRevision: nextLockout.revision,
+            reservedLockoutRaw: nextLockoutRaw,
+            v2Credential: credSnapshot.v2,
+            legacyV1HashRaw: credSnapshot.rawV1Hash,
+            legacyV1SaltRaw: credSnapshot.rawV1Salt,
+            effectiveFamilyId: effectiveFamilyId,
+            effectiveActorId: effectiveActorId,
+            fence: fence,
+          ),
+        );
       }
 
       if (preCommitGuard != null && !preCommitGuard()) {
-        return StagedPinReservationResult.rejected(
+        return PinAttemptReservationResult.rejected(
           PinVerificationResult(
             outcome: PinVerificationOutcome.staleFence,
             failedAttempts: currentLockout.failedAttempts,
@@ -844,22 +863,29 @@ class ParentGateService {
       }
     }
 
-    if (!reserved) {
-      return const StagedPinReservationResult.rejected(
-        PinVerificationResult(
-          outcome: PinVerificationOutcome.concurrencyRetryExhausted,
-          failedAttempts: 0,
-          message: 'Too many simultaneous verification attempts. Try again.',
-        ),
-      );
-    }
+    return const PinAttemptReservationResult.rejected(
+      PinVerificationResult(
+        outcome: PinVerificationOutcome.concurrencyRetryExhausted,
+        failedAttempts: 0,
+        message: 'Too many simultaneous verification attempts. Try again.',
+      ),
+    );
+  }
 
-    // Phase 2: Derive key / check digest OUTSIDE lock.
+  /// Phase 2 ONLY: Runs PBKDF2 digest comparison (and v1->v2 upgrade KDF) OUTSIDE locks.
+  Future<StagedPinVerificationAttempt> evaluateReservedAttempt({
+    required String enteredPin,
+    required ReservedPinAttempt reserved,
+    bool hasPositiveServerAdultVerification = false,
+    List<String> verifiedActiveAdultFamilyIds = const [],
+    Future<void> Function(StagedPinVerificationAttempt attempt)?
+    onAfterKdfBeforeFinalize,
+  }) async {
     var pinMatched = false;
     ParentGateCredentialV2? upgradedV2;
 
-    if (credSnapshot.status == ParentGateCredentialStatus.validV2) {
-      final v2 = credSnapshot.v2!;
+    if (reserved.credentialStatus == ParentGateCredentialStatus.validV2) {
+      final v2 = reserved.v2Credential!;
       final saltBytes = ParentGateCrypto.tryHexToBytes(v2.saltHex)!;
       final derived = await ParentGateCrypto.pbkdf2HmacSha256(
         password: utf8.encode(enteredPin),
@@ -872,43 +898,37 @@ class ParentGateService {
         ParentGateCrypto.bytesToHex(derived),
         v2.hashHex,
       );
-    } else if (credSnapshot.status == ParentGateCredentialStatus.legacyV1) {
+    } else if (reserved.credentialStatus ==
+        ParentGateCredentialStatus.legacyV1) {
       final candidateDigest = ParentGateCrypto.sha256V1PinHex(
         pin: enteredPin,
-        salt: credSnapshot.rawV1Salt!,
+        salt: reserved.legacyV1SaltRaw!,
       );
       pinMatched = ParentGateCrypto.constantTimeEqualsHex(
         candidateDigest,
-        credSnapshot.rawV1Hash!,
+        reserved.legacyV1HashRaw!,
       );
       final canUpgradeLegacyV1 =
           pinMatched &&
           _hasAuthorizedAdultFence(
-            familyId: effectiveFamilyId,
-            actorUserId: effectiveActorId,
+            familyId: reserved.effectiveFamilyId,
+            actorUserId: reserved.effectiveActorId,
             hasPositiveServerAdultVerification:
                 hasPositiveServerAdultVerification,
             verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
-            fence: fence,
+            fence: reserved.fence,
           );
       if (canUpgradeLegacyV1) {
-        final newSaltBytes = ParentGateCrypto.generateRandomBytes();
-        final newDerived = await ParentGateCrypto.pbkdf2HmacSha256(
-          password: utf8.encode(enteredPin),
-          salt: newSaltBytes,
-          iterations: configuredIterations,
-          keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
-          runInIsolate: runInIsolate,
-        );
+        final material = await derivePinMaterial(enteredPin);
         upgradedV2 = ParentGateCredentialV2(
           version: 2,
-          kdf: ParentGateCrypto.kdfAlgorithmId,
-          iterations: configuredIterations,
-          keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
-          saltHex: ParentGateCrypto.bytesToHex(newSaltBytes),
-          hashHex: ParentGateCrypto.bytesToHex(newDerived),
-          ownerFamilyId: effectiveFamilyId,
-          configuredByActorUserId: effectiveActorId,
+          kdf: material.kdf,
+          iterations: material.iterations,
+          keyLengthBytes: material.keyLengthBytes,
+          saltHex: material.saltHex,
+          hashHex: material.hashHex,
+          ownerFamilyId: reserved.effectiveFamilyId,
+          configuredByActorUserId: reserved.effectiveActorId,
           credentialRevision: 1,
           updatedAtUtc: _clock.now().toUtc(),
         );
@@ -916,37 +936,80 @@ class ParentGateService {
     }
 
     final hasAuthorizedExitContext = _hasAuthorizedAdultFence(
-      familyId: effectiveFamilyId,
-      actorUserId: effectiveActorId,
+      familyId: reserved.effectiveFamilyId,
+      actorUserId: reserved.effectiveActorId,
       hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
       verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
-      fence: fence,
+      fence: reserved.fence,
     );
 
     final stagedAttempt = StagedPinVerificationAttempt(
-      attemptId: attemptId,
+      attemptId: reserved.attemptId,
       pinMatched: pinMatched,
       hasAuthorizedExitContext: hasAuthorizedExitContext,
-      credentialStatus: credSnapshot.status,
-      reservedCredentialRevision: credSnapshot.v2?.credentialRevision ?? 1,
-      reservedLockoutRevision: committedLockout.revision,
-      reservedLockoutRaw: committedLockoutRaw,
+      credentialStatus: reserved.credentialStatus,
+      reservedCredentialRevision: reserved.reservedCredentialRevision,
+      reservedLockoutRevision: reserved.reservedLockoutRevision,
+      reservedLockoutRaw: reserved.reservedLockoutRaw,
       upgradedV2Credential: upgradedV2,
-      legacyV1HashRaw: credSnapshot.rawV1Hash,
-      legacyV1SaltRaw: credSnapshot.rawV1Salt,
-      fence: fence,
+      legacyV1HashRaw: reserved.legacyV1HashRaw,
+      legacyV1SaltRaw: reserved.legacyV1SaltRaw,
+      fence: reserved.fence,
     );
 
     if (onAfterKdfBeforeFinalize != null) {
       await onAfterKdfBeforeFinalize(stagedAttempt);
     }
 
+    return stagedAttempt;
+  }
+
+  /// Phases 1 + 2: Pessimistically reserves the attempt BEFORE KDF execution,
+  /// evaluates PBKDF2-HMAC-SHA-256 (or legacy v1 digest + derived v2 upgrade
+  /// strictly when adult/actor/family/fence preconditions hold), and returns a
+  /// staged handle ready for fenced CAS finalization.
+  Future<StagedPinReservationResult> beginStagedVerification({
+    required String enteredPin,
+    String? actorFamilyId,
+    String? actorUserId,
+    bool hasPositiveServerAdultVerification = false,
+    List<String> verifiedActiveAdultFamilyIds = const [],
+    ParentGateOperationFence? fence,
+    bool Function()? preCommitGuard,
+    Future<void> Function()? onBeforePreCommitGuard,
+    Future<void> Function()? onAfterGuardBeforeCommit,
+    Future<void> Function(StagedPinVerificationAttempt attempt)?
+    onAfterKdfBeforeFinalize,
+  }) async {
+    final reservationResult = await reserveVerificationAttempt(
+      enteredPin: enteredPin,
+      actorFamilyId: actorFamilyId,
+      actorUserId: actorUserId,
+      fence: fence,
+      preCommitGuard: preCommitGuard,
+      onBeforePreCommitGuard: onBeforePreCommitGuard,
+      onAfterGuardBeforeCommit: onAfterGuardBeforeCommit,
+    );
+    if (!reservationResult.isReserved) {
+      return StagedPinReservationResult.rejected(
+        reservationResult.immediateFailure,
+      );
+    }
+
+    final stagedAttempt = await evaluateReservedAttempt(
+      enteredPin: enteredPin,
+      reserved: reservationResult.reservation!,
+      hasPositiveServerAdultVerification: hasPositiveServerAdultVerification,
+      verifiedActiveAdultFamilyIds: verifiedActiveAdultFamilyIds,
+      onAfterKdfBeforeFinalize: onAfterKdfBeforeFinalize,
+    );
     return StagedPinReservationResult.reserved(stagedAttempt);
   }
 
   /// Phase 3: Atomically finalizes a staged verification attempt via CAS.
   Future<PinVerificationResult> completeStagedVerification({
     required StagedPinVerificationAttempt attempt,
+    bool? hasAuthorizedExitContextOverride,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
@@ -1036,8 +1099,10 @@ class ParentGateService {
       final expiredOrSupersededSuccess =
           attempt.pinMatched &&
           (!hasValidSelfReservation || supersededByOtherLockout);
+      final effectiveHasAuthorizedExitContext =
+          hasAuthorizedExitContextOverride ?? attempt.hasAuthorizedExitContext;
       final unauthorizedMatch =
-          attempt.pinMatched && !attempt.hasAuthorizedExitContext;
+          attempt.pinMatched && !effectiveHasAuthorizedExitContext;
 
       if (!attempt.pinMatched ||
           expiredOrSupersededSuccess ||
@@ -1363,6 +1428,7 @@ class ParentGateService {
     required bool hasPositiveServerAdultVerification,
     required List<String> verifiedActiveAdultFamilyIds,
     required ParentGateOperationFence fence,
+    PreDerivedPinMaterial? preDerivedMaterial,
     bool Function()? preCommitGuard,
     Future<void> Function()? onBeforePreCommitGuard,
     Future<void> Function()? onAfterGuardBeforeCommit,
@@ -1391,16 +1457,9 @@ class ParentGateService {
       );
     }
 
-    final saltBytes = ParentGateCrypto.generateRandomBytes();
-    final saltHex = ParentGateCrypto.bytesToHex(saltBytes);
-    final derived = await ParentGateCrypto.pbkdf2HmacSha256(
-      password: utf8.encode(newPin),
-      salt: saltBytes,
-      iterations: configuredIterations,
-      keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
-      runInIsolate: runInIsolate,
-    );
-    final hashHex = ParentGateCrypto.bytesToHex(derived);
+    final material = preDerivedMaterial ?? await derivePinMaterial(newPin);
+    final saltHex = material.saltHex;
+    final hashHex = material.hashHex;
 
     for (var retry = 0; retry < _maxCasRetries; retry++) {
       if (preCommitGuard != null && !preCommitGuard()) {
@@ -1446,9 +1505,9 @@ class ParentGateService {
       final nextCredRevision = (credSnapshot.v2?.credentialRevision ?? 0) + 1;
       final nextCredential = ParentGateCredentialV2(
         version: 2,
-        kdf: ParentGateCrypto.kdfAlgorithmId,
-        iterations: configuredIterations,
-        keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
+        kdf: material.kdf,
+        iterations: material.iterations,
+        keyLengthBytes: material.keyLengthBytes,
         saltHex: saltHex,
         hashHex: hashHex,
         ownerFamilyId: normalizedFamilyId,

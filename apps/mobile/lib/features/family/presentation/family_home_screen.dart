@@ -9,6 +9,8 @@ import 'package:learnward_domain/learnward_domain.dart';
 
 import '../../../app/bootstrap/app_providers.dart';
 import '../../../app/routing/app_routes.dart';
+import '../../shared_device/domain/parent_gate_models.dart';
+import '../../shared_device/presentation/parent_pin_settings_dialog.dart';
 import '../../shared_device/presentation/parent_pin_setup_dialog.dart';
 
 /// Parent/Guardian home dashboard.
@@ -57,7 +59,13 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
         return;
       }
 
-      final currentActive = ref.read(activeFamilyProvider) ?? families.first;
+      final preferredFamily =
+          ref.read(activeFamilyProvider) ??
+          ref.read(coldStartContainmentProvider).verifiedFamily;
+      final currentActive = preferredFamily != null
+          ? (families.where((f) => f.id == preferredFamily.id).firstOrNull ??
+                families.first)
+          : families.first;
       ref.read(activeFamilyProvider.notifier).selectFamily(currentActive);
 
       final childRepo = ref.read(childProfileRepositoryProvider);
@@ -200,19 +208,81 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
       );
     }
 
+    final containment = ref.watch(coldStartContainmentProvider);
+    final controller = ref.read(coldStartContainmentProvider.notifier);
+    final verifiedFamilies = containment.verifiedFamilies;
+
+    Future<void> openPinSettingsDialog() async {
+      final gateService = ref.read(parentGateServiceProvider);
+      final inspection = await gateService.inspectCredential();
+      if (!context.mounted) return;
+      await ParentPinSettingsDialog.show(
+        context,
+        credentialStatus: inspection.status,
+        pinOwnerFamilyId: inspection.v2?.ownerFamilyId,
+        activeFamilyId: activeFamily.id.value,
+        isPostSignOutFreshAdultAuth: containment.isPostSignOutFreshAdultAuth,
+        onInitialSetup: (newPin) async {
+          await controller.submitInitialPinSetup(newPin);
+        },
+        onChangePin: (currentPin, newPin) => controller.submitParentPinChange(
+          currentPin: currentPin,
+          newPin: newPin,
+        ),
+        onReassignCrossFamily: (newPin) async {
+          await controller.submitCrossFamilyPinReassignment(newPin: newPin);
+        },
+        onForgottenReset: containment.isPostSignOutFreshAdultAuth
+            ? (newPin) async {
+                await controller.submitForgottenPinReset(newPin: newPin);
+              }
+            : null,
+        onRecoverCorrupt: (newPin) async {
+          await controller.submitCorruptPinRecovery(newPin: newPin);
+        },
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(activeFamily.name),
         actions: [
+          if (verifiedFamilies.length > 1)
+            PopupMenuButton<Family>(
+              key: const Key('family_switcher_button'),
+              icon: const Icon(Icons.swap_horiz),
+              tooltip: 'Switch Family',
+              onSelected: (selected) async {
+                await controller.switchActiveFamily(selected);
+              },
+              itemBuilder: (context) => verifiedFamilies
+                  .map(
+                    (f) => PopupMenuItem<Family>(
+                      key: Key('switch_family_${f.id.value}'),
+                      value: f,
+                      child: Text(f.name),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          IconButton(
+            key: const Key('parent_pin_settings_button'),
+            icon: const Icon(Icons.pin_outlined),
+            tooltip: 'Parent PIN Settings',
+            onPressed: openPinSettingsDialog,
+          ),
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: 'Add Child',
             onPressed: () => context.go(AppRoutes.createChild),
           ),
           IconButton(
-            icon: const Icon(Icons.account_circle_outlined),
-            tooltip: 'Adult Auth',
-            onPressed: () => context.go(AppRoutes.auth),
+            key: const Key('parent_sign_out_button'),
+            icon: const Icon(Icons.logout),
+            tooltip: 'Sign Out',
+            onPressed: () async {
+              await controller.signOutNormal();
+            },
           ),
         ],
       ),
@@ -511,21 +581,63 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
                               final gateService = ref.read(
                                 parentGateServiceProvider,
                               );
-                              final hasPin = await gateService
-                                  .hasConfiguredPin();
+                              final controller = ref.read(
+                                coldStartContainmentProvider.notifier,
+                              );
+                              final inspection = await gateService
+                                  .inspectCredential();
                               if (!context.mounted) return;
 
-                              if (!hasPin) {
+                              if (inspection.status ==
+                                  ParentGateCredentialStatus.missing) {
                                 final pinConfigured =
-                                    await ParentPinSetupDialog.show(context);
+                                    await ParentPinSetupDialog.show(
+                                      context,
+                                      onSavePin: (pin) async {
+                                        await controller.submitInitialPinSetup(
+                                          pin,
+                                        );
+                                      },
+                                    );
                                 if (!pinConfigured || !context.mounted) {
+                                  return;
+                                }
+                              } else if (inspection.status ==
+                                      ParentGateCredentialStatus.corrupt ||
+                                  (inspection.status ==
+                                          ParentGateCredentialStatus.validV2 &&
+                                      inspection.v2?.ownerFamilyId != null &&
+                                      inspection.v2!.ownerFamilyId !=
+                                          child.familyId.value)) {
+                                final updated =
+                                    await ParentPinSettingsDialog.show(
+                                      context,
+                                      credentialStatus: inspection.status,
+                                      pinOwnerFamilyId:
+                                          inspection.v2?.ownerFamilyId,
+                                      activeFamilyId: child.familyId.value,
+                                      isPostSignOutFreshAdultAuth: ref
+                                          .read(coldStartContainmentProvider)
+                                          .isPostSignOutFreshAdultAuth,
+                                      onReassignCrossFamily: (newPin) async {
+                                        await controller
+                                            .submitCrossFamilyPinReassignment(
+                                              newPin: newPin,
+                                            );
+                                      },
+                                      onRecoverCorrupt: (newPin) async {
+                                        await controller
+                                            .submitCorruptPinRecovery(
+                                              newPin: newPin,
+                                            );
+                                      },
+                                    );
+                                if (!updated || !context.mounted) {
                                   return;
                                 }
                               }
 
-                              await ref
-                                  .read(activeChildModeProvider.notifier)
-                                  .selectChild(child);
+                              await controller.enterChildMode(child);
                               if (context.mounted) {
                                 context.go(AppRoutes.childMode);
                               }

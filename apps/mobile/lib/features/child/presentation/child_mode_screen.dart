@@ -163,24 +163,25 @@ class _ChildModeScreenState extends ConsumerState<ChildModeScreen> {
         title: Text('Hi, $displayName!'),
         automaticallyImplyLeading: false,
         actions: [
-          TextButton.icon(
-            key: const Key('exit_child_mode_button'),
-            icon: const Icon(Icons.lock_outline, size: 18),
-            label: const Text('Exit Child Mode'),
-            onPressed: () {
-              ParentGateDialog.show(
-                context,
-                onGatePassed: () async {
-                  await ref
-                      .read(activeChildModeProvider.notifier)
-                      .exitChildMode();
-                  if (context.mounted) {
-                    context.go(AppRoutes.parentHome);
-                  }
-                },
-              );
-            },
-          ),
+          if (!ref.watch(coldStartContainmentProvider).isPairedChildMode)
+            TextButton.icon(
+              key: const Key('exit_child_mode_button'),
+              icon: const Icon(Icons.lock_outline, size: 18),
+              label: const Text('Exit Child Mode'),
+              onPressed: () {
+                ParentGateDialog.show(
+                  context,
+                  onSubmitPin: (pin) => ref
+                      .read(coldStartContainmentProvider.notifier)
+                      .submitParentGateUnlock(pin),
+                  onGatePassed: () {
+                    if (context.mounted) {
+                      context.go(AppRoutes.parentHome);
+                    }
+                  },
+                );
+              },
+            ),
         ],
       ),
       body: SafeArea(

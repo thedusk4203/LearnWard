@@ -205,22 +205,25 @@ void main() {
     await tester.tap(find.byKey(const Key('exit_child_mode_button')));
     await tester.pumpAndSettle();
 
-    // Parent Gate fails closed until WP3 wires an authorized submit handler.
+    // Parent Gate is now backed by WP3 SessionLifecycleController; cancel stays in Child Mode,
+    // and valid PIN (4829) unlocks cleanly back into Parent Mode.
     expect(find.text('Parent Gate'), findsOneWidget);
-    expect(
-      find.byKey(const Key('parent_gate_restricted_notice')),
-      findsOneWidget,
-    );
-    final verifyButton = tester.widget<FilledButton>(
-      find.byKey(const Key('parent_gate_verify_button')),
-    );
-    expect(verifyButton.onPressed, isNull);
-
-    // Cancel keeps Child Mode active and never unlocks Parent Mode.
     await tester.tap(find.byKey(const Key('parent_gate_cancel_button')));
     await tester.pumpAndSettle();
 
     expect(find.text('Hi, Maya!'), findsOneWidget);
     expect(find.text('Parent Mode'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('exit_child_mode_button')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('parent_gate_pin_field')),
+      '8392',
+    );
+    await tester.tap(find.byKey(const Key('parent_gate_verify_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Parent Mode'), findsOneWidget);
+    expect(find.text('Hi, Maya!'), findsNothing);
   });
 }

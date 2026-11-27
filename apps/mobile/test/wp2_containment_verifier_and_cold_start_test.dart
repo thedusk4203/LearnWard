@@ -1165,7 +1165,7 @@ void main() {
           expect(find.text('Parent Mode'), findsNothing);
           expect(find.text('Maya Secret'), findsNothing);
 
-          // Even without active_child_session, valid containment_recovery_lock_v1 stays locked in WP2
+          // Stale sessionGeneration (matching initiatedFromSessionGeneration) stays locked even without active_child_session
           await db.applyMetadataBatch([
             MetadataMutation.upsert(
               key: ParentGateService.containmentRecoveryLockV1Key,
@@ -1174,7 +1174,7 @@ void main() {
                 ownershipLevel: ContainmentRecoveryOwnershipLevel.boundV2,
                 requiredOwnerFamilyId: testFamily.id.value,
                 originActorUserId: 'adult-a',
-                initiatedFromSessionGeneration: 'gen-1',
+                initiatedFromSessionGeneration: 'gen-2',
                 initiatedAtUtc: nowUtc,
               ).toJsonString(),
               updatedAt: nowUtc,

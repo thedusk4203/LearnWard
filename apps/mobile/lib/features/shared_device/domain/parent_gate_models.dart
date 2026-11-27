@@ -638,6 +638,66 @@ final class StagedPinReservationResult {
   bool get isReserved => attempt != null;
 }
 
+/// Pre-derived PBKDF2 PIN material computed OUTSIDE `_ContainmentArbiter`.
+final class PreDerivedPinMaterial {
+  const PreDerivedPinMaterial({
+    required this.kdf,
+    required this.iterations,
+    required this.keyLengthBytes,
+    required this.saltHex,
+    required this.hashHex,
+  });
+
+  final String kdf;
+  final int iterations;
+  final int keyLengthBytes;
+  final String saltHex;
+  final String hashHex;
+}
+
+/// Phase 1 lockout reservation snapshot before PBKDF2 evaluation (`D4` / `WP3`).
+final class ReservedPinAttempt {
+  const ReservedPinAttempt({
+    required this.attemptId,
+    required this.credentialStatus,
+    required this.reservedCredentialRevision,
+    required this.reservedLockoutRevision,
+    required this.reservedLockoutRaw,
+    this.v2Credential,
+    this.legacyV1HashRaw,
+    this.legacyV1SaltRaw,
+    this.effectiveFamilyId,
+    this.effectiveActorId,
+    this.fence,
+  });
+
+  final String attemptId;
+  final ParentGateCredentialStatus credentialStatus;
+  final int reservedCredentialRevision;
+  final int reservedLockoutRevision;
+  final String reservedLockoutRaw;
+  final ParentGateCredentialV2? v2Credential;
+  final String? legacyV1HashRaw;
+  final String? legacyV1SaltRaw;
+  final String? effectiveFamilyId;
+  final String? effectiveActorId;
+  final ParentGateOperationFence? fence;
+}
+
+/// Result of Phase 1 SQLite lockout reservation prior to PBKDF2 (`WP3`).
+final class PinAttemptReservationResult {
+  const PinAttemptReservationResult.reserved(this.reservation)
+    : immediateFailure = null;
+
+  const PinAttemptReservationResult.rejected(this.immediateFailure)
+    : reservation = null;
+
+  final ReservedPinAttempt? reservation;
+  final PinVerificationResult? immediateFailure;
+
+  bool get isReserved => reservation != null;
+}
+
 /// Well-formed legacy `(familyId, childId)` hint parsed strictly from `active_child_session`.
 final class LegacyChildHint {
   const LegacyChildHint({required this.familyId, required this.childId});

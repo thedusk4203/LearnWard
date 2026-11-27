@@ -2425,6 +2425,56 @@ final class InMemoryWheelRepository implements WheelRepository {
   }
 }
 
+/// Combines in-memory assessment drafts and pending reward commands as a
+/// read-only [LegacyOutboxProvenanceSource] (`D1.6`, `WP3`).
+final class CombinedInMemoryLegacyOutboxProvenanceSource
+    implements LegacyOutboxProvenanceSource {
+  CombinedInMemoryLegacyOutboxProvenanceSource({
+    required InMemoryLocalDraftStore draftStore,
+    required InMemoryPendingRewardCommandStore commandStore,
+  }) : _draftStore = draftStore,
+       _commandStore = commandStore;
+
+  final InMemoryLocalDraftStore _draftStore;
+  final InMemoryPendingRewardCommandStore _commandStore;
+
+  @override
+  Future<List<ActorBoundOutboxRecord>> listActorBoundRecords() async {
+    final records = <ActorBoundOutboxRecord>[];
+    for (final draft in _draftStore._drafts.values) {
+      final actorId = draft.actorUserId?.trim();
+      if (actorId == null || actorId.isEmpty) {
+        continue;
+      }
+      records.add(
+        ActorBoundOutboxRecord(
+          source: LegacyOutboxRecordSource.assessmentDraft,
+          recordId: draft.localDraftId,
+          familyId: draft.familyId,
+          childId: draft.childId,
+          actorUserId: actorId,
+        ),
+      );
+    }
+    for (final cmd in _commandStore._commands.values) {
+      final actorId = cmd.actorUserId?.trim();
+      if (actorId == null || actorId.isEmpty) {
+        continue;
+      }
+      records.add(
+        ActorBoundOutboxRecord(
+          source: LegacyOutboxRecordSource.rewardCommand,
+          recordId: cmd.commandId,
+          familyId: cmd.familyId,
+          childId: cmd.childId,
+          actorUserId: actorId,
+        ),
+      );
+    }
+    return records;
+  }
+}
+
 /// Lightweight in-memory fallback for [LearningRepository] when Supabase
 /// credentials are not configured in local development.
 final class InMemoryLearningRepository implements LearningRepository {
