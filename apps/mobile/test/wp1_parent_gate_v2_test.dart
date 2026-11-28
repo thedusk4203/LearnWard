@@ -94,6 +94,35 @@ void main() {
         ),
         equals('89b69d0516f829893c696226650a8687'),
       );
+      // RFC 7914 Section 11 test vectors for PBKDF2-HMAC-SHA-256:
+      expect(
+        await deriveHex(utf8.encode('passwd'), utf8.encode('salt'), 1, 64),
+        equals(
+          '55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783',
+        ),
+      );
+      expect(
+        await deriveHex(
+          utf8.encode('Password'),
+          utf8.encode('NaCl'),
+          80000,
+          64,
+        ),
+        equals(
+          '4ddcd8f60b98be21830cee5ef22701f9641a4418d04c0414aeff08876b34ab56a1d425a1225833549adb841b51c9b3176a272bdebba1d078478f62b397f33c8d',
+        ),
+      );
+      expect(
+        await deriveHex(
+          utf8.encode('pleaseletmein'),
+          utf8.encode('SodiumChloride'),
+          16384,
+          64,
+        ),
+        equals(
+          'e5d7c03e11ae5b90b6669755fd90930259ec77f7f643b3d71d263304358e528a679f2ef40a2306882becc93d7f3f38f213304971033ad47eb3421d72ad20e77c',
+        ),
+      );
     });
 
     test('CSPRNG salts are 16+ bytes and constant-time compare is exact', () {
@@ -115,7 +144,7 @@ void main() {
     () {
       test(
         'parentGateServiceProvider enforces >= 100,000 iterations in isolate',
-        () {
+        () async {
           final store = InMemoryLocalMetadataStore();
           final container = ProviderContainer(
             overrides: [localMetadataStoreProvider.overrideWithValue(store)],
@@ -126,6 +155,30 @@ void main() {
           expect(service.minIterations, greaterThanOrEqualTo(100000));
           expect(service.configuredIterations, greaterThanOrEqualTo(100000));
           expect(service.runsInIsolate, isTrue);
+
+          final belowFloorCred = ParentGateCredentialV2(
+            version: 2,
+            kdf: ParentGateCrypto.kdfAlgorithmId,
+            iterations: 99999,
+            keyLengthBytes: ParentGateCrypto.defaultKeyLengthBytes,
+            saltHex: List.filled(32, 'a').join(),
+            hashHex: List.filled(64, 'b').join(),
+            ownerFamilyId: 'fam-a',
+            configuredByActorUserId: 'actor-a',
+            credentialRevision: 1,
+            updatedAtUtc: DateTime.utc(2026, 11, 24),
+          );
+          await store.writeMetadata(
+            key: ParentGateService.credentialV2Key,
+            value: belowFloorCred.toJsonString(),
+            updatedAt: DateTime.utc(2026, 11, 24),
+          );
+          expect(
+            ParentGateCredentialV2.tryParse(belowFloorCred.toJsonString()),
+            isNull,
+          );
+          final inspection = await service.inspectCredential();
+          expect(inspection.status, ParentGateCredentialStatus.corrupt);
         },
       );
 
