@@ -1,6 +1,6 @@
 # LearnWard — Phase 6 Slice 4C-1: Manual Recovery, Quarantine Management & Export UX
 
-**Document status:** WP0 DESIGN DRAFT REVISED FOR FINAL INDEPENDENT REVIEW (`R44-01`–`R44-04` & `Q1`–`Q4` RESOLVED) — RUNTIME NOT IMPLEMENTED / NOT FROZEN  
+**Document status:** WP0 DESIGN DRAFT REVISED FOR FINAL INDEPENDENT REVIEW (`R44-01`–`R44-05` & `Q1`–`Q4` RESOLVED) — RUNTIME NOT IMPLEMENTED / NOT FROZEN  
 **Canonical repository path:** `docs/27-phase-6-slice-4c-1-manual-recovery-and-export-design-contract.md`  
 **Verified baseline (`main`):** `a23cdd907cc27a781c50c4cb382508986142b89e` (tree `8983f28ad36624fe8b08da8114f89c16d1aec370`; PR `#43` Slice 4C-0 WP5 squash merge; post-merge `main` CI run [`46104397435`](https://github.com/thedusk4203/LearnWard/actions/runs/46104397435), 4/4 `SUCCESS`)  
 **Prerequisites (all MERGED & FROZEN):** Slice 4A-0 (Drift v6 CAS), Slice 4A-1 (Spin/Redeem recovery runtime), Slice 4A-2 (Adult Fulfill/Cancel reliability), Slice 4B-0 (Immediate local evidence safety), Slice 4B-1 (Evidence resumability & Storage 409 reconciliation), Slice 4C-0 (Auth, Child Mode & device containment), and frozen Phase 0–6 Supabase migrations/RPC/RLS/Storage contracts (`20261031000000`–`20261106000000`).  
@@ -82,7 +82,7 @@ Every code path in the entire monorepo capable of writing to `local_assessment_d
   2. **Export unsynced work** (off-UI-thread streaming pure-Dart Store-mode `.zip` bundle `learnward_local_export_v1` with opaque safe archive paths, SHA-256 `manifest.json`, redacted metadata JSON, byte-verified canonical/confined original evidence photos, explicit resource limits, `ExportScopeToken` revalidation across every async boundary, atomic staging/rename, cold-start & scope-transition cache purge, native `MethodChannel` Android `FileProvider` / iOS `UIActivityViewController` share sheet via `ExportSharePort`), plus optional online **Export Server Family Data** (`export_family_data_json`).
   3. **Abandon local copy** (high-friction confirmation, fresh online active-adult verification, production `SessionLifecycleController` `_arbiter` serialization with Slice 4C-0 Barrier 1/Barrier 2 semantics, full-column SQLite CAS deletion, and cross-connection race-free durable **SQLite GC Tombstone & Typed Ticket** protocol in `pending_evidence_gc_v1` enforced atomically in ALL draft writers in WP1).
 - Screen-reader semantics, deterministic focus order, `>= 48 x 48 dp` touch targets, dynamic text scaling, and zero-flash scope invalidation.
-- Deterministic acceptance and negative test matrix `C1-01`–`C1-36`.
+- Deterministic acceptance and negative test matrix `C1-01`–`C1-39`.
 
 **Non-goals (strictly prohibited in Slice 4C-1):**
 - Zero changes to Supabase migrations, SQL, RPC signatures (`export_family_data_json`, etc.), RLS policies, or Storage bucket policies.
@@ -96,7 +96,7 @@ Every code path in the entire monorepo capable of writing to `local_assessment_d
 
 ## 3. Threat Model & Mandatory Security Invariants (`C1-I01`–`C1-I20`)
 
-### 3.1 Threat Model (`T4C1-01`–`T4C1-14`)
+### 3.1 Threat Model (`T4C1-01`–`T4C1-15`)
 
 | Threat ID | Actor & Precondition | Attack / Failure Vector | Consequence if Unmitigated | Required Mitigation |
 |---|---|---|---|---|
@@ -114,6 +114,7 @@ Every code path in the entire monorepo capable of writing to `local_assessment_d
 | `T4C1-12` | Canonical snapshot missing/corrupted while mutable `localPhotoPath` exists | Export silently substitutes mutable photo under canonical SHA-256 | Forged evidence provenance | Flag canonical as `missing_on_disk` / `corrupted_checksum_mismatch` in `manifest.json`; confined original exported strictly as separate `included_unverified_original` (`C1-I06`). |
 | `T4C1-13` | Scope changes while OS share sheet is already open | Subsequent app reads cached export via stale `FileProvider` URI or open iOS sheet | Post-sign-out file access (`R44-03`) | Native `MethodChannel` revokes Android URI permissions (`revokeUriPermission`), dismisses presented iOS `UIActivityViewController`, and deletes `cacheDir/exports/`; honest disclosure that copies already saved by external recipient apps cannot be revoked (`C1-I19`). |
 | `T4C1-14` | Child in Shared-Device Child Mode or Paired Child Device deep-links to `/parent/recovery` | Child accesses parent recovery dashboard or triggers export/abandonment | Containment bypass (`C0-I01`, `C0-I08`) | `/parent/recovery` restricted strictly to `verifiedParentMode` in `GoRouter` redirect AND `Consumer` builder (`SizedBox.shrink()`) (`C1-I01`). |
+| `T4C1-15` | Stale editor or later draft writer (`saveLocalDraft` / `registerOrUpdateDraftIfUnchanged`) passes former path `P` AFTER `File.deleteSync(P)` and GC ticket finalization, OR another process recreates/mutates a file at `P` | No active ticket exists in `pending_evidence_gc_v1`, allowing SQLite to persist a draft referencing a deleted or replaced evidence file (`R44-05`) | Silent persistence of broken, missing, or substituted evidence paths across restarts | **Two-layer defense-in-depth (`C1-I13`, `C1-I14`):** (1) Atomic `T_finalize` moves `P` from `pending_evidence_gc_v1` into durable `retired_evidence_paths_v1` in one SQLite transaction (0-gap retirement blocking all future reattachment of `P`), AND (2) `EvidenceWriterIntegrityValidator` enforces on-disk confinement, existence, magic bytes, size cap, and canonical SHA-256 match inside every draft write. |
 
 ### 3.2 Mandatory Security & Durability Invariants (`C1-I01`–`C1-I20`)
 
@@ -129,8 +130,8 @@ Every code path in the entire monorepo capable of writing to `local_assessment_d
 10. **`C1-I10` — No Abandonment on Uncertain/Ambiguous or Quarantined Outcomes (`Q1`):** Timeout, transport error, HTTP `42501`, RLS 0-row, missing receipt, `possibly_dispatched`, `unknown_legacy`, `quarantined_unknown_outcome`, `LW109`, and **ALL five `quarantined*` draft dispositions** (`quarantinedUnknownOutcome`, `quarantinedConflict`, `quarantinedMissingSnapshot`, `quarantinedCorruptedSnapshot`, `quarantinedLegacyUnknown`) MUST keep `Abandon local copy` **DISABLED fail-closed**.
 11. **`C1-I11` — Cross-Actor & Lease Protection (`Q2`):** Records with `waitingOriginalActor`, `pendingOriginalActor`, any non-null `leaseToken`/`leaseExpiresAt`, or any ordinary `editableDraft` where `actorUserId != liveActor.userId` MUST NEVER be abandoned by another session.
 12. **`C1-I12` — Full-Row SQLite CAS & Slice 4C-0 Two-Barrier Fencing (`R44-02`):** Abandonment verifies exact full-row CAS (all 30 draft cols / all 19 command cols), `family_id == verifiedFamilyId`, null lease, eligible state predicate, and synchronous `preCommitGuard()` inside a single SQLite `BEGIN IMMEDIATE` transaction. Barrier 1 (`onBeforePreCommitGuard`) rolls back with `0` deletions/tickets/unlinks; Barrier 2 (`onAfterGuardBeforeCommit`) completes cleanly (`t_commit < t_event`, zero compensating re-insert) while suppressing stale UI publication and deferring physical GC to the next safe sweep.
-13. **`C1-I13` — Atomic SQLite Tombstone Reservation & Universal Draft Writer Fence (`R44-01`):** Inside the SAME SQLite abandonment transaction that deletes an eligible draft row, every `0`-reference confined evidence path is atomically recorded as an active tombstone ticket (`status: 'tombstoned_pending_unlink'`) in `local_metadata_entries['pending_evidence_gc_v1']`. **Every** draft writer capable of creating or modifying `localPhotoPath` or `localCompressedPhotoPath` (`AppDatabase.saveLocalDraft`, `AppDatabase.registerOrUpdateDraftIfUnchanged`, `InMemoryLocalDraftStore`, `TestLocalDraftStore`) MUST atomically reject writes referencing any active tombstoned normalized path inside its write transaction (assigned explicitly to **WP1**). If full writer coordination cannot be proven, physical unlinking MUST remain disabled (`preservedConservative`).
-14. **`C1-I14` — SQLite-Verified Typed GC Ticket Authority & Crash-Safe Idempotent Unlink (`R44-02`):** Physical unlinking has **zero** caller-supplied boolean trust flags. `executeCommittedGcTicket` MUST load and validate the durable `EvidenceGcTicketV1` directly from SQLite (`ticketId`, normalized confined path identity, source provenance), verify `_inspectConfinedPath` + `countDraftReferencesToFile == 0`, CAS-transition `tombstoned_pending_unlink -> unlinking_in_progress`, execute `File.deleteSync()`, and CAS-remove the ticket. Crash between `File.deleteSync()` and ticket finalization resolves idempotently on restart (`alreadyAbsent`).
+13. **`C1-I13` — Atomic SQLite Tombstone Reservation, Post-GC Retired Path Ledger & Universal Draft Writer Integrity Fence (`R44-01`, `R44-05`):** Inside the SAME SQLite abandonment transaction that deletes an eligible draft row, every `0`-reference confined evidence path is atomically recorded as an active tombstone ticket (`status: 'tombstoned_pending_unlink'`) in `local_metadata_entries['pending_evidence_gc_v1']`. Upon physical unlink completion, ticket finalization atomically transfers the normalized path identity into `local_metadata_entries['retired_evidence_paths_v1']` in a single SQLite `BEGIN IMMEDIATE` transaction (zero gap between active tombstone and retired tombstone). **Every** draft writer capable of creating or modifying `localPhotoPath` or `localCompressedPhotoPath` (`AppDatabase.saveLocalDraft`, `AppDatabase.registerOrUpdateDraftIfUnchanged`, `InMemoryLocalDraftStore`, `TestLocalDraftStore`) MUST atomically reject writes referencing any path in `pending_evidence_gc_v1` (`evidence_path_tombstoned_for_gc`) OR `retired_evidence_paths_v1` (`evidence_path_retired_after_gc`) AND enforce `EvidenceWriterIntegrityValidator` (confined regular file exists on disk, `0 < len <= 10 MiB`, valid JPEG/PNG magic bytes, and exact canonical `sha256Checksum` match) before persisting (assigned explicitly to **WP1**). If full writer coordination and post-GC protection cannot be proven without altering frozen contracts, physical unlinking MUST remain disabled (`preservedConservative`).
+14. **`C1-I14` — SQLite-Verified Typed GC Ticket Authority & Crash-Safe Idempotent Unlink/Retirement (`R44-02`, `R44-05`):** Physical unlinking has **zero** caller-supplied boolean trust flags. `executeCommittedGcTicket` MUST load and validate the durable `EvidenceGcTicketV1` directly from SQLite (`ticketId`, normalized confined path identity, source provenance), verify `_inspectConfinedPath` + `countDraftReferencesToFile == 0`, CAS-transition `tombstoned_pending_unlink -> unlinking_in_progress`, execute `File.deleteSync()`, and atomically CAS-remove the ticket from `pending_evidence_gc_v1` while inserting `RetiredEvidencePathEntry` into `retired_evidence_paths_v1`. Crash between `File.deleteSync()` and finalization keeps `unlinking_in_progress` active (blocking writers) and resolves idempotently on restart (`alreadyAbsent` -> atomic retirement).
 15. **`C1-I15` — Zero Remote Storage Deletion & Preservation of Slice 4B-0 Legacy Guards:** Slice 4C-1 MUST NEVER invoke remote Storage `DELETE`. Existing `LocalEvidenceFileStore.deleteDurableEvidence`, `deleteEvidence`, and `deleteEvidenceIfUnreferenced` remain conservatively disabled (`preservedConservative`).
 16. **`C1-I16` — Zero Blanket SQLite Wipes & Redacted Local Recovery Audit:** Zero `clearAllTables()` / bulk `DELETE`. Every completed abandonment appends a redacted entry to `local_metadata_entries['last_manual_recovery_audit_v1']` (25-entry ring buffer; zero PII, photo paths, or tokens).
 17. **`C1-I17` — Explicit High-Friction Destructive Confirmation & Non-Destructive Defaults:** Confirmation requires exact item summary, local-only / remote-effect caveat, unchecked-by-default acknowledgement checkbox, `Export Before Abandoning` shortcut, and non-destructive default button (`Keep Quarantined / Cancel`).
@@ -192,7 +193,7 @@ Every code path in the entire monorepo capable of writing to `local_assessment_d
 
 ---
 
-## 5. Formal Specifications, Concurrency Protocols & State Machines (Task 3, `R44-01`–`R44-04`)
+## 5. Formal Specifications, Concurrency Protocols & State Machines (Task 3, `R44-01`–`R44-05`)
 
 ### 5.1 Action A — `Keep quarantined`
 - Explicit, idempotent, non-destructive acknowledgement: `0` SQLite writes, `0` file mutations, `0` remote RPC calls. Preserves every original UUID, state column, and evidence SHA-256 byte-for-byte.
@@ -253,7 +254,7 @@ stateDiagram-v2
 
 ---
 
-### 5.3 Action C — `Abandon local copy`, Cross-Connection Tombstone Protocol & Typed GC Tickets (`R44-01`, `R44-02`)
+### 5.3 Action C — `Abandon local copy`, Cross-Connection Tombstone Protocol, Typed GC Tickets & Post-GC Path Retirement (`R44-01`, `R44-02`, `R44-05`)
 
 #### 1. Canonical Evidence Path Identity (`EvidencePathIdentity`)
 Every path compared across `pending_evidence_gc_v1` tickets, `countDraftReferencesToFile`, and draft writers (`saveLocalDraft`, `registerOrUpdateDraftIfUnchanged`) is normalized identically via a shared `EvidencePathNormalizer`:
@@ -290,7 +291,47 @@ Consider Connection `C1` executing draft abandonment + GC and concurrent Connect
 1. Both `C1`'s abandonment transaction (`abandonDraftAtomicallyWithGc`) and `C2`'s draft write transaction (`saveLocalDraft` / `registerOrUpdateDraftIfUnchanged`) execute inside SQLite `BEGIN IMMEDIATE` write transactions (`PRAGMA journal_mode = WAL`, `PRAGMA busy_timeout = 5000`, `_withSqliteBusyRetry`). SQLite guarantees strict total ordering between them:
    - **Case 1 (`C2` commits BEFORE `C1`):** When `C1` acquires the SQLite write lock, `C1`'s in-transaction `countDraftReferencesToFile(P)` sees `C2`'s committed row (`count >= 1`). `C1` deletes ONLY the abandoned draft row and **does NOT mint a tombstone or `EvidenceGcTicketV1`** for `P`. Result: `P` is preserved (`preservedReferenced`).
    - **Case 2 (`C1` commits BEFORE `C2` — including when `C2` runs AFTER `C1`'s final reference check and BEFORE `File.deleteSync()`!):** `C1` commits BOTH the draft deletion AND the active tombstone `EvidenceGcTicketV1(P, status: tombstoned_pending_unlink)` in one atomic SQLite transaction before releasing the write lock. When `C2` subsequently executes its write transaction, `C2` reads `local_metadata_entries['pending_evidence_gc_v1']` **inside the same SQLite write transaction**, observes the active tombstone matching `P`'s normalized path identity, and **REJECTS the write (`ROLLBACK`, `evidence_path_tombstoned_for_gc`)**! Because `C2` cannot commit a reference to `P` while the tombstone exists, `C1`'s post-commit `File.deleteSync()` can **NEVER** delete a referenced file!
-2. **Fail-Closed Safety Clause (`R44-01` #6):** Every write path audited in `§1.2` (`AppDatabase.saveLocalDraft`, `AppDatabase.registerOrUpdateDraftIfUnchanged`, `InMemoryLocalDraftStore`, `TestLocalDraftStore`) MUST implement the tombstone rejection check in **WP1**. If any uncoordinated writer is ever discovered that cannot participate in the SQLite tombstone check, physical unlinking MUST stay disabled (`preservedConservative` / deferred-safe).
+2. **Fail-Closed Safety Clause (`R44-01` #6, `R44-05` #5):** Every write path audited in `§1.2` (`AppDatabase.saveLocalDraft`, `AppDatabase.registerOrUpdateDraftIfUnchanged`, `InMemoryLocalDraftStore`, `TestLocalDraftStore`) MUST implement both the active/retired tombstone checks AND `EvidenceWriterIntegrityValidator` in **WP1**. If full writer coordination and post-GC path protection cannot be proven without modifying frozen contracts, physical unlinking MUST stay disabled (`preservedConservative` / deferred-safe).
+
+#### 3a. Post-GC Stale Path Retirement & Writer Integrity Validation (`R44-05`)
+Ticket finalization NEVER authorizes reattaching a formerly unlinked path `P` (original `localPhotoPath` OR canonical `localCompressedPhotoPath`). LearnWard enforces a **two-layer fail-closed post-GC defense** across all SQLite connections, restarts, and stale UI editors (zero Drift schema change):
+
+1. **Layer 1 — Atomic Durable Retired-Path Ledger (`local_metadata_entries['retired_evidence_paths_v1']`):**
+   - Schema (`RetiredEvidencePathsV1`):
+     ```json
+     {
+       "schemaVersion": 1,
+       "entries": [
+         {
+           "confinedRelativePath": "d1_canonical_1730000000_uuid.jpg",
+           "canonicalAbsolutePath": "/app/docs/draft_evidence/d1_canonical_1730000000_uuid.jpg",
+           "resolvedAbsolutePath": "/app/docs/draft_evidence/d1_canonical_1730000000_uuid.jpg",
+           "retiredAtUtc": "2026-11-28T07:05:00Z",
+           "sourceTicketId": "550e8400-e29b-41d4-a716-446655440000",
+           "sourceDraftId": "d1"
+         }
+       ]
+     }
+     ```
+   - **Zero-Gap Atomic Handoff (`T_finalize`):** Removing a completed ticket from `pending_evidence_gc_v1` AND inserting its `RetiredEvidencePathEntry` into `retired_evidence_paths_v1` execute inside a **single atomic SQLite `BEGIN IMMEDIATE` transaction** (`compareAndSwapMetadataBatch`). There is `0` window across any connection or process kill where `P` is absent from both `pending_evidence_gc_v1` and `retired_evidence_paths_v1`.
+   - **Safe Retention & Compaction Policy:** Because LearnWard allocates every new evidence file with a fresh CSPRNG UUIDv4 filename via `createSync(exclusive: true)`, legitimate new evidence never collides with a retired path. `retired_evidence_paths_v1` enforces `minRetentionWindow = 180 days` AND `maxRetiredEntries = 2,000`: entries are **never** pruned while either `< 180 days` old OR total count `<= 2,000`. If both thresholds are exceeded simultaneously, only oldest-first entries older than `180 days` are compacted—and **Layer 2** below independently continues blocking missing/replaced/mismatched files even after compaction.
+2. **Layer 2 — Atomic Writer-Side Evidence Path-Identity & On-Disk File Integrity Validation (`EvidenceWriterIntegrityValidator`):**
+   - Inside `AppDatabase.saveLocalDraft` and `AppDatabase.registerOrUpdateDraftIfUnchanged` (and in-memory/test parity stores), whenever a draft inserts or persists any non-empty `localPhotoPath` or `localCompressedPhotoPath`:
+     1. Inside SQLite `BEGIN IMMEDIATE`: check `pending_evidence_gc_v1` (`evidence_path_tombstoned_for_gc`) AND `retired_evidence_paths_v1` (`evidence_path_retired_after_gc`) by unified `EvidencePathNormalizer` identity (`confinedRelativePath`, `canonicalAbsolutePath`, `resolvedAbsolutePath`). Reject atomically (`ROLLBACK`) on any match — even if an external actor recreated a file at former path `P`!
+     2. Validate via `EvidenceWriterIntegrityValidator` (mandatory in production `apps/mobile` bootstrap and all 4C-1 file-backed tests; fail-closed if omitted in production):
+        - `_inspectConfinedPath(path)` passes strictly inside `draft_evidence/`, regular non-symlink file, **currently exists on disk** (else `evidence_file_missing_on_disk`), `0 < byteLength <= 10 MiB`, valid JPEG/PNG magic bytes (`detectEvidenceMagicBytes`, else `evidence_file_corrupted`).
+        - For `localCompressedPhotoPath` (canonical snapshot): on-disk SHA-256 MUST equal `desired.sha256Checksum` verbatim (else `evidence_sha256_mismatch`).
+     3. Legitimate replacement of evidence MUST allocate a brand-new unique UUID filename via `saveDurableEvidence` / `saveCanonicalEvidenceSnapshot` (`exclusive: true`); overwriting or reusing a deleted/retired path is strictly prohibited.
+
+#### 3b. Transaction Linearization Points (`R44-05` Requirement #4)
+
+| Point | Transaction / Operation | SQLite Isolation Boundary | Exact State Invariant Established | Concurrent Writer Outcome |
+|---|---|---|---|---|
+| **`L1` (`T_abandon`)** | `abandonDraftAtomicallyWithGc` | Single SQLite `BEGIN IMMEDIATE` txn (`_arbiter`) | Deletes eligible draft (30-col CAS + `preCommitGuard()`) + verifies `countDraftReferencesToFile(P) == 0` + writes `EvidenceGcTicketV1(P, tombstoned_pending_unlink)` into `pending_evidence_gc_v1`. | Writer `W` committing before `L1` yields `count >= 1` (no ticket minted, `P` preserved). Writer `W` starting after `L1` sees `P` in `pending_evidence_gc_v1` -> `ROLLBACK` (`evidence_path_tombstoned_for_gc`). |
+| **`L2` (`T_claim` → `T_unlink`)** | `executeCommittedGcTicket` claim + `File.deleteSync(P)` | Claim: single SQLite `BEGIN IMMEDIATE` CAS; Unlink: disk syscall while `unlinking_in_progress` persists | CAS transitions `tombstoned_pending_unlink -> unlinking_in_progress` (re-verifying `count == 0` & `_inspectConfinedPath`); disk unlink executes while `unlinking_in_progress` stays durable in `pending_evidence_gc_v1`. | Any concurrent writer `W` during `T_claim` or `T_unlink` (or after crash before `L3`) sees `unlinking_in_progress` in `pending_evidence_gc_v1` -> `ROLLBACK` (`evidence_path_tombstoned_for_gc`). |
+| **`L3` (`T_finalize`)** | `executeCommittedGcTicket` finalization | Single SQLite `BEGIN IMMEDIATE` CAS batch (`pending_evidence_gc_v1` + `retired_evidence_paths_v1`) | Atomically removes `ticketId` from `pending_evidence_gc_v1` AND inserts `RetiredEvidencePathEntry(P)` into `retired_evidence_paths_v1`. Zero gap between active & retired states. | Any writer `W` starting before `L3` hits `pending_evidence_gc_v1`; any writer `W` starting after `L3` hits `retired_evidence_paths_v1` -> `ROLLBACK` (`evidence_path_retired_after_gc`). |
+| **`L4` (`T_write`)** | Subsequent or stale `saveLocalDraft` / `registerOrUpdateDraftIfUnchanged` | Single SQLite `BEGIN IMMEDIATE` txn + `EvidenceWriterIntegrityValidator` | Rejects `P` in `pending_evidence_gc_v1` or `retired_evidence_paths_v1`; rejects stale `expected` row via `notFound`; rejects missing/non-image/SHA-256-mismatched on-disk files. | Stale editor or new draft attaching deleted `P` fails closed (`0` rows persisted across single/multi-connection & SQLite reopen). |
+| **`L5` (`T_replace`)** | Same-path recreation or in-place file replacement | `T_write` SQLite retired-ledger check + on-disk SHA-256/magic-byte check | Same-path recreation after `L3` still fails `retired_evidence_paths_v1` (`evidence_path_retired_after_gc`); in-place mutation of an unretired canonical path fails `evidence_sha256_mismatch`. | Only freshly generated UUID paths (`exclusive: true`) with verified on-disk bytes can be attached. |
 
 #### 4. Production `SessionLifecycleController` Abandonment & Barrier 1 / Barrier 2 Semantics (`R44-02`)
 ```mermaid
@@ -308,19 +349,20 @@ stateDiagram-v2
     Barrier2Committed --> TicketBackedGc : "Fence still valid -> executeCommittedGcTicket(ticketId) loads & validates SQLite ticket"
     TicketBackedGc --> TicketClaimCas : "CAS ticket tombstoned_pending_unlink -> unlinking_in_progress (re-verifies 0 refs & confined path)"
     TicketClaimCas --> UnlinkDisk : "File.deleteSync() (alreadyAbsent treated idempotently)"
-    UnlinkDisk --> FinalizeTicketCas : "CAS remove ticket from pending_evidence_gc_v1"
+    UnlinkDisk --> FinalizeTicketCas : "Atomic CAS batch: remove ticket from pending_evidence_gc_v1 + insert RetiredEvidencePathEntry into retired_evidence_paths_v1 (L3)"
     UnlinkDisk --> RevertTicketOnIoError : "I/O error -> CAS revert to tombstoned_pending_unlink (attemptCount++); retry on restart"
-    FinalizeTicketCas --> Completed : "Clean completion (crash before finalize resolves idempotently via alreadyAbsent on restart)"
+    FinalizeTicketCas --> Completed : "Clean completion (crash before L3 resolves idempotently via alreadyAbsent -> L3 retirement on restart)"
 ```
 
-#### 5. Crash & Failure Mode Matrix (Metadata, Tickets & Files)
+#### 5. Crash & Failure Mode Matrix (Metadata, Tickets, Retired Ledger & Files)
 
-| Failure / Race Scenario | SQLite Draft / Command | `pending_evidence_gc_v1` Ticket | Physical File (`draft_evidence/`) | Recovery Behavior |
+| Failure / Race Scenario | SQLite Draft / Command | `pending_evidence_gc_v1` / `retired_evidence_paths_v1` | Physical File (`draft_evidence/`) | Recovery Behavior |
 |---|---|---|---|---|
 | **Barrier 1 abort / CAS conflict / crash BEFORE SQLite `COMMIT`** | **Intact** (rolled back) | **None created** | **Intact (0 unlink attempted)** | Clean rollback; zero inconsistency. |
-| **Barrier 2 invalidation during SQLite `COMMIT`** | **Deleted (`t_commit < t_event`)** | **Durably committed (`tombstoned_pending_unlink`)** | Still on disk (tombstone protects against reuse) | UI flips fail-closed immediately (`0` stale Parent UI); zero compensating re-insert; next safe sweeper pass executes ticket cleanly. |
+| **Barrier 2 invalidation during SQLite `COMMIT`** | **Deleted (`t_commit < t_event`)** | **Active (`tombstoned_pending_unlink`)** | Still on disk (tombstone protects against reuse) | UI flips fail-closed immediately (`0` stale Parent UI); zero compensating re-insert; next safe sweeper pass executes ticket cleanly. |
 | **Concurrent draft writer (`C2`) runs AFTER final ref check & BEFORE `File.deleteSync()`** | `C2` **REJECTED (`ROLLBACK`, `evidence_path_tombstoned_for_gc`)** | Active (`tombstoned_pending_unlink` / `unlinking_in_progress`) | Safely unlinked by `C1` | **Zero** referenced-file deletion (`R44-01`). |
-| **Crash AFTER `File.deleteSync()` and BEFORE ticket-finalization CAS** | **Deleted** | Remains `unlinking_in_progress` | Already absent | Next startup/sweep resumes `unlinking_in_progress`, observes `FileSystemEntityType.notFound` (`alreadyAbsent`), and CAS-removes ticket cleanly (`R44-02`). |
+| **Crash AFTER `File.deleteSync()` and BEFORE `L3` ticket-finalization CAS** | **Deleted** | Remains `unlinking_in_progress` (blocks writers!) | Already absent | Next startup/sweep resumes `unlinking_in_progress`, observes `alreadyAbsent`, and runs atomic `L3` handoff to `retired_evidence_paths_v1` (`R44-02`, `R44-05`). |
+| **Stale editor or new writer attaches `P` AFTER `L3` finalization (or after SQLite reopen / same-path file recreation)** | **REJECTED (`ROLLBACK`, `evidence_path_retired_after_gc` or `notFound`)** | `P` durably recorded in `retired_evidence_paths_v1` | Absent (or recreated externally — still rejected!) | **Zero** silently persisted deleted/replaced evidence references (`R44-05`). |
 | **`File.deleteSync()` fails with I/O error** | **Deleted** (never re-inserted) | CAS-reverted to `tombstoned_pending_unlink` (`attemptCount++`) | Still on disk (tombstoned) | Non-fatal UI notice; retries idempotently on next sweep without allowing writer reuse. |
 | **Forged / missing / consumed `ticketId` or mismatched path** | N/A | Rejected by SQLite ticket lookup/validation | **Intact (0 unlink!)** | Returns `rejectedMissingOrInvalidTicket` / `rejectedTicketPathMismatch` (`R44-02`). |
 
@@ -335,7 +377,7 @@ All contracts below are **strictly additive** with **zero** Drift schema changes
 - `Future<DraftAbandonmentOutcome> abandonDraftAtomicallyWithGc({required String localDraftId, required String verifiedFamilyId, required String authenticatedActorId, required LocalAssessmentDraft expectedDraft, required DraftAbandonmentReason reason, required int commitFenceEpoch, required DateTime now, bool Function()? preCommitGuard, Future<void> Function()? onBeforePreCommitGuard, Future<void> Function()? onAfterGuardBeforeCommit});`
   - Inside ONE SQLite `BEGIN IMMEDIATE` transaction: validates 30-col CAS, `familyId == verifiedFamilyId`, null lease, strict eligibility (`Q1`, `Q2`), Barrier 1 hook + `preCommitGuard()`, deletes row (`affectedRows == 1`), checks `countDraftReferencesToFile` across normalized path variants, mints durable `EvidenceGcTicketV1` entries in `local_metadata_entries['pending_evidence_gc_v1']` for `0`-ref confined paths, appends redacted audit in `last_manual_recovery_audit_v1`, and invokes optional Barrier 2 hook before commit.
   - Returns `DraftAbandonmentOutcome(status, localDraftId, mintedTicketIds, reason)`.
-- **Mandatory WP1 Writer Hardening (`R44-01`):** `AppDatabase.saveLocalDraft` (`L586`), `AppDatabase.registerOrUpdateDraftIfUnchanged` (`L941`), `InMemoryLocalDraftStore`, and `TestLocalDraftStore` read `local_metadata_entries['pending_evidence_gc_v1']` inside their write transaction and reject any `localPhotoPath` / `localCompressedPhotoPath` matching an active tombstone's normalized path identity (`evidence_path_tombstoned_for_gc`).
+- **Mandatory WP1 Writer Hardening (`R44-01`, `R44-05`):** `AppDatabase.saveLocalDraft` (`L586`), `AppDatabase.registerOrUpdateDraftIfUnchanged` (`L941`), `InMemoryLocalDraftStore`, and `TestLocalDraftStore` read BOTH `local_metadata_entries['pending_evidence_gc_v1']` AND `local_metadata_entries['retired_evidence_paths_v1']` inside their write transaction, rejecting any `localPhotoPath` / `localCompressedPhotoPath` matching an active (`evidence_path_tombstoned_for_gc`) or retired (`evidence_path_retired_after_gc`) normalized path identity, AND run `EvidenceWriterIntegrityValidator` (confined regular file exists on disk, `0 < len <= 10 MiB`, JPEG/PNG magic bytes, and exact canonical `sha256Checksum` match; mandatory in production `apps/mobile` wiring).
 
 ### 6.2 `PendingRewardCommandStore` Extensions (`packages/learnward_application/lib/src/ports/pending_reward_command_store.dart` + `AppDatabase`)
 - `Future<CommandAbandonmentOutcome> abandonCommandAtomically({required String commandId, required String verifiedFamilyId, required String authenticatedActorId, required PendingRewardCommand expectedCommand, required int commitFenceEpoch, required DateTime now, bool Function()? preCommitGuard, Future<void> Function()? onBeforePreCommitGuard, Future<void> Function()? onAfterGuardBeforeCommit});`
@@ -348,7 +390,7 @@ All contracts below are **strictly additive** with **zero** Drift schema changes
 - `Future<ConfinedEvidenceExportRead> readConfinedEvidenceForExport(String filePath);` (`_inspectConfinedPath` + regular file + `<= 10 MiB` + SHA-256 + magic-byte MIME).
 - `Future<EvidenceGcExecutionResult> executeCommittedGcTicket({required String ticketId, required LocalMetadataStore metadataStore, required LocalDraftStore draftStore, Future<void> Function(EvidenceGcTicketV1 ticket)? onPreUnlinkForTest, Future<void> Function(EvidenceGcTicketV1 ticket)? onAfterUnlinkBeforeFinalizeForTest});`
   - Loads & validates the durable `EvidenceGcTicketV1` directly from `metadataStore` (`pending_evidence_gc_v1`) — **zero caller boolean parameter (`R44-02`)**!
-  - Verifies `_inspectConfinedPath` + path-identity match against ticket + `countDraftReferencesToFile == 0` + CAS claim `tombstoned_pending_unlink -> unlinking_in_progress` + `File.deleteSync()` + CAS finalize removal.
+  - Verifies `_inspectConfinedPath` + path-identity match against ticket + `countDraftReferencesToFile == 0` + CAS claim `tombstoned_pending_unlink -> unlinking_in_progress` + `File.deleteSync()` + atomic `L3` CAS batch removing the ticket from `pending_evidence_gc_v1` AND inserting `RetiredEvidencePathEntry` into `retired_evidence_paths_v1` (`R44-05`).
   - Existing `deleteDurableEvidence`, `deleteEvidence`, and `deleteEvidenceIfUnreferenced` remain **100% unchanged** (`preservedConservative`).
 
 ### 6.5 Production `SessionLifecycleController` & Application Ports (`R44-02`, `R44-03`)
@@ -371,7 +413,7 @@ All contracts below are **strictly additive** with **zero** Drift schema changes
 | **Offline / Unverified during Abandon** | `ContainmentAuthorizationVerifier` -> `SessionAuthorizationUnverified` | Fail-closed abort before `_arbiter`; `0` DB writes. | `"Cannot abandon local copy while offline or unverified. Connect to verify parent permissions, or keep/export locally."` | 0 local or remote changes. |
 | **Revoked Membership / `42501` during Abandon or Server Export** | `ConfirmedAdultMembershipRevoked` or RPC `42501` | Abort immediately; `rehydrate()` routes out of `/parent/recovery`; `revokeActiveGrantsAndPurge()` clears `cacheDir/exports/`. | Handled by Slice 4C-0 restricted shell. | 0 local deletions; export cache purged. |
 | **Actor Switch / Sign-Out / Family Switch Mid-Dialog, Mid-Export, or While Share Sheet Open** | `sessionScopeEpoch` / `containmentEpoch` / `exportCacheEpoch` change + `preCommitGuard() == false` | Dismiss dialog synchronously; abort export & delete `.tmp`; block `ready/` rename; rollback Barrier 1 SQLite txn; revoke Android URI grants / dismiss iOS VC; purge `cacheDir/exports/`. | None flashed on closed screen (transitions immediately to new scope). | 0 cross-household leakage; 0 partial deletes. |
-| **Concurrent Modification / Active Lease / Tombstoned Path** | `concurrencyConflict`, `blockedIneligibleState`, or `evidence_path_tombstoned_for_gc` | SQLite `ROLLBACK`; reload fresh snapshot. | `"This item changed while you were confirming. Review its updated status before taking action."` | 0 rows or referenced files deleted. |
+| **Concurrent Modification / Active Lease / Tombstoned, Retired, Missing, or Corrupted Path** | `concurrencyConflict`, `blockedIneligibleState`, `evidence_path_tombstoned_for_gc`, `evidence_path_retired_after_gc`, `evidence_file_missing_on_disk`, or `evidence_sha256_mismatch` | SQLite `ROLLBACK`; reload fresh snapshot (`0` broken/replaced evidence references persisted). | `"This item or its attached photo changed or is no longer available. Please refresh or capture a new photo."` | 0 rows or referenced files deleted; 0 stale paths reattached. |
 | **Missing / Corrupted Canonical Snapshot or Out-of-Bounds Path during Export** | `verifyCanonicalEvidenceSnapshot` / `readConfinedEvidenceForExport` | Omit bad binary from ZIP; record exact status & expected vs actual SHA-256 in `manifest.json`; complete ZIP cleanly. | `"Export created with integrity warnings: N evidence photo(s) were missing, corrupted, or blocked (see manifest.json)."` | 0 DB/file mutations; never substitutes mutable photo. |
 | **Archive Resource Limit Exceeded or Disk Full during Export** | `ExportBundleLimitExceededException` or `FileSystemException` | Delete `staging/<id>.tmp`; leave `ready/` clean. | `"Export could not be completed because the bundle exceeded safe size/item limits or storage is full. Try exporting individual items."` | 0 DB or `draft_evidence/` mutations. |
 | **Post-Commit Unlink I/O Failure or Crash Before Ticket Finalize** | `deletionFailed` or restart finding `unlinking_in_progress` | Keep durable ticket in `pending_evidence_gc_v1` (still blocking writers!); retry idempotently on next sweep (`alreadyAbsent` finalizes cleanly). | `"Local record removed. Cleanup of cached photo file will complete automatically."` | Record deleted; safe retry queued. |
@@ -416,7 +458,7 @@ All contracts below are **strictly additive** with **zero** Drift schema changes
 
 ---
 
-## 9. Deterministic Acceptance & Negative Test Matrix (`C1-01`–`C1-36`)
+## 9. Deterministic Acceptance & Negative Test Matrix (`C1-01`–`C1-39`)
 
 All tests verify zero blanket SQLite wipes, zero forbidden remote RPCs, zero remote Storage deletes, zero cross-household PII leakage, and zero Drift/Supabase contract drift:
 
@@ -458,6 +500,9 @@ All tests verify zero blanket SQLite wipes, zero forbidden remote RPCs, zero rem
 | `C1-34` | ZIP Entry Sanitization & ZIP-Slip Negative Matrix (`R44-04`) | Malformed legacy `localDraftId` (`../../etc/passwd`, `a\b`, `\u0000`, `\u202E`, spaces) exports cleanly using opaque `evidence/item_0001/...` paths with raw ID in JSON only; `ZipStoreBundleWriter` rejects `..`, `/abs`, `a\b`, control chars, exact duplicates, and case-colliding entries fail-closed. |
 | `C1-35` | Export Resource Limits & Streaming Memory Bounds (`R44-04`) | Exceeding `maxEntryCount` (`500`), `maxEvidenceEntryBytes` (`10 MiB`), `maxJsonEntryBytes` (`5 MiB`), or `maxTotalBundleBytes` (`100 MiB`) throws `ExportBundleLimitExceededException`, deletes staging `.tmp`, leaves `ready/` clean, and mutates `0` DB/evidence rows. |
 | `C1-36` | Locked `Q1` & `Q2` Policy Enforcement | (a) Pre-dispatch `neverDispatched` draft with missing or corrupted canonical snapshot (`quarantinedMissingSnapshot` / `quarantinedCorruptedSnapshot`, `serverAssessmentId == null`) keeps `Abandon local copy` **DISABLED** (`Q1`); (b) Adult A2 (`owner` in `Family_A`) cannot abandon Adult A1's ordinary `editableDraft` (`actorUserId != liveActor.userId`, returns `blockedActorMismatch`, `Q2`). |
+| `C1-37` | Post-GC Stale Path Reattachment & SQLite Reopen (`R44-05`) | Abandon draft `d1` (original `P_orig` + canonical `P_canon`), run `executeCommittedGcTicket` through `L3` finalization (`pending_evidence_gc_v1` -> `retired_evidence_paths_v1`), **close and reopen file-backed `AppDatabase`**: (a) `saveLocalDraft` AND `registerOrUpdateDraftIfUnchanged(expected: null)` attaching `P_orig` or `P_canon` to new draft `d2` fail closed (`evidence_path_retired_after_gc`, `0` rows persisted); (b) stale editor holding pre-abandonment `d1` fails `registerOrUpdateDraftIfUnchanged(expected: staleD1)` with `notFound` and fails `saveLocalDraft(staleD1)` with `evidence_path_retired_after_gc` (`0` rows persisted). |
+| `C1-38` | Concurrent Writers Across `T_unlink` → `T_finalize` (`R44-05`) | Multi-connection file-backed SQLite test firing concurrent `saveLocalDraft` and `registerOrUpdateDraftIfUnchanged` calls during `unlinking_in_progress`, paused at `onAfterUnlinkBeforeFinalizeForTest`, and immediately after `L3` `T_finalize` -> proves zero window where `P_orig` or `P_canon` can be silently persisted across connections. |
+| `C1-39` | Same-Path Replacement & Writer File-Integrity Rejection (`R44-05`) | (a) Externally recreating a new file at retired path `P_orig` or `P_canon` after `L3` is still rejected by `retired_evidence_paths_v1` (`evidence_path_retired_after_gc`); (b) unretired path whose file is missing on disk (`evidence_file_missing_on_disk`), non-image/corrupt (`evidence_file_corrupted`), or whose canonical bytes fail `desired.sha256Checksum` (`evidence_sha256_mismatch`) is rejected fail-closed by `EvidenceWriterIntegrityValidator` in both `saveLocalDraft` and `registerOrUpdateDraftIfUnchanged` (`0` silently accepted missing/corrupted references). |
 
 ---
 
@@ -465,16 +510,16 @@ All tests verify zero blanket SQLite wipes, zero forbidden remote RPCs, zero rem
 
 Each work package is delivered as an independently reviewed, narrowly scoped PR:
 
-- **`WP0` (Current Docs-Only PR #44):** Author & refine `docs/27-phase-6-slice-4c-1-manual-recovery-and-export-design-contract.md` (`R44-01`–`R44-04`, `Q1`–`Q4`) and update `docs/21-phase-6-master-delivery-and-pilot-gates.md` (`DOC-POST43-01` + 4C-1 WP0 pending review). Independent design approval required before `WP1`.
-- **`WP1` — Additive Drift v6 Store Queries, Full-Row CAS Abandonment, Universal Draft Writer Tombstone Hardening, Typed GC Tickets, Confined Reader & Server Export Port:**
-  - `EvidencePathNormalizer` & typed `EvidenceGcTicketV1` codec (`pending_evidence_gc_v1`).
-  - **Mandatory WP1 writer hardening (`R44-01`):** Atomic SQLite tombstone checks inside `AppDatabase.saveLocalDraft`, `AppDatabase.registerOrUpdateDraftIfUnchanged`, `InMemoryLocalDraftStore`, and `TestLocalDraftStore`.
+- **`WP0` (Current Docs-Only PR #44):** Author & refine `docs/27-phase-6-slice-4c-1-manual-recovery-and-export-design-contract.md` (`R44-01`–`R44-05`, `Q1`–`Q4`) and update `docs/21-phase-6-master-delivery-and-pilot-gates.md` (`DOC-POST43-01` + 4C-1 WP0 pending review). Independent design approval required before `WP1`.
+- **`WP1` — Additive Drift v6 Store Queries, Full-Row CAS Abandonment, Universal Draft Writer Tombstone/Retirement/Integrity Hardening, Typed GC Tickets, Confined Reader & Server Export Port:**
+  - `EvidencePathNormalizer`, typed `EvidenceGcTicketV1` (`pending_evidence_gc_v1`), and durable `RetiredEvidencePathsV1` (`retired_evidence_paths_v1`, `180d` / `2,000`-entry safe compaction policy).
+  - **Mandatory WP1 writer hardening (`R44-01`, `R44-05` — MUST complete before any physical GC unlink is enabled):** Atomic SQLite active-tombstone AND retired-path rejection + `EvidenceWriterIntegrityValidator` (confinement, existence, magic-byte, canonical SHA-256 check) inside `AppDatabase.saveLocalDraft`, `AppDatabase.registerOrUpdateDraftIfUnchanged`, `InMemoryLocalDraftStore`, and `TestLocalDraftStore`.
   - `LocalDraftStore.listLocalDraftsForFamily` & `abandonDraftAtomicallyWithGc` (`AppDatabase` + in-memory/test parity; Barrier 1 & Barrier 2 hooks; `Q1`/`Q2` rules enforced).
   - `PendingRewardCommandStore.abandonCommandAtomically` (`AppDatabase` + in-memory parity).
   - `FamilyRepository.exportFamilyDataJson` (`SupabaseFamilyRepository` + `InMemoryFamilyRepository`).
-  - `LocalEvidenceFileStore.readConfinedEvidenceForExport` & `executeCommittedGcTicket` (SQLite-verified typed ticket authority; zero boolean trust flags; legacy 4B-0 `delete*` methods unchanged).
+  - `LocalEvidenceFileStore.readConfinedEvidenceForExport` & `executeCommittedGcTicket` (SQLite-verified typed ticket authority; zero boolean trust flags; atomic `L3` ticket removal + `retired_evidence_paths_v1` insertion; legacy 4B-0 `delete*` methods unchanged).
   - Production `ManualRecoveryArbiterPort` methods on `SessionLifecycleController` (zero `runSerializedForTest()` in production!).
-  - File-backed SQLite concurrency/tombstone/ticket tests (`C1-02`, `C1-03`, `C1-13`, `C1-17`–`C1-27`, `C1-31`, `C1-36`).
+  - File-backed SQLite concurrency/tombstone/retirement/ticket/integrity tests (`C1-02`, `C1-03`, `C1-13`, `C1-17`–`C1-27`, `C1-31`, `C1-36`–`C1-39`).
 - **`WP2` — Off-Isolate Streaming Export Engine (`ZipStoreBundleWriter`, `UnsyncedWorkExportService`) & `ManualAbandonmentCoordinator`:**
   - Pure-Dart streaming Store-mode ZIP writer with opaque entry paths, strict path/case-collision validator, hard resource limits (`R44-04`), and `Isolate.run` execution (`R44-03`).
   - `ExportScopeToken` + `_exportCacheMutex` publication gate, cold-start purge in `Hydrating`, and `SessionLifecycleController._clearInMemoryProtectedState()` cache purge & share revocation hooks.
@@ -485,8 +530,8 @@ Each work package is delivered as an independently reviewed, narrowly scoped PR:
   - Build `ParentRecoveryScreen` (draft/command tabs, distinct chips, duplicate-charge warnings, Keep/Export/Abandon flows, high-friction confirmation dialog, Server Family Export button, accessibility semantics/focus/48dp/2x-scale compliance).
   - Implement native `MethodChannel('com.learnward.app/recovery_export_share')` behind `ExportSharePort`: Android `FileProvider` (`res/xml/recovery_export_paths.xml` scoped strictly to `cacheDir/exports/ready/`, `revokeUriPermission`) + iOS `UIActivityViewController` (valid iPad `sourceRect`, `isExcludedFromBackup = true`, scope-change dismiss).
   - Widget & accessibility tests (`C1-01`, `C1-04`, `C1-10`, `C1-28`, `C1-29`).
-- **`WP4` — Full Deterministic Acceptance Matrix (`C1-01`–`C1-36`), Traceability Ledger & Remediation:**
-  - End-to-end file-backed SQLite + live `LearnWardApp`/`GoRouter` + ZIP extraction + cross-connection tombstone race + crash-restart GC suite (`C1-01`–`C1-36`) + traceability matrix `docs/28-phase-6-slice-4c-1-wp4-acceptance-traceability-matrix.md` + 4/4 CI.
+- **`WP4` — Full Deterministic Acceptance Matrix (`C1-01`–`C1-39`), Traceability Ledger & Remediation:**
+  - End-to-end file-backed SQLite + live `LearnWardApp`/`GoRouter` + ZIP extraction + cross-connection tombstone/post-GC retirement race + crash-restart GC suite (`C1-01`–`C1-39`) + traceability matrix `docs/28-phase-6-slice-4c-1-wp4-acceptance-traceability-matrix.md` + 4/4 CI.
 - **`WP5` — Docs-Only Freeze Receipt & Master Ledger Closeout:**
   - Create `docs/freezes/phase-6-slice-4c-1-manual-recovery-and-export-freeze.md` and update `docs/21-phase-6-master-delivery-and-pilot-gates.md` closing `LW-AUD-10` at implementation-evidence level while keeping `LW-AUD-06`–`LW-AUD-09` and Pilot/Production gates **CLOSED**.
 
@@ -494,8 +539,8 @@ Each work package is delivered as an independently reviewed, narrowly scoped PR:
 
 ## 11. Freeze & Release Gates
 
-- **WP0 Gate:** Independent final approval of this revised contract (`docs/27`, resolving `R44-01`–`R44-04` and locking `Q1`–`Q4`) before starting `WP1`.
-- **WP1–WP4 Gate:** Sequential independent reviews, exact-HEAD squash merges, 4/4 `SUCCESS` pre- and post-merge CI, `36/36` `C1-01`–`C1-36` PASS, and `0` diff to frozen Supabase SQL/RPC/RLS/Storage, Drift schema v6, existing freeze receipts, `SupabaseRecoveryAuthorizationAdapter`, and `RECOVERY_DISPATCHER_ENABLED=false`.
+- **WP0 Gate:** Independent final approval of this revised contract (`docs/27`, resolving `R44-01`–`R44-05` and locking `Q1`–`Q4`) before starting `WP1`.
+- **WP1–WP4 Gate:** Sequential independent reviews, exact-HEAD squash merges, 4/4 `SUCCESS` pre- and post-merge CI, `39/39` `C1-01`–`C1-39` PASS, and `0` diff to frozen Supabase SQL/RPC/RLS/Storage, Drift schema v6, existing freeze receipts, `SupabaseRecoveryAuthorizationAdapter`, and `RECOVERY_DISPATCHER_ENABLED=false`.
 - **WP5 Freeze Gate:** Docs-only freeze receipt approved, squash-merged, and verified 4/4 green on post-merge `main` CI.
 - **Pilot & Production Distribution Gates:** Remain strictly **CLOSED** after Slice 4C-1 until **Slice 5** (`LW-AUD-08`) and **Slice 6** (`LW-AUD-06`, `LW-AUD-07`, `LW-AUD-09`) complete with independent sign-off.
 
