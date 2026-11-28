@@ -814,7 +814,24 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
   static const String containmentRecoveryLockV1Key =
       'containment_recovery_lock_v1';
 
+  /// Strict fail-closed destination allowlist permitted by
+  /// [applyContainmentInvalidation] (`R42-01`).
+  static const Set<ColdStartContainmentStatus>
+  allowedContainmentInvalidationTargets = {
+    ColdStartContainmentStatus.unauthenticated,
+    ColdStartContainmentStatus.containmentLocked,
+    ColdStartContainmentStatus.pairedChildRevoked,
+    ColdStartContainmentStatus.pairedChildUnverified,
+    ColdStartContainmentStatus.authorizationUnverified,
+    ColdStartContainmentStatus.adultAccessRestricted,
+  };
+
   final ContainmentArbiter _arbiter = ContainmentArbiter();
+
+  /// Deterministic test hook invoked inside [_arbiter] immediately before
+  /// `_persistFenceTransition()` commits to local metadata (`R42-02`).
+  @visibleForTesting
+  Future<void> Function()? onBeforePersistFenceTransitionForTest;
 
   int _containmentEpoch = 0;
   int _sessionScopeEpoch = 0;
@@ -926,6 +943,11 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     try {
       await _arbiter.run(() async {
         if (!ref.mounted) return;
+        final beforePersistHook = onBeforePersistFenceTransitionForTest;
+        if (beforePersistHook != null) {
+          await beforePersistHook();
+          if (!ref.mounted) return;
+        }
         final store = ref.read(localMetadataStoreProvider);
         final rawChild = await store.readMetadata(
           ActiveChildModeNotifier.activeSessionKey,
@@ -1063,16 +1085,54 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     }
   }
 
-  /// Synchronously (`0 await`) transitions the controller into a fail-closed
-  /// containment state upon child archival, grant revocation, or server
-  /// containment downgrade, then enqueues `_persistFenceTransition()` in
-  /// `_ContainmentArbiter` (`C0-33`, `C0-37(d)`, `WP4-DEF-03`).
+  /// Synchronously (`0 await`) transitions the controller into an allowlisted
+  /// fail-closed containment state upon child archival, grant revocation, or
+  /// server containment downgrade, then enqueues `_persistFenceTransition()` in
+  /// `_ContainmentArbiter` (`C0-33`, `C0-37(d)`, `WP4-DEF-03`, `R42-01`).
+  ///
+  /// Rejects any non-downgrade target (`verifiedParentMode`,
+  /// `verifiedChildMode`, `offlineContainedChildMode`, `hydrating`,
+  /// `noActiveFamilyMembership`), any positive authorization outcome, and any
+  /// state relaxation from `unauthenticated` or Child Mode/`containmentLocked`.
   void applyContainmentInvalidation({
     required ColdStartContainmentStatus targetStatus,
     ContainmentVerificationOutcome? verificationOutcome,
     required String reason,
   }) {
+    if (!allowedContainmentInvalidationTargets.contains(targetStatus)) {
+      throw ArgumentError.value(
+        targetStatus,
+        'targetStatus',
+        'applyContainmentInvalidation only permits fail-closed containment downgrade targets.',
+      );
+    }
+    if (verificationOutcome is AuthorizedActiveAdult ||
+        verificationOutcome is AuthorizedPairedChild) {
+      throw ArgumentError.value(
+        verificationOutcome,
+        'verificationOutcome',
+        'applyContainmentInvalidation cannot publish a positive authorization outcome.',
+      );
+    }
     if (!ref.mounted) return;
+    if (state.status == ColdStartContainmentStatus.unauthenticated &&
+        targetStatus != ColdStartContainmentStatus.unauthenticated) {
+      throw ArgumentError.value(
+        targetStatus,
+        'targetStatus',
+        'Cannot transition out of unauthenticated via applyContainmentInvalidation.',
+      );
+    }
+    if ((state.isActiveChildMode ||
+            state.status == ColdStartContainmentStatus.containmentLocked) &&
+        (targetStatus == ColdStartContainmentStatus.authorizationUnverified ||
+            targetStatus == ColdStartContainmentStatus.adultAccessRestricted)) {
+      throw ArgumentError.value(
+        targetStatus,
+        'targetStatus',
+        'Cannot relax Child Mode or containmentLocked into an adult-only restricted state via applyContainmentInvalidation.',
+      );
+    }
     _containmentEpoch++;
     _sessionScopeEpoch++;
     _sessionGenerationOrdinal++;
@@ -1082,7 +1142,7 @@ class SessionLifecycleController extends Notifier<ColdStartContainmentState> {
     state = ColdStartContainmentState(
       status: targetStatus,
       actorContext: state.actorContext,
-      verificationOutcome: verificationOutcome ?? state.verificationOutcome,
+      verificationOutcome: verificationOutcome,
       persistedSessionResult: state.persistedSessionResult,
       recoveryLockResult: state.recoveryLockResult,
       parentGateCredentialStatus: state.parentGateCredentialStatus,

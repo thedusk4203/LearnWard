@@ -36,10 +36,31 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(_loadData());
+      }
+    });
   }
 
   Future<void> _loadData() async {
+    if (!mounted) return;
+    final initialContainment = ref.read(coldStartContainmentProvider);
+    if (initialContainment.status !=
+        ColdStartContainmentStatus.verifiedParentMode) {
+      return;
+    }
+    final capturedScopeEpoch = initialContainment.sessionScopeEpoch;
+    final capturedActorUserId = initialContainment.actorContext?.userId;
+
+    bool isStillAuthorizedParentScope() {
+      if (!mounted) return false;
+      final live = ref.read(coldStartContainmentProvider);
+      return live.status == ColdStartContainmentStatus.verifiedParentMode &&
+          live.sessionScopeEpoch == capturedScopeEpoch &&
+          live.actorContext?.userId == capturedActorUserId;
+    }
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -49,6 +70,7 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
       final familyRepo = ref.read(familyRepositoryProvider);
       final listFamilies = ListMyFamilies(familyRepo);
       final families = await listFamilies();
+      if (!isStillAuthorizedParentScope()) return;
 
       if (families.isEmpty) {
         ref.read(activeFamilyProvider.notifier).selectFamily(null);
@@ -72,15 +94,18 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
       final childRepo = ref.read(childProfileRepositoryProvider);
       final listChildren = ListFamilyChildren(childRepo);
       final children = await listChildren(currentActive.id);
+      if (!isStillAuthorizedParentScope()) return;
 
       final assessmentRepo = ref.read(assessmentRepositoryProvider);
       final pendingUseCase = ListPendingAssessments(assessmentRepo);
       final pending = await pendingUseCase.forFamily(currentActive.id);
+      if (!isStillAuthorizedParentScope()) return;
 
       final growthRepo = ref.read(growthRepositoryProvider);
       try {
         await growthRepo.catchUpUnprocessedGrowth(currentActive.id);
       } catch (_) {}
+      if (!isStillAuthorizedParentScope()) return;
       final getBalance = GetChildBalance(growthRepo);
       int pendingRedemptionsCount = 0;
       try {
@@ -92,6 +117,7 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
         );
         pendingRedemptionsCount = redemptions.length;
       } catch (_) {}
+      if (!isStillAuthorizedParentScope()) return;
 
       final balances = <String, ChildBalance>{};
       for (final c in children) {
@@ -100,6 +126,7 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
           if (b != null) balances[c.id.value] = b;
         } catch (_) {}
       }
+      if (!isStillAuthorizedParentScope()) return;
 
       setState(() {
         _children = children;
@@ -108,9 +135,11 @@ class _FamilyHomeScreenState extends ConsumerState<FamilyHomeScreen> {
         _pendingRedemptionsCount = pendingRedemptionsCount;
       });
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Failed to load family data: ${e.toString()}';
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Failed to load family data: ${e.toString()}';
+        });
+      }
     } finally {
       if (mounted) {
         setState(() {

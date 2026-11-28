@@ -234,6 +234,10 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => Consumer(
           builder: (context, widgetRef, _) {
             final containment = widgetRef.watch(coldStartContainmentProvider);
+            if (containment.status !=
+                ColdStartContainmentStatus.verifiedParentMode) {
+              return const SizedBox.shrink();
+            }
             return FamilyHomeScreen(
               key: ValueKey(
                 'parent_home_${_scopeKeyPrefix(containment, null)}',
@@ -314,6 +318,10 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => Consumer(
           builder: (context, widgetRef, _) {
             final containment = widgetRef.watch(coldStartContainmentProvider);
+            if (containment.status !=
+                ColdStartContainmentStatus.verifiedParentMode) {
+              return const SizedBox.shrink();
+            }
             return FamilyHomeScreen(
               key: ValueKey(
                 'parent_home_${_scopeKeyPrefix(containment, null)}',

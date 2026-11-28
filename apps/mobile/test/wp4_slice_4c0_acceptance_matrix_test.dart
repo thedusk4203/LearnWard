@@ -830,6 +830,15 @@ void main() {
                 FakeFamilyRepository(
                   currentUserId: 'adult-a',
                   families: [familyA],
+                  memberships: [
+                    FamilyMembership(
+                      familyId: familyA.id,
+                      authUserId: 'adult-a',
+                      role: FamilyRole.owner,
+                      status: MembershipStatus.active,
+                      joinedAt: nowUtc,
+                    ),
+                  ],
                 ),
               ),
               childProfileRepositoryProvider.overrideWithValue(
@@ -1243,6 +1252,15 @@ void main() {
                 FakeFamilyRepository(
                   currentUserId: 'adult-a',
                   families: [familyA],
+                  memberships: [
+                    FamilyMembership(
+                      familyId: familyA.id,
+                      authUserId: 'adult-a',
+                      role: FamilyRole.owner,
+                      status: MembershipStatus.active,
+                      joinedAt: nowUtc,
+                    ),
+                  ],
                 ),
               ),
               childProfileRepositoryProvider.overrideWithValue(
@@ -2469,6 +2487,1023 @@ void main() {
       );
       await Future<void>.delayed(Duration.zero);
     });
+  });
+
+  group(
+    'Group E — R42-01: Containment Invalidation Privilege-Boundary Hardening',
+    () {
+      test('R42-01(a): verifiedChildMode rejects verifiedParentMode and non-downgrade targets with zero epoch, provider, or SQLite side effects', () async {
+        final tempDir = await Directory.systemTemp.createTemp('lw_wp4_r4201a_');
+        addTearDown(() async {
+          if (tempDir.existsSync()) {
+            await tempDir.delete(recursive: true);
+          }
+        });
+        final db = await _openDb(tempDir, 'r4201a.sqlite');
+        addTearDown(db.close);
+
+        await seedBoundPin(
+          db,
+          pin: '8392',
+          ownerFamilyId: familyA.id.value,
+          actorUserId: 'adult-a',
+        );
+        await db.writeMetadata(
+          key: ParentGateService.containmentFenceV1Key,
+          value: ContainmentFenceV1(
+            version: 1,
+            fenceEpoch: 3,
+            actorUserId: 'adult-a',
+            sessionGeneration: 1,
+            lockState: ContainmentFenceLockState.containmentLocked,
+            updatedAtUtc: nowUtc,
+          ).toJsonString(),
+          updatedAt: nowUtc,
+        );
+
+        final fakeAuth = FakeAuthSessionPort(activeUserId: null);
+        setActor(fakeAuth, userId: 'adult-a', sessionGeneration: 'gen-a-1');
+        final verifier = FakeContainmentAuthorizationVerifier(
+          defaultOutcome: AuthorizedActiveAdult(
+            verifiedRole: VerifiedAdultRole.owner,
+            verifiedFamily: familyA,
+            verifiedFamilies: [familyA],
+            verifiedRolesByFamilyId: {
+              familyA.id.value: VerifiedAdultRole.owner,
+            },
+            verifiedChild: childA,
+          ),
+        );
+
+        final container = ProviderContainer(
+          overrides: [
+            appClockProvider.overrideWithValue(() => nowUtc),
+            authSessionPortProvider.overrideWithValue(fakeAuth),
+            restrictedShellSignOutProvider.overrideWithValue(
+              () async => fakeAuth.signOut(),
+            ),
+            localMetadataStoreProvider.overrideWithValue(db),
+            containmentAuthorizationVerifierProvider.overrideWithValue(
+              verifier,
+            ),
+            parentGateServiceProvider.overrideWithValue(
+              ParentGateService(
+                db,
+                clock: FixedClock(nowUtc),
+                minIterations: 1000,
+                configuredIterations: 1000,
+                runInIsolate: false,
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final ctrl = container.read(sessionContainmentProvider.notifier);
+        await ctrl.rehydrate();
+        await ctrl.enterChildMode(childA);
+        expect(
+          container.read(sessionContainmentProvider).status,
+          ColdStartContainmentStatus.verifiedChildMode,
+        );
+
+        final epochBefore = ctrl.containmentEpoch;
+        final scopeEpochBefore = ctrl.sessionScopeEpoch;
+        final rawChildBefore = await db.readMetadata(
+          ActiveChildModeNotifier.activeSessionKey,
+        );
+        final rawFenceBefore = await db.readMetadata(
+          ParentGateService.containmentFenceV1Key,
+        );
+        final rawCredBefore = await db.readMetadata(
+          ParentGateService.credentialV2Key,
+        );
+
+        for (final forbidden in const [
+          ColdStartContainmentStatus.verifiedParentMode,
+          ColdStartContainmentStatus.verifiedChildMode,
+          ColdStartContainmentStatus.offlineContainedChildMode,
+          ColdStartContainmentStatus.noActiveFamilyMembership,
+          ColdStartContainmentStatus.hydrating,
+          ColdStartContainmentStatus.authorizationUnverified,
+          ColdStartContainmentStatus.adultAccessRestricted,
+        ]) {
+          expect(
+            () => ctrl.applyContainmentInvalidation(
+              targetStatus: forbidden,
+              reason: 'forbidden_${forbidden.name}',
+            ),
+            throwsArgumentError,
+          );
+        }
+
+        expect(
+          () => ctrl.applyContainmentInvalidation(
+            targetStatus: ColdStartContainmentStatus.containmentLocked,
+            verificationOutcome: AuthorizedActiveAdult(
+              verifiedRole: VerifiedAdultRole.owner,
+              verifiedFamily: familyA,
+              verifiedFamilies: [familyA],
+              verifiedRolesByFamilyId: {
+                familyA.id.value: VerifiedAdultRole.owner,
+              },
+            ),
+            reason: 'forbidden_positive_outcome',
+          ),
+          throwsArgumentError,
+        );
+
+        await ctrl.runSerializedForTest(() async {});
+
+        expect(
+          container.read(sessionContainmentProvider).status,
+          ColdStartContainmentStatus.verifiedChildMode,
+        );
+        expect(ctrl.containmentEpoch, equals(epochBefore));
+        expect(ctrl.sessionScopeEpoch, equals(scopeEpochBefore));
+        expect(container.read(activeChildModeProvider)?.id, equals(childA.id));
+        expect(
+          await db.readMetadata(ActiveChildModeNotifier.activeSessionKey),
+          equals(rawChildBefore),
+        );
+        expect(
+          await db.readMetadata(ParentGateService.containmentFenceV1Key),
+          equals(rawFenceBefore),
+        );
+        expect(
+          await db.readMetadata(ParentGateService.credentialV2Key),
+          equals(rawCredBefore),
+        );
+      });
+
+      test('R42-01(b): restricted & unauthenticated states reject verifiedChildMode, offlineContainedChildMode, verifiedParentMode, and relaxation', () async {
+        final store = InMemoryLocalMetadataStore();
+        await store.writeMetadata(
+          key: ActiveChildModeNotifier.activeSessionKey,
+          value: PersistedChildModeSession(
+            modeKind: PersistedChildModeKind.sharedDeviceAdult,
+            actorUserId: 'adult-a',
+            familyId: familyA.id,
+            childId: childA.id,
+            childProfileSnapshot: childA,
+            persistedAtUtc: nowUtc,
+          ).toJsonString(),
+          updatedAt: nowUtc,
+        );
+        final fakeAuth = FakeAuthSessionPort(activeUserId: null);
+        setActor(fakeAuth, userId: 'adult-a', sessionGeneration: 'gen-a-1');
+        final verifier = FakeContainmentAuthorizationVerifier(
+          defaultOutcome: AuthorizedAdultChildUnavailable(
+            verifiedRole: VerifiedAdultRole.owner,
+            verifiedFamily: familyA,
+            verifiedFamilies: [familyA],
+            verifiedRolesByFamilyId: {
+              familyA.id.value: VerifiedAdultRole.owner,
+            },
+            reason: TargetChildUnavailabilityReason.confirmedArchived,
+            targetChildId: childA.id,
+            targetFamilyId: familyA.id,
+          ),
+        );
+
+        final container = ProviderContainer(
+          overrides: [
+            appClockProvider.overrideWithValue(() => nowUtc),
+            authSessionPortProvider.overrideWithValue(fakeAuth),
+            restrictedShellSignOutProvider.overrideWithValue(
+              () async => fakeAuth.signOut(),
+            ),
+            localMetadataStoreProvider.overrideWithValue(store),
+            containmentAuthorizationVerifierProvider.overrideWithValue(
+              verifier,
+            ),
+            parentGateServiceProvider.overrideWithValue(
+              ParentGateService(
+                store,
+                clock: FixedClock(nowUtc),
+                minIterations: 1000,
+                configuredIterations: 1000,
+                runInIsolate: false,
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final ctrl = container.read(sessionContainmentProvider.notifier);
+        await ctrl.rehydrate();
+        expect(
+          container.read(sessionContainmentProvider).status,
+          ColdStartContainmentStatus.containmentLocked,
+        );
+
+        for (final target in const [
+          ColdStartContainmentStatus.verifiedParentMode,
+          ColdStartContainmentStatus.verifiedChildMode,
+          ColdStartContainmentStatus.offlineContainedChildMode,
+          ColdStartContainmentStatus.noActiveFamilyMembership,
+          ColdStartContainmentStatus.hydrating,
+          ColdStartContainmentStatus.authorizationUnverified,
+          ColdStartContainmentStatus.adultAccessRestricted,
+        ]) {
+          expect(
+            () => ctrl.applyContainmentInvalidation(
+              targetStatus: target,
+              reason: 'from_locked_${target.name}',
+            ),
+            throwsArgumentError,
+          );
+        }
+        expect(
+          container.read(sessionContainmentProvider).status,
+          ColdStartContainmentStatus.containmentLocked,
+        );
+
+        // Switch to authorizationUnverified cleanly and confirm child/parent targets still reject
+        final existingChildRaw = await store.readMetadata(
+          ActiveChildModeNotifier.activeSessionKey,
+        );
+        if (existingChildRaw != null) {
+          await store.compareAndSwapMetadataBatch(
+            expectedValues: {
+              ActiveChildModeNotifier.activeSessionKey: existingChildRaw,
+            },
+            mutations: const [
+              MetadataMutation.delete(
+                key: ActiveChildModeNotifier.activeSessionKey,
+              ),
+            ],
+          );
+        }
+        verifier.defaultOutcome = const SessionAuthorizationUnverified(
+          reason: 'offline',
+        );
+        await ctrl.rehydrate();
+        expect(
+          container.read(sessionContainmentProvider).status,
+          ColdStartContainmentStatus.authorizationUnverified,
+        );
+        for (final target in const [
+          ColdStartContainmentStatus.verifiedParentMode,
+          ColdStartContainmentStatus.verifiedChildMode,
+          ColdStartContainmentStatus.offlineContainedChildMode,
+          ColdStartContainmentStatus.noActiveFamilyMembership,
+          ColdStartContainmentStatus.hydrating,
+        ]) {
+          expect(
+            () => ctrl.applyContainmentInvalidation(
+              targetStatus: target,
+              reason: 'from_auth_unverified_${target.name}',
+            ),
+            throwsArgumentError,
+          );
+        }
+
+        // Unauthenticated cannot move into containmentLocked or any active mode
+        fakeAuth.signOut();
+        await ctrl.rehydrate();
+        expect(
+          container.read(sessionContainmentProvider).status,
+          ColdStartContainmentStatus.unauthenticated,
+        );
+        for (final target in const [
+          ColdStartContainmentStatus.verifiedParentMode,
+          ColdStartContainmentStatus.verifiedChildMode,
+          ColdStartContainmentStatus.offlineContainedChildMode,
+          ColdStartContainmentStatus.containmentLocked,
+        ]) {
+          expect(
+            () => ctrl.applyContainmentInvalidation(
+              targetStatus: target,
+              reason: 'from_unauth_${target.name}',
+            ),
+            throwsArgumentError,
+          );
+        }
+        expect(
+          container.read(sessionContainmentProvider).status,
+          ColdStartContainmentStatus.unauthenticated,
+        );
+      });
+
+      test('R42-01(c): valid allowlisted downgrades (containmentLocked, pairedChildRevoked, pairedChildUnverified) synchronously fail closed and advance durable fence', () async {
+        final tempDir = await Directory.systemTemp.createTemp('lw_wp4_r4201c_');
+        addTearDown(() async {
+          if (tempDir.existsSync()) {
+            await tempDir.delete(recursive: true);
+          }
+        });
+        final db = await _openDb(tempDir, 'r4201c.sqlite');
+        addTearDown(db.close);
+
+        await seedBoundPin(
+          db,
+          pin: '8392',
+          ownerFamilyId: familyA.id.value,
+          actorUserId: 'adult-a',
+        );
+        final fakeAuth = FakeAuthSessionPort(activeUserId: null);
+        final verifier = FakeContainmentAuthorizationVerifier(
+          defaultOutcome: AuthorizedActiveAdult(
+            verifiedRole: VerifiedAdultRole.owner,
+            verifiedFamily: familyA,
+            verifiedFamilies: [familyA],
+            verifiedRolesByFamilyId: {
+              familyA.id.value: VerifiedAdultRole.owner,
+            },
+            verifiedChild: childA,
+          ),
+        );
+        final container = ProviderContainer(
+          overrides: [
+            appClockProvider.overrideWithValue(() => nowUtc),
+            authSessionPortProvider.overrideWithValue(fakeAuth),
+            restrictedShellSignOutProvider.overrideWithValue(
+              () async => fakeAuth.signOut(),
+            ),
+            localMetadataStoreProvider.overrideWithValue(db),
+            containmentAuthorizationVerifierProvider.overrideWithValue(
+              verifier,
+            ),
+            parentGateServiceProvider.overrideWithValue(
+              ParentGateService(
+                db,
+                clock: FixedClock(nowUtc),
+                minIterations: 1000,
+                configuredIterations: 1000,
+                runInIsolate: false,
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+        final ctrl = container.read(sessionContainmentProvider.notifier);
+
+        for (final target in const [
+          ColdStartContainmentStatus.containmentLocked,
+          ColdStartContainmentStatus.pairedChildRevoked,
+          ColdStartContainmentStatus.pairedChildUnverified,
+        ]) {
+          final existingChildRaw = await db.readMetadata(
+            ActiveChildModeNotifier.activeSessionKey,
+          );
+          if (existingChildRaw != null) {
+            await db.compareAndSwapMetadataBatch(
+              expectedValues: {
+                ActiveChildModeNotifier.activeSessionKey: existingChildRaw,
+              },
+              mutations: const [
+                MetadataMutation.delete(
+                  key: ActiveChildModeNotifier.activeSessionKey,
+                ),
+              ],
+            );
+          }
+          setActor(fakeAuth, userId: 'adult-a', sessionGeneration: 'gen-a-1');
+          await ctrl.rehydrate();
+          await ctrl.enterChildMode(childA);
+          final prevEpoch = ctrl.containmentEpoch;
+          final prevScope = ctrl.sessionScopeEpoch;
+
+          ctrl.applyContainmentInvalidation(
+            targetStatus: target,
+            reason: 'valid_downgrade_${target.name}',
+          );
+
+          // Immediate synchronous fail-closed guarantees (`0 await`):
+          final live = container.read(sessionContainmentProvider);
+          expect(live.status, equals(target));
+          expect(live.allowsProtectedUi, isFalse);
+          expect(live.verificationOutcome, isNull);
+          expect(ctrl.containmentEpoch, equals(prevEpoch + 1));
+          expect(ctrl.sessionScopeEpoch, equals(prevScope + 1));
+          expect(container.read(activeFamilyProvider), isNull);
+          expect(container.read(activeChildModeProvider), isNull);
+
+          await ctrl.runSerializedForTest(() async {});
+          expect(
+            await db.readMetadata(ActiveChildModeNotifier.activeSessionKey),
+            isNotNull,
+          );
+          final persistedFence = ContainmentFenceV1.tryParse(
+            await db.readMetadata(ParentGateService.containmentFenceV1Key),
+          );
+          expect(persistedFence?.fenceEpoch, greaterThanOrEqualTo(1));
+        }
+      });
+
+      testWidgets(
+        'R42-01(d): mounted LearnWardApp + GoRouter proves forged verifiedParentMode invalidation throws and never exposes Parent Mode',
+        (tester) async {
+          final store = InMemoryLocalMetadataStore();
+          await seedBoundPin(
+            store,
+            pin: '8392',
+            ownerFamilyId: familyA.id.value,
+            actorUserId: 'adult-a',
+          );
+          await store.writeMetadata(
+            key: ActiveChildModeNotifier.activeSessionKey,
+            value: PersistedChildModeSession(
+              modeKind: PersistedChildModeKind.sharedDeviceAdult,
+              actorUserId: 'adult-a',
+              familyId: familyA.id,
+              childId: childA.id,
+              childProfileSnapshot: childA,
+              persistedAtUtc: nowUtc,
+            ).toJsonString(),
+            updatedAt: nowUtc,
+          );
+
+          final fakeAuth = FakeAuthSessionPort(activeUserId: null);
+          setActor(fakeAuth, userId: 'adult-a', sessionGeneration: 'gen-a-1');
+          final verifier = FakeContainmentAuthorizationVerifier(
+            defaultOutcome: AuthorizedActiveAdult(
+              verifiedRole: VerifiedAdultRole.owner,
+              verifiedFamily: familyA,
+              verifiedFamilies: [familyA],
+              verifiedRolesByFamilyId: {
+                familyA.id.value: VerifiedAdultRole.owner,
+              },
+              verifiedChild: childA,
+            ),
+          );
+
+          late ProviderContainer container;
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                appClockProvider.overrideWithValue(() => nowUtc),
+                authSessionPortProvider.overrideWithValue(fakeAuth),
+                restrictedShellSignOutProvider.overrideWithValue(
+                  () async => fakeAuth.signOut(),
+                ),
+                localMetadataStoreProvider.overrideWithValue(store),
+                familyRepositoryProvider.overrideWithValue(
+                  FakeFamilyRepository(
+                    currentUserId: 'adult-a',
+                    families: [familyA],
+                    memberships: [
+                      FamilyMembership(
+                        familyId: familyA.id,
+                        authUserId: 'adult-a',
+                        role: FamilyRole.owner,
+                        status: MembershipStatus.active,
+                        joinedAt: nowUtc,
+                      ),
+                    ],
+                  ),
+                ),
+                childProfileRepositoryProvider.overrideWithValue(
+                  FakeChildProfileRepository(children: [childA]),
+                ),
+                growthRepositoryProvider.overrideWithValue(
+                  mobile_mem.InMemoryGrowthRepository(),
+                ),
+                rewardRepositoryProvider.overrideWithValue(
+                  mobile_mem.InMemoryRewardRepository(),
+                ),
+                assessmentRepositoryProvider.overrideWithValue(
+                  FakeAssessmentRepository(),
+                ),
+                containmentAuthorizationVerifierProvider.overrideWithValue(
+                  verifier,
+                ),
+                parentGateServiceProvider.overrideWithValue(
+                  ParentGateService(
+                    store,
+                    clock: FixedClock(nowUtc),
+                    minIterations: 1000,
+                    configuredIterations: 1000,
+                    runInIsolate: false,
+                  ),
+                ),
+              ],
+              child: Consumer(
+                builder: (context, ref, _) {
+                  container = ProviderScope.containerOf(context);
+                  return const LearnWardApp();
+                },
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(find.byType(ChildModeScreen), findsOneWidget);
+          expect(find.byType(FamilyHomeScreen), findsNothing);
+
+          final ctrl = container.read(sessionContainmentProvider.notifier);
+          expect(
+            () => ctrl.applyContainmentInvalidation(
+              targetStatus: ColdStartContainmentStatus.verifiedParentMode,
+              reason: 'forged_parent_elevation',
+            ),
+            throwsArgumentError,
+          );
+          container.read(routerProvider).go(AppRoutes.parentHome);
+          await tester.pumpAndSettle();
+          expect(find.byType(ChildModeScreen), findsOneWidget);
+          expect(find.byType(FamilyHomeScreen), findsNothing);
+          expect(find.text('Alpha Family'), findsNothing);
+          expect(
+            container
+                .read(routerProvider)
+                .routerDelegate
+                .currentConfiguration
+                .uri
+                .path,
+            equals(AppRoutes.childMode),
+          );
+
+          // Now trigger valid runtime downgrade -> GoRouter moves fail-closed to containmentLocked
+          ctrl.applyContainmentInvalidation(
+            targetStatus: ColdStartContainmentStatus.containmentLocked,
+            reason: 'child_archived_runtime',
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const Key('cold_start_containment_locked_shell')),
+            findsOneWidget,
+          );
+          expect(find.byType(ChildModeScreen), findsNothing);
+          expect(find.byType(FamilyHomeScreen), findsNothing);
+
+          container.read(routerProvider).go(AppRoutes.parentHome);
+          await tester.pumpAndSettle();
+          expect(find.byType(FamilyHomeScreen), findsNothing);
+          expect(
+            container
+                .read(routerProvider)
+                .routerDelegate
+                .currentConfiguration
+                .uri
+                .path,
+            equals(AppRoutes.childContainmentLocked),
+          );
+        },
+      );
+    },
+  );
+
+  group('Group F — R42-02: C0-37 Real GoRouter/Widget Barrier 2 Isolation & Before/After Queued Fence SQLite Persistence', () {
+    for (final opKind in const ['unlock', 'pin_change']) {
+      for (final eventKind in const [
+        'sign_out',
+        'actor_switch_b_lockout',
+        'session_rotation',
+        'containment_downgrade',
+      ]) {
+        testWidgets(
+          'C0-37 Live GoRouter + File SQLite [$opKind][barrier2][$eventKind]: blocks ParentMode while paused and verifies SQLite before & after queued fence transition',
+          (tester) async {
+            final dbName = 'c037_rt_${opKind}_$eventKind.sqlite';
+            late Directory tempDir;
+            late AppDatabase db1;
+            var db1Closed = false;
+            late ({String path, String sha256Hex, List<int> bytes}) photo;
+
+            final enteredBarrier2 = Completer<void>();
+            final releaseBarrier2 = Completer<void>();
+            final enteredFenceTransition = Completer<void>();
+            final releaseFenceTransition = Completer<void>();
+            final releasePostEventVerify = Completer<void>();
+
+            addTearDown(() async {
+              if (!releaseBarrier2.isCompleted) releaseBarrier2.complete();
+              if (!releaseFenceTransition.isCompleted) {
+                releaseFenceTransition.complete();
+              }
+              if (!releasePostEventVerify.isCompleted) {
+                releasePostEventVerify.complete();
+              }
+              await tester.runAsync(() async {
+                if (!db1Closed) {
+                  db1Closed = true;
+                  await db1.close();
+                }
+                if (tempDir.existsSync()) {
+                  await tempDir.delete(recursive: true);
+                }
+              });
+            });
+
+            await tester.runAsync(() async {
+              tempDir = await Directory.systemTemp.createTemp(
+                'lw_wp4_c037_rt_',
+              );
+              db1 = await _openDb(tempDir, dbName);
+              final fileStore = DefaultLocalEvidenceFileStore(
+                baseDirectory: tempDir,
+              );
+              photo = await writeEvidenceFile(fileStore, draftId: 'd-c037-rt');
+              await db1.saveLocalDraft(
+                LocalAssessmentDraft(
+                  localDraftId: 'd-c037-rt',
+                  familyId: familyA.id.value,
+                  childId: childA.id.value,
+                  createCommandId: 'cmd-c037-rt',
+                  submitCommandId: 'cmd-s037-rt',
+                  subjectKey: SubjectKey.math,
+                  subject: 'Math',
+                  title: 'Barrier 2 Live GoRouter Draft',
+                  assessmentType: 'quiz',
+                  difficulty: 'normal',
+                  rawScore: 9,
+                  maxScore: 10,
+                  localCompressedPhotoPath: photo.path,
+                  sha256Checksum: photo.sha256Hex,
+                  occurredAt: nowUtc,
+                  updatedAt: nowUtc,
+                  actorUserId: 'adult-a',
+                  actorRole: 'owner',
+                ),
+              );
+              await seedBoundPin(
+                db1,
+                pin: '8392',
+                ownerFamilyId: familyA.id.value,
+                actorUserId: 'adult-a',
+              );
+              if (opKind == 'unlock') {
+                await db1.writeMetadata(
+                  key: ActiveChildModeNotifier.activeSessionKey,
+                  value: PersistedChildModeSession(
+                    modeKind: PersistedChildModeKind.sharedDeviceAdult,
+                    actorUserId: 'adult-a',
+                    familyId: familyA.id,
+                    childId: childA.id,
+                    childProfileSnapshot: childA,
+                    persistedAtUtc: nowUtc,
+                  ).toJsonString(),
+                  updatedAt: nowUtc,
+                );
+              }
+            });
+
+            final fakeAuth = FakeAuthSessionPort(activeUserId: null);
+            setActor(fakeAuth, userId: 'adult-a', sessionGeneration: 'gen-a-1');
+
+            var gatePostEventVerify = false;
+            final verifier = FakeContainmentAuthorizationVerifier(
+              onVerify: (call) async {
+                if (gatePostEventVerify &&
+                    !releasePostEventVerify.isCompleted) {
+                  await releasePostEventVerify.future;
+                }
+                if (call.context.userId == 'adult-a') {
+                  return AuthorizedActiveAdult(
+                    verifiedRole: VerifiedAdultRole.owner,
+                    verifiedFamily: familyA,
+                    verifiedFamilies: [familyA],
+                    verifiedRolesByFamilyId: {
+                      familyA.id.value: VerifiedAdultRole.owner,
+                    },
+                    verifiedChild: childA,
+                  );
+                }
+                return AuthorizedActiveAdult(
+                  verifiedRole: VerifiedAdultRole.owner,
+                  verifiedFamily: familyB,
+                  verifiedFamilies: [familyB],
+                  verifiedRolesByFamilyId: {
+                    familyB.id.value: VerifiedAdultRole.owner,
+                  },
+                  verifiedChild: childB,
+                );
+              },
+            );
+
+            final gateService = ParentGateService(
+              db1,
+              clock: FixedClock(nowUtc),
+              minIterations: 1000,
+              configuredIterations: 1000,
+              runInIsolate: false,
+            );
+
+            late ProviderContainer container;
+            await tester.pumpWidget(
+              ProviderScope(
+                overrides: [
+                  appClockProvider.overrideWithValue(() => nowUtc),
+                  authSessionPortProvider.overrideWithValue(fakeAuth),
+                  restrictedShellSignOutProvider.overrideWithValue(
+                    () async => fakeAuth.signOut(),
+                  ),
+                  localMetadataStoreProvider.overrideWithValue(db1),
+                  localDraftStoreProvider.overrideWithValue(db1),
+                  pendingRewardCommandStoreProvider.overrideWithValue(db1),
+                  legacyOutboxProvenanceSourceProvider.overrideWithValue(db1),
+                  familyRepositoryProvider.overrideWithValue(
+                    FakeFamilyRepository(
+                      currentUserId: 'adult-a',
+                      families: [familyA, familyB],
+                      memberships: [
+                        FamilyMembership(
+                          familyId: familyA.id,
+                          authUserId: 'adult-a',
+                          role: FamilyRole.owner,
+                          status: MembershipStatus.active,
+                          joinedAt: nowUtc,
+                        ),
+                        FamilyMembership(
+                          familyId: familyB.id,
+                          authUserId: 'adult-a',
+                          role: FamilyRole.owner,
+                          status: MembershipStatus.active,
+                          joinedAt: nowUtc,
+                        ),
+                      ],
+                    ),
+                  ),
+                  childProfileRepositoryProvider.overrideWithValue(
+                    FakeChildProfileRepository(children: [childA, childB]),
+                  ),
+                  growthRepositoryProvider.overrideWithValue(
+                    mobile_mem.InMemoryGrowthRepository(),
+                  ),
+                  rewardRepositoryProvider.overrideWithValue(
+                    mobile_mem.InMemoryRewardRepository(),
+                  ),
+                  assessmentRepositoryProvider.overrideWithValue(
+                    FakeAssessmentRepository(),
+                  ),
+                  containmentAuthorizationVerifierProvider.overrideWithValue(
+                    verifier,
+                  ),
+                  parentGateServiceProvider.overrideWithValue(gateService),
+                ],
+                child: Consumer(
+                  builder: (context, ref, _) {
+                    container = ProviderScope.containerOf(context);
+                    return const LearnWardApp();
+                  },
+                ),
+              ),
+            );
+            await tester.pumpAndSettle();
+
+            if (opKind == 'unlock') {
+              expect(find.byType(ChildModeScreen), findsOneWidget);
+              expect(find.byType(FamilyHomeScreen), findsNothing);
+            } else {
+              expect(find.byType(FamilyHomeScreen), findsOneWidget);
+              expect(find.text('Alpha Family'), findsOneWidget);
+            }
+
+            final ctrl = container.read(sessionContainmentProvider.notifier);
+            ctrl.onBeforePersistFenceTransitionForTest = () async {
+              if (!enteredFenceTransition.isCompleted) {
+                enteredFenceTransition.complete();
+              }
+              await releaseFenceTransition.future;
+            };
+
+            Future<void> barrier2Hook() async {
+              if (!enteredBarrier2.isCompleted) {
+                enteredBarrier2.complete();
+              }
+              await releaseBarrier2.future;
+            }
+
+            late final Future<PinVerificationResult> opFuture;
+            if (opKind == 'unlock') {
+              opFuture = ctrl.submitParentGateUnlock(
+                '8392',
+                onAfterFinalizeGuardBeforeCommit: barrier2Hook,
+              );
+            } else {
+              opFuture = ctrl.submitParentPinChange(
+                currentPin: '8392',
+                newPin: '9999',
+                onAfterFinalizeGuardBeforeCommit: barrier2Hook,
+              );
+            }
+
+            // Wait until real SQLite Barrier 2 write transaction is active & paused.
+            await enteredBarrier2.future;
+            gatePostEventVerify = true;
+
+            Future<void>? actorBWrongPinFuture;
+            switch (eventKind) {
+              case 'sign_out':
+                fakeAuth.signOut();
+              case 'actor_switch_b_lockout':
+                setActor(
+                  fakeAuth,
+                  userId: 'adult-b',
+                  sessionGeneration: 'gen-b-1',
+                );
+                await tester.pump();
+                actorBWrongPinFuture = ctrl.runSerializedForTest(() async {
+                  await gateService.verifyPin('0000');
+                });
+              case 'session_rotation':
+                fakeAuth.setSessionGeneration('gen-a-rotated');
+              case 'containment_downgrade':
+                ctrl.applyContainmentInvalidation(
+                  targetStatus: ColdStartContainmentStatus.containmentLocked,
+                  reason: 'archived_or_revoked_downgrade',
+                );
+            }
+
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 50));
+
+            final expectedRoute = switch (eventKind) {
+              'sign_out' => AppRoutes.auth,
+              'actor_switch_b_lockout' ||
+              'session_rotation' => AppRoutes.containmentLoading,
+              'containment_downgrade' => AppRoutes.childContainmentLocked,
+              _ => throw StateError('Unexpected $eventKind'),
+            };
+
+            void assertLiveGoRouterFailClosed({required String phase}) {
+              expect(
+                find.byType(FamilyHomeScreen),
+                findsNothing,
+                reason: 'FamilyHomeScreen leaked during $phase',
+              );
+              expect(
+                find.byType(ChildModeScreen),
+                findsNothing,
+                reason: 'ChildModeScreen leaked during $phase',
+              );
+              expect(
+                find.text('Alpha Family'),
+                findsNothing,
+                reason: 'Family A PII leaked during $phase',
+              );
+              expect(container.read(activeFamilyProvider), isNull);
+              expect(container.read(activeChildModeProvider), isNull);
+              expect(
+                container
+                    .read(routerProvider)
+                    .routerDelegate
+                    .currentConfiguration
+                    .uri
+                    .path,
+                equals(expectedRoute),
+                reason: 'GoRouter mismatch during $phase',
+              );
+              switch (eventKind) {
+                case 'sign_out':
+                  expect(find.byType(AuthScreen), findsOneWidget);
+                case 'actor_switch_b_lockout':
+                case 'session_rotation':
+                  expect(
+                    find.byKey(const Key('containment_hydrating_screen')),
+                    findsOneWidget,
+                  );
+                case 'containment_downgrade':
+                  expect(
+                    find.byKey(
+                      const Key('cold_start_containment_locked_shell'),
+                    ),
+                    findsOneWidget,
+                  );
+              }
+            }
+
+            // 1) Live GoRouter + widget tree assertion WHILE Barrier 2 SQLite tx is PAUSED:
+            assertLiveGoRouterFailClosed(phase: 'paused_barrier2');
+            container.read(routerProvider).go(AppRoutes.parentHome);
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 50));
+            assertLiveGoRouterFailClosed(
+              phase: 'paused_barrier2_after_parent_nav',
+            );
+
+            // 2) Checkpoint 1 (t_commit < t < t_fence): Barrier 2 COMMITS,
+            // queued _persistFenceTransition pauses BEFORE writing SQLite.
+            releaseBarrier2.complete();
+            final opResult = await opFuture;
+            expect(opResult.outcome, PinVerificationOutcome.staleFence);
+            await enteredFenceTransition.future;
+
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 50));
+            assertLiveGoRouterFailClosed(phase: 'checkpoint1_pre_fence_ui');
+
+            // Open independent SQLite reader on the same file BEFORE _persistFenceTransition() runs.
+            late ContainmentFenceV1? fenceBefore;
+            late String? childBefore;
+            late ParentGateCredentialV2? credBefore;
+            late ParentGateLockoutV1? lockoutBefore;
+            await tester.runAsync(() async {
+              final dbBeforeFence = await _openDb(tempDir, dbName);
+              try {
+                fenceBefore = ContainmentFenceV1.tryParse(
+                  await dbBeforeFence.readMetadata(
+                    ParentGateService.containmentFenceV1Key,
+                  ),
+                );
+                childBefore = await dbBeforeFence.readMetadata(
+                  ActiveChildModeNotifier.activeSessionKey,
+                );
+                credBefore = ParentGateCredentialV2.tryParse(
+                  await dbBeforeFence.readMetadata(
+                    ParentGateService.credentialV2Key,
+                  ),
+                  minIterations: 1000,
+                );
+                lockoutBefore = ParentGateLockoutV1.tryParse(
+                  await dbBeforeFence.readMetadata(
+                    ParentGateService.lockoutV1Key,
+                  ),
+                );
+              } finally {
+                await dbBeforeFence.close();
+              }
+            });
+
+            expect(fenceBefore?.fenceEpoch, equals(1));
+            expect(fenceBefore?.actorUserId, equals('adult-a'));
+            expect(
+              fenceBefore?.lockState,
+              equals(ContainmentFenceLockState.none),
+            );
+            if (opKind == 'unlock') {
+              expect(childBefore, isNull);
+            } else {
+              expect(credBefore?.credentialRevision, equals(2));
+            }
+            if (eventKind == 'actor_switch_b_lockout') {
+              expect(lockoutBefore?.failedAttempts, equals(0));
+            }
+
+            // 3) Checkpoint 2 (t > t_fence): queued _persistFenceTransition commits & SQLite reopens cleanly.
+            releaseFenceTransition.complete();
+            if (actorBWrongPinFuture != null) {
+              await actorBWrongPinFuture;
+            }
+            await ctrl.runSerializedForTest(() async {});
+
+            await tester.pump();
+            await tester.pump(const Duration(milliseconds: 50));
+            assertLiveGoRouterFailClosed(phase: 'checkpoint2_post_fence_ui');
+
+            // Unmount widget tree before closing db1 and releasing post-event verifier gate.
+            await tester.pumpWidget(const SizedBox.shrink());
+            await tester.pump();
+            if (!releasePostEventVerify.isCompleted) {
+              releasePostEventVerify.complete();
+            }
+
+            await tester.runAsync(() async {
+              if (!db1Closed) {
+                db1Closed = true;
+                await db1.close();
+              }
+              final dbAfterFence = await _openDb(tempDir, dbName);
+              try {
+                final fenceAfter = ContainmentFenceV1.tryParse(
+                  await dbAfterFence.readMetadata(
+                    ParentGateService.containmentFenceV1Key,
+                  ),
+                );
+                final childAfter = await dbAfterFence.readMetadata(
+                  ActiveChildModeNotifier.activeSessionKey,
+                );
+                final credAfter = ParentGateCredentialV2.tryParse(
+                  await dbAfterFence.readMetadata(
+                    ParentGateService.credentialV2Key,
+                  ),
+                  minIterations: 1000,
+                );
+                final lockoutAfter = ParentGateLockoutV1.tryParse(
+                  await dbAfterFence.readMetadata(
+                    ParentGateService.lockoutV1Key,
+                  ),
+                );
+
+                expect(fenceAfter?.fenceEpoch, equals(2));
+                expect(fenceAfter?.actorUserId, isNull);
+                if (opKind == 'unlock') {
+                  expect(childAfter, isNull);
+                } else {
+                  expect(credAfter?.credentialRevision, equals(2));
+                }
+                if (eventKind == 'actor_switch_b_lockout') {
+                  expect(lockoutAfter?.failedAttempts, equals(1));
+                }
+                expect(
+                  await dbAfterFence.getLocalDraft('d-c037-rt'),
+                  isNotNull,
+                );
+                expect(
+                  sha256
+                      .convert(await File(photo.path).readAsBytes())
+                      .toString(),
+                  equals(photo.sha256Hex),
+                );
+              } finally {
+                await dbAfterFence.close();
+              }
+            });
+          },
+        );
+      }
+    }
   });
 }
 
